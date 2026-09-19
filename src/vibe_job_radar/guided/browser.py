@@ -312,6 +312,9 @@ class PlaywrightBackend:
                     return candidate
         return None
 
+    def _before_pagination_click(self) -> None:
+        """Backend state transition after permission/quota checks, before clicking."""
+
     @traced('pagination', 'browser')
     def next_page(self) -> bool:
         self.auth_mode, self.error, self.redirects = False, None, 0
@@ -323,6 +326,7 @@ class PlaywrightBackend:
         self.wire.reserve('page')  # Reserve once, before either a document or SPA action.
         self._pagination_page = self.page
         try:
+            self._before_pagination_click()
             button.click(timeout=90000)
             self._settle()
             return True

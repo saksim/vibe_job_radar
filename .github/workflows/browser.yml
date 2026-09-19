@@ -33,6 +33,8 @@ jobs:
           python scripts/run_network_settings_browser.py
           python scripts/run_research_workflow_browser.py
           python scripts/run_native_login_browser.py
+          python scripts/run_login_detail_return_browser.py
+          python scripts/run_login_detail_return_browser.py --automatic
           python scripts/run_target_acquisition_browser.py
           python scripts/run_browser_policy_binding.py
       - name: Save browser evidence

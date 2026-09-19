@@ -9,8 +9,11 @@ from __future__ import annotations
 import json
 import re
 from urllib.parse import urljoin, urlsplit
+from html import unescape
+from typing import Callable
 
-from ..html_parser import Document, Node, jobpostings
+from ..html_parser import (Document, Node, ParseError, jobpostings, plain_text,
+                           _posting_identity, _unique_object)
 from .adapters import DOMAdapter
 from .contracts import Card, CrawlError, PageSnapshot
 
@@ -109,6 +112,146 @@ def semantic_detail(markup: str) -> dict:
         raise CrawlError('structure_changed') from exc
 
 
+def _jsonld_whitespace(raw: str) -> tuple[str, bool]:
+    """Escape only literal JSON string CR/LF/TAB, not syntax or other controls.
+
+    Some published Liepin HTML serializes description line breaks literally.
+    This local representation repair never evaluates JS, unescapes URLs, drops
+    duplicate keys, invents braces, or makes a truncated document parseable.
+    """
+    if len(raw) > 1_000_000:
+        raise CrawlError('response_too_large')
+    out, quoted, escaped, changed = [], False, False, False
+    for char in raw:
+        if quoted and not escaped and char in '\r\n\t':
+            out.append({'\r': r'\r', '\n': r'\n', '\t': r'\t'}[char])
+            changed = True
+            continue
+        out.append(char)
+        if escaped:
+            escaped = False
+        elif quoted and char == '\\':
+            escaped = True
+        elif char == '"':
+            quoted = not quoted
+    return ''.join(out), changed
+
+
+def _invalid_json_constant(value):
+    raise ParseError('non-JSON structured-data value')
+
+
+def _intro_posting(postings: list[dict], url: str, identity: Callable[[str], str]) -> dict:
+    """Select the same platform entity, ignoring only irrelevant query variants.
+
+    The URL family and hostname are part of identity. Metadata remains data:
+    no URL is visited and it cannot authorize another host or change the task.
+    """
+    unique = list({json.dumps(p, sort_keys=True, ensure_ascii=False): p for p in postings}.values())
+    target = identity(url)
+    matches, references = [], []
+    for posting in unique:
+        refs = _posting_identity(posting, url)
+        references.append(refs)
+        try:
+            if refs and all(identity(ref) == target for ref in refs):
+                matches.append(posting)
+        except CrawlError:
+            # An unrelated recommended entity may legitimately be present, but
+            # it must never become the selected job or grant network permission.
+            continue
+    if len(matches) == 1:
+        return matches[0]
+    if len(unique) == 1 and not references[0]:
+        return unique[0]
+    raise CrawlError('job_identity_mismatch')
+
+
+def structured_intro_detail(markup: str, url: str,
+                            identity: Callable[[str], str]) -> dict | None:
+    """Liepin's recorded dd/JSON-LD representation, including pages without h1.
+
+    Return None only when this representation is absent, so established generic
+    layouts retain their parser. If present but ambiguous/broken, fail explicitly
+    rather than recovering unrelated DOM text. See docs/LIEPIN_RECORDED_LAYOUT.md.
+    """
+    if not isinstance(markup, str) or len(markup) > 5_000_000:
+        raise CrawlError('response_too_large')
+    try:
+        root = Document(markup).root
+        nodes = list(root.walk())
+        anchors = [n for n in nodes if n.attrs.get('data-selector') == 'job-intro-content']
+        visible_ids = {id(n) for n, _ in _walk(root)}
+        postings, repaired_job = [], False
+        scripts = [n for n in nodes if n.tag == 'script'
+                   and n.attrs.get('type', '').strip().lower() == 'application/ld+json']
+        if len(scripts) > 64:
+            raise CrawlError('response_too_large')
+        for node in scripts:
+            raw = node.text(include_script=True)
+            normalized, repaired = _jsonld_whitespace(raw)
+            try:
+                data = json.loads(normalized, object_pairs_hook=_unique_object,
+                                  parse_constant=_invalid_json_constant)
+                found = list(jobpostings(data))
+            except (ValueError, TypeError) as exc:
+                # Do not hide an explicitly broken JobPosting behind another
+                # script or DOM fallback. Unrelated SEO metadata is not a JD.
+                if re.search(r'"@type"\s*:\s*(?:"JobPosting"|\[[^\]]{0,256}"JobPosting")', raw):
+                    raise CrawlError('structure_changed') from exc
+                continue
+            postings.extend(found)
+            repaired_job = repaired_job or (repaired and bool(found))
+            if len(postings) > 64:
+                raise CrawlError('response_too_large')
+        if not anchors and not repaired_job:
+            return None
+        if not postings:
+            raise CrawlError('structure_changed')
+        posting = _intro_posting(postings, url, identity)
+        title, description = posting.get('title'), posting.get('description')
+        if not isinstance(title, str) or not isinstance(description, str):
+            raise CrawlError('structure_changed')
+        if any(ord(c) < 32 and c not in '\r\n\t' for c in title + description):
+            raise CrawlError('structure_changed')
+        title = unescape(title).strip()
+        description = _clean(plain_text(description))
+        if not title or len(title) > 500 or len(description) < 20:
+            raise CrawlError('jd_incomplete')
+        body = description
+        if anchors:
+            if len(anchors) != 1 or anchors[0].tag != 'dd':
+                raise CrawlError('structure_changed')
+            anchor = anchors[0]
+            if id(anchor) not in visible_ids:
+                raise CrawlError('jd_incomplete')
+            body = _clean(_text(anchor))
+            # A visible complete introduction can extend a structured prefix;
+            # incompatible descriptions must not mix metadata from another job.
+            compact_body = re.sub(r'\s+', '', body)
+            compact_description = re.sub(r'\s+', '', description)
+            if not compact_body.startswith(compact_description):
+                raise CrawlError('jd_incomplete')
+            parser = 'liepin:job_intro_jsonld:v1'
+        else:
+            parser = 'liepin:jsonld_string_whitespace:v1'
+        if _INCOMPLETE.search(body) or _INCOMPLETE.search(description):
+            raise CrawlError('jd_incomplete')
+        if (len(body) < 40 or len(body) > 150_000 or _FOREIGN.search(body)
+                or not re.search(r'职责|要求|岗位描述|职位描述|工作内容', body)):
+            raise CrawlError('structure_changed')
+        org = posting.get('hiringOrganization')
+        company = org.get('name', '') if isinstance(org, dict) else ''
+        posted = posting.get('datePosted', '')
+        return {'title': title, 'text': body,
+                'company': company.strip() if isinstance(company, str) else '',
+                'published_at': posted if isinstance(posted, str) else '', 'parser': parser}
+    except CrawlError:
+        raise
+    except (ValueError, TypeError, RecursionError) as exc:
+        raise CrawlError('structure_changed') from exc
+
+
 class LiepinAdapter(DOMAdapter):
     """Site-specific entity checks without widening the base access contract."""
 
@@ -132,7 +275,22 @@ class LiepinAdapter(DOMAdapter):
         # variants: persisted page signatures and selections depend on them.
         # Entity-level cross-page/task deduplication belongs to D05, not a silent
         # migration during detail-parser rollout.
-        return super().cards(page)
+        if self.challenged(plain_text(page.html), page.url):
+            raise CrawlError('manual_required')
+        from .liepin_search import observed_cards
+        observed = observed_cards(self, page)
+        return observed if observed is not None else super().cards(page)
+
+    def native_request_context(self, operation, request, page_url):
+        from .liepin_search import request_context
+        return request_context(self, operation, request, page_url)
+
+    def native_ready(self, observations):
+        return any(o.operation == 'liepin_search' for o in observations)
+
+    def confirmed_empty(self, page):
+        from .liepin_search import observed_cards
+        return observed_cards(self, page) == []
 
     def validate_detail_identity(self, expected_url: str, page: PageSnapshot) -> None:
         expected = self.job_identity(expected_url)
@@ -155,6 +313,11 @@ class LiepinAdapter(DOMAdapter):
     def detail(self, page: PageSnapshot) -> dict:
         self.job_identity(page.url)
         self.validate_detail_identity(page.url, page)
+        if self.challenged(plain_text(page.html), page.url):
+            raise CrawlError('manual_required')
+        intro = structured_intro_detail(page.html, page.url, self.job_identity)
+        if intro is not None:
+            return intro
         try:
             parsed = super().detail(page)
             if _INCOMPLETE.search(parsed['text']):

@@ -17,6 +17,7 @@ class Card:
 class PageSnapshot:
     url: str
     html: str = field(repr=False)
+    business: tuple = field(default=(), repr=False)  # Private observations, never task/diagnostic output.
 
 
 class CrawlError(RuntimeError):

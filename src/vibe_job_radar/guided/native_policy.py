@@ -1,7 +1,7 @@
 """Trusted-code native access contracts. Web forms cannot add hosts or operations.
 
-The bootstrap Liepin contract deliberately has no guessed business API or login
-POST. Unreviewed operations are visible failures, not empty search results.
+Liepin has one recorded read-only search operation and static asset hosts.
+No login POST is enabled. Unreviewed operations remain explicit failures.
 """
 from __future__ import annotations
 
@@ -22,6 +22,8 @@ class NativeRule:
     resources: tuple[str, ...] = ('Fetch', 'XHR')
     role: str = 'business'
     authentication: bool = False
+    cors_origin: str = ''
+    cors_headers: tuple[str, ...] = ()
 
     def __post_init__(self):
         if not re.fullmatch(r'[a-z][a-z0-9_]{1,39}', self.key):
@@ -33,6 +35,24 @@ class NativeRule:
         if not re.fullmatch(r'[a-z0-9.-]{1,253}', self.host) or len(self.path) > 512:
             raise ValueError('invalid native operation target')
         re.compile(self.path)
+        if self.cors_origin:
+            p = urlsplit(self.cors_origin)
+            if p.scheme != 'https' or p.path or p.query or p.fragment or p.username or p.password or p.port:
+                raise ValueError('invalid native CORS origin')
+            if not p.hostname or not self.cors_headers or any(not re.fullmatch(r'[a-z0-9-]+', h) for h in self.cors_headers):
+                raise ValueError('invalid native CORS header contract')
+
+    def validate_headers(self, method, headers):
+        if not self.cors_origin:
+            return
+        values = {k.lower(): v for k, v in headers.items()}
+        if values.get('origin') != self.cors_origin:
+            raise CrawlError('native_operation_unreviewed')
+        if method == 'OPTIONS':
+            requested = {h.strip().lower() for h in values.get('access-control-request-headers', '').split(',') if h.strip()}
+            if (values.get('access-control-request-method') != 'POST'
+                    or not requested or not requested <= set(self.cors_headers)):
+                raise CrawlError('native_operation_unreviewed')
 
 
 @dataclass(frozen=True)
@@ -84,16 +104,28 @@ class NativeContract:
 
 
 def liepin_bootstrap():
-    # These are existing application entrypoints, NOT a live-certified data API.
-    # Dependencies are exact hosts already named by that entrypoint; unknown CDN
-    # hosts stay blocked until their actual purpose is reviewed in the site PR.
-    host = 'www.liepin.com'
-    return NativeContract('liepin_bootstrap_v1', (host,), (
+    # Historical request/markup evidence is recorded in LIEPIN_SEARCH_NATIVE.md.
+    # The code contract supports one read-only search operation; it does NOT
+    # certify current platform access or enable login/application/message APIs.
+    host, api, cdn, image = 'www.liepin.com', 'api-c.liepin.com', 'concat.lietou-static.com', 'image0.lietou-static.com'
+    search = r'/api/com\.liepin\.searchfront4c\.pc-search-job'
+    cors = dict(cors_origin='https://' + host, cors_headers=(
+        'content-type', 'x-client-type', 'x-fscp-version', 'x-requested-with',
+        'x-fscp-std-info', 'x-fscp-trace-id'))
+    return NativeContract('liepin_search_read_v1', (host, api, cdn, image), (
         NativeRule('liepin_navigation', host, r'(?:/|/zhaopin/|/job/[^/]+\.(?:shtml|html)|/a/[0-9]+\.shtml|/lptjob/[0-9]+)',
                    resources=('Document',), role='document'),
         NativeRule('liepin_same_host_assets', host, r'.+\.(?:js|css|png|jpg|jpeg|gif|webp|svg|ico|woff2?|ttf)',
                    resources=('Script','Stylesheet','Image','Font'), role='asset'),
-    ))
+        NativeRule('liepin_static_assets', cdn,
+                   r'/(?:fe-www-pc|fe-c-pc|fe-lib-pc)/v6/(?!apmplus/).+\.(?:js|css|png|jpg|jpeg|gif|webp|svg|ico|woff2?|ttf)',
+                   resources=('Script','Stylesheet','Image','Font'), role='asset'),
+        NativeRule('liepin_static_images', image, r'/.+\.(?:png|jpg|jpeg|gif|webp|svg|ico)',
+                   resources=('Image',), role='asset'),
+        NativeRule('liepin_search', api, search, methods=('POST',), **cors),
+        NativeRule('liepin_search_preflight', api, search, methods=('OPTIONS',),
+                   resources=('Preflight', 'Other', 'Fetch', 'XHR'), role='business', **cors),
+    ), bootstrap_only=False)
 
 
 def contract_for(adapter):

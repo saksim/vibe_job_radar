@@ -2,8 +2,10 @@
 
 CDP Fetch observes/authorizes each owned-page hop. A context route rejects
 unowned pages before their initial request (a page event can arrive too late).
-Owned traffic continues unchanged; no route.fetch/fulfill or HTTP replay is used.
-Cross-origin preflights remain outside the supported site contracts.
+Owned requests use native networking without HTTP request replay. CORS contexts
+deliver native-fetched document bytes with one extra restrictive CSP; original
+publisher security policies remain enforced.
+Cross-origin requests require an exact, code-owned CORS operation contract.
 Only application-owned browser targets are used. Worker/OOPIF targets are stopped
 before running until their complete request accounting is separately supported.
 """
@@ -11,7 +13,7 @@ from __future__ import annotations
 
 import base64
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import json
 import time
 from urllib.parse import urljoin, urlsplit
@@ -22,6 +24,7 @@ from .diagnostic_trace import notify, observe, traced
 from .native_policy import NativeRobots, contract_for
 from .native_tunnel import NativeTunnel
 from .native_errors import native_failure_code
+from .native_documents import continue_document_response
 from .rate import RateLimit
 from .transport import PinnedTransport
 from ..network import USER_AGENT
@@ -33,6 +36,7 @@ class BusinessObservation:
     operation: str
     received_at: float
     payload: dict | list = field(repr=False)
+    context: dict = field(default_factory=dict, repr=False)
 
 
 class NativeControl(PinnedTransport):
@@ -70,6 +74,7 @@ class NativeBackend(PlaywrightBackend):
         self._command = self._epoch = 0
         self._observations = deque(maxlen=20)
         self._observed_bytes = 0
+        self._latest_business = {}
         self._closing = self._halted = self._loading_robots = False
         self._robots_url = ''
         self._auth_attempts = set()
@@ -94,7 +99,13 @@ class NativeBackend(PlaywrightBackend):
     def _configure_context(self):
         # Install before any page is created. Target debugger pause does not
         # alone prevent the browser's initial popup network request.
-        self.context.route('**/*', self._ownership_route)
+        self._native_cors = any(rule.cors_origin for rule in self.contract.rules)
+        # Playwright's route layer auto-fulfills CORS OPTIONS. For reviewed
+        # CORS contracts use direct CDP controls, so the publisher really
+        # receives and decides preflight. Unsupported targets get an abort-only
+        # Fetch guard before their deferred close, never collection controls.
+        if not self._native_cors:
+            self.context.route('**/*', self._ownership_route)
         self.context.route_web_socket('**/*', lambda ws: ws.close())
         self.context.on('page', self._page_created)
         self._cdp = self.browser.new_browser_cdp_session()
@@ -167,6 +178,9 @@ class NativeBackend(PlaywrightBackend):
             return
         rejected.add(target)
         self.__dict__.setdefault('_pending_rejected_targets', []).append(target)
+        if self.__dict__.get('_native_cors', False):
+            from .native_cors import quarantine_target
+            quarantine_target(self, target)
 
     def _drain_rejected_pages(self):
         # Called outside target/page events. Our controller sends no resume
@@ -174,6 +188,14 @@ class NativeBackend(PlaywrightBackend):
         targets = self.__dict__.setdefault('_pending_rejected_targets', [])
         while targets:
             target = targets.pop(0)
+            # Cancellation and rejection already stopped this target. Retire
+            # its protocol callbacks BEFORE closeTarget yields to the driver:
+            # a late quarantine-command error must not close the main job tab.
+            # This only removes our bookkeeping; it never resumes a target,
+            # disables interception or continues a pending network request.
+            for session, owned_target in tuple(self._sessions.items()):
+                if owned_target == target:
+                    self._detached({'sessionId': session})
             try:
                 self._cdp.send('Target.closeTarget', {'targetId': target})
             except Exception:
@@ -219,6 +241,7 @@ class NativeBackend(PlaywrightBackend):
         # Retire the temporary target-creation attachment BEFORE configuring
         # Fetch on the public Playwright page session. Edge does not deliver
         # interception events through the old non-flattened relay reliably.
+        # Removing the old attachment first preserves page-level interception.
         for old, known in tuple(self._sessions.items()):
             if known == target:
                 self._cdp.send('Target.detachFromTarget', {'sessionId':old})
@@ -482,7 +505,7 @@ class NativeBackend(PlaywrightBackend):
                 self.native_counts['blocked'] += 1
                 # An unknown business request must not become a silent empty list.
                 # Unknown optional assets are reported without poisoning the task.
-                if kind in {'Document','Fetch','XHR'} or code not in {'native_operation_unreviewed','resource_domain_blocked'}:
+                if kind in {'Document','Fetch','XHR','Preflight'} or code not in {'native_operation_unreviewed','resource_domain_blocked'}:
                     self._fatal(code,exc)
                 try:
                     self._send(session,'Fetch.failRequest',{'requestId':event['requestId'],'errorReason':'BlockedByClient'})
@@ -499,6 +522,7 @@ class NativeBackend(PlaywrightBackend):
             role, operation='robots','robots'
         else:
             rule=self.contract.match(url,r['method'],kind,authentication=self.auth_mode)
+            rule.validate_headers(r['method'], r.get('headers', {}))
             role,operation=rule.role,rule.key
             if role != 'asset':
                 self.wire.ensure_robots(url)
@@ -515,7 +539,16 @@ class NativeBackend(PlaywrightBackend):
         key=(session,event.get('networkId',event['requestId']))
         if len(self._requests) >= 128 and key not in self._requests:
             raise CrawlError('native_observation_limit')
-        self._requests[key]={'epoch':self._epoch,'operation':operation,'role':role,'size':0,
+        context = {}
+        bind = getattr(self.adapter, 'native_request_context', None)
+        if role == 'business' and r['method'] != 'OPTIONS' and callable(bind):
+            context = bind(operation, r, self.page.url)
+        if role == 'business' and r['method'] != 'OPTIONS':
+            self._business_sequence = getattr(self, '_business_sequence', 0) + 1
+            context['sequence'] = self._business_sequence
+            self.__dict__.setdefault('_latest_business', {})[operation] = self._business_sequence
+            self._observations = deque((o for o in self._observations if o.operation != operation), maxlen=20)
+        self._requests[key]={'context': context, 'epoch':self._epoch,'operation':operation,'role':role,'size':0,
                              'url':url,'status':None, 'json':False}
         self.native_counts[role] += 1
         self._send(session,'Fetch.continueRequest',{'requestId':event['requestId']})
@@ -559,8 +592,10 @@ class NativeBackend(PlaywrightBackend):
         record['status']=status
         record['json']=headers.get('content-type','').split(';')[0].strip().lower()=='application/json'
         self.native_counts['responses']+=1
-        # No response byte/header reconstruction, decompression or Cookie parsing.
-        self._send(session,'Fetch.continueResponse',{'requestId':event['requestId']})
+        # CORS documents need a fully parsed policy before scripts execute.
+        # No HTTP request is repeated; actual preflight/business replies remain
+        # native. See native_documents for the bounded decoded-body delivery.
+        continue_document_response(self, session, event)
 
     def _finished(self, session, event):
         key=(session,event['requestId']); record=self._requests.pop(key,None)
@@ -568,10 +603,14 @@ class NativeBackend(PlaywrightBackend):
         if (not record or record['role']!='business' or not record['json']
                 or record['epoch']!=self._epoch or record['status']!=200 or self._halted):
             return
+        sequence = record.get('context', {}).get('sequence')
+        if sequence is not None and self.__dict__.get('_latest_business', {}).get(record['operation']) != sequence:
+            return
         if record['size'] > 1_000_000:
             self._fatal('native_observation_limit'); return
         def store(result):
-            if record['epoch']!=self._epoch or self._closing or self._halted:
+            if (record['epoch'] != self._epoch or self._closing or self._halted
+                    or (sequence is not None and self.__dict__.get('_latest_business', {}).get(record['operation']) != sequence)):
                 return
             data=result.get('body','')
             if len(data)>1_400_000:
@@ -585,9 +624,12 @@ class NativeBackend(PlaywrightBackend):
                     raise ValueError()
             except (ValueError, RecursionError):
                 self._fatal('native_business_response_invalid'); return
-            self._observations.append(BusinessObservation(self._epoch,record['operation'],time.time(),payload))
+            self._observations.append(BusinessObservation(self._epoch,record['operation'],time.time(),payload,record.get('context', {})))
             self._observed_bytes+=len(raw)
         self._send(session,'Network.getResponseBody',{'requestId':event['requestId']},store)
+
+    def snapshot(self):
+        return replace(super().snapshot(), business=self.observations())
 
     def observations(self):
         """Private local payloads for a reviewed site adapter, never diagnostic API."""
@@ -634,7 +676,8 @@ class NativeBackend(PlaywrightBackend):
         self.adapter.accept_url(url)
         self.contract.match(url,'GET','Document',authentication=authentication)
         self.auth_mode=authentication; self.error=self.wait_error=None; self._halted=False
-        self._epoch+=1; self._observations.clear(); self._observed_bytes=0
+        self._epoch+=1; self._observations.clear()
+        self.__dict__.get('_latest_business', {}).clear(); self._observed_bytes=0
         self._load_robots()
         self.wire.ensure_robots(url)
         try:
@@ -674,10 +717,18 @@ class NativeBackend(PlaywrightBackend):
 
     def next_page(self):
         self._check_error()
+        return super().next_page()
+
+    def _before_pagination_click(self):
+        # Looking for a next button is not a navigation. Retain the current
+        # API result when the button is absent/disabled or permission/quota
+        # rejects the action. Invalidate only immediately before an actual
+        # click, so late responses cannot populate the next page with old data.
+        self._check_error()
         self._epoch += 1
         self._observations.clear()
+        self.__dict__.get('_latest_business', {}).clear()
         self._observed_bytes = 0
-        return super().next_page()
 
     def collection_mode(self):
         super().collection_mode()
@@ -696,6 +747,7 @@ class NativeBackend(PlaywrightBackend):
         if self.tunnel:
             self.tunnel.close(); self.tunnel=None
         self._sessions.clear(); self._pending.clear(); self._requests.clear(); self._hops.clear()
-        self._observations.clear(); self._auth_attempts.clear()
+        self._observations.clear()
+        self.__dict__.get('_latest_business', {}).clear(); self._auth_attempts.clear()
         self._page_sessions.clear(); self._bound_pages.clear()
         self._rejected_targets.clear(); self._pending_rejected_targets.clear(); self._rejected_pages.clear()
