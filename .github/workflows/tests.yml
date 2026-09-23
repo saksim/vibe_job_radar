@@ -10,6 +10,31 @@ concurrency:
 permissions:
   contents: read
 jobs:
+  workspace-compatibility:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          ref: ec4587992113848be879da2fbc4cebdac62d10e2
+          path: .verify/compat-baseline
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify old workspace upgrade and rollback with artificial data
+        run: python scripts/check_workspace_compatibility.py --old-source .verify/compat-baseline
+      - name: Save compatibility evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          retention-days: 7
+          name: workspace-compatibility-${{ matrix.os }}
+          path: browser-acceptance/compatibility/
   test:
     timeout-minutes: 15
     strategy:

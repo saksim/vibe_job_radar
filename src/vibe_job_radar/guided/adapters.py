@@ -138,8 +138,9 @@ class Registry:
             raise CrawlError('unknown_site') from exc
 
     def describe(self) -> list[dict]:
+        from ..acquisition_status import describe_adapter
         return [{'key': a.key, 'label': a.label, 'version': getattr(a, 'version', 'custom'),
-                 'certification': getattr(a, 'certification', 'not_live_verified'),
+                 'certification': 'not_live_verified', 'acquisition':describe_adapter(a),
                  'login': 'manual_in_platform_browser'} for a in self._adapters.values()]
 
 
