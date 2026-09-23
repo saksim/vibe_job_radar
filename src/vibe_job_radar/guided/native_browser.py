@@ -23,6 +23,7 @@ from .native_policy import NativeRobots, contract_for
 from .native_tunnel import NativeTunnel
 from .native_errors import native_failure_code
 from .rate import RateLimit
+from .read_retry import TransientReadFailure, document_failure, read_attempt
 from .transport import PinnedTransport
 from ..network import USER_AGENT
 
@@ -431,7 +432,7 @@ class NativeBackend(PlaywrightBackend):
     def _fatal(self, code, error=None):
         if not self.error:
             self.error = code
-            self.wait_error = error if isinstance(error,RateLimit) else None
+            self.wait_error = error if isinstance(error,(RateLimit,TransientReadFailure)) else None
         self._halted = True
         if code == 'native_protocol_error' and self._cdp:
             # A failed interception command must not leave a page running with
@@ -540,8 +541,15 @@ class NativeBackend(PlaywrightBackend):
                 raise RateLimit(delay,'http_429',next_allowed_at=self.wire.ledger.clock()+delay)
             raise CrawlError('http_'+str(status))
         if status >= 500 and record['role']!='asset':
-            raise CrawlError('remote_server_error')
+            deadlines=[h['value'] for h in event.get('responseHeaders',[]) if h['name'].lower()=='retry-after']
+            raise document_failure(self,url,event['request']['method'],
+                'document' if event.get('resourceType')=='Document' else 'other',status,
+                deadlines[0] if len(deadlines)==1 else ('invalid' if deadlines else ''),
+                main=bool(event.get('frameId') and event['frameId']==self._sessions.get(session)
+                          and record['role']!='robots' and not self._loading_robots))
         if 300 <= status < 400:
+            if event.get('resourceType') == 'Document':
+                self._read_redirected = True
             if record['role']=='robots' or status==304:
                 raise CrawlError('robots_unavailable' if record['role']=='robots' else 'native_unaccounted_response')
             target=urljoin(url,headers.get('location',''))
@@ -630,6 +638,7 @@ class NativeBackend(PlaywrightBackend):
                     self._loading_robots=False; self._robots_url=''; self.page=main
 
     @traced('navigation','browser',url=True)
+    @read_attempt
     def open(self,url,*,authentication=False):
         self.adapter.accept_url(url)
         self.contract.match(url,'GET','Document',authentication=authentication)
@@ -652,7 +661,14 @@ class NativeBackend(PlaywrightBackend):
             self._check_error()
             # Readiness is site content/response/challenge, not network-idle or a
             # fixed sleep. The existing parser still determines usable job data.
-            text=self.page.locator('body').inner_text(timeout=1000)
+            body = self.page.locator('body')
+            if not body.count():
+                # A navigation can replace the document after DOMContentLoaded.
+                # Stay within the existing overall deadline instead of failing
+                # the entire login after a one-second locator timeout.
+                self.page.wait_for_timeout(100)
+                continue
+            text=body.inner_text(timeout=1000)
             if self.adapter.challenged(text,self.page.url):
                 raise CrawlError('manual_required')
             if self.auth_mode and text.strip():

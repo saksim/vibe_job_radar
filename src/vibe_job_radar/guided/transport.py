@@ -137,6 +137,8 @@ class PinnedTransport:
             notify(getattr(self, '_diagnostics', None), 'mark', status=response.status)
             pairs = response.getheaders()
             metadata = {k.lower(): v for k, v in pairs if k.lower() != 'set-cookie'}
+            if response.status in {502, 503, 504} and sum(k.lower() == 'retry-after' for k, _ in pairs) > 1:
+                metadata['retry-after'] = 'invalid'  # Ambiguous deadlines cannot authorize a retry.
             if response.status in {401, 403, 429}:
                 if required or response.status == 429:
                     self.blocked.add(host)
