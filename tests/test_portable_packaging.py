@@ -45,9 +45,9 @@ class PortablePackagingTests(unittest.TestCase):
         with patch.object(self.builder,'ROOT',self.root),patch.object(self.builder,'build_candidate',side_effect=failing):
             with self.assertRaises(RuntimeError):self.builder.build(out,self.root/'source-evidence.json')
         self.assertEqual(candidate.read_bytes(),b'keep')
-        self.assertEqual(json.loads((out/'manifest.json').read_text())['status'],'build_failed')
-        self.assertFalse(json.loads((out/'manifest.json').read_text())['runtime_verified'])
-        self.assertEqual(json.loads((out/'portable-verification.json').read_text())['stage'],'original_report')
+        self.assertEqual(json.loads((out/'manifest.json').read_text(encoding='utf-8'))['status'],'build_failed')
+        self.assertFalse(json.loads((out/'manifest.json').read_text(encoding='utf-8'))['runtime_verified'])
+        self.assertEqual(json.loads((out/'portable-verification.json').read_text(encoding='utf-8'))['stage'],'original_report')
 
     def test_builder_rejects_invalid_source_before_loading_build_tools(self):
         evidence=self.root/'source.json';evidence.write_text('{"success":false}',encoding='utf-8')
