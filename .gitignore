@@ -144,6 +144,7 @@ live-evidence/
 # Source-bound local validation output, never application input.
 release-verification/
 release-candidate/
+portable-candidate/
 
 # Locally generated reports, never source payload.
 /runs/

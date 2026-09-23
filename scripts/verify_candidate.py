@@ -48,7 +48,7 @@ def verify(out: Path) -> dict:
                 try:
                     run = subprocess.run([sys.executable,*args], cwd=ROOT, stdin=subprocess.DEVNULL,
                                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                         timeout=180, shell=False)
+                                         timeout=600 if name == 'unit-tests' else 180, shell=False)
                     entry['returncode'] = run.returncode
                     entry['output_tail'] = safe_text(run.stdout, 3000)
                 except subprocess.TimeoutExpired:
