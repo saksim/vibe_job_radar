@@ -72,9 +72,17 @@ def build_candidate(out,evidence_path):
             args.extend(['--collect-all',package,'--copy-metadata',package])
         args.extend(['--distpath',str(stage/'程序目录 with spaces'),'--workpath',str(stage/'build'),'--specpath',str(stage),
                      str(ROOT/'scripts'/'portable_entry.py')])
-        subprocess.run(args,cwd=ROOT,env={**os.environ,'PLAYWRIGHT_BROWSERS_PATH':'0'},check=True,timeout=600)
+        # Collection hooks run before Analysis applies --paths. Make the source
+        # package discoverable to that process as well, without installing it.
+        subprocess.run(args,cwd=ROOT,env={**os.environ,'PLAYWRIGHT_BROWSERS_PATH':'0',
+                       'PYTHONPATH':str(ROOT/'src')},check=True,timeout=600)
         bundle=stage/'程序目录 with spaces'/'VibeJobRadar'
         if not (bundle/'VibeJobRadar.exe').is_file():raise ValueError('executable was not built')
+        for source in (ROOT/'src'/'vibe_job_radar').iterdir():
+            if source.is_file() and source.suffix in {'.json','.html','.js'}:
+                target=bundle/'_internal'/'vibe_job_radar'/source.name
+                if not target.is_file() or file_hash(target)!=file_hash(source):
+                    raise ValueError(f'packaged application resource absent or changed: {source.name}')
         licenses=bundle/'licenses';licenses.mkdir()
         shutil.copyfile(ROOT/'LICENSE',licenses/'VibeJobRadar.txt')
         python_license=Path(sys.base_prefix)/'LICENSE.txt'

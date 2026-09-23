@@ -82,6 +82,9 @@ def verify(bundle,report_path):
             workspace=root/'用户工作区 with spaces';cwd=root/'different-working-directory';cwd.mkdir()
             doctor=subprocess.run([str(exe),'--doctor','--workspace',str(workspace)],cwd=cwd,env=env,
                 capture_output=True,timeout=30,creationflags=subprocess.CREATE_NO_WINDOW)
+            result['doctor_returncode']=doctor.returncode
+            result['doctor_error_types']=sorted({item.decode('ascii') for item in
+                re.findall(rb'\b([A-Z][A-Za-z]*(?:Error|Exception))\b',doctor.stderr)})
             if doctor.returncode or json.loads(doctor.stdout.decode('utf-8')).get('workspace_writable') is not True:
                 raise AssertionError('portable doctor failed')
             result['checks'].append('exe runs from a different directory with no Python PATH, Unicode/spaced workspace and working SQLite')
