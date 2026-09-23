@@ -36,6 +36,7 @@ from .login_return import LoginReturnManager
 from .session_reuse import reuse_current_session
 from .saved_session import SavedSession
 from .rate import RateLedger, RateLimit
+from .deferred_resume import DeferredResume, can_resume
 from .transport import diagnose_host
 from .diagnostic_trace import DiagnosticTrace, traced, observe, notify
 from .browser_health import (BrowserStartupError, HEALTH_MESSAGES, environment_report,
@@ -45,6 +46,7 @@ from .browser_choice import BrowserChoice, CHOICES, validate_choice
 from .. import tls_context
 
 MESSAGES = {
+    'automatic_resume_unavailable': '无法确认原采集会话仍可继续，已暂停自动接续；已有结果和等待时间保留。请明确继续或重新正常登录。',
     'saved_session_invalid': '保存的会话格式无效。未启动新的采集；请清除该平台保存的会话后正常登录。',
     'saved_session_incompatible': '保存会话的工作区、平台版本、后端、浏览器或网络设置不匹配。未自动换身份重试；请明确清除该平台保存的会话。',
     'saved_session_unreadable': '保存的会话无法读取或解密。请使用原 Windows 用户，或清除后重新正常登录。',
@@ -228,7 +230,7 @@ class GuidedService:
                 if item['status'] in {'queued', 'running'} and item['id'] != self._active:
                     item.update(status='interrupted', code='interrupted', message=MESSAGES['interrupted'])
                 item['browser_open'] = item['id'] in self._backends
-                item['automatic_resume_available'] = (item.get('auto_resume', False)
+                item['automatic_resume_available'] = (item.get('auto_resume') is True
                                                       and item['browser_open']
                                                       and item['status'] == 'waiting_rate')
                 item['backend'] = item.get('backend', 'bridge')
@@ -620,14 +622,16 @@ class GuidedService:
                    saved_session_status='cleared', saved_session_error='', login_continuation='off')
 
     @traced('browser_session', 'service', state_index=0)
-    def _backend(self, state):
+    def _backend(self, state, *, required=None):
         if self._restart_required:
             raise BrowserStartupError(self._restart_report())
         if self._selected_browser not in CHOICES:
             raise BrowserStartupError(failed_report(environment_report(),
                 ValueError('invalid saved browser selection'), code='browser_choice_invalid'))
         ident = state['id']
-        if reuse_current_session(self, state):
+        if required is not None and (self._backends.get(ident) is not required or not can_resume(required)):
+            raise CrawlError('automatic_resume_unavailable')
+        if required is None and reuse_current_session(self, state):
             old = state['session_source_task']
             if old in self._session_leases:
                 self._session_leases[ident] = self._session_leases.pop(old)
@@ -638,7 +642,11 @@ class GuidedService:
             raise CrawlError('native_policy_changed')
         if previous and hasattr(previous, 'alive') and not previous.alive():
             self._close_backend(ident)
+            if required is not None:
+                raise CrawlError('automatic_resume_unavailable')
         if ident not in self._backends:
+            if required is not None:
+                raise CrawlError('automatic_resume_unavailable')
             for old in list(self._backends):
                 self._close_backend(old)
             def progress(code, seconds):
@@ -668,6 +676,8 @@ class GuidedService:
                     self._browser_health = dict(health)
                     self._remember_check(health, self._selected_browser)
         backend = self._backends[ident]
+        if required is not None and backend is not required:
+            raise CrawlError('automatic_resume_unavailable')
         if native:
             backend.policy_check = lambda: self.workspace.network_policy().fingerprint == backend.wire.network_policy.fingerprint
         bind = getattr(backend, 'bind_diagnostics', None)
@@ -851,6 +861,11 @@ class GuidedService:
         if action == 'pause_idle':
             self._cancel.set()
             self._save(state,'paused',status='paused'); return
+        if isinstance(secret, DeferredResume):
+            if self._cancel.is_set():
+                raise CrawlError('paused')
+            if action not in {'search', 'capture', 'collect', 'resume'}:
+                raise CrawlError('automatic_resume_unavailable')
         adapter = self.registry.get(state['platform'])
         if action == 'login':
             try:
@@ -858,7 +873,8 @@ class GuidedService:
             except RateLimit as exc:
                 self._save(state, wait_seconds=round(exc.wait, 1))
                 raise CrawlError('login_rate_limited') from exc
-        backend = self._backend(state)
+        backend = (self._backend(state, required=secret.backend)
+                   if isinstance(secret, DeferredResume) else self._backend(state))
         self._save(state, 'opening', status='running')
         pending_login = state.get('authentication') == 'manual_pending'
         if action == 'login':
@@ -896,12 +912,18 @@ class GuidedService:
                     state = self._load(ident)
                     due = state.get('next_allowed_at')
                     action = state.get('retry_action')
-                    if (state['status'] == 'waiting_rate' and state.get('auto_resume')
+                    if (state['status'] == 'waiting_rate' and state.get('auto_resume') is True
                             and action in {'search', 'capture', 'collect', 'resume'}
-                            and isinstance(due, (int, float)) and math.isfinite(due)
-                            and due <= self.ledger.clock()):
+                            and type(due) in (int, float) and math.isfinite(due)):
+                        backend = self._backends[ident]
+                        if not can_resume(backend):
+                            self._save(state, 'automatic_resume_unavailable', status='waiting_manual',
+                                       auto_resume=False)
+                            continue
+                        if due > self.ledger.clock():
+                            continue
                         self._save(state, status='queued', auto_resume=False, next_allowed_at=None)
-                        self._submit(action, ident)
+                        self._submit(action, ident, DeferredResume(backend, due))
                         return
                 except (InputError, OSError, ValueError):
                     continue
@@ -972,7 +994,10 @@ class GuidedService:
                                 self._cancel.set()  # No background browser requests during deferral.
                             else:
                                 self._save(state,code,status='paused' if code=='paused' else 'waiting_manual',
-                                           auto_resume=False, next_allowed_at=None)
+                                           auto_resume=False, next_allowed_at=(secret.next_allowed_at
+                                               if isinstance(secret, DeferredResume) else None))
+                                if isinstance(secret, DeferredResume):
+                                    self._cancel.set()  # Explicit action must re-enable browser requests.
                     except Exception:
                         pass
             finally:
