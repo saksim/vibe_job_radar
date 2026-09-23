@@ -209,6 +209,8 @@ class PlaywrightBackend:
             notify(getattr(self, '_diagnostics', None), 'mark', status=result.status)
             self._cookies(url, result.cookies)
             if 300 <= result.status < 400:
+                if kind == 'document':
+                    self._read_redirected = True
                 destination = urljoin(url, result.headers.get('location', ''))
                 self.adapter.accept_url(destination) if not self.auth_mode else self._auth_navigation(destination)
                 self.redirects += 1
