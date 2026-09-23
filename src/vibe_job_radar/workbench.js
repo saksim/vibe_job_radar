@@ -234,7 +234,7 @@ async function publicState() {
   $('public-consent-text').textContent = result.privacy;
   $('public-search-button').textContent = local ? '获取并在本机筛选' : '查询所选公开来源';
   $('public-network').textContent = JSON.stringify(result.network_policy, null, 2);
-  const busy = ['queued', 'running', 'cancelling'].includes(task.status);
+  const busy = task.owned_elsewhere || ['queued', 'running', 'cancelling'].includes(task.status);
   $('public-example').disabled = busy;
   $('public-search-button').disabled = busy || !result.query_available;
   publicNextQuery = task.status === 'completed' && task.next_cursor
@@ -254,7 +254,7 @@ async function watchPublic() {
   try {
     for (let i = 0; i < 120; i++) {
       const task = await publicState();
-      if (!['queued', 'running', 'cancelling'].includes(task.status)) {
+      if (!task.owned_elsewhere && !['queued', 'running', 'cancelling'].includes(task.status)) {
         if (!reportPinned && task.status === 'completed' && task.report_id && task.report_id !== publicReport) {
           publicReport = task.report_id;
           await refresh(); showReport(await request('/api/report/' + task.report_id));
