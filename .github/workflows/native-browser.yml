@@ -52,10 +52,24 @@ jobs:
         if: runner.os == 'Windows'
         timeout-minutes: 3
         run: python scripts/run_native_liepin_probe.py --controlled --channel msedge ${{ matrix.mode == 'headed' && '--headed' || '' }}
+      - name: Verify native authenticated proxies on Linux
+        if: runner.os == 'Linux' && matrix.mode == 'headless'
+        timeout-minutes: 3
+        run: python scripts/run_native_proxy_auth.py --controlled
+      - name: Verify headed native authenticated proxies on Linux
+        if: runner.os == 'Linux' && matrix.mode == 'headed'
+        timeout-minutes: 3
+        run: xvfb-run -a python scripts/run_native_proxy_auth.py --controlled --headed
+      - name: Verify native authenticated proxies on Windows
+        if: runner.os == 'Windows'
+        timeout-minutes: 3
+        run: python scripts/run_native_proxy_auth.py --controlled --channel msedge ${{ matrix.mode == 'headed' && '--headed' || '' }}
       - name: Preserve native evidence including failures
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: native-browser-${{ runner.os }}-${{ matrix.mode }}
           retention-days: 7
-          path: browser-acceptance/native/
+          path: |
+            browser-acceptance/native/
+            browser-acceptance/native-proxy-auth/

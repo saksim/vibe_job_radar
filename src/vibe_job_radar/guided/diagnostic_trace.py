@@ -45,6 +45,7 @@ CODES = frozenset('''operation_error network_error dns_error non_public_address
     encrypted_dns_empty_answer encrypted_dns_expired_answer encrypted_dns_cooldown
     encrypted_dns_budget encrypted_dns_clock_rollback
     local_proxy_configuration_conflict local_proxy_configuration_invalid
+    local_proxy_credentials_invalid local_proxy_credentials_require_explicit local_proxy_auth_failed
     local_proxy_connection_failed local_socks_configuration_invalid
     local_socks_auth_unsupported local_socks_protocol_error local_socks_timeout
     local_socks_connection_failed local_socks_request_rejected local_socks_truncated_reply
