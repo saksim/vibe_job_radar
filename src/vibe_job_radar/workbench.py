@@ -179,7 +179,8 @@ class Handler(BaseHTTPRequestHandler):
                 artifact = self.server.evidence._artifact_path(path.removeprefix("/api/evidence/attachment/"))
                 self._respond(200, artifact.read_bytes(), "application/octet-stream", filename=artifact.name)
             elif path == "/api/status":
-                self._json(200, self.server.workspace.status())
+                self._json(200, {**self.server.workspace.status(),
+                                'acquisition_sites':self.server.guided.registry.describe()})
             elif path == "/api/doctor":
                 self._json(200, self.server.workspace.doctor())
             elif path.startswith("/api/report/"):
