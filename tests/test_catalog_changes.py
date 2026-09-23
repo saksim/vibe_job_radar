@@ -10,7 +10,7 @@ from unittest.mock import Mock, patch
 from vibe_job_radar.catalog_changes import FIELDS, compare_catalogs, compact_change, validate_change
 from vibe_job_radar.local_public import API_URL, SOURCE, LocalPublicDataClient, parse_board, revision
 from vibe_job_radar.public_contract import ContractError
-from vibe_job_radar.network import FetchError, SafeHTTP
+from vibe_job_radar.network import FetchError, SafeHTTP, JSONRepresentation
 from vibe_job_radar.store import Store
 from vibe_job_radar.utils import atomic_json
 from vibe_job_radar.workspace import Workspace
@@ -273,8 +273,8 @@ class ChangeHTTPTests(unittest.TestCase):
         self.server.workspace.add_job(http_fixtures.capture())
         client=self.server.public_tasks.hybrid
         now=[time.time()];client.clock=lambda:now[0]
-        with patch.object(SafeHTTP,'json',return_value=fixtures.payload()) as wire:
-            first=self.submit();now[0]+=601;wire.return_value=changed_payload()
+        with patch.object(SafeHTTP,'conditional_json',return_value=JSONRepresentation(200,fixtures.payload(),None)) as wire:
+            first=self.submit();now[0]+=601;wire.return_value=JSONRepresentation(200,changed_payload(),None)
             second=self.submit()
             self.assertEqual(second['catalog_change']['counts']['updated'],1)
             self.assertNotIn('added',second['catalog_change'])
@@ -292,14 +292,14 @@ class ChangeHTTPTests(unittest.TestCase):
         with Store(self.server.workspace.db) as store:self.assertGreaterEqual(len(store.records()),3)
 
     def test_empty_filter_exposes_catalog_counts_without_inventing_report(self):
-        with patch.object(SafeHTTP,'json',return_value=fixtures.payload()):
+        with patch.object(SafeHTTP,'conditional_json',return_value=JSONRepresentation(200,fixtures.payload(),None)):
             state=self.submit(fixtures.query(query='DO-NOT-MATCH'))
         self.assertEqual(state['report_id'],'')
         self.assertEqual(state['code'],'public_empty')
         self.assertEqual(state['catalog_change']['counts']['current_total'],3)
 
     def test_state_and_page_are_offline_and_cannot_accept_change_injection(self):
-        with patch.object(SafeHTTP,'json') as wire:
+        with patch.object(SafeHTTP,'conditional_json') as wire:
             self.assertEqual(self.call('/api/public/state',authorized=False)[0],403)
             self.assertIn('public-changes',self.call('/')[2].decode('utf-8'))
             self.assertEqual(self.call('/api/public/search',{'consent':True,'query':fixtures.query().payload(),

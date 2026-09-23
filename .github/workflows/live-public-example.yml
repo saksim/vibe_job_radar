@@ -5,6 +5,7 @@ on:
       - 'src/vibe_job_radar/public_example.py'
       - 'src/vibe_job_radar/local_public.py'
       - 'src/vibe_job_radar/public_boards.py'
+      - 'src/vibe_job_radar/public_revalidation.py'
       - 'src/vibe_job_radar/public_contract.py'
       - 'scripts/check_live_local_public.py'
       - 'src/vibe_job_radar/network.py'
