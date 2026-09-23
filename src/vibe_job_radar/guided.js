@@ -36,6 +36,14 @@ function render(){
  if(health){$('browser-summary').textContent=(health.browser_channel ? '本次检查：'+(choice?.options[health.browser_channel]||health.browser_channel)+'。' : '')+health.message;
  $('browser-diagnostic').textContent=JSON.stringify({browser:health,installation:state.setup,choice},null,2);}
  if(!$('site').options.length)options($('site'),state.sites.map(s=>[s.key,s.label+'（实站未验证）']));
+ $('capability-status').replaceChildren();
+ for(const site of state.sites){
+  for(const capability of site.acquisition?.backends || []){
+   const line=document.createElement('p');
+   line.textContent=`${site.label} · ${capability.backend==='bridge'?'默认浏览器桥':'原生实验'}：${capability.message}`;
+   $('capability-status').append(line);
+  }
+ }
  if(!$('role').options.length){options($('role'),Object.entries(state.roles));$('role').value='time_series';}
  if(!intakeApplied){
   intakeApplied=true;
