@@ -28,3 +28,16 @@ def native_failure_code(error: object) -> str:
         'ERR_NAME_NOT_RESOLVED': 'dns_error',
         'ERR_BLOCKED_BY_ADMINISTRATOR': 'native_administrator_blocked',
     }.get(code, '')
+
+
+def native_transport_failure(error: object, tunnel_error: str = '') -> str:
+    """A generic Chromium tunnel failure must retain our actual upstream cause.
+
+    Certificate, browser-guard authentication and administrator errors are
+    independent diagnoses; a previous tunnel error cannot overwrite those.
+    Existing controller policy failures are preserved separately by _fatal.
+    """
+    code = native_failure_code(error)
+    if not code or code == 'local_proxy_connection_failed':
+        return tunnel_error or code
+    return code

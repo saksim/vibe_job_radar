@@ -51,7 +51,7 @@ class LocalSourceTests(unittest.TestCase):
         self.client.root.mkdir(exist_ok=True)
         self.client.key_path.write_bytes(b'bad')
         other=LocalPublicDataClient(self.workspace,transport=self.transport)
-        self.assertEqual(other.registry,{SOURCE.key:SOURCE})
+        self.assertEqual(other.registry[SOURCE.key],SOURCE)
         with self.assertRaises(ContractError):other.search(query(),consent=True)
         self.transport.json.assert_not_called()
 
@@ -202,12 +202,16 @@ class LocalPublicHTTPTests(unittest.TestCase):
     call=http_fixtures.HTTPTests.call
 
     def wait(self):
-        deadline=time.monotonic()+10
-        while time.monotonic()<deadline:
-            state=self.server.public_tasks.state()['task']
-            if state['status'] not in {'queued','running'}:return state
-            time.sleep(.01)
-        self.fail('local public task timeout')
+        # This checks task completion, not report-generation performance. Wait
+        # on the actual worker rather than repeatedly discovering system proxy
+        # settings via state() while it writes the report on a busy CI host.
+        worker=self.server.public_tasks._thread
+        self.assertIsNotNone(worker)
+        worker.join(timeout=30)
+        state=self.server.public_tasks.state()['task']
+        self.assertFalse(worker.is_alive(),f'local public worker timeout: {state}')
+        self.assertNotIn(state['status'],{'queued','running','cancelling'},state)
+        return state
 
     def test_default_local_provider_needs_no_server_or_config_and_is_offline_until_consent(self):
         with patch.object(SafeHTTP,'json') as network:

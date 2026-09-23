@@ -4,6 +4,7 @@ on:
     paths:
       - 'src/vibe_job_radar/public_example.py'
       - 'src/vibe_job_radar/local_public.py'
+      - 'src/vibe_job_radar/public_boards.py'
       - 'src/vibe_job_radar/public_contract.py'
       - 'scripts/check_live_local_public.py'
       - 'src/vibe_job_radar/network.py'
@@ -20,7 +21,7 @@ permissions:
 jobs:
   real-source:
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 4
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -32,6 +33,10 @@ jobs:
         run: |
           python -c "import time; time.sleep(31)"
           python scripts/check_live_local_public.py --live
+      - name: One fixed Cloudflare board GET after conservative spacing
+        run: |
+          python -c "import time; time.sleep(31)"
+          python scripts/check_live_local_public.py --live --source cloudflare
       - name: Consented DoH repair with simulated local mapping and real public GET
         run: |
           python -c "import time; time.sleep(31)"

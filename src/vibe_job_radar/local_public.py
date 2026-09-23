@@ -1,6 +1,6 @@
 """Local-only public-board acquisition; no application-owned server required.
 
-One fixed, documented read-only API, explicit user consent, no arbitrary URL,
+Fixed, documented read-only APIs, explicit user consent, no arbitrary URL,
 credentials or job application endpoint. Query filtering and paging stay local.
 Local research access is deliberately NOT a grant of redistribution rights.
 """
@@ -15,7 +15,6 @@ import math
 import secrets
 import time
 from datetime import datetime, timezone
-from urllib.parse import urlsplit
 
 from .catalog_changes import compare_catalogs, validate_change
 from .collection import writer_lock
@@ -23,15 +22,13 @@ from .guided.rate import Limits, RateLedger, RateLimit
 from .html_parser import plain_text
 from .public_cache_guard import CacheFailureGuard
 from .network import FetchError, SafeHTTP
-from .public_contract import ContractError, PublicQuery, PublicSource, validate_batch
+from .public_contract import ContractError, PublicQuery, validate_batch
+from .public_boards import ANTHROPIC, BOARDS
 from .utils import atomic_json
 from .workspace import InputError
 
-SOURCE = PublicSource('greenhouse_anthropic', 'Anthropic 公开招聘（本机获取）',
-    ('job-boards.greenhouse.io', 'boards.greenhouse.io'),
-    '用户主动请求：Greenhouse公开只读职位接口；仅本机岗位研究，不提交申请、不推断转载授权。',
-    local_access_approved=True)
-API_URL = 'https://boards-api.greenhouse.io/v1/boards/anthropic/jobs?content=true'
+SOURCE = ANTHROPIC.source  # Existing imports/default source remain compatible.
+API_URL = ANTHROPIC.api_url
 HOST = 'boards-api.greenhouse.io'
 SCOPE = 'greenhouse_public_example'  # Same workspace budget as the one-job example.
 MAX_BYTES = 32_000_000
@@ -47,7 +44,7 @@ def revision(jobs):
     return hashlib.sha256(json.dumps(jobs, sort_keys=True, ensure_ascii=False).encode('utf-8')).hexdigest()
 
 
-def parse_board(payload, now):
+def parse_board(payload, now, board=ANTHROPIC):
     """Read only listed full job descriptions; never infer a missing field."""
     if (not isinstance(payload, dict) or not isinstance(payload.get('jobs'), list)
             or len(payload['jobs']) > 10000 or not isinstance(payload.get('meta'), dict)
@@ -63,9 +60,9 @@ def parse_board(payload, now):
             raise ContractError('public_duplicate_result')
         identities.add(ident)
         url = raw.get('absolute_url')
-        SOURCE.accepts(url)
-        parsed = urlsplit(url)
-        if parsed.path.rstrip('/') != '/anthropic/jobs/' + ident or parsed.query:
+        board.accepts_job(url, ident)
+        if ((board.require_company or 'company_name' in raw)
+                and raw.get('company_name') != board.company):
             raise ContractError('public_source_mismatch')
         title, content, location = raw.get('title'), raw.get('content'), raw.get('location')
         if (not isinstance(title, str) or not title.strip() or not isinstance(content, str)
@@ -80,10 +77,10 @@ def parse_board(payload, now):
         # A malformed/truncated board is not accepted as a complete acquisition.
         if not 100 <= len(body.strip()) <= 150000:
             raise ContractError('public_content_incomplete')
-        jobs.append({'id': ident, 'source': SOURCE.key, 'title': title, 'company': 'Anthropic',
+        jobs.append({'id': ident, 'source': board.source.key, 'title': title, 'company': board.company,
             'location': location['name'], 'remote': None, 'text': body, 'url': url, 'final_url': url,
             'collected_at': timestamp(now), 'completeness': 'full_text',
-            'adapter_version': 'greenhouse_local_board_v1'})
+            'adapter_version': board.adapter_version})
     jobs.sort(key=lambda row: row['id'])
     return jobs
 
@@ -93,7 +90,7 @@ class LocalPublicDataClient:
 
     def __init__(self, workspace, *, transport=None, clock=time.time):
         self.workspace, self.clock = workspace, clock
-        self.registry = {SOURCE.key: SOURCE}
+        self.registry = {key: board.source for key, board in BOARDS.items()}
         self.root = workspace.root / 'local_public'
         self.path = self.root / 'anthropic-board-v2.json'
         self.legacy_path = self.root / 'anthropic-board-v1.json'
@@ -131,13 +128,24 @@ class LocalPublicDataClient:
                 Limits(request_interval=30, requests_hour=12, requests_day=24), clock=self.clock)
 
     def _scope(self, query):
-        if not isinstance(query, PublicQuery) or query.source_scope != (SOURCE.key,):
+        if (not isinstance(query, PublicQuery) or len(query.source_scope) != 1
+                or query.source_scope[0] not in BOARDS
+                or query.source_scope[0] not in self.registry
+                or not self.registry[query.source_scope[0]].local_access_approved):
             raise ContractError('public_source_unapproved')
+        return BOARDS[query.source_scope[0]]
 
-    def _validate_snapshot(self, value, now):
+    def _paths(self, board):
+        return (self.root / f'{board.token}-board-v2.json',
+                self.root / f'{board.token}-board-v1.json')
+
+    def _guard(self, board):
+        return self.failure_guard if board == ANTHROPIC else CacheFailureGuard(self.root, board.api_url)
+
+    def _validate_snapshot(self, value, now, board=ANTHROPIC):
         if (not isinstance(value, dict) or set(value) not in ({'observed_at', 'api', 'revision', 'jobs'},
                                   {'observed_at', 'api', 'revision', 'jobs', 'catalog_change'})
-                or value['api'] != API_URL or not isinstance(value['jobs'], list)
+                or value['api'] != board.api_url or not isinstance(value['jobs'], list)
                 or len(value['jobs']) > 10000):
             raise ContractError('public_cache_invalid')
         stamp = value['observed_at']
@@ -148,24 +156,25 @@ class LocalPublicDataClient:
         for offset in range(0, len(value['jobs']), 50):
             checked = validate_batch({'schema_version': 1, 'jobs': value['jobs'][offset:offset+50],
                 'next_cursor': '', 'generated_at': stamp_text},
-                PublicQuery('snapshot', (SOURCE.key,), limit=50), self.registry, access_mode='local')
+                PublicQuery('snapshot', (board.source.key,), limit=50), self.registry, access_mode='local')
             for job in checked['jobs']:
-                parsed = urlsplit(job['url'])
-                if (job['id'] in seen or job['source'] != SOURCE.key or job['company'] != 'Anthropic'
-                        or not job['id'].isdigit() or parsed.path.rstrip('/') != '/anthropic/jobs/' + job['id']
-                        or parsed.query or job['final_url'] != job['url'] or job['collected_at'] != stamp_text):
+                board.accepts_job(job['url'], job['id'])
+                if (job['id'] in seen or job['source'] != board.source.key or job['company'] != board.company
+                        or not job['id'].isdigit() or job['final_url'] != job['url']
+                        or job['collected_at'] != stamp_text):
                     raise ContractError('public_cache_invalid')
                 seen.add(job['id'])
         if value['revision'] != revision(value['jobs']):
             raise ContractError('public_cache_invalid')
         if 'catalog_change' in value:
-            validate_change(value['catalog_change'], value, SOURCE.key)
+            validate_change(value['catalog_change'], value, board.source.key)
         return value if now - stamp <= 7*86400 else None
 
-    def _cached(self, now):
+    def _cached(self, now, board=ANTHROPIC):
         timestamp(now)
         # Keep v1 untouched for rollback. A broken v2 must not fall back to v1.
-        path = self.path if self.path.exists() or self.path.is_symlink() else self.legacy_path
+        current, legacy = self._paths(board)
+        path = current if current.exists() or current.is_symlink() else legacy
         if path.is_symlink():
             raise InputError('缓存文件不能使用符号链接。')
         if not path.exists():
@@ -173,7 +182,7 @@ class LocalPublicDataClient:
         if path.stat().st_size > MAX_BYTES:
             raise ContractError('public_cache_invalid')
         try:
-            return self._validate_snapshot(json.loads(path.read_text(encoding='utf-8')), now)
+            return self._validate_snapshot(json.loads(path.read_text(encoding='utf-8')), now, board)
         except (ValueError, TypeError, KeyError) as exc:
             raise ContractError('public_cache_invalid') from exc
 
@@ -187,6 +196,11 @@ class LocalPublicDataClient:
                 if all(term in (j['title']+' '+j['company']+' '+j['text']).casefold() for term in terms)
                 and (not query.region or query.region.casefold() in j['location'].casefold())
                 and (query.remote is None or j['remote'] is query.remote)]
+        if BOARDS[query.source_scope[0]].prioritize_title:
+            # Broad body matches remain visible/countable, but a company
+            # boilerplate mentioning architects must not bury title matches.
+            # Anthropic's existing ordering/cursors remain unchanged.
+            jobs.sort(key=lambda job:(not all(term in job['title'].casefold() for term in terms),job['id']))
         offset = 0
         if query.cursor:
             try:
@@ -208,21 +222,22 @@ class LocalPublicDataClient:
                 'catalog_change': copy.deepcopy(snapshot.get('catalog_change'))}
 
     def cached(self, query):
-        self._scope(query)
+        board = self._scope(query)
         with writer_lock(self.workspace.root):
             self._prepare()
-            now = self.clock(); value = self._cached(now)
+            now = self.clock(); value = self._cached(now, board)
             return self._select(query, value, now, cached=True,
-                                error=self.failure_guard.read(now)) if value else None
+                                error=self._guard(board).read(now)) if value else None
 
-    def search(self, query, *, consent=False):
-        self._scope(query)
+    def search(self, query, *, consent=False, network_policy=None):
+        board = self._scope(query)
         if consent is not True:
             raise InputError('请确认本机获取所选公开来源；不提交申请或上传个人资料。')
         with writer_lock(self.workspace.root):
             self._prepare()
-            now = self.clock(); cached = self._cached(now)
-            hard_failure = self.failure_guard.read(now)
+            now = self.clock(); cached = self._cached(now, board)
+            guard = self._guard(board)
+            hard_failure = guard.read(now)
             if query.cursor:
                 # Pagination never triggers another fetch or changes the snapshot.
                 if cached is None:
@@ -248,11 +263,11 @@ class LocalPublicDataClient:
                 if self._default_transport:
                     # A new confirmed query may adopt changed preferences. The
                     # active query and existing circuit state are not reset.
-                    self.client.network_policy = self.workspace.network_policy()
+                    self.client.network_policy = network_policy or self.workspace.network_policy()
                     self.client.resolver = self.workspace.dns_resolver
                 # This constant GET carries no user query, region, files, cookies,
                 # passwords, application API key or Authorization header.
-                payload = self.client.json(API_URL)
+                payload = self.client.json(board.api_url)
             except FetchError as exc:
                 if exc.code == 'http_429':
                     self._rate_blocked = True
@@ -262,24 +277,25 @@ class LocalPublicDataClient:
                                'encrypted_dns_unavailable', 'encrypted_dns_timeout',
                                'encrypted_dns_cooldown', 'encrypted_dns_budget'}
                 if exc.code not in recoverable:
-                    self.failure_guard.record(exc.code, now)
+                    guard.record(exc.code, now)
                 elif hard_failure:
                     raise FetchError(hard_failure) from None
                 if cached and exc.code in recoverable:
                     return self._select(query, cached, now, cached=True, requests=1, error=exc.code)
                 raise
             try:
-                jobs = parse_board(payload, now)
-                value = {'observed_at': now, 'api': API_URL, 'revision': revision(jobs), 'jobs': jobs}
-                value['catalog_change'] = compare_catalogs(cached, value, SOURCE.key)
-                self._validate_snapshot(value, now)
+                jobs = parse_board(payload, now, board)
+                value = {'observed_at': now, 'api': board.api_url, 'revision': revision(jobs), 'jobs': jobs}
+                value['catalog_change'] = compare_catalogs(cached, value, board.source.key)
+                self._validate_snapshot(value, now, board)
                 if len((json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False)+'\n').encode('utf-8')) > MAX_BYTES:
                     raise ContractError('public_cache_invalid')
             except ContractError as exc:
-                self.failure_guard.record(exc.code, now)
+                guard.record(exc.code, now)
                 raise
-            if self.path.is_symlink():
+            path, _ = self._paths(board)
+            if path.is_symlink():
                 raise InputError('缓存文件不能使用符号链接。')
-            atomic_json(self.path, value)
-            self.failure_guard.clear()
+            atomic_json(path, value)
+            guard.clear()
             return self._select(query, value, now, cached=False, requests=1)

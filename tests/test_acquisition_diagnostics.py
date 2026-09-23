@@ -210,6 +210,15 @@ class TransportTraceTests(unittest.TestCase):
             RateLedger(Path(self.tmp.name)/'rates.sqlite',Limits(request_interval=0,page_interval=0)),threading.Event())
         self.trace=trace(); self.wire._diagnostics=self.trace
 
+    def test_missing_file_is_distinct_from_unreachable_and_does_not_expose_body(self):
+        response = WireResponse(404, {'content-type':'text/html'}, SECRET.encode())
+        with patch.object(self.wire, 'fetch', return_value=response):
+            self.wire.ensure_robots('https://' + HOST + '/search')
+        snapshot = self.trace.snapshot()
+        self.assertIn('robots_file_absent', {e['code'] for e in snapshot['events']})
+        self.assertNotIn(SECRET, json.dumps(snapshot))
+        self.assertIsNone(self.trace.first_failure)
+
     def test_robots_html_categorized_without_relaxing_decision(self):
         with patch.object(self.wire,'fetch',return_value=WireResponse(200,{'content-type':'text/html'},SECRET.encode())) as fetch:
             with self.assertRaises(CrawlError) as got:self.wire.ensure_robots('https://'+HOST+'/search')
@@ -310,6 +319,7 @@ class ServiceTraceTests(unittest.TestCase):
     def test_restart_loses_recording_not_prior_task(self):
         ident=self.helper.create(diagnostics=True)
         old=self.service.diagnostics({'id':ident})
+        self.service.close()  # Restart means the previous owner has exited.
         other=GuidedService(self.helper.workspace,registry=Registry([fixtures.fixture_adapter()]),backend_factory=fixtures.FakeBackend)
         self.addCleanup(other.close)
         new=other.diagnostics({'id':ident})

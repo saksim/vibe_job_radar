@@ -6,14 +6,17 @@ REASONS = {
     'fresh_reused': ('复用了已保存的新鲜正文', '没有为这条记录重复访问网站。'),
     'budget_skipped': ('未执行：本批正文尝试预算已用完', '不是抓取失败；先确认已尝试条目的问题，再为剩余链接新建小批次。'),
     'local_proxy_configuration_conflict': ('本程序的HTTP与SOCKS设置同时存在', '请只保留一种专用覆盖；系统自动模式不会猜测冲突配置。'),
-    'local_socks_configuration_invalid': ('SOCKS5入口配置无效', '仅接受无账号的本机socks5入口；socks5h、SOCKS4及远程入口不会静默降级。'),
+    'local_socks_configuration_invalid': ('SOCKS5入口配置无效', '仅接受无userinfo的本机socks5入口，凭据需单独设置；socks5h、SOCKS4及远程入口不会静默降级。'),
     'local_socks_auth_unsupported': ('SOCKS代理要求未支持的认证', '未发送网站请求，也不会绕过所选代理；不要把网站密码填写到代理配置。'),
     'local_socks_protocol_error': ('SOCKS代理响应格式不正确', '任务已停止且保留进度；检查所选端口是否提供SOCKS5协议。'),
     'local_socks_truncated_reply': ('SOCKS代理握手中断', '未改走直连，未重放网站请求。'),
     'local_socks_timeout': ('SOCKS代理握手超时', '等待网络恢复后继续；增加岗位预算不能解决握手超时。'),
     'local_socks_connection_failed': ('无法连接所选SOCKS代理', '保留任务，代理恢复后再继续；不会偷偷直连。'),
     'local_socks_request_rejected': ('SOCKS代理拒绝目标连接', '已停止，不通过切换身份、出口或直连绕过拒绝。'),
-    'local_proxy_configuration_invalid': ('本机HTTP代理配置不符合要求', '只能填写明确的本机HTTP代理地址；此版本不支持代理账号或远程代理；匿名本机SOCKS5由统一策略单独识别。不要在职位URL中填写代理地址。'),
+    'local_proxy_configuration_invalid': ('本机HTTP代理配置不符合要求', '只能填写明确的本机HTTP代理地址，凭据需单独设置；不支持远程代理。不要在职位URL中填写代理地址。'),
+    'local_proxy_credentials_invalid': ('代理凭据配置无效', '用户名和密码需同时提供并符合字符/长度限制；未发送凭据或目标请求。'),
+    'local_proxy_credentials_require_explicit': ('代理凭据没有绑定明确入口', '请配置本程序专用HTTP或SOCKS5入口；不会将凭据交给系统发现的其他代理。'),
+    'local_proxy_auth_failed': ('本机代理认证未通过', '核对所选代理凭据；不会降为匿名、重复认证或改走直连。'),
     'local_proxy_connection_failed': ('所选本机代理无法建立连接或隧道', '核对代理实际HTTP监听端口。程序不会因代理失败自动直连；增加职位预算不能修复代理连接。'),
     'tls_verification_failed': ('TLS证书验证失败', '请检查系统时间和证书，不要关闭TLS验证。'),
     'tls_handshake_failed': ('TLS握手失败', '检查网络及服务端TLS支持；不自动重放已发送请求。'),
@@ -58,3 +61,5 @@ def explain(state: dict) -> dict:
 from .network_settings import DNS_MESSAGES
 
 REASONS.update({code: ("网络解析未完成", message) for code, message in DNS_MESSAGES.items()})
+from .vm_proxy import ERROR_MESSAGES as VM_MESSAGES
+REASONS.update({code: ("宿主机代理未连接", message) for code, message in VM_MESSAGES.items()})

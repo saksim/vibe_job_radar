@@ -9,7 +9,7 @@
 选择来源和地区，确认后获取并在本机筛选。无需填写产品服务器地址、API Key、代理端口，
 也不需要先部署网关。默认本地提供者与以后可选的远端服务共用本地任务和报告接口。
 
-初始范围严格限定为 **Anthropic 的 Greenhouse 公开招聘目录**。不是全市场搜索，
+原已合并范围为 **Anthropic 的 Greenhouse 公开招聘目录**，本分支按#95增加Cloudflare固定目录，每次明确选择一个来源，详见[来源契约](PUBLIC_SOURCES.md)。不是全市场搜索，
 不是 BOSS、猎聘、51job 认证，也不会用这个来源冒充指定平台成功。关键词是原文子串匹配，
 不调用模型翻译或扩写岗位。接口未提供明确远程属性时保留未知，不自行推断。
 
@@ -17,7 +17,7 @@
 
 `网页确认 -> 本机任务 -> 固定公开 GET -> 本机校验/筛选/分页 -> 本机 Store -> 独立报告`
 
-固定接口：`GET https://boards-api.greenhouse.io/v1/boards/anthropic/jobs?content=true`。
+固定接口分别为`GET https://boards-api.greenhouse.io/v1/boards/anthropic/jobs?content=true`和`GET https://boards-api.greenhouse.io/v1/boards/cloudflare/jobs?content=true`，不是用户输入的URL。
 Greenhouse 官方文档明确公开 GET 不需要认证，并提供包含正文的列表查询：
 https://docs.greenhouse.io/job-board.html#list-jobs
 
@@ -32,7 +32,7 @@ https://docs.greenhouse.io/job-board.html#list-jobs
 
 ## 缓存、分页与限频
 
-缓存10分钟内复用。查询词变化只在已有目录上筛选，不再向上游重复请求；本地分页游标
+每个来源的缓存、错误和变化基线分别保存，缓存10分钟内复用。查询词变化只在已有目录上筛选，不再向上游重复请求；本地分页游标
 绑定查询、目录版本和本机密钥。重启可继续有效缓存的分页；未知/错范围/过期游标不触发外部抓取。
 每页生成独立报告，页面显示本页条目数和本次目录的匹配数；不是覆盖率或全市场岗位数。
 
@@ -60,7 +60,7 @@ https://docs.greenhouse.io/job-board.html#list-jobs
 本地访问不授权分发、缓存重启、查询隔离、分页/游标、错误/429、时间回拨、共享额度和独立报告。
 真实 Chromium 界面流程加入原 run_recovery_browser.py，远端内容是明确标注的人工夹具。
 另有 check_live_local_public.py --live，明确确认后只请求一次固定真实目录，只输出计数/元数据，
-正文保留在临时工作区。既有公开案例CI继续保留，两个真实请求间隔31秒。
+正文保留在临时工作区。默认仍检查Anthropic；`--source cloudflare`只检查第二个固定来源。既有公开案例CI继续保留，真实请求之间间隔31秒，不上传第三方全文。
 
 本地回归不等于 Windows/macOS/Linux 远端已通过，也不等于真实浏览器或目标招聘平台已认证。
 最终结果以对应提交的 CI 和真实来源烟测为准。
