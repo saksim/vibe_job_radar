@@ -212,7 +212,11 @@ def main():
                 assert HandoffFixtureBrowser.opened==[task['details'][0]['url']]
                 assert server.collector._load(task['id'])['detail_attempts']==1
                 result['checks'].append('HTTP failure preview performs no network; cancel creates nothing; confirmation transfers exact failed URL, preserves budget and roles, produces isolated report in selected browser task')
-                page.goto(server.origin+'/advanced');page.locator('#collect-load').click()
+                page.goto(server.origin+'/advanced')
+                # Navigation finishes before the async history request. Wait
+                # for the exact saved parent instead of clicking an empty list.
+                page.locator('#collect-history').select_option(task['id'])
+                page.locator('#collect-load').click()
                 page.get_by_role('button',name='将未完成链接转交浏览器（先预览，不联网）',exact=True).click()
                 expect(page.get_by_role('link',name='继续已保存的浏览器任务（不重复创建）',exact=True)).to_be_visible()
                 assert len(server.guided.state()['jobs'])==1 and len(HandoffFixtureBrowser.opened)==1

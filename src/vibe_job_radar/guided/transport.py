@@ -15,15 +15,15 @@ import time
 from dataclasses import dataclass, field
 from email.utils import parsedate_to_datetime
 from urllib.parse import urlsplit
-from urllib.robotparser import RobotFileParser
 
-from ..network import FetchError, PinnedHTTPSConnection, USER_AGENT, validate_public_url, validate_url_target
+from ..network import FetchError, PinnedHTTPSConnection, validate_public_url, validate_url_target
 from ..utils import domain_matches
 from ..network_policy import NetworkPolicy, current_policy, use_policy
 from .contracts import CrawlError
 from .rate import RateLedger, RateLimit
 from .request_headers import browser_headers
 from .diagnostic_trace import traced, notify, observe_robots
+from .native_policy import NativeRobots
 
 
 @dataclass(frozen=True)
@@ -182,22 +182,19 @@ class PinnedTransport:
         if origin not in self.robots:
             result = self.fetch(origin + '/robots.txt')
             observe_robots(getattr(self, '_diagnostics', None), result)
-            if result.status != 200 or 'html' in result.headers.get('content-type', '').lower():
-                raise CrawlError('robots_unavailable')
-            parser = RobotFileParser()
-            try:
-                parser.parse(result.body.decode('utf-8-sig').splitlines())
-            except UnicodeError as exc:
-                raise CrawlError('robots_unavailable') from exc
+            # Both browser backends must interpret wildcards/statuses alike.
+            # Preserve the bridge's missing-MIME compatibility for valid rules;
+            # malformed/HTML/empty successful responses still cannot grant access.
+            parser = NativeRobots(result.status,
+                result.headers.get('content-type', 'text/plain'), result.body)
             self.robots[origin] = parser
         parser = self.robots[origin]
-        if not parser.can_fetch(USER_AGENT, url):
+        if not parser.allowed(url):
             raise CrawlError('robots_denied')
-        delay = parser.crawl_delay(USER_AGENT) or 0
-        rate = parser.request_rate(USER_AGENT)
-        self.ledger.set_publisher(self.adapter.key, origin, delay=delay,
-                                  requests=rate.requests if rate else None,
-                                  seconds=rate.seconds if rate else None)
+        self.ledger.set_publisher(self.adapter.key, origin, delay=parser.delay)
+        for count, seconds in parser.windows:
+            self.ledger.set_publisher(self.adapter.key, origin, delay=parser.delay,
+                                      requests=count, seconds=seconds)
 
     def allowed_resource(self, url: str) -> bool:
         p = urlsplit(url)
