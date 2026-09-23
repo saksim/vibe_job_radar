@@ -46,6 +46,8 @@ from .saved_session import SavedSession
 from .password_login import LoginCredentials
 from .rate import RateLedger, RateLimit
 from .deferred_resume import DeferredResume, can_resume
+from .read_retry import (TransientReadFailure, budget as retry_budget, retry_delay,
+                         retry_after_seconds, action_for as retry_action_for)
 from .transport import diagnose_host
 from .diagnostic_trace import DiagnosticTrace, traced, observe, notify
 from .browser_health import (BrowserStartupError, HEALTH_MESSAGES, environment_report,
@@ -64,6 +66,12 @@ MESSAGES = {
     'invalid_page_observation': '页面观察无效，已保留任务并停止读取。',
     'job_unavailable': '平台已标明该职位暂停招聘或已下线，未把推荐职位保存为该岗位正文。',
     'login_credentials_rejected': '平台提示账号或密码错误。自动接续已停止，不会重试密码；请在平台正常页面核对。',
+    'read_transient_failure': '来源主页面暂时返回502/503/504，已有正文和报告保留。正在判断本任务是否还有有限重试额度。',
+    'read_retry_wait': '来源主页面暂时不可用，已安排有限退避重试；仍遵守来源节奏和共享配额，可暂停或停止。',
+    'read_retry_exhausted': '本任务的两次自动读页重试已用完，已停止自动请求。已有正文和报告保留，请核对来源后明确继续。',
+    'read_retry_unavailable': '无法确认失败来自本任务当前主文档的只读请求，未自动重放；已有进度保留。',
+    'read_retry_state_invalid': '本任务的重试预算无法安全读取，已停止自动访问；请恢复原工作区文件或使用兼容版本。',
+    'read_retry_after_invalid': '来源的重试时间无效或超出支持范围，已停止自动访问；请核对来源要求。',
     'automatic_resume_unavailable': '无法确认原采集会话仍可继续，已暂停自动接续；已有结果和等待时间保留。请明确继续或重新正常登录。',
     'saved_session_invalid': '保存的会话格式无效。未启动新的采集；请清除该平台保存的会话后正常登录。',
     'saved_session_incompatible': '保存会话的工作区、平台版本、后端、浏览器或网络设置不匹配。未自动换身份重试；请明确清除该平台保存的会话。',
@@ -874,7 +882,7 @@ class GuidedService:
     def _outcome(state, manifest=None):
         rows = [c for c in state['cards'] if c['id'] in set(state['selection'])]
         saved = sum(c['status'] == 'ok' for c in rows)
-        waiting = {'discovered', 'opening', 'manual_required', 'paused', 'rate_wait',
+        waiting = {'discovered', 'opening', 'manual_required', 'paused', 'rate_wait', 'read_transient_failure',
                    'publisher_wait', 'cooldown', 'http_429', 'hourly_limit', 'daily_limit'}
         pending = sum(c['status'] in waiting for c in rows)
         failed = len(rows) - saved - pending
@@ -982,6 +990,7 @@ class GuidedService:
         if action == 'pause_idle':
             self._cancel.set()
             self._save(state,'paused',status='paused'); return
+        retry_budget(state)  # Validate saved accounting before creating a browser.
         if isinstance(secret, DeferredResume):
             if self._cancel.is_set():
                 raise CrawlError('paused')
@@ -1087,6 +1096,28 @@ class GuidedService:
         self._save(state, selection=ids, selection_source='query_order',
                    auto_selection_applied=True, phase='collect', report_id='')
         self._collect(state, backend, adapter)
+
+    def _defer_read_retry(self, state, action, failure):
+        backend = self._backends.get(state['id'])
+        if (action not in {'search', 'capture', 'collect', 'resume'}
+                or getattr(backend, 'wait_error', None) is not failure
+                or not can_resume(backend)):
+            raise CrawlError('read_retry_unavailable')
+        retry = retry_action_for(state, failure)
+        saved = retry_budget(state)
+        publisher_wait = retry_after_seconds(failure.retry_after, self.ledger.clock())
+        if publisher_wait:
+            due = self.ledger.defer(state['platform'], publisher_wait)  # Even after retry exhaustion.
+            self._save(state, next_allowed_at=due)
+        delay = retry_delay(saved['used'], failure.retry_after, self.ledger.clock())
+        saved.update(used=saved['used'] + 1, last_status=failure.status)
+        # Reserve before scheduling. A crash may spend this slot but never grant
+        # extra retries; another task/process still observes the same cooldown.
+        self._save(state, read_retry=saved)
+        due = self.ledger.defer(state['platform'], delay)
+        self._save(state, 'read_retry_wait', status='waiting_rate',
+                   wait_seconds=round(max(0, due-self.ledger.clock()), 1),
+                   next_allowed_at=due, retry_action=retry, auto_resume=True)
 
     def _resume_due(self):
         """Resume only safe read actions in a still-owned browser session.
@@ -1201,7 +1232,19 @@ class GuidedService:
                                 self._browser_health = exc.report
                                 self._remember_check(exc.report, self._selected_browser)
                                 state['startup_diagnostic'] = exc.report
-                            if isinstance(exc, RateLimit) and exc.next_allowed_at is not None:
+                            if isinstance(exc, TransientReadFailure):
+                                try:
+                                    self._defer_read_retry(state, action, exc)
+                                except CrawlError as retry_error:
+                                    if state.get('phase') == 'collect':
+                                        for row in state['cards']:
+                                            if row['url'] == exc.url and row['status'] == exc.code:
+                                                row['status'] = retry_error.code
+                                        self._finalize_report(state, self.registry.get(state['platform']))
+                                    self._save(state, retry_error.code, status='waiting_manual',
+                                               auto_resume=False, next_allowed_at=state.get('next_allowed_at'))
+                                self._cancel.set()
+                            elif isinstance(exc, RateLimit) and exc.next_allowed_at is not None:
                                 backend = self._backends.get(ident)
                                 safe = (action in {'search', 'capture', 'collect', 'resume'}
                                         and not getattr(backend, 'auth_mode', False)

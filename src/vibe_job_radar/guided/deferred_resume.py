@@ -1,6 +1,7 @@
 """Ephemeral ownership for a timer action; never stored with task metadata."""
 from dataclasses import dataclass, field
 from .rate import RateLimit
+from .read_retry import TransientReadFailure
 
 
 _TRANSIENT = frozenset({'rate_wait', 'publisher_wait', 'cooldown', 'http_429',
@@ -26,6 +27,8 @@ def can_resume(backend):
         # A fatal page/HTTP error must not be erased by a new automatic open().
         if error in (None, '', 'paused'):
             return waiting is None
+        if error == 'read_transient_failure':
+            return isinstance(waiting, TransientReadFailure) and waiting.code == error
         return (error in _TRANSIENT and isinstance(waiting, RateLimit)
                 and waiting.code == error)
     except Exception:

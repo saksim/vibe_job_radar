@@ -14,6 +14,7 @@ from ..utils import domain_matches
 from ..network_policy import current_policy
 from .contracts import CrawlError, PageSnapshot
 from .rate import RateLimit
+from .read_retry import TransientReadFailure, document_failure, read_attempt
 from .transport import PinnedTransport
 from .diagnostic_trace import traced, notify
 from .browser_health import (BrowserStartupError, HEALTH_MESSAGES, environment_report,
@@ -184,6 +185,8 @@ class PlaywrightBackend:
                 notify(getattr(self, '_diagnostics', None), 'mark', code='paused')
                 route.abort('blockedbyclient')
                 return  # Idle polling must not poison the next explicit action.
+            if self.error == 'read_transient_failure':
+                raise self.wait_error or CrawlError(self.error)
             url, kind, method = request.url, request.resource_type, request.method
             p = urlsplit(url)
             if not self.wire.allowed_resource(url):
@@ -226,7 +229,10 @@ class PlaywrightBackend:
                               body=f'<meta http-equiv="refresh" content="0;url={escaped}">')
                 return
             if result.status >= 500:
-                raise CrawlError('remote_server_error')
+                raise document_failure(self, url, method, kind, result.status,
+                    result.headers.get('retry-after', ''),
+                    main=bool(getattr(request, 'frame', None) is not None
+                              and request.frame == getattr(self.page, 'main_frame', None)))
             filtered = {k: v for k, v in result.headers.items() if k not in {
                 'content-length', 'content-encoding', 'transfer-encoding', 'connection',
                 'set-cookie', 'alt-svc', 'report-to', 'nel'}}
@@ -241,10 +247,10 @@ class PlaywrightBackend:
             if (request.resource_type == 'document' or exc.code not in {
                     'resource_domain_blocked', 'write_not_allowed', 'method_blocked'}):
                 transient = {'rate_wait', 'publisher_wait', 'cooldown', 'http_429',
-                             'hourly_limit', 'daily_limit'}
-                if not isinstance(exc, RateLimit) or self.error is None or self.error in transient:
+                             'hourly_limit', 'daily_limit', 'read_transient_failure'}
+                if not isinstance(exc, (RateLimit, TransientReadFailure)) or self.error is None or self.error in transient:
                     self.error = exc.code
-                    self.wait_error = exc if isinstance(exc, RateLimit) else None
+                    self.wait_error = exc if isinstance(exc, (RateLimit, TransientReadFailure)) else None
             try:
                 route.abort('blockedbyclient')
             except Exception:
@@ -282,6 +288,7 @@ class PlaywrightBackend:
             raise getattr(self, 'wait_error', None) or CrawlError(self.error)
 
     @traced('navigation', 'browser', url=True)
+    @read_attempt
     def open(self, url: str, *, authentication: bool = False) -> PageSnapshot:
         self.auth_mode, self.error, self.redirects = authentication, None, 0
         self.wait_error = None

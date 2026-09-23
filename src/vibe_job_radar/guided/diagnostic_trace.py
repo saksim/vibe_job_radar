@@ -27,6 +27,8 @@ STAGES = frozenset({'task', 'browser_session', 'listing', 'list_parse', 'collect
 RESOURCES = frozenset({'document', 'stylesheet', 'script', 'image', 'media', 'font',
     'xhr', 'fetch', 'websocket', 'other', 'unknown'})
 CODES = frozenset('''operation_error network_error dns_error non_public_address
+    read_transient_failure read_retry_wait read_retry_exhausted read_retry_unavailable
+    read_retry_state_invalid read_retry_after_invalid
     tls_verification_failed tls_handshake_failed http_401 http_403 http_429
     robots_denied robots_unavailable resource_domain_blocked write_not_allowed native_optional_request_blocked
     method_blocked redirect_requires_attention login_origin_changed invalid_url
