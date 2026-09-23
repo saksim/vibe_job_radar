@@ -7,6 +7,7 @@ import json
 import secrets
 import sys
 import threading
+import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
@@ -73,6 +74,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
+        if self.close_connection:
+            self.send_header("Connection", "close")
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
@@ -85,8 +88,46 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         try:
             self.wfile.write(body)
-        except (BrokenPipeError, ConnectionResetError):
+            self.wfile.flush()
+            if code >= 400 and self.command == 'POST':
+                self._discard_rejected_body()
+        except OSError:
             pass
+
+    def _discard_rejected_body(self):
+        """After sending a refusal, drain only an unambiguous bounded frame.
+
+        Closing a Windows socket with unread inbound data can reset the peer
+        before it sees the 403. Never parse unauthorized JSON, dispatch it,
+        reuse the connection, or wait indefinitely for a slow/truncated body.
+        """
+        if getattr(self, '_body_consumed', False) or self.headers.get('Transfer-Encoding'):
+            return
+        lengths = self.headers.get_all('Content-Length', [])
+        if len(lengths) != 1 or not lengths[0].isascii() or not lengths[0].isdecimal():
+            return
+        try:
+            remaining = int(lengths[0])
+        except ValueError:
+            return
+        if not 0 < remaining <= MAX_BODY:
+            return
+        previous_timeout = self.connection.gettimeout()
+        deadline = time.monotonic() + .2
+        try:
+            while remaining:
+                wait = deadline - time.monotonic()
+                if wait <= 0:
+                    break
+                self.connection.settimeout(wait)
+                chunk = self.rfile.read1(min(remaining, 8192))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+        except OSError:
+            pass
+        finally:
+            self.connection.settimeout(previous_timeout)
 
     def _json(self, code: int, data: dict):
         self._respond(code, json.dumps(data, ensure_ascii=False).encode("utf-8"), "application/json; charset=utf-8")
@@ -165,6 +206,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             raw = self.rfile.read(length)
+            self._body_consumed = True
             if len(raw) != length:
                 raise ValueError
             data = json.loads(raw.decode("utf-8"))
@@ -179,7 +221,7 @@ class Handler(BaseHTTPRequestHandler):
         target = self.server.workspace
         if route.startswith("/api/public/"):
             target = self.server.public_tasks
-            methods = {"/api/public/" + name: name for name in ("start", "search")}
+            methods = {"/api/public/" + name: name for name in ("start", "search", "cancel", "resume")}
         elif route.startswith("/api/guided/"):
             target = self.server.guided
             methods = {"/api/guided/" + name: name for name in ("create", "action", "install", "check_browser", "diagnose", "export", "diagnostics")}

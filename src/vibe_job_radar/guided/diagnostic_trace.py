@@ -27,32 +27,36 @@ STAGES = frozenset({'task', 'browser_session', 'listing', 'list_parse', 'collect
 RESOURCES = frozenset({'document', 'stylesheet', 'script', 'image', 'media', 'font',
     'xhr', 'fetch', 'websocket', 'other', 'unknown'})
 CODES = frozenset('''operation_error network_error dns_error non_public_address
+    read_transient_failure read_retry_wait read_retry_exhausted read_retry_unavailable
+    read_retry_state_invalid read_retry_after_invalid
     tls_verification_failed tls_handshake_failed http_401 http_403 http_429
-    robots_denied robots_unavailable resource_domain_blocked write_not_allowed
+    robots_denied robots_unavailable resource_domain_blocked write_not_allowed native_optional_request_blocked
     method_blocked redirect_requires_attention login_origin_changed invalid_url
     wrong_platform credential_url not_job_url not_job_list manual_required
+    login_form_changed login_credentials_rejected login_password_submitted job_unavailable invalid_page_observation
     structure_changed invalid_job_data response_too_large request_too_large
     unexpected_compression request_headers_invalid request_headers_conflict remote_server_error site_stopped
     page_not_ready browser_closed browser_missing playwright_missing
     playwright_incompatible browser_executable_missing browser_launch_failed
     browser_choice_invalid paused rate_wait publisher_wait cooldown hourly_limit
     daily_limit list_page_limit login_rate_limited rate_storage_error clock_rollback
-    publisher_policy_invalid encrypted_dns_consent_required encrypted_dns_tls_failed
+    publisher_policy_invalid automatic_resume_unavailable encrypted_dns_consent_required encrypted_dns_tls_failed
     encrypted_dns_unavailable encrypted_dns_invalid_response encrypted_dns_disabled
     encrypted_dns_non_public_answer encrypted_dns_route_failed encrypted_dns_timeout
     encrypted_dns_http_rejected encrypted_dns_refused encrypted_dns_name_not_found
     encrypted_dns_empty_answer encrypted_dns_expired_answer encrypted_dns_cooldown
     encrypted_dns_budget encrypted_dns_clock_rollback
     local_proxy_configuration_conflict local_proxy_configuration_invalid
+    local_proxy_credentials_invalid local_proxy_credentials_require_explicit local_proxy_auth_failed
     local_proxy_connection_failed local_socks_configuration_invalid
     local_socks_auth_unsupported local_socks_protocol_error local_socks_timeout
     local_socks_connection_failed local_socks_request_rejected local_socks_truncated_reply
-    robots_response_html robots_http_unavailable robots_encoding_invalid
+    robots_response_html robots_http_unavailable robots_encoding_invalid robots_file_absent
     robots_rules_observed robots_extensions_observed robots_no_rules_observed
     robots_inspection_truncated no_cards no_records native_administrator_blocked native_contract_unavailable
     native_contract_invalid native_operation_unreviewed native_surface_unsupported
-    native_protocol_error native_proxy_auth_failed native_policy_changed native_observation_limit
-    native_unaccounted_response native_business_response_invalid'''.split())
+    native_protocol_error native_proxy_auth_failed native_policy_changed native_observation_limit native_page_cleared
+    native_unaccounted_response native_business_response_invalid checkpoint_incompatible checkpoint_records_missing batch_identity_unsupported search_scope_changed'''.split())
 WAITS = frozenset({'paused', 'rate_wait', 'publisher_wait', 'cooldown', 'http_429',
     'hourly_limit', 'daily_limit', 'login_rate_limited'})
 LOCAL_POLICIES = {
@@ -65,6 +69,7 @@ LOCAL_POLICIES = {
     'response_too_large': 'response_size', 'request_too_large': 'request_size',
     'request_headers_invalid': 'header_validation', 'request_headers_conflict': 'header_validation',
     'paused': 'cancellation', 'native_operation_unreviewed': 'native_site_contract',
+    'native_optional_request_blocked': 'native_optional_dependency',
     'native_surface_unsupported': 'native_surface_policy', 'native_policy_changed': 'workspace_policy',
     'native_observation_limit': 'native_response_limit',
 }
@@ -158,7 +163,7 @@ class DiagnosticTrace:
 
     def begin(self, stage, actor, *, url='', resource='unknown', method='', impact='unknown', operation='', entity=''):
         with self._lock:
-            operation = operation if operation in {'search', 'login', 'capture', 'more', 'collect', 'pause_idle', 'close', 'resume'} else ''
+            operation = operation if operation in {'search', 'login', 'login_password', 'capture', 'more', 'collect', 'pause_idle', 'close', 'resume'} else ''
             entity = entity if isinstance(entity, str) and re.fullmatch(r'[a-f0-9]{24}', entity) else ''
             parent = self._frames[-1] if self._frames else {}
             frame = {'operation': operation or parent.get('operation', ''), 'entity': entity or parent.get('entity', ''), 'stage': stage if stage in STAGES else 'unknown',
@@ -295,7 +300,9 @@ def observe_robots(trace, result):
     if type(trace) is not DiagnosticTrace:
         return
     try:
-        if result.status != 200:
+        if result.status in {404, 410}:
+            code = 'robots_file_absent'
+        elif result.status != 200:
             code = 'robots_http_unavailable'
         elif 'html' in result.headers.get('content-type', '').lower():
             code = 'robots_response_html'
