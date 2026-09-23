@@ -44,6 +44,14 @@ jobs:
         # and stack dump for the always() artifact step; failure remains fatal.
         timeout-minutes: 3
         run: python scripts/run_native_auth_probe.py --controlled --channel msedge ${{ matrix.mode == 'headed' && '--headed' || '' }}
+      - name: Verify recorded Liepin CORS search through native Chromium
+        if: runner.os == 'Linux'
+        timeout-minutes: 3
+        run: ${{ matrix.mode == 'headed' && 'xvfb-run -a' || '' }} python scripts/run_native_liepin_probe.py --controlled ${{ matrix.mode == 'headed' && '--headed' || '' }}
+      - name: Verify recorded Liepin CORS search through native Edge
+        if: runner.os == 'Windows'
+        timeout-minutes: 3
+        run: python scripts/run_native_liepin_probe.py --controlled --channel msedge ${{ matrix.mode == 'headed' && '--headed' || '' }}
       - name: Preserve native evidence including failures
         if: always()
         uses: actions/upload-artifact@v4

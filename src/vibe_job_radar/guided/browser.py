@@ -192,7 +192,15 @@ class PlaywrightBackend:
                 raise CrawlError('resource_domain_blocked')
             if method not in {'GET', 'HEAD', 'POST', 'OPTIONS'}:
                 raise CrawlError('method_blocked')
-            if method == 'POST' and (not self.auth_mode or p.hostname not in self.adapter.login_hosts):
+            if (self.adapter.key == 'liepin' and self.adapter.login_url == 'https://www.liepin.com/'
+                    and method in {'POST', 'OPTIONS'}):
+                # Use the same exact, observed operations as the native backend;
+                # adding a login host must not grant every write on that host.
+                from .native_policy import contract_for
+                rule = contract_for(self.adapter).match(url, method,
+                    {'xhr': 'XHR', 'fetch': 'Fetch'}.get(kind, 'Other'), authentication=self.auth_mode)
+                rule.validate_headers(method, request.all_headers())
+            elif method == 'POST' and (not self.auth_mode or p.hostname not in self.adapter.login_hosts):
                 raise CrawlError('write_not_allowed')
             if kind == 'document':
                 self.adapter.accept_url(url) if not self.auth_mode else self._auth_navigation(url)
@@ -298,10 +306,19 @@ class PlaywrightBackend:
         text = self.page.locator('body').inner_text(timeout=5000)
         if self.adapter.challenged(text, url):
             raise CrawlError('manual_required')
+        if (getattr(self, 'auth_mode', False) and self.adapter.key == 'liepin'
+                and self.page.locator('input[data-nick="login-pwd"]:visible').count()):
+            # A readable list behind the login dialog is not a completed login.
+            # Report a visible rejection without retaining its account text.
+            if re.search(r'(?:账号|账户|用户名|手机号|邮箱)(?:或|/|和)密码(?:错误|不正确)|密码(?:错误|不正确)|账号不存在', text):
+                raise CrawlError('login_credentials_rejected')
+            raise CrawlError('manual_required')
         content = self.page.content()
         if len(content) > 5_000_000:
             raise CrawlError('response_too_large')
-        return PageSnapshot(url, content)
+        if self.page.url != url:
+            raise CrawlError('page_not_ready')
+        return PageSnapshot(url, content, visible_text=text)
 
     def _visible(self, selectors, scope=None):
         for selector in selectors:
@@ -311,6 +328,13 @@ class PlaywrightBackend:
                 if candidate.is_visible() and candidate.is_enabled():
                     return candidate
         return None
+
+    def password_login(self, credentials):
+        from .password_login import submit_password_login
+        submit_password_login(self, credentials)
+
+    def _before_pagination_click(self) -> None:
+        """Backend state transition after permission/quota checks, before clicking."""
 
     @traced('pagination', 'browser')
     def next_page(self) -> bool:
@@ -323,6 +347,7 @@ class PlaywrightBackend:
         self.wire.reserve('page')  # Reserve once, before either a document or SPA action.
         self._pagination_page = self.page
         try:
+            self._before_pagination_click()
             button.click(timeout=90000)
             self._settle()
             return True
