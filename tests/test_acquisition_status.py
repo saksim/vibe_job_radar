@@ -54,6 +54,22 @@ class AcquisitionStatusTests(unittest.TestCase):
         self.assertEqual(native['verification_level'], 'implemented')
         self.assertEqual(native['evidence'], [])
 
+    def test_recorded_liepin_definitions_keep_their_own_dated_proof(self):
+        adapter=builtins().get('liepin')
+        before=replace(adapter,resource_domains=('liepin.com','liepin.cn'))
+        after=replace(adapter,resource_domains=('liepin.com','liepin.cn',
+            'concat.lietou-static.com','image0.lietou-static.com'))
+        old=describe_adapter(before)['backends'][0]
+        new=describe_adapter(after)['backends'][0]
+        self.assertEqual(old['evidence'][0]['source_revision'],'cde1e1cf842fee2a15ade77470753201fc7fdc45')
+        self.assertEqual(new['evidence'][0]['source_revision'],'0d85f554818779f9445ad8e3d618a26a118910b7')
+        self.assertEqual(old['evidence'][0]['date'],'2026-09-18')
+        self.assertEqual(new['evidence'][0]['date'],'2026-09-23')
+        self.assertFalse(new['live_verified'])
+        # Expanding the reviewed hosts again cannot keep either proof.
+        other=describe_adapter(replace(after,resource_domains=(*after.resource_domains,'unreviewed.test')))
+        self.assertTrue(all(not row['evidence'] for row in other['backends']))
+
     def test_custom_adapter_has_no_automatic_inherited_certification(self):
         registry = Registry([replace(fixture_adapter(), certification='live_verified')])
         data = registry.describe()[0]
