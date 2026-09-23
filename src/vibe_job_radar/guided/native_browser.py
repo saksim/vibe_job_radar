@@ -23,7 +23,7 @@ from .contracts import CrawlError
 from .diagnostic_trace import notify, observe, observe_robots, traced
 from .native_policy import NativeRobots, contract_for
 from .native_tunnel import NativeTunnel
-from .native_errors import native_failure_code
+from .native_errors import native_transport_failure
 from .native_documents import continue_document_response
 from .rate import RateLimit
 from .transport import PinnedTransport, WireResponse
@@ -473,7 +473,7 @@ class NativeBackend(PlaywrightBackend):
                 self._hops.pop(key,None)
                 if record and record['role'] != 'asset' and not self.cancelled.is_set() and not self.error:
                     err = data.get('errorText','')
-                    code = native_failure_code(err) or self.tunnel.last_error or 'network_error'
+                    code = native_transport_failure(err, self.tunnel.last_error) or 'network_error'
                     self._fatal(code)
         except Exception:
             self._fatal('native_protocol_error')
@@ -701,7 +701,7 @@ class NativeBackend(PlaywrightBackend):
             except CrawlError:
                 raise
             except Exception as exc:
-                code = self.error or self.tunnel.last_error or native_failure_code(exc)
+                code = self.error or native_transport_failure(exc, self.tunnel.last_error)
                 raise CrawlError(code or 'robots_unavailable') from exc
             finally:
                 try:
@@ -726,7 +726,7 @@ class NativeBackend(PlaywrightBackend):
         except CrawlError:
             raise
         except Exception as exc:
-            raise self.wait_error or CrawlError(self.error or self.tunnel.last_error or native_failure_code(exc) or 'page_not_ready') from exc
+            raise self.wait_error or CrawlError(self.error or native_transport_failure(exc, self.tunnel.last_error) or 'page_not_ready') from exc
 
     def _settle(self):
         deadline=time.monotonic()+15
