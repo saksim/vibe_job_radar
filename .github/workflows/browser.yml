@@ -28,6 +28,7 @@ jobs:
           python scripts/run_collection_guidance_browser.py
           python scripts/run_resume_browser.py
           python scripts/run_guided_browser.py
+          python scripts/run_guided_startup_browser.py
           python scripts/run_guided_review_browser.py
           python scripts/run_proxy_auth_browser.py
           python scripts/run_recovery_browser.py
