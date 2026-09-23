@@ -51,7 +51,7 @@ class LocalSourceTests(unittest.TestCase):
         self.client.root.mkdir(exist_ok=True)
         self.client.key_path.write_bytes(b'bad')
         other=LocalPublicDataClient(self.workspace,transport=self.transport)
-        self.assertEqual(other.registry,{SOURCE.key:SOURCE})
+        self.assertEqual(other.registry[SOURCE.key],SOURCE)
         with self.assertRaises(ContractError):other.search(query(),consent=True)
         self.transport.json.assert_not_called()
 

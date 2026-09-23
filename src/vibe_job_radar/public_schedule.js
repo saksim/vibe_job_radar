@@ -28,8 +28,9 @@
     const next = value.next_due ? ` 下一次：${new Date(value.next_due * 1000).toLocaleString()}。` : '';
     byId('schedule-status').textContent = value.message + next;
     const q = value.query;
+    const sourceLabels = q?.source_scope.map(key => Array.from(form.elements.source.options).find(option => option.value === key)?.textContent || '已保存来源').join('、');
     byId('schedule-query').textContent = q
-      ? `已保存计划：${q.source_scope.join('、')} · ${q.query} · 地区：${q.region || '不限'} · 每次最多${q.limit}条首屏结果。修改上方表单不会自动改动此计划。`
+      ? `已保存计划：${sourceLabels} · ${q.query} · 地区：${q.region || '不限'} · 每次最多${q.limit}条首屏结果。修改上方表单不会自动改动此计划。`
       : '尚未保存查询计划。';
     const entries = value.history.slice().reverse().map(item => {
       const li = document.createElement('li');

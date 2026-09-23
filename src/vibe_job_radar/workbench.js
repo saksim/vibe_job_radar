@@ -221,7 +221,8 @@ async function publicState() {
   publicTaskId = task.id || '';
   $('public-cancel').hidden = !task.can_cancel;
   $('public-resume').hidden = !task.can_resume;
-  $('public-saved-query').textContent = task.query?.query ? `已保存查询：${task.query.query} · 地区：${task.query.region||'不限'}。继续时采用这些条件。` : '';
+  const sourceLabels = (task.query?.source_scope || []).map(key => result.sources.find(source => source.id === key)?.label || '原来源当前不可用').join('、');
+  $('public-saved-query').textContent = task.query?.query ? `已保存查询：${sourceLabels} · ${task.query.query} · 地区：${task.query.region||'不限'}。继续和下一页采用这些条件，修改表单不会改动当前结果。` : '';
   $('public-status').textContent = task.message || '';
   const changeMessage = task.catalog_change?.message || '';
   $('public-changes').textContent = changeMessage;
@@ -241,7 +242,7 @@ async function publicState() {
     ? {...task.query, cursor: task.next_cursor} : null;
   $('public-next').hidden = !publicNextQuery;
   $('public-next').disabled = busy;
-  $('public-next').textContent = local ? '读取下一页（本地缓存）' : '确认获取下一页';
+  $('public-next').textContent = local ? `读取下一页（${sourceLabels} · 本地缓存）` : '确认获取下一页';
   if (!$('public-source').options.length) for (const source of result.sources) {
     const option = document.createElement('option'); option.value = source.id; option.textContent = source.label;
     $('public-source').append(option);
