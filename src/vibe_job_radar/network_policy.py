@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 
 from .loopback_proxy import LocalProxyError, LoopbackProxy
 from .loopback_socks import LoopbackSocks5, select_loopback_proxy
+from .vm_proxy import VmHTTPProxy, VmSocks5Proxy
 from .proxy_credentials import configured as credentials_configured
 
 _ACTIVE: ContextVar = ContextVar('radar_network_policy', default=None)
@@ -130,6 +131,10 @@ class NetworkPolicy:
 
     @staticmethod
     def transport_name(proxy: LoopbackProxy | None) -> str:
+        if isinstance(proxy, VmSocks5Proxy):
+            return 'vm_host_socks5_proxy'
+        if isinstance(proxy, VmHTTPProxy):
+            return 'vm_host_http_proxy'
         if isinstance(proxy, LoopbackSocks5):
             return 'loopback_socks5_proxy'
         return 'loopback_http_proxy' if proxy else 'system_route'
@@ -151,6 +156,8 @@ class NetworkPolicy:
                   'encrypted_dns_provider': 'Cloudflare' if self.encrypted_dns else None,
                   'proxy_credentials_supported': True,
                   'proxy_credentials_scope': 'explicit_application_loopback_only',
+                  'vm_host_proxy_supported': True,
+                  'vm_host_proxy_scope': 'explicit_workspace_anonymous_rfc1918_ipv4',
                   'proxy_authentication_configured': bool(self.proxy and self.proxy.credentials is not None),
                   'network_tested': False}
         try:

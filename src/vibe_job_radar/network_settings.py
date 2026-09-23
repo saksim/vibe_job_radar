@@ -8,6 +8,7 @@ from dataclasses import replace
 from .network_policy import NetworkPolicy
 from .loopback_proxy import LoopbackProxy, LocalProxyError
 from .loopback_socks import LoopbackSocks5
+from .vm_proxy import VmHTTPProxy, VmSocks5Proxy, ERROR_MESSAGES as VM_MESSAGES
 from .proxy_credentials import configured as credentials_configured
 from .html_parser import _unique_object
 from .utils import atomic_json, utc_now
@@ -16,7 +17,10 @@ from .workspace import InputError
 CONSENT = 'cloudflare-doh-v1'
 MODES = {'system', 'fake_ip_doh'}
 PROXY_CONSENT = 'workspace-anonymous-loopback-v1'
-PROXY_MODES = {'auto', 'http', 'socks5'}
+VM_CONSENT = 'workspace-anonymous-vm-host-v1'
+PROXY_PARSERS = {'http': LoopbackProxy, 'socks5': LoopbackSocks5,
+                 'vm_http': VmHTTPProxy, 'vm_socks5': VmSocks5Proxy}
+PROXY_MODES = {'auto', *PROXY_PARSERS}
 PROXY_DEFAULT = {'proxy_mode': 'auto', 'proxy_endpoint': '', 'proxy_consent_version': ''}
 PROXY_CONFLICT = '已有应用专用代理或代理凭据环境设置；请先清除冲突或选择自动模式。不会把这些凭据交给工作区的新入口。'
 DISCLOSURE = ('仅当系统DNS为映射地址时，使用Cloudflare加密解析目标域名；解析服务可看到域名和网络出口，'
@@ -32,16 +36,20 @@ def _proxy(mode, endpoint):
             if endpoint != '':
                 raise ValueError()
             return None
-        return (LoopbackProxy if mode == 'http' else LoopbackSocks5).from_url(endpoint)
+        return PROXY_PARSERS[mode].from_url(endpoint)
     except (ValueError, TypeError, LocalProxyError):
-        raise InputError('只接受明确的匿名本机HTTP或SOCKS5代理及端口；不能包含账号密码、路径、远程地址或代理DNS。') from None
+        raise InputError('请按所选模式填写匿名HTTP或SOCKS5代理及端口：本机模式只接受loopback，宿主机模式只接受RFC1918 IPv4。不能包含账号密码、路径、其他远程地址或代理DNS。') from None
 
 
 def _endpoint(mode, proxy):
     if proxy is None:
         return ''
     host = '[' + proxy.host + ']' if ':' in proxy.host else proxy.host
-    return f'{mode}://{host}:{proxy.port}'
+    return f'{mode.removeprefix("vm_")}://{host}:{proxy.port}'
+
+
+def _proxy_consent(mode):
+    return '' if mode == 'auto' else VM_CONSENT if mode.startswith('vm_') else PROXY_CONSENT
 
 
 def _environment_conflict():
@@ -71,7 +79,7 @@ def read_settings(workspace):
         if value['schema_version'] == 2:
             proxy = _proxy(value['proxy_mode'], value['proxy_endpoint'])
             if (value['proxy_endpoint'] != _endpoint(value['proxy_mode'], proxy)
-                    or value['proxy_consent_version'] != (PROXY_CONSENT if proxy else '')):
+                    or value['proxy_consent_version'] != _proxy_consent(value['proxy_mode'])):
                 raise ValueError
         return value
     except (ValueError, TypeError, OSError, InputError):
@@ -134,13 +142,14 @@ def save_proxy(workspace, data):
         value = {**previous, 'schema_version': 2, 'revision': previous['revision'] + 1,
                  'updated_at': utc_now(), 'proxy_mode': data['mode'],
                  'proxy_endpoint': _endpoint(data['mode'], proxy),
-                 'proxy_consent_version': PROXY_CONSENT if proxy else ''}
+                 'proxy_consent_version': _proxy_consent(data['mode'])}
         atomic_json(workspace.root/'network-preferences.json', value)
     workspace.dns_resolver.clear()
     return {**state(workspace), 'message': '已保存本工作区代理，未进行联网测试。请停止并重开已有采集会话以采用新设置；其他工作区和系统设置未修改。'}
 
 
 DNS_MESSAGES = {
+    **VM_MESSAGES,
     'workspace_proxy_environment_conflict': PROXY_CONFLICT,
     'non_public_address': '系统返回非公网地址。若网络检查显示映射地址，可在“网络自动适配”阅读说明并启用加密解析；无需改系统DNS或关闭VPN。其他私网地址仍会拒绝。',
     'encrypted_dns_disabled': '加密解析的许可已撤销；未发起新的解析。已有任务与数据保留。',

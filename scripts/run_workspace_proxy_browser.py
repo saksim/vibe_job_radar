@@ -15,7 +15,12 @@ from vibe_job_radar.workspace import Workspace
 
 def main():
     from playwright.sync_api import sync_playwright, expect
-    out=ROOT/'browser-acceptance'/'workspace-proxy';out.mkdir(parents=True,exist_ok=True)
+    vm='--vm' in sys.argv
+    http_mode,socks_mode=('vm_http','vm_socks5') if vm else ('http','socks5')
+    http_input='http://192.168.56.1:18990/' if vm else 'http://localhost:18990/'
+    http_saved='http://192.168.56.1:18990' if vm else 'http://127.0.0.1:18990'
+    socks_saved='socks5://10.0.2.2:18991' if vm else 'socks5://[::1]:18991'
+    out=ROOT/'browser-acceptance'/('vm-proxy-settings' if vm else 'workspace-proxy');out.mkdir(parents=True,exist_ok=True)
     result={'success':False,'checks':[],'external_requests':[],'page_errors':[],
         'scope':'Actual local workbench UI and preferences; no proxy probes, DNS queries, accounts or recruiting requests.'}
     private=('VIBE_RADAR_HTTP_PROXY','VIBE_RADAR_SOCKS_PROXY','VIBE_RADAR_PROXY_USERNAME','VIBE_RADAR_PROXY_PASSWORD')
@@ -53,12 +58,17 @@ def main():
                     assert 'unsafe-eval' not in entry.headers['content-security-policy']
                     expect(page.locator('#workspace-proxy-mode')).to_have_value('auto')
                     assert not (workspace.root/'network-preferences.json').exists()
-                    page.locator('#workspace-proxy-mode').select_option('http')
-                    page.locator('#workspace-proxy-endpoint').fill('http://localhost:18990/')
+                    page.locator('#workspace-proxy-mode').select_option(http_mode)
+                    if vm:
+                        expect(page.locator('#workspace-proxy-consent-label')).to_contain_text('宿主机授权给此来宾')
+                        page.locator('#workspace-proxy-endpoint').fill('http://127.0.0.1:18990')
+                        page.locator('#workspace-proxy-consent').check();save(page,400)
+                        assert not (workspace.root/'network-preferences.json').exists()
+                    page.locator('#workspace-proxy-endpoint').fill(http_input)
                     save(page,400)
                     assert not (workspace.root/'network-preferences.json').exists()
                     page.locator('#workspace-proxy-consent').check();save(page)
-                    expect(page.locator('#workspace-proxy-endpoint')).to_have_value('http://127.0.0.1:18990')
+                    expect(page.locator('#workspace-proxy-endpoint')).to_have_value(http_saved)
                     page.locator('#encrypted-dns-consent').check()
                     with page.expect_response(lambda r:r.url.endswith('/api/network/preferences')) as response:
                         page.locator('#save-network-preferences').click()
@@ -68,20 +78,21 @@ def main():
                     stale=context.new_page();stale.goto(server.entry_url);expand(stale)
                     for path in ('/guided','/advanced'):
                         page.goto(server.origin+path);expand(page)
-                        expect(page.locator('#workspace-proxy-endpoint')).to_have_value('http://127.0.0.1:18990')
+                        expect(page.locator('#workspace-proxy-endpoint')).to_have_value(http_saved)
                         expect(page.locator('#encrypted-dns-consent')).to_be_checked()
-                    page.locator('#workspace-proxy-mode').select_option('socks5')
-                    page.locator('#workspace-proxy-endpoint').fill('socks5://[::1]:18991')
+                    page.locator('#workspace-proxy-mode').select_option(socks_mode)
+                    page.locator('#workspace-proxy-endpoint').fill(socks_saved)
                     page.locator('#workspace-proxy-consent').check();save(page)
                     stale.locator('#workspace-proxy-consent').check();save(stale,400)
-                    assert workspace.network_state()['proxy_mode']=='socks5'
+                    assert workspace.network_state()['proxy_mode']==socks_mode
                     assert workspace.network_state()['revision']==3
                     result['checks'].append('three workbench pages share saved route; stale page cannot overwrite newer SOCKS setting')
                     page.reload();expand(page)
-                    expect(page.locator('#workspace-proxy-endpoint')).to_have_value('socks5://[::1]:18991')
+                    expect(page.locator('#workspace-proxy-endpoint')).to_have_value(socks_saved)
                     page.set_viewport_size({'width':390,'height':844})
                     assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
                     page.screenshot(path=str(out/'mobile.png'),full_page=True)
+                    page.locator('#network-preferences').screenshot(path=str(out/'preferences.png'))
                     page.goto(servers[1].entry_url);expand(page)
                     expect(page.locator('#workspace-proxy-mode')).to_have_value('auto')
                     expect(page.locator('#encrypted-dns-consent')).not_to_be_checked()
@@ -94,7 +105,7 @@ def main():
                     assert not result['external_requests'] and not result['page_errors']
                     assert all(not w.db.exists() for w in workspaces)
                     result['checks'].append('return to auto preserves DNS, leaves versioned rollback guard and creates no jobs or external requests')
-                    result.update(success=True,browser_version=browser.version)
+                    result.update(success=True,browser_version=browser.version,proxy_scope='vm_host' if vm else 'loopback')
                 finally:browser.close()
         finally:
             for server in servers:server.shutdown();server.server_close()

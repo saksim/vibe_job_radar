@@ -38,6 +38,7 @@ jobs:
           python scripts/run_recovery_browser.py
           python scripts/run_network_settings_browser.py
           python scripts/run_workspace_proxy_browser.py
+          python scripts/run_workspace_proxy_browser.py --vm
           python scripts/run_research_workflow_browser.py
           python scripts/run_native_login_browser.py
           python scripts/run_login_detail_return_browser.py
