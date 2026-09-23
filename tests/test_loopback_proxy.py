@@ -96,7 +96,7 @@ class RealProxyTests(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.requests=[];self.connects=[];self.sni=[]
         self.http_status=200;self.proxy_status=200;self.symbol=IP4;owner=self
-        self.expected_proxy_auth=None;self.proxy_reason='refused'
+        self.expected_proxy_auth=None;self.proxy_reason='refused';self.proxy_peers=[]
         class Handler(http.server.BaseHTTPRequestHandler):
             def log_message(self,*a):pass
             def answer(self):
@@ -119,6 +119,7 @@ class RealProxyTests(unittest.TestCase):
         self.real_gai=socket.getaddrinfo;self.real_dial=socket.create_connection
         class Tunnel(socketserver.StreamRequestHandler):
             def handle(self):
+                owner.proxy_peers.append(self.client_address[0])
                 first=self.rfile.readline(4096).decode('ascii').strip();headers={}
                 for _ in range(30):
                     line=self.rfile.readline(4096)
@@ -149,7 +150,7 @@ class RealProxyTests(unittest.TestCase):
         class Server(socketserver.ThreadingTCPServer):
             allow_reuse_address=True;daemon_threads=True
             def handle_error(self,*a):pass
-        self.proxy=Server(('127.0.0.1',0),Tunnel)
+        self.proxy=Server((getattr(self,'proxy_bind','127.0.0.1'),0),Tunnel)
         self.threads=[]
         for server in (self.target,self.proxy):
             t=threading.Thread(target=server.serve_forever,kwargs={'poll_interval':.01},daemon=True);t.start();self.threads.append(t)
