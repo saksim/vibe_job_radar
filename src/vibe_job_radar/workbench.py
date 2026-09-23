@@ -217,7 +217,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         route = urlsplit(self.path).path
         methods = {"/api/job": "add_job", "/api/import": "import_file", "/api/plan": "plan",
-                   "/api/discover": "discover", "/api/analyze": "analyze", "/api/network/preferences": "network_preferences"}
+                   "/api/discover": "discover", "/api/analyze": "analyze", "/api/network/preferences": "network_preferences",
+                   "/api/network/proxy": "network_proxy_preferences"}
         target = self.server.workspace
         if route.startswith("/api/public/"):
             target = self.server.public_tasks

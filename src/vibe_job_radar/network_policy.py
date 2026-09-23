@@ -122,7 +122,7 @@ class NetworkPolicy:
             return cls('automatic_static', bypass=rules, error='local_proxy_configuration_invalid')
 
     def for_host(self, host: str) -> LoopbackProxy | None:
-        if self.source != 'explicit_application' and _bypasses(host, self.bypass):
+        if self.source not in {'explicit_application', 'explicit_workspace'} and _bypasses(host, self.bypass):
             return None
         if self.error:
             raise LocalProxyError(self.error)

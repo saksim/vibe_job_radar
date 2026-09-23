@@ -42,7 +42,7 @@ def main():
                 with page.expect_response(lambda r:'/api/network/preferences' in r.url) as saved:
                     page.locator('#save-network-preferences').click()
                 assert saved.value.status==200
-                expect(page.locator('#network-preferences [role=status]')).to_contain_text('已保存')
+                expect(page.locator('#network-dns-status')).to_contain_text('已保存')
                 assert workspace.network_policy().encrypted_dns
                 for path in ('/guided','/advanced'):
                     page.goto(server.origin+path)
