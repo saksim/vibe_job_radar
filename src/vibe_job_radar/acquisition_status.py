@@ -22,6 +22,11 @@ DEFINITIONS = {
     '51job':'ba24c8f94c26b51360a1fdfc30f24815454a30f9ac9702759445625b1bc49221',
 }
 NATIVE_DEFINITION = '1e1531acdeea880808c168fa33df4b4b7d957c3b707b1c0a437607358234ca31'
+# A second, separately tested definition. Keeping both allows either reviewed
+# feature branch to land first without assigning old proof to a new contract.
+LIEPIN_DEFINITION = 'a84e31bfac42377dfe238a41ebba113d31fcdd232cf16095729bd5703701cae7'
+LIEPIN_NATIVE_DEFINITION = 'fcea6e2869894c082fdddabb2b7c465d77dbe3c245fc4360051dcd8e10ff136b'
+LIEPIN_EVIDENCE_HEAD = '0d85f554818779f9445ad8e3d618a26a118910b7'
 
 
 def _digest(value):
@@ -36,7 +41,9 @@ def describe_adapter(adapter):
                            'class':type(adapter).__module__+'.'+type(adapter).__qualname__})
     except TypeError:
         identity = None
-    known = identity is not None and identity == DEFINITIONS.get(adapter.key)
+    baseline = identity is not None and identity == DEFINITIONS.get(adapter.key)
+    updated_liepin = adapter.key == 'liepin' and identity == LIEPIN_DEFINITION
+    known = baseline or updated_liepin
     try:
         contract = contract_for(adapter)
     except CrawlError:
@@ -45,18 +52,21 @@ def describe_adapter(adapter):
     rows = []
     for backend in ('bridge','native'):
         available = backend == 'bridge' or contract is not None
+        expected_native = LIEPIN_NATIVE_DEFINITION if updated_liepin else NATIVE_DEFINITION
         matched = known and (backend == 'bridge' or contract is not None
-                             and _digest(asdict(contract)) == NATIVE_DEFINITION)
+                             and _digest(asdict(contract)) == expected_native)
         evidence = []
         if matched:
             # Shared backend fixtures are not dedicated live-site certification.
-            evidence = [{'level':'controlled_verified', 'date':EVIDENCE_DATE,
-                'source_revision':EVIDENCE_HEAD,
+            evidence = [{'level':'controlled_verified', 'date':'2026-09-23' if updated_liepin else EVIDENCE_DATE,
+                'source_revision':LIEPIN_EVIDENCE_HEAD if updated_liepin else EVIDENCE_HEAD,
                 'scope':'人工页面与真实浏览器/报告引擎；未使用平台账号，未认证实站',
                 'browser_os':(['Chromium / Linux'] if backend == 'bridge' else
                               ['Chromium / Linux（有头与无头）','Edge / Windows（有头与无头）']),
                 'network':'人工上游或本机 TLS 夹具；不代表用户 VPN/TUN',
-                'url':REPO+'/actions/runs/'+('35358529040' if backend == 'bridge' else '35358529120')}]
+                'url':REPO+'/actions/runs/'+(
+                    ('35891758001' if backend == 'bridge' else '35891758054') if updated_liepin else
+                    ('35358529040' if backend == 'bridge' else '35358529120'))}]
         if not available:
             message = '尚无本站原生访问契约，不能选择该模式。'
         elif not known:
