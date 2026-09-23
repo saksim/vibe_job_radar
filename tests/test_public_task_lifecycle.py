@@ -167,9 +167,9 @@ class PublicLifecycleTests(unittest.TestCase):
         original = copy.deepcopy(self.tasks._state)
         for changes in ({'resume_binding':None}, {'attempt':'2'}, {'attempt':True},
                         {'attempt':0}, {'id':'not-a-task'}, {'query':query(query='Engineer').payload()}):
-            self.tasks._state = {**original, **changes}
+            self.tasks._save(**{**original, **changes})
             self.assertFalse(self.tasks.state()['task']['can_resume'])
-        self.tasks._state = original
+        self.tasks._save(**original)
         self.assertTrue(self.tasks.state()['task']['can_resume'])
         self.assertEqual(self.tasks.state()['task']['id'], ident)
 
@@ -213,10 +213,10 @@ class PublicLifecycleTests(unittest.TestCase):
         self.assertEqual(transport.json.call_count, 1)
 
     def test_example_saved_extra_query_is_rejected(self):
-        self.tasks._state = {'id':'a'*32, 'status':'interrupted', 'kind':'example', 'query':{},
-                            'attempt':1,'resume_binding':self.tasks._binding('example', {})}
+        self.tasks._save(id='a'*32, status='interrupted', kind='example', query={},
+                        attempt=1,resume_binding=self.tasks._binding('example', {}))
         self.assertTrue(self.tasks.state()['task']['can_resume'])
-        self.tasks._state['query'] = {'url':'https://unreviewed.fixture.test'}
+        self.tasks._save(query={'url':'https://unreviewed.fixture.test'})
         self.assertFalse(self.tasks.state()['task']['can_resume'])
 
 

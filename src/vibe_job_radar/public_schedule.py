@@ -12,6 +12,7 @@ import uuid
 
 from .collection import writer_lock
 from .public_contract import PublicQuery
+from .public_tasks import PublicTaskBusy
 from .workspace import InputError
 
 DAY = 86400
@@ -206,12 +207,13 @@ class PublicSchedule:
     def _task(self):
         # Task-only snapshot: status polling must not repeatedly discover OS
         # proxy settings. Lock is shared with manual submit/cancel operations.
-        with self.tasks._lock:return copy.deepcopy(self.tasks._state)
+        return self.tasks.snapshot()
 
     def _cancel_active(self,value):
         with self.tasks._lock:
             task=self._task()
-            if value['active_task_id'] and task.get('id')==value['active_task_id'] and task.get('status') in {'queued','running','cancelling'}:
+            if (not task.get('owned_elsewhere') and value['active_task_id'] and task.get('id')==value['active_task_id']
+                    and task.get('status') in {'queued','running','cancelling'}):
                 self.tasks.cancel({'id':task['id']})
 
     def recover(self):
@@ -221,6 +223,7 @@ class PublicSchedule:
             if not value['attempt_id']:return
             task=self._task()
             matched=bool(value['active_task_id']) and task.get('id')==value['active_task_id']
+            if matched and task.get('owned_elsewhere') and task.get('status') in {'queued','running','cancelling'}:return
             complete=matched and task.get('status')=='completed'
             self._finish(value,task if matched else {},self._now(),interrupted=not complete)
 
@@ -238,7 +241,8 @@ class PublicSchedule:
                     if task.get('id')!=value['active_task_id']:
                         self._finish(value,{},now,interrupted=True);return
                     if task.get('status') in {'queued','running','cancelling'}:
-                        if value['status'] in {'paused','disabled'}:self.tasks.cancel({'id':task['id']})
+                        if value['status'] in {'paused','disabled'} and not task.get('owned_elsewhere'):
+                            self.tasks.cancel({'id':task['id']})
                         return
                     self._finish(value,task,now);return
             if value['status']!='scheduled' or now<value['next_due']:return
@@ -248,11 +252,15 @@ class PublicSchedule:
             except (ValueError,TypeError,KeyError):
                 value.update(status='paused',code='conditions_changed',next_due=None);self._write(value);return
             with self.tasks._lock:
-                if self._stop.is_set() or self.tasks._thread and self.tasks._thread.is_alive():return
+                if self._stop.is_set() or self.tasks.busy():return
                 value.update(status='dispatching',code='dispatching',attempt_id=uuid.uuid4().hex,last_seen=now)
                 self._write(value)  # Crash afterwards is uncertain, never replayed.
                 try:
                     started=self.tasks.scheduled_search(value['query'],binding=value['binding'],policy_id=value['policy_id'])
+                except PublicTaskBusy:
+                    # The lease was refused before creating a task/request.
+                    value.update(status='scheduled',code='scheduled',attempt_id='',active_task_id='')
+                    self._write(value);return
                 except Exception:
                     self._finish(value,{},now,interrupted=True);return
                 value.update(status='running',code='running',active_task_id=started['id'])

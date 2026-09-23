@@ -7,10 +7,12 @@ network requests require a user's explicit start/search consent.
 from __future__ import annotations
 
 import copy
+from contextlib import contextmanager, ExitStack
 import hashlib
 import json
 import tempfile
 import threading
+import time
 import uuid
 from dataclasses import asdict
 from pathlib import Path
@@ -26,6 +28,10 @@ from .utils import atomic_json, utc_now, parse_time
 from .workspace import InputError
 
 
+class PublicTaskBusy(InputError):
+    """No task was submitted and no new source request was started."""
+
+
 class PublicTasks:
     def __init__(self, workspace, *, hybrid_client=None, example_factory=PublicExample):
         self.workspace, self.hybrid = workspace, hybrid_client
@@ -33,26 +39,89 @@ class PublicTasks:
         self.root=workspace.root/'public_tasks'
         self.root.mkdir(exist_ok=True,mode=0o700)
         self.path=self.root/'state.json'
-        if self.root.is_symlink() or self.path.is_symlink():
+        if self.root.is_symlink():
             raise InputError('公开任务记录不能使用符号链接。')
         self._lock=threading.RLock(); self._thread=None; self._closed=False
-        self._cancel = threading.Event()
+        self._cancel = threading.Event();self._lease=None;self._foreign=False
+        self.owner_root=self.root/'owner'
         self._state={'status':'idle','message':'点击获取后才会联网；个人材料和登录态保留本地。'}
-        if self.path.exists():
-            if self.path.stat().st_size>2_000_000:
-                raise InputError('公开任务记录过大，请检查工作区。')
-            self._state=json.loads(self.path.read_text(encoding='utf-8'))
-            if not isinstance(self._state, dict):
-                raise InputError('公开任务记录损坏，未恢复或启动网络请求。')
-            if self._state.get('status') in {'queued','running','cancelling'}:
-                self._state.update(status='interrupted',message='上次服务已退出；已保存条件和数据，确认后可继续。')
+        self._refresh()
+
+    def _claim(self):
+        if self.root.is_symlink() or self.owner_root.is_symlink():
+            raise InputError('公开任务所有权目录不能使用符号链接。')
+        self.owner_root.mkdir(exist_ok=True,mode=0o700)
+        lease=writer_lock(self.owner_root)
+        try:lease.__enter__()
+        except InputError as exc:
+            if isinstance(exc.__cause__,OSError):
+                raise PublicTaskBusy('另一个本机服务正在执行公开任务，请回到原工作台查看或停止。') from None
+            raise
+        return lease
+
+    def busy(self):
+        with self._lock:
+            if self._lease is not None or self._thread and self._thread.is_alive():return True
+            if not self.owner_root.exists():return False
+            try:lease=self._claim()
+            except PublicTaskBusy:return True
+            else:lease.__exit__(None,None,None);return False
+
+    @contextmanager
+    def _record_lock(self):
+        # Atomic replacement on Windows can fail while another instance reads
+        # the old file. Readers/writers share a short lock; owner leases remain
+        # nonblocking and are never inferred from PID/stale-file timestamps.
+        deadline=time.monotonic()+5
+        with ExitStack() as stack:
+            while True:
+                try:stack.enter_context(writer_lock(self.root));break
+                except InputError as exc:
+                    if not isinstance(exc.__cause__,OSError) or time.monotonic()>=deadline:raise
+                    time.sleep(.01)
+            yield
+
+    def _read_record(self):
+        if self.root.is_symlink():
+            raise InputError('公开任务记录不能使用符号链接。')
+        with self._record_lock():
+            # Even Windows metadata probes can briefly hold a file handle.
+            # Keep all accesses to state.json under the replacement lock.
+            if self.path.is_symlink():raise InputError('公开任务记录不能使用符号链接。')
+            if self.path.exists():
+                if self.path.stat().st_size>2_000_000:
+                    raise InputError('公开任务记录过大，请检查工作区。')
+                try:value=json.loads(self.path.read_text(encoding='utf-8'))
+                except (ValueError,OSError):raise InputError('公开任务记录损坏，未恢复或启动网络请求。') from None
+                if not isinstance(value,dict):raise InputError('公开任务记录损坏，未恢复或启动网络请求。')
+                self._state=value
+            else:self._state={'status':'idle','message':'点击获取后才会联网；个人材料和登录态保留本地。'}
+
+    def _refresh(self):
+        if self._lease is not None:return
+        self._foreign=self.busy()
+        self._read_record()
+        if not self._foreign and self._state.get('status') in {'queued','running','cancelling'}:
+            self._state.update(status='interrupted',message='上次服务已退出；已保存条件和数据，确认后可继续。')
+
+    def snapshot(self):
+        """Current task and ownership only; no network-policy discovery."""
+        with self._lock:
+            self._refresh()
+            task=copy.deepcopy(self._state)
+            task['owned_elsewhere']=self._foreign
+            task['can_cancel']=not self._foreign and self._lease is not None and task.get('status') in {'queued','running'}
+            task['can_resume']=not self._foreign and self._can_resume()
+            if self._foreign:
+                task['message']='另一个本机服务正在执行公开任务；此处只查看进度，请回到原工作台停止。'
+            return task
 
     def _save(self, **changes):
         with self._lock:
-            if self.path.is_symlink():
-                raise InputError('公开任务记录不能使用符号链接。')
-            self._state.update(changes,updated_at=utc_now())
-            with writer_lock(self.root):
+            with self._record_lock():
+                if self.path.is_symlink():
+                    raise InputError('公开任务记录不能使用符号链接。')
+                self._state.update(changes,updated_at=utc_now())
                 atomic_json(self.path,self._state)
 
     def mode(self):
@@ -60,9 +129,7 @@ class PublicTasks:
 
     def state(self):
         with self._lock:
-            task = copy.deepcopy(self._state)
-            task['can_cancel'] = task.get('status') in {'queued','running'}
-            task['can_resume'] = self._can_resume()
+            task = self.snapshot()
             return {'task':task,'hybrid_service_configured':self.mode() == 'remote_service',
                     'query_available':self.hybrid is not None,'execution_mode':self.mode(),
                     'sources':[{'id':s.key,'label':s.label} for s in self.hybrid.registry.values()
@@ -129,6 +196,8 @@ class PublicTasks:
 
     def cancel(self, data):
         with self._lock:
+            self._refresh()
+            if self._foreign:raise PublicTaskBusy('该任务由另一个本机服务执行，请回到原工作台停止。')
             if set(data) != {'id'} or not isinstance(data['id'], str) or data['id'] != self._state.get('id'):
                 raise InputError('请选择当前公开任务，旧页面不能停止另一个任务。')
             if self._state.get('status') not in {'queued','running','cancelling'}:
@@ -139,30 +208,54 @@ class PublicTasks:
 
     def resume(self, data):
         with self._lock:
+            self._refresh()
             if (set(data) != {'id','consent'} or data['consent'] is not True
                     or not isinstance(data['id'], str) or data['id'] != self._state.get('id')):
                 raise InputError('请明确确认继续当前任务的已保存查询；不接受新地址、凭据或替换条件。')
-            if not self._can_resume():
+            if self._foreign or not self._can_resume():
                 raise InputError('此任务不处于可恢复的中断状态，或来源/契约已变化；已保存结果保留，请核对后新建任务。')
-            return self._submit(self._state['kind'], self._state['query'], resume=True)
+            return self._submit(self._state['kind'], self._state['query'], resume_id=data['id'])
 
-    def _submit(self, kind, query, *, resume=False, network_policy=None):
+    def _submit(self, kind, query, *, resume_id='', network_policy=None):
         with self._lock:
             if self._closed:
                 raise InputError('本地服务正在关闭。')
             if self._thread and self._thread.is_alive():
-                raise InputError('公开任务正在执行；进度已保留，请勿重复提交。')
-            binding = self._binding(kind, query)
-            previous = self._state if resume else {}
-            self._cancel.clear()
-            self._state={'id':previous.get('id', uuid.uuid4().hex),'kind':kind,'query':copy.deepcopy(query),
-                         'created_at':previous.get('created_at', utc_now()), 'resume_binding':binding,
-                         'attempt':previous.get('attempt', 0)+1}
-            self._save(status='queued',message='任务已保存，正在准备获取公开数据。',report_id='')
-            args=(kind,query) if network_policy is None else (kind,query,network_policy)
-            self._thread=threading.Thread(target=self._run,args=args,name='radar-public-data',daemon=True)
-            self._thread.start()
-            return {'id':self._state['id'],'queued':True}
+                raise PublicTaskBusy('公开任务正在执行；进度已保留，请勿重复提交。')
+            self._lease=self._claim()
+            try:
+                self._foreign=False;self._read_record()
+                if self._state.get('status') in {'queued','running','cancelling'}:
+                    self._state['status']='interrupted'
+                if resume_id:
+                    if self._state.get('id')!=resume_id or not self._can_resume():
+                        raise InputError('原任务已变化，请刷新后核对；没有继续旧页面的任务。')
+                    kind,query=self._state['kind'],self._state['query']
+                binding = self._binding(kind, query)
+                previous = self._state if resume_id else {}
+                self._cancel.clear()
+                self._state={'id':previous.get('id', uuid.uuid4().hex),'kind':kind,'query':copy.deepcopy(query),
+                             'created_at':previous.get('created_at', utc_now()), 'resume_binding':binding,
+                             'attempt':previous.get('attempt', 0)+1}
+                self._save(status='queued',message='任务已保存，正在准备获取公开数据。',report_id='')
+                args=(kind,query) if network_policy is None else (kind,query,network_policy)
+                self._thread=threading.Thread(target=self._run_owned,args=args,name='radar-public-data',daemon=True)
+                self._thread.start()
+                return {'id':self._state['id'],'queued':True}
+            except BaseException:
+                if not self._thread or not self._thread.is_alive():
+                    self._release_owner()
+                    if self._thread and self._thread.ident is None:self._thread=None
+                raise
+
+    def _release_owner(self):
+        lease,self._lease=self._lease,None
+        if lease is not None:lease.__exit__(None,None,None)
+
+    def _run_owned(self,*args):
+        try:self._run(*args)
+        finally:
+            with self._lock:self._release_owner()
 
     def _begin_commit(self):
         # Cancellation before this point prevents persistence. Once the local
