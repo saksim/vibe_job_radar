@@ -72,7 +72,35 @@ def browser_health_summary(health):
     return {key:health[key] for key in fields if key in health}
 
 
-def verify(bundle,report_path,*,browser_choice='bundled'):
+def verify_startup_registration(app,exe,workspace,cwd,env):
+    """Real HKCU writes are opt-in and confined to an ephemeral Windows runner."""
+    if os.environ.get('GITHUB_ACTIONS')!='true':raise ValueError('startup registration acceptance requires ephemeral CI')
+    from vibe_job_radar.windows_startup import WindowsRun,command_line,CONSENT
+    state=app.json('/api/windows/startup/state')
+    if state['status']!='disabled' or not state['can_enable']:raise AssertionError('startup was not initially off')
+    registry=WindowsRun();name=state['value_name'];command=command_line(exe,workspace)
+    if registry.read(name) is not None:raise AssertionError('refusing pre-existing startup entry')
+    try:
+        enabled=app.json('/api/windows/startup/enable',dict(revision=state['revision'],consent=True,consent_version=CONSENT))
+        if enabled['status']!='registered' or registry.read(name)!=(1,command):raise AssertionError('exe did not register fixed startup command')
+        second=RunningApp(exe,workspace,cwd,env)
+        try:
+            reopened=second.json('/api/windows/startup/state')
+            if reopened['status']!='registered':raise AssertionError('new exe process did not observe owned startup entry')
+            disabled=second.json('/api/windows/startup/disable',{'revision':reopened['revision']})
+            if disabled['status']!='disabled' or registry.read(name) is not None:raise AssertionError('exe did not remove startup entry')
+            if second.json('/api/public/schedule/state')['status']!='disabled':raise AssertionError('startup registration changed daily schedule')
+        finally:second.close()
+    finally:
+        actual=registry.read(name)
+        if actual==(1,command):registry.remove(name,command)
+        elif actual is not None:raise AssertionError('unexpected startup value retained for inspection, not removed')
+    if registry.read(name) is not None:raise AssertionError('startup acceptance did not clean up')
+
+
+def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=False):
+    if verify_login_startup and os.environ.get('GITHUB_ACTIONS')!='true':
+        raise ValueError('startup registration acceptance is restricted to ephemeral CI')
     if browser_choice not in ('bundled','msedge'):raise ValueError('unsupported verification browser')
     if sys.platform!='win32':raise ValueError('portable executable verification requires Windows')
     if bundle.is_symlink():raise ValueError('portable bundle is a symlink')
@@ -80,7 +108,7 @@ def verify(bundle,report_path,*,browser_choice='bundled'):
     if not exe.is_file():raise ValueError('portable executable absent')
     before=inventory(bundle)
     result={'success':False,'stage':'doctor','checks':[],'page_errors':[],'external_browser_requests':[],
-        'verified_browser':browser_choice,
+        'verified_browser':browser_choice,'startup_registration_verified':False,
         'scope':'Built Windows executable with Python PATH/environment removed, artificial manual JD, original report, explicitly selected browser blank-page check. Only bundled-browser verification can qualify a build. No live recruiting certification.'}
     env={k:v for k,v in os.environ.items() if k not in {'PYTHONPATH','PYTHONHOME','VIRTUAL_ENV','CONDA_PREFIX','PLAYWRIGHT_BROWSERS_PATH'} and not k.startswith('VIBE_RADAR_')}
     env['PATH']=str(Path(os.environ['SystemRoot'])/'System32')
@@ -102,7 +130,7 @@ def verify(bundle,report_path,*,browser_choice='bundled'):
             app=RunningApp(exe,workspace,cwd,env)
             try:
                 result['stage']='resources_and_runtime'
-                for path in ('/','/app.js','/guided','/guided.js','/advanced','/advanced.js','/network-settings.js','/public-schedule.js'):
+                for path in ('/','/app.js','/guided','/guided.js','/advanced','/advanced.js','/network-settings.js','/public-schedule.js','/windows-startup.js'):
                     if app.call(path)[0]!=200:raise AssertionError('packaged static resource absent')
                 status=app.json('/api/status')
                 if status['counts']['records']!=0:raise AssertionError('packaged application did not use empty test workspace')
@@ -177,6 +205,11 @@ def verify(bundle,report_path,*,browser_choice='bundled'):
                     finally:browser.close()
                 result['checks'].append('built application accepts artificial JD and produces original report/CSV; selected real browser renders report and portable guidance at 390px without external page requests')
                 result['checks'].append('packaged two-source registry and both ownership states present; source selection submits no job; daily plan stays off')
+                if verify_login_startup:
+                    result['stage']='startup_registration'
+                    verify_startup_registration(app,exe,workspace,cwd,env)
+                    result['startup_registration_verified']=True
+                    result['checks'].append('ephemeral CI: actual exe explicitly registers fixed HKCU login command, second exe observes/removes it, cleanup leaves no entry or enabled daily plan; actual Windows logon not tested')
             finally:app.close()
             # All requested writes finished before stopping this owned test
             # process. A fresh executable process must reopen the same report.
@@ -204,8 +237,10 @@ if __name__=='__main__':
     parser.add_argument('--bundle',required=True,type=Path);parser.add_argument('--report',required=True,type=Path)
     parser.add_argument('--browser',choices=('bundled','msedge'),default='bundled',
         help='Explicit local verification choice; Edge results cannot qualify a portable build.')
+    parser.add_argument('--verify-login-startup',action='store_true',
+        help='Explicit ephemeral-CI-only startup register/read/remove acceptance; default is read-only.')
     args=parser.parse_args()
-    try:result=verify(args.bundle,args.report,browser_choice=args.browser)
+    try:result=verify(args.bundle,args.report,browser_choice=args.browser,verify_login_startup=args.verify_login_startup)
     except Exception as exc:
         # Playwright exception text may include the private loopback token URL.
         # Keep detailed stages in the structured report, never raw tracebacks.

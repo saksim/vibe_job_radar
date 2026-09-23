@@ -43,7 +43,7 @@ class PortablePackagingTests(unittest.TestCase):
         out=self.root/'out';out.mkdir();candidate=out/'previous-verified.zip';candidate.write_bytes(b'keep')
         (out/'manifest.json').write_text('{"runtime_verified":true}',encoding='utf-8')
         (out/'portable-verification.json').write_text('{"success":true}',encoding='utf-8')
-        def failing(*args):
+        def failing(*args,**kwargs):
             (out/'portable-verification.json').write_text('{"success":false,"stage":"original_report"}',encoding='utf-8')
             raise RuntimeError('artificial failed executable acceptance')
         with patch.object(self.builder,'ROOT',self.root),patch.object(self.builder,'build_candidate',side_effect=failing):
@@ -61,6 +61,18 @@ class PortablePackagingTests(unittest.TestCase):
              patch.object(self.builder.subprocess,'run') as run:
             with self.assertRaises(ValueError):self.builder.build(self.root/'out',evidence)
             versions.assert_not_called();run.assert_not_called()
+
+    def test_startup_evidence_is_required_only_for_explicit_ci_acceptance(self):
+        proof={'success':True,'verified_browser':'bundled','files':self.builder.inventory(self.bundle)}
+        with self.assertRaises(ValueError):
+            self.builder.validate_runtime_evidence(self.bundle,proof,require_login_startup=True)
+        proof['startup_registration_verified']=True
+        self.builder.validate_runtime_evidence(self.bundle,proof,require_login_startup=True)
+        with patch.dict(self.builder.os.environ,{'GITHUB_ACTIONS':'false'}), \
+             patch.object(self.builder,'build_candidate') as build:
+            with self.assertRaises(ValueError):
+                self.builder.build(self.root/'out',self.root/'source.json',verify_login_startup=True)
+            build.assert_not_called()
 
     def test_archive_must_retain_exact_verified_file_names_and_bytes(self):
         expected=self.builder.inventory(self.bundle);path=self.root/'payload.zip'

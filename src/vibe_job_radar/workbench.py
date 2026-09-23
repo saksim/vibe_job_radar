@@ -24,6 +24,7 @@ from .evidence_ui import Conflict, EvidenceService
 from .public_tasks import PublicTasks, PublicTaskBusy
 from .guided.ownership import GuidedTaskBusy
 from .public_schedule import PublicSchedule
+from .windows_startup import WindowsStartup, StartupChanged
 
 MAX_BODY = 2_000_000
 _DEFAULT_PUBLIC_CLIENT = object()
@@ -45,6 +46,7 @@ class LocalServer(ThreadingHTTPServer):
             public_client = LocalPublicDataClient(workspace)
         self.public_tasks = PublicTasks(workspace, hybrid_client=public_client)
         self.public_schedule = PublicSchedule(workspace, self.public_tasks)
+        self.windows_startup = WindowsStartup(workspace)
         self.token = secrets.token_urlsafe(32)
         self.mutation_lock = threading.Lock()
         super().__init__(("127.0.0.1", port), Handler)
@@ -157,12 +159,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = unquote(urlsplit(self.path).path)
-        public = path in {"/", "/app.js", "/advanced", "/advanced.js", "/collection-help.js", "/guided", "/guided.js", "/network-settings.js", "/public-schedule.js"}
+        public = path in {"/", "/app.js", "/advanced", "/advanced.js", "/collection-help.js", "/guided", "/guided.js", "/network-settings.js", "/public-schedule.js", "/windows-startup.js"}
         if not self._authorized(token_required=not public):
             return
         try:
             if public:
-                name = {"/": "workbench.html", "/app.js": "workbench.js", "/advanced": "advanced.html", "/advanced.js": "advanced.js", "/collection-help.js": "collection_help.js", "/guided": "guided.html", "/guided.js": "guided.js", "/network-settings.js": "network_settings.js", "/public-schedule.js": "public_schedule.js"}[path]
+                name = {"/": "workbench.html", "/app.js": "workbench.js", "/advanced": "advanced.html", "/advanced.js": "advanced.js", "/collection-help.js": "collection_help.js", "/guided": "guided.html", "/guided.js": "guided.js", "/network-settings.js": "network_settings.js", "/public-schedule.js": "public_schedule.js", "/windows-startup.js": "windows_startup.js"}[path]
                 mime = "text/html" if name.endswith(".html") else "text/javascript"
                 self._respond(200, files("vibe_job_radar").joinpath(name).read_bytes(), mime + "; charset=utf-8")
             elif path == "/api/network/state":
@@ -171,6 +173,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, self.server.public_tasks.state())
             elif path == "/api/public/schedule/state":
                 self._json(200, self.server.public_schedule.state())
+            elif path == "/api/windows/startup/state":
+                self._json(200, self.server.windows_startup.state())
             elif path == "/api/guided/state":
                 self._json(200, self.server.guided.state())
             elif path == "/api/evidence/export":
@@ -234,7 +238,10 @@ class Handler(BaseHTTPRequestHandler):
                    "/api/discover": "discover", "/api/analyze": "analyze", "/api/network/preferences": "network_preferences",
                    "/api/network/proxy": "network_proxy_preferences"}
         target = self.server.workspace
-        if route.startswith("/api/public/schedule/"):
+        if route.startswith("/api/windows/startup/"):
+            target = self.server.windows_startup
+            methods = {"/api/windows/startup/" + name: name for name in ("enable", "disable")}
+        elif route.startswith("/api/public/schedule/"):
             target = self.server.public_schedule
             methods = {"/api/public/schedule/" + name: name for name in ("configure", "disable")}
         elif route.startswith("/api/public/"):
@@ -269,6 +276,8 @@ class Handler(BaseHTTPRequestHandler):
             status, response = 409, {"error": str(exc), "code": "public_task_busy"}
         except GuidedTaskBusy as exc:
             status, response = 409, {"error": str(exc), "code": "guided_task_busy"}
+        except StartupChanged as exc:
+            status, response = 409, {"error": str(exc), "code": "startup_changed"}
         except InputError as exc:
             status, response = 400, {"error": str(exc)}
         except (ValueError, TypeError) as exc:

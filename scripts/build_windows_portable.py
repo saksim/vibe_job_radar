@@ -57,20 +57,22 @@ def check_payload_path_lengths(bundle):
             raise ValueError('portable payload path is too deeply nested')
 
 
-def build(out,evidence_path):
+def build(out,evidence_path,*,verify_login_startup=False):
+    if verify_login_startup and os.environ.get('GITHUB_ACTIONS')!='true':
+        raise ValueError('login startup registration acceptance is restricted to an ephemeral CI runner')
     out=output_directory(ROOT,out);out.mkdir(parents=True,exist_ok=True)
     # A failed rerun must not leave a previous success as this run's manifest.
     atomic_json(out/'manifest.json',{'status':'build_incomplete','runtime_verified':False})
     atomic_json(out/'portable-verification.json',{'success':False,'stage':'not_started'})
     try:
-        return build_candidate(out,evidence_path)
+        return build_candidate(out,evidence_path,verify_login_startup=verify_login_startup)
     except Exception as exc:
         atomic_json(out/'manifest.json',{'status':'build_failed','runtime_verified':False,
                                        'error_type':type(exc).__name__})
         raise
 
 
-def build_candidate(out,evidence_path):
+def build_candidate(out,evidence_path,*,verify_login_startup=False):
     if sys.platform!='win32' or platform.machine().lower() not in {'amd64','x86_64'} or sys.maxsize<=2**32:
         raise ValueError('portable candidate builder requires Windows x64 Python')
     if evidence_path.is_symlink() or evidence_path.stat().st_size>10_000_000:raise ValueError('invalid source evidence')
@@ -130,6 +132,7 @@ def build_candidate(out,evidence_path):
             '打开本机地址后可检查采集浏览器，也可明确选择已安装的Edge。组件更新请更换完整候选包。\n'
             '默认数据仍在用户目录 .vibe-job-radar；程序不会将工作区放进本包。\n'
             '升级/回退前停止任务与计划、关闭所有工作台，并备份整个工作区。\n'
+            '可在首页明确选择登录Windows后启动；默认关闭。移动/升级包前关闭旧登记，再从新包启用。\n'
             '三站实站登录/完整JD仍未认证；包的启动成功不代表网站允许采集。\n'
             '不自动安装开机任务、更新软件、发布服务或修改系统证书。\n',encoding='utf-8')
         atomic_json(bundle/'PORTABLE.json',{'schema_version':1,'status':'portable_candidate_not_release',
@@ -141,10 +144,12 @@ def build_candidate(out,evidence_path):
         # Outside disposable build staging so an executable failure remains
         # inspectable in CI. The verifier never writes session tokens/logs.
         runtime_evidence=out/'portable-verification.json'
-        subprocess.run([sys.executable,str(ROOT/'scripts'/'verify_windows_portable.py'),
-            '--bundle',str(bundle),'--report',str(runtime_evidence)],cwd=ROOT,check=True,timeout=240)
+        verification=[sys.executable,str(ROOT/'scripts'/'verify_windows_portable.py'),
+            '--bundle',str(bundle),'--report',str(runtime_evidence)]
+        if verify_login_startup:verification.append('--verify-login-startup')
+        subprocess.run(verification,cwd=ROOT,check=True,timeout=240)
         report=json.loads(runtime_evidence.read_text(encoding='utf-8'))
-        validate_runtime_evidence(bundle,report)
+        validate_runtime_evidence(bundle,report,require_login_startup=verify_login_startup)
         if fingerprint(ROOT)!=expected:raise ValueError('source changed during portable build')
         part=stage/'candidate.zip'
         with zipfile.ZipFile(part,'w',zipfile.ZIP_DEFLATED) as archive:
@@ -167,13 +172,15 @@ def build_candidate(out,evidence_path):
             raise
         atomic_json(out/'manifest.json',{'file':dest.name,'sha256':digest,'source_sha256':expected['sha256'],
             'status':'portable_candidate_not_release','runtime_verified':True,'live_sites_certified':False,
-            'components':versions,'platform':'windows-x64','size_bytes':dest.stat().st_size})
+            'components':versions,'platform':'windows-x64','size_bytes':dest.stat().st_size,
+            'startup_registration_verified':report.get('startup_registration_verified') is True})
         return dest
 
 
-def validate_runtime_evidence(bundle,report):
+def validate_runtime_evidence(bundle,report,*,require_login_startup=False):
     if (not isinstance(report,dict) or report.get('success') is not True
             or report.get('verified_browser')!='bundled'
+            or (require_login_startup and report.get('startup_registration_verified') is not True)
             or not isinstance(report.get('files'),dict) or not report['files']
             or report['files']!=inventory(bundle)):
         raise ValueError('portable runtime evidence does not match payload')
@@ -195,5 +202,7 @@ if __name__=='__main__':
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--out',type=Path,default=ROOT/'portable-candidate')
     parser.add_argument('--evidence',type=Path,default=ROOT/'release-verification'/'result.json')
+    parser.add_argument('--verify-login-startup',action='store_true',
+        help='Explicit ephemeral-CI-only register/read/remove test; never used by ordinary local builds.')
     args=parser.parse_args()
-    print(build(args.out,args.evidence))
+    print(build(args.out,args.evidence,verify_login_startup=args.verify_login_startup))
