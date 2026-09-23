@@ -7,8 +7,8 @@
 |---|---|---|---|---|
 | BOSS直聘 / 1 | bridge / 默认 | implemented | [2026-09-18 人工夹具](https://github.com/saksim/vibe_job_radar/actions/runs/35358529040) | not_verified；[#55](https://github.com/saksim/vibe_job_radar/issues/55) |
 | BOSS直聘 / 1 | native / 不可用 | blocked | 无匹配记录 | not_verified；[#55](https://github.com/saksim/vibe_job_radar/issues/55) |
-| 猎聘 / 3 | bridge / 默认 | implemented | [2026-09-18 人工夹具](https://github.com/saksim/vibe_job_radar/actions/runs/35358529040) | blocked；[#54](https://github.com/saksim/vibe_job_radar/issues/54) / [#63](https://github.com/saksim/vibe_job_radar/issues/63) |
-| 猎聘 / 3 | native / 显式实验 | implemented | [2026-09-18 人工夹具](https://github.com/saksim/vibe_job_radar/actions/runs/35358529120) | blocked；[#54](https://github.com/saksim/vibe_job_radar/issues/54) / [#63](https://github.com/saksim/vibe_job_radar/issues/63) |
+| 猎聘 / 3 | bridge / 默认 | implemented | [2026-09-23 人工夹具](https://github.com/saksim/vibe_job_radar/actions/runs/35891758001) | blocked；[#54](https://github.com/saksim/vibe_job_radar/issues/54) / [#63](https://github.com/saksim/vibe_job_radar/issues/63) |
+| 猎聘 / 3 | native / 显式实验 | implemented | [2026-09-23 人工夹具](https://github.com/saksim/vibe_job_radar/actions/runs/35891758054) | blocked；[#54](https://github.com/saksim/vibe_job_radar/issues/54) / [#63](https://github.com/saksim/vibe_job_radar/issues/63) |
 | 前程无忧 / 1 | bridge / 默认 | implemented | [2026-09-18 人工夹具](https://github.com/saksim/vibe_job_radar/actions/runs/35358529040) | not_verified；[#56](https://github.com/saksim/vibe_job_radar/issues/56) |
 | 前程无忧 / 1 | native / 不可用 | blocked | 无匹配记录 | not_verified；[#56](https://github.com/saksim/vibe_job_radar/issues/56) |
 <!-- acquisition-status:end -->
