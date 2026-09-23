@@ -20,6 +20,8 @@ BOSS、猎聘、51job 的浏览器采集仍需逐站现场验收，不能因入�
 
 登录态、简历、本人证据和私人报告默认留本地，生产 Linux 部署后置。已合并的匿名本机 HTTP/SOCKS5 静态策略和明确同意的 198.18/15 加密解析保留；本分支新增的[显式本机代理认证](docs/LOCAL_PROXY_AUTH.md)由#75跟踪。高级批次接线、PAC及其他网络缺口见 [网络状态](docs/NETWORK_COMPATIBILITY_STATUS.md)。不要关闭 TLS 校验或删除配额库来制造成功。
 
+本分支还增加[工作区网页代理偏好](docs/WORKSPACE_PROXY_SETTINGS.md)：三个工作台入口可保存匿名本机HTTP/SOCKS5入口，DNS与代理共享修订号，其他工作区不受影响。已有应用专用代理/凭据冲突时停止；保存不联网测试，更换后需停止并重开采集会话。首次保存代理写入v2网络偏好，旧源码会明确拒绝，回退需先备份并恢复原v1偏好。
+
 当前为 Python 3.10+ 源码版本，尚非包含 Python/Chromium 的免安装发行版。Windows 可双击 `start_windows.bat`，其他系统使用原启动入口。新增的 `research_brief.md` 便于带走本批结论；底层完整原文、复核队列和历史报告保留。
 
 详细的主线范围与验收见 [首份岗位研究流程](docs/MAINLINE_WORKFLOW.md)。所有后续源码迭代从实际已合并的 main 开始，不把未合并分支写成主干功能。
