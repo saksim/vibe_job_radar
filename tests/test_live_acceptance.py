@@ -43,7 +43,7 @@ class LiveAcceptanceTests(unittest.TestCase):
                 'backend':'native','native_consent':True,'rights_note':'ARTIFICIAL OFFLINE TEST DATA ONLY'})
         state=self.service._load(result['id'])
         state.update(created_at=f'2026-09-{day:02}T10:00:00+00:00',status='completed',phase='report')
-        state['cards']=[];state['selection']=[]
+        state['cards']=[];state['selection']=[];records=[]
         for index,status in enumerate(statuses or ['ok']*count):
             ident=f'{start+index:024x}'
             url=f'https://www.liepin.com/job/{start+index}.shtml'
@@ -58,10 +58,19 @@ class LiveAcceptanceTests(unittest.TestCase):
                 if record_changes:
                     record=replace(record,record_id='',**record_changes)
                 with Store(self.workspace.db) as store:store.add(record)
+                records.append(record)
                 row.update(resolved_url=url,record_id=record.record_id,body_sha256=hashlib.sha256(record.text.encode()).hexdigest(),
                     parser=record.parser,adapter_version=self.adapter.version,platform_job_id=self.adapter.job_identity(url))
             state['cards'].append(row);state['selection'].append(ident)
-        self.service._finalize_report(state,self.adapter)
+        if record_changes:
+            # These are deliberately invalid legacy reports for the OFFLINE
+            # reader. Newer GuidedService rejects them before report creation;
+            # use its report writer with fixture records to retain that case.
+            # Production checkpoint validation remains enabled and tested.
+            with patch.object(self.service,'_selected_records',return_value=records,create=True):
+                self.service._finalize_report(state,self.adapter)
+        else:
+            self.service._finalize_report(state,self.adapter)
         self.service._save(state,'completed',status='completed')
         return state
 
