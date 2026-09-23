@@ -30,6 +30,7 @@ jobs:
           python scripts/run_guided_browser.py
           python scripts/verify_password_form.py
           python scripts/run_guided_review_browser.py
+          python scripts/run_deferred_browser.py
           python scripts/run_recovery_browser.py
           python scripts/run_network_settings_browser.py
           python scripts/run_research_workflow_browser.py
