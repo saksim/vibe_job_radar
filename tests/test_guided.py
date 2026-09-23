@@ -221,6 +221,7 @@ class ServiceTests(unittest.TestCase):
         with self.assertRaises(InputError):self.service.action({'id':ident,'action':'auto_login','username':'u','password':'p'})
     def test_restart_marks_running_task_interrupted_without_restoring_session(self):
         ident=self.create();job=self.job(ident);self.service._save(job,status='running')
+        self.service.close()  # A second live process is not a restart.
         other=GuidedService(self.workspace,registry=Registry([fixture_adapter()]),backend_factory=FakeBackend)
         try:
             self.assertEqual(other.state()['jobs'][0]['status'],'interrupted')
