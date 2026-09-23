@@ -39,7 +39,7 @@ class PublicTasks:
         self.root=workspace.root/'public_tasks'
         self.root.mkdir(exist_ok=True,mode=0o700)
         self.path=self.root/'state.json'
-        if self.root.is_symlink() or self.path.is_symlink():
+        if self.root.is_symlink():
             raise InputError('公开任务记录不能使用符号链接。')
         self._lock=threading.RLock(); self._thread=None; self._closed=False
         self._cancel = threading.Event();self._lease=None;self._foreign=False
@@ -82,17 +82,20 @@ class PublicTasks:
             yield
 
     def _read_record(self):
-        if self.root.is_symlink() or self.path.is_symlink():
+        if self.root.is_symlink():
             raise InputError('公开任务记录不能使用符号链接。')
-        if self.path.exists():
-            with self._record_lock():
+        with self._record_lock():
+            # Even Windows metadata probes can briefly hold a file handle.
+            # Keep all accesses to state.json under the replacement lock.
+            if self.path.is_symlink():raise InputError('公开任务记录不能使用符号链接。')
+            if self.path.exists():
                 if self.path.stat().st_size>2_000_000:
                     raise InputError('公开任务记录过大，请检查工作区。')
                 try:value=json.loads(self.path.read_text(encoding='utf-8'))
                 except (ValueError,OSError):raise InputError('公开任务记录损坏，未恢复或启动网络请求。') from None
                 if not isinstance(value,dict):raise InputError('公开任务记录损坏，未恢复或启动网络请求。')
                 self._state=value
-        else:self._state={'status':'idle','message':'点击获取后才会联网；个人材料和登录态保留本地。'}
+            else:self._state={'status':'idle','message':'点击获取后才会联网；个人材料和登录态保留本地。'}
 
     def _refresh(self):
         if self._lease is not None:return
@@ -115,10 +118,10 @@ class PublicTasks:
 
     def _save(self, **changes):
         with self._lock:
-            if self.path.is_symlink():
-                raise InputError('公开任务记录不能使用符号链接。')
-            self._state.update(changes,updated_at=utc_now())
             with self._record_lock():
+                if self.path.is_symlink():
+                    raise InputError('公开任务记录不能使用符号链接。')
+                self._state.update(changes,updated_at=utc_now())
                 atomic_json(self.path,self._state)
 
     def mode(self):
