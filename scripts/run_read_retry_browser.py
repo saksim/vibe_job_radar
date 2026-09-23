@@ -1,4 +1,5 @@
 """Actual Edge/Chromium UI and document failures; artificial upstream only."""
+import argparse
 import hashlib
 import json
 import os
@@ -26,7 +27,8 @@ ORIGIN='https://jobs.fixture.test'
 
 def main():
     from playwright.sync_api import sync_playwright, expect
-    out=ROOT/'browser-acceptance'/'read-retry';out.mkdir(parents=True,exist_ok=True)
+    parser=argparse.ArgumentParser();parser.add_argument('--automatic',action='store_true');args=parser.parse_args()
+    out=ROOT/'browser-acceptance'/('read-retry-automatic' if args.automatic else 'read-retry');out.mkdir(parents=True,exist_ok=True)
     result={'success':False,'checks':[],'source_requests':0,'page_errors':[],
         'scope':'Actual browser/UI and production bridge/controller; artificial responses and clock. No live platform or account.'}
     now=[1000.0];failures={'/job/2':1};calls=[];instances=[]
@@ -70,7 +72,8 @@ def main():
                     page.route('**/*',lambda route:route.continue_() if route.request.url.startswith(server.origin+'/') else route.abort())
                     page.goto(server.entry_url)
                     def create():return service.create({'platform':'fixture','keyword':'时间序列算法','roles':['time_series'],
-                        'max_pages':1,'max_jobs':2,'consent':True,'rights_note':'ARTIFICIAL BROWSER TEST ONLY'})['id']
+                        'max_pages':1,'max_jobs':2,'consent':True,'rights_note':'ARTIFICIAL BROWSER TEST ONLY',
+                        **({'auto_collect':True} if args.automatic else {})})['id']
                     def wait(ident,predicate):
                         deadline=time.monotonic()+30
                         while time.monotonic()<deadline:
@@ -78,11 +81,13 @@ def main():
                             if not service.state()['busy'] and predicate(state):return state
                             page.wait_for_timeout(30)
                         raise AssertionError('fixture state: '+state['code'])
-                    ident=create();ready=wait(ident,lambda s:s['status']=='ready')
+                    ident=create()
+                    ready=wait(ident,lambda s:s['code']=='read_retry_wait' if args.automatic else s['status']=='ready')
                     page.goto(server.origin+'/guided?task='+ident)
-                    expect(page.locator('#task-status')).to_contain_text('可以选择岗位')
-                    selected=[c['id'] for c in ready['cards']]
-                    service.action({'id':ident,'action':'collect','selected':selected})
+                    if not args.automatic:
+                        expect(page.locator('#task-status')).to_contain_text('可以选择岗位')
+                        selected=[c['id'] for c in ready['cards']]
+                        service.action({'id':ident,'action':'collect','selected':selected})
                     deferred=wait(ident,lambda s:s['code']=='read_retry_wait')
                     expect(page.locator('#task-status')).to_contain_text('1/2 次自动读页重试')
                     assert deferred['outcome']['saved']==1 and deferred['outcome']['pending']==1
@@ -96,6 +101,9 @@ def main():
                     assert hashlib.sha256(old_report.read_bytes()).hexdigest()==before
                     assert ledger.summary('fixture')['request']['day']==4
                     result['checks'].append('503 waits for Retry-After; same browser retries only interrupted JD, preserves first JD/report and counts failed request')
+                    if args.automatic:
+                        assert finished['auto_selection_applied'] and finished['selection_source']=='query_order'
+                        result['checks'].append('create-time automatic selection reaches the same retry and report without Collect/Resume actions')
                     failures['/search']=9;ident2=create()
                     for used in (1,2):
                         waiting=wait(ident2,lambda s:s['code']=='read_retry_wait' and s['read_retry']['used']==used)
