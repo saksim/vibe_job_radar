@@ -52,9 +52,15 @@ def local_query_journey(pw, options, result, out):
     with tempfile.TemporaryDirectory() as tmp:
         server=LocalServer(Workspace(tmp))
         now=[time.time()];server.public_tasks.hybrid.clock=lambda:now[0]
+        entered, release = threading.Event(), threading.Event()
+        def held_source(url):
+            entered.set()
+            if not release.wait(20):
+                raise AssertionError('browser did not finish cancellation before releasing fixture source')
+            return board
         thread=threading.Thread(target=server.serve_forever,kwargs={'poll_interval':.01},daemon=True);thread.start()
         try:
-            with patch.object(SafeHTTP,'json',return_value=board) as source:
+            with patch.object(SafeHTTP,'json',side_effect=held_source) as source:
                 browser=pw.chromium.launch(**options)
                 context=browser.new_context(viewport={'width':1360,'height':1000})
                 context.route('**/*',lambda route:route.continue_() if route.request.url.startswith(server.origin+'/') else route.abort())
@@ -68,12 +74,29 @@ def local_query_journey(pw, options, result, out):
                 source.assert_not_called()  # Browser form requires explicit consent.
                 page.locator('#public-search [name=consent]').check()
                 page.locator('#public-search-button').click()
+                assert entered.wait(5)
+                interrupted_id = server.public_tasks.state()['task']['id']
+                expect(page.locator('#public-cancel')).to_be_visible()
+                page.locator('#public-cancel').click()
+                expect(page.locator('#public-status')).to_contain_text('正在停止')
+                release.set()
+                expect(page.locator('#public-status')).to_contain_text('公开任务已停止', timeout=30000)
+                expect(page.locator('#public-resume')).to_be_visible()
+                assert not server.public_tasks.state()['task']['report_id']
+                assert not list((server.workspace.root/'reports').iterdir())
+                page.reload()
+                expect(page.locator('#public-resume')).to_be_visible()
+                expect(page.locator('#public-saved-query')).to_contain_text('Architect')
+                source.assert_called_once_with(API_URL)
+                page.locator('#public-resume').click()
                 expect(page.locator('#public-status')).to_contain_text('本页 20 条',timeout=30000)
                 expect(page.locator('#public-status')).to_contain_text('匹配 21 条')
                 expect(page.locator('#public-changes')).to_contain_text('不将首次记录算作新增')
                 expect(page.locator('#public-next')).to_be_visible()
                 first=server.public_tasks.state()['task']
                 assert first['report_id'] and first['next_cursor'] and first['execution_mode']=='local_direct'
+                assert first['id'] == interrupted_id and first['attempt'] == 2 and first['cache_reused']
+                result['checks'].append('UI stops an in-flight public query before report creation; reload stays offline; explicit resume uses same query/task and retained cache without a second source request')
                 page.locator('#public-next').click()
                 expect(page.locator('#public-status')).to_contain_text('本页 1 条',timeout=30000)
                 expect(page.locator('#public-next')).to_be_hidden()
@@ -88,7 +111,7 @@ def local_query_journey(pw, options, result, out):
                 changed['jobs'][0]['content']+='<p>New artificial responsibility.</p>'
                 new_job=copy.deepcopy(board['jobs'][1])
                 new_job.update(id=880099,absolute_url='https://job-boards.greenhouse.io/anthropic/jobs/880099')
-                changed['jobs'].append(new_job);source.return_value=changed
+                changed['jobs'].append(new_job);source.side_effect=None;source.return_value=changed
                 now[0]+=601
                 # Reload resets form values: explicitly confirm this later query.
                 page.locator('#public-search [name=query]').fill('Architect')
@@ -106,12 +129,18 @@ def local_query_journey(pw, options, result, out):
                 assert source.call_count==2
                 result['checks'].append('complete catalog audit: baseline is not additions; explicit later fetch yields 1 added/1 modified/1 missing/19 unchanged; report audit persists and reload does not fetch; missing is not closure')
                 page.set_viewport_size({'width':390,'height':844})
-                assert page.evaluate('document.documentElement.scrollWidth<=window.innerWidth')
                 page.screenshot(path=str(out/'local-public-query.png'),full_page=True)
+                page.locator('#public-entry').screenshot(path=str(out/'public-lifecycle.png'))
+                assert page.evaluate('document.documentElement.scrollWidth<=window.innerWidth'), page.evaluate("""() =>
+                    [...document.querySelectorAll('body *')].filter(el => !el.closest('.scroll') &&
+                      el.scrollWidth > el.clientWidth && getComputedStyle(el).overflowX === 'visible')
+                      .map(el => ({tag:el.tagName,id:el.id,text:el.textContent.slice(0,100),
+                        width:el.clientWidth,scroll:el.scrollWidth})).slice(0,20)""")
                 assert not result['page_errors']
                 result['checks'].append('default local query needs no own server: consent -> one fixed fixture GET -> 20/1 local pages -> separate reports; reload does not fetch; no private query upload')
                 browser.close()
         finally:
+            release.set()
             server.shutdown();server.server_close();thread.join(timeout=5)
 
 

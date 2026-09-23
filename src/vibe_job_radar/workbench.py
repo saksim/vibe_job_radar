@@ -221,7 +221,7 @@ class Handler(BaseHTTPRequestHandler):
         target = self.server.workspace
         if route.startswith("/api/public/"):
             target = self.server.public_tasks
-            methods = {"/api/public/" + name: name for name in ("start", "search")}
+            methods = {"/api/public/" + name: name for name in ("start", "search", "cancel", "resume")}
         elif route.startswith("/api/guided/"):
             target = self.server.guided
             methods = {"/api/guided/" + name: name for name in ("create", "action", "install", "check_browser", "diagnose", "export", "diagnostics")}
