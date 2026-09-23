@@ -233,7 +233,10 @@ class ScheduleTests(unittest.TestCase):
         # Real second Python process acquires the same OS owner file.
         owner=self.schedule.root/'owner';owner.mkdir()
         code="from pathlib import Path;from vibe_job_radar.collection import writer_lock;import sys\nwith writer_lock(Path(sys.argv[1])):\n print('locked',flush=True);sys.stdin.readline()"
-        child=subprocess.Popen([sys.executable,'-u','-c',code,str(owner)],stdin=subprocess.PIPE,stdout=subprocess.PIPE,text=True)
+        # The test runner adds src to its own sys.path, not the child's.
+        # Explicitly use this checkout, independent of shell PYTHONPATH/install.
+        child_env={**os.environ,'PYTHONPATH':str(Path(__file__).resolve().parents[1]/'src')}
+        child=subprocess.Popen([sys.executable,'-u','-c',code,str(owner)],stdin=subprocess.PIPE,stdout=subprocess.PIPE,text=True,env=child_env)
         self.addCleanup(lambda:child.poll() is None and child.kill())
         try:
             self.assertEqual(child.stdout.readline().strip(),'locked')
