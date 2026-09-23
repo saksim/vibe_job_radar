@@ -17,6 +17,7 @@ function options(element,values){const value=element.value;element.replaceChildr
 function active(){if(!current)throw Error('先在第2步创建任务。');return current.id;}
 function render(){
  if(!state)return;
+ $('guided-startup').disabled=false;$('guided-startup').setAttribute('aria-busy','false');$('guided-initializing').hidden=true;
  $('environment').textContent=`当前 Python：${state.python}。Playwright：${state.browser_package||'尚未安装'}。本次组件操作：${installationNames[state.installation]||state.installation}。`;
  const tls=state.tls_environment;
  if(tls){

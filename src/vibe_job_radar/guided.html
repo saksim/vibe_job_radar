@@ -1,8 +1,9 @@
 <!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>一步步找岗位 · Vibe Job Radar</title>
 <style>
 :root{font-family:system-ui,"Microsoft YaHei",sans-serif;line-height:1.65;color:#182d42;background:#f1f5f9}*{box-sizing:border-box;min-width:0}body{margin:0;overflow-wrap:anywhere}main{max-width:1060px;margin:auto;padding:24px 18px 70px}h1{font-size:30px;margin-bottom:8px}h2{font-size:22px;margin:0 0 10px}a{color:#245f95}section{background:white;padding:22px;border:1px solid #d5e0eb;border-radius:12px;margin:18px 0}.step,small,.muted{color:#526a83}.step{font-size:13px}.notice{padding:12px 16px;border-left:4px solid #b48028;background:#fff8e8;white-space:pre-wrap;overflow-wrap:anywhere}.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}label{display:block;font-weight:600}input,select,textarea{max-width:100%;font:inherit;width:100%;padding:9px 10px;border:1px solid #a9bbce;border-radius:6px}textarea{min-height:70px}input[type=checkbox]{width:auto}.check{font-weight:400;margin:10px 0}button{font:inherit;border:1px solid #285e92;background:#285e92;color:white;padding:9px 14px;border-radius:7px;margin:7px 7px 7px 0;cursor:pointer}button.secondary{color:#285e92;background:white}button:disabled{opacity:.5;cursor:default}details{margin:12px 0}summary{cursor:pointer;font-weight:600}pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:280px;overflow:auto;background:#f5f7fa;padding:12px}.card{border:1px solid #d5e0eb;border-radius:8px;padding:14px;margin:10px 0;overflow-wrap:anywhere}.card label{font-size:17px}.card small{display:block}.bar{display:flex;gap:8px;flex-wrap:wrap}#busy{position:sticky;top:8px;z-index:2}#busy:empty{display:none}#result{overflow-wrap:anywhere}footer{font-size:13px;color:#526a83}@media(max-width:650px){.grid{grid-template-columns:1fr}section{padding:15px}h1{font-size:25px}}
+#guided-startup{border:0;margin:0;padding:0;min-width:0}
 </style><script src="/guided.js" defer></script><script src="/network-settings.js" defer></script>
-</head><body><main><section id="network-preferences"><details><summary>网络自动适配（不必关闭 VPN/TUN）</summary>
+</head><body><main><p id="guided-initializing" class="notice" role="status">正在读取本机任务，完成后即可操作。若长时间未完成，可重新载入或返回工作台。</p><fieldset id="guided-startup" disabled aria-busy="true" aria-label="岗位采集操作"><section id="network-preferences"><details><summary>网络自动适配（不必关闭 VPN/TUN）</summary>
 <p>仅在系统返回映射地址时，可使用 Cloudflare 加密解析目标域名。解析服务可看到域名和网络出口，不接收职位正文、URL 查询参数、Cookie、密码或个人材料。普通公网 DNS 不额外请求它，不修改系统 DNS，也不扫描代理端口。</p>
 <label class="check"><input id="encrypted-dns-consent" type="checkbox">我同意上述解析方式，并在此本机工作区记住选择</label>
 <button id="save-network-preferences" type="button" disabled>保存网络偏好</button><p role="status" aria-live="polite">正在读取本机偏好（不联网测试）。</p>
@@ -27,4 +28,4 @@
 <footer>正文只接受独立职位容器或 JobPosting，不把搜索摘要或推荐页当完整 JD。报告继续使用原分析与证据引擎；个人证据在高级页面编辑。故障不等于输入一定错误，结果与失败原因均保留。</footer>
 
 <section><details><summary>各平台当前支持与验证范围</summary><div id="capability-status"></div><p class="muted">受控测试只证明对应人工页面和程序流程。真实账号、当前页面及本机网络需分别验收；未完成项不会因已有报告而升级为实站认证。</p></details></section>
-</main></body></html>
+</fieldset></main></body></html>
