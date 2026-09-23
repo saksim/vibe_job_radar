@@ -283,7 +283,8 @@ class PublicTasks:
             # Do not persist the report's full private rendering in task status.
             allowed={'success','message','code','report_id','source_url','collected_at','checked_at',
                      'cache_reused','stale','refresh_error','network_requests_this_click','scope','source_scope',
-                     'next_cursor','matching_jobs','returned_jobs','available_jobs','execution_mode','catalog_change'}
+                     'next_cursor','matching_jobs','returned_jobs','available_jobs','execution_mode','catalog_change',
+                     'source_checked_at','not_modified'}
             view={k:v for k,v in result.items() if k in allowed}
             if self._cancel.is_set() and result.get('success'):
                 view['message'] = '停止请求到达时本批保存已开始或结果已完成；本批结果保留，没有启动下一页。'
@@ -313,11 +314,18 @@ class PublicTasks:
         for key in ('matching_jobs','returned_jobs','available_jobs'):
             if key in result:
                 summary[key]=result[key]
+        if self.mode()=='local_direct' and 'checked_at' in result:
+            from .local_public import timestamp
+            summary.update(source_checked_at=timestamp(result['checked_at']),not_modified=result['not_modified'])
         change = result.get('catalog_change') if self.mode() == 'local_direct' else None
         if change is not None:
             summary['catalog_change'] = compact_change(change)
         if not records:
-            return {**summary,'code':'public_empty','message':'所选来源中未取得匹配条目，不代表整个市场没有岗位。'}
+            message='所选来源中未取得匹配条目，不代表整个市场没有岗位。'
+            if summary.get('not_modified'):
+                message+=' 来源最近于'+summary['source_checked_at']+'确认目录未变化；原正文采集时间保持。'
+            if result['stale']:message+=' 刷新暂不可用，当前是过期缓存。'
+            return {**summary,'code':'public_empty','message':message}
         from .pipeline import analyze
         with writer_lock(self.workspace.root):
             with Store(self.workspace.db) as store:
@@ -347,6 +355,8 @@ class PublicTasks:
             atomic_json(folder/'run_manifest.json',manifest)
         message=('使用缓存结果生成本地报告，采集时间保持原值。' if result['cache_reused']
                  else '已取得所选公开来源结果并生成本地报告；完整正文与摘要保持区分。')
+        if result.get('not_modified'):
+            message='来源最近于'+summary['source_checked_at']+'确认目录未变化；复用原正文，正文采集时间保持原值。'
         if self.mode() == 'local_direct':
             labels='、'.join(self.hybrid.registry[key].label for key in query.source_scope)
             message+=' 本机直取 '+labels+'；本页 '+str(len(jobs))+' 条，筛选匹配 '+str(result.get('matching_jobs',len(jobs)))+' 条。'

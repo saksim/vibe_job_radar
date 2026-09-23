@@ -21,7 +21,7 @@ sys.path.insert(0,str(ROOT/'src'))
 from vibe_job_radar.workbench import LocalServer
 from vibe_job_radar.workspace import Workspace
 from vibe_job_radar.public_example import JOB_ID, SOURCE_URL
-from vibe_job_radar.network import SafeHTTP
+from vibe_job_radar.network import SafeHTTP, JSONRepresentation
 from vibe_job_radar.guided.contracts import PageSnapshot
 
 
@@ -53,14 +53,14 @@ def local_query_journey(pw, options, result, out):
         server=LocalServer(Workspace(tmp))
         now=[time.time()];server.public_tasks.hybrid.clock=lambda:now[0]
         entered, release = threading.Event(), threading.Event()
-        def held_source(url):
+        def held_source(url,**kwargs):
             entered.set()
             if not release.wait(20):
                 raise AssertionError('browser did not finish cancellation before releasing fixture source')
-            return board
+            return JSONRepresentation(200,board,None)
         thread=threading.Thread(target=server.serve_forever,kwargs={'poll_interval':.01},daemon=True);thread.start()
         try:
-            with patch.object(SafeHTTP,'json',side_effect=held_source) as source:
+            with patch.object(SafeHTTP,'conditional_json',side_effect=held_source) as source:
                 browser=pw.chromium.launch(**options)
                 context=browser.new_context(viewport={'width':1360,'height':1000})
                 context.route('**/*',lambda route:route.continue_() if route.request.url.startswith(server.origin+'/') else route.abort())
@@ -87,7 +87,7 @@ def local_query_journey(pw, options, result, out):
                 page.reload()
                 expect(page.locator('#public-resume')).to_be_visible()
                 expect(page.locator('#public-saved-query')).to_contain_text('Architect')
-                source.assert_called_once_with(API_URL)
+                source.assert_called_once_with(API_URL,etag=None)
                 page.locator('#public-resume').click()
                 expect(page.locator('#public-status')).to_contain_text('本页 20 条',timeout=30000)
                 expect(page.locator('#public-status')).to_contain_text('匹配 21 条')
@@ -102,16 +102,16 @@ def local_query_journey(pw, options, result, out):
                 expect(page.locator('#public-next')).to_be_hidden()
                 second=server.public_tasks.state()['task']
                 assert second['report_id']!=first['report_id'] and second['cache_reused']
-                source.assert_called_once_with(API_URL)
+                source.assert_called_once_with(API_URL,etag=None)
                 page.reload()
                 expect(page.locator('#public-status')).to_contain_text('本页 1 条')
-                source.assert_called_once_with(API_URL)
+                source.assert_called_once_with(API_URL,etag=None)
                 changed=copy.deepcopy(board)
                 changed['jobs'].pop(1)
                 changed['jobs'][0]['content']+='<p>New artificial responsibility.</p>'
                 new_job=copy.deepcopy(board['jobs'][1])
                 new_job.update(id=880099,absolute_url='https://job-boards.greenhouse.io/anthropic/jobs/880099')
-                changed['jobs'].append(new_job);source.side_effect=None;source.return_value=changed
+                changed['jobs'].append(new_job);source.side_effect=None;source.return_value=JSONRepresentation(200,changed,None)
                 now[0]+=601
                 # Reload resets form values: explicitly confirm this later query.
                 page.locator('#public-search [name=query]').fill('Architect')
