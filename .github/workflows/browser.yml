@@ -43,6 +43,7 @@ jobs:
           python scripts/run_public_sources_browser.py
           python scripts/run_public_revalidation_browser.py
           python scripts/run_windows_startup_browser.py
+          python scripts/run_english_obligation_browser.py
           python scripts/run_public_owner_browser.py
           python scripts/run_guided_owner_browser.py
           python scripts/run_research_workflow_browser.py
