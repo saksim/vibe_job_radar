@@ -188,10 +188,13 @@ class GuidedService:
         return p
 
     def _load(self, ident):
-        try:
-            return json.loads(self._path(ident).read_text(encoding='utf-8'))
-        except (OSError, ValueError) as exc:
-            raise InputError('任务不存在或文件损坏。') from exc
+        # Windows can refuse atomic replacement while another thread keeps a
+        # read handle open. Use the same owner lock as _save until it is closed.
+        with self._lock:
+            try:
+                return json.loads(self._path(ident).read_text(encoding='utf-8'))
+            except (OSError, ValueError) as exc:
+                raise InputError('任务不存在或文件损坏。') from exc
 
     def _save(self, state, code=None, **changes):
         with self._lock:
