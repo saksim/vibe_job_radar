@@ -29,6 +29,7 @@ from ..models import JobRecord
 from ..store import Store
 from ..utils import atomic_json, utc_now
 from ..workspace import InputError, text_field
+from ..runtime import description as runtime_description, require_source_install
 from .adapters import Registry, builtins
 from .browser import PlaywrightBackend
 from .native_browser import NativeBackend
@@ -320,7 +321,7 @@ class GuidedService:
                                        'error': self._choice_error,
                                        'last_check': self._choice.historical_view(self._choice_data, self._package())},
                     'browser_health': copy.deepcopy(self._browser_health), 'setup': copy.deepcopy(self._setup),
-                    'python': sys.executable, 'roles': {k: v['label'] for k,v in self.workspace.config['roles'].items()},
+                    'python': sys.executable, 'runtime':runtime_description(), 'roles': {k: v['label'] for k,v in self.workspace.config['roles'].items()},
                     'sessions_persisted': any(j.get('saved_session_status') == 'saved_unverified' for j in jobs),
                     'session_storage_scope': 'opt_in_cookies_only_not_account_certification',
                     'external_site_certification': False}
@@ -459,6 +460,7 @@ class GuidedService:
         return {'id': ident, 'queued': True}
 
     def install(self, data):
+        require_source_install()
         if (not isinstance(data, dict) or set(data) - {'consent', 'mode'}
                 or data.get('consent') is not True
                 or not isinstance(data.get('mode', 'ensure'), str)

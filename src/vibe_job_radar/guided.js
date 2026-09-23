@@ -20,10 +20,14 @@ function render(){
  if(!state)return;
  const foreign=state.owned_elsewhere===true;
  $('guided-startup').disabled=false;$('guided-startup').setAttribute('aria-busy','false');$('guided-initializing').hidden=true;
- $('environment').textContent=`当前 Python：${state.python}。Playwright：${state.browser_package||'尚未安装'}。本次组件操作：${installationNames[state.installation]||state.installation}。`;
+ const portable=state.runtime?.kind==='portable';
+ $('environment').textContent=portable ? `便携运行包 · Playwright：${state.browser_package||'组件缺失'}。` : `当前 Python：${state.python}。Playwright：${state.browser_package||'尚未安装'}。本次组件操作：${installationNames[state.installation]||state.installation}。`;
+ if(!$('portable-runtime-note')){const p=document.createElement('p');p.id='portable-runtime-note';p.className='notice';$('environment').after(p);}
+ $('portable-runtime-note').hidden=!portable;$('portable-runtime-note').textContent=state.runtime?.guidance||'';
+ for(const id of ['install','repair-browser','upgrade-browser','source-runtime-help','source-browser-instructions'])$(id).hidden=portable;
  const tls=state.tls_environment;
  if(tls){
-  $('tls-repair').hidden=!tls.windows;
+  $('tls-repair').hidden=!tls.windows||portable;
   $('tls-environment').textContent='TLS 验证引擎：'+tls.engine+' · '+tls.reason+(tls.restart_required?' · 组件操作后需重新启动工作台再检查':'');
  }
  const choice=state.browser_choice;
