@@ -1,4 +1,5 @@
 """Coordinate an actual open file handle with the task's atomic writer."""
+from contextlib import contextmanager
 from pathlib import Path
 import tempfile
 import threading
@@ -22,15 +23,17 @@ class GuidedReadLockTests(unittest.TestCase):
                 reading, release = threading.Event(), threading.Event()
                 attempted, saved = threading.Event(), threading.Event()
                 errors = []
-                original = Path.read_text
-                def hold_read(path, *args, **kwargs):
-                    if path != target:
-                        return original(path, *args, **kwargs)
-                    with path.open(encoding='utf-8') as stream:
-                        reading.set()
-                        if not release.wait(5):
-                            raise AssertionError('fixture read was not released')
-                        return stream.read()
+                original = Path.open
+                @contextmanager
+                def hold_open(path, *args, **kwargs):
+                    # Exercise an open reader for both legacy read_text and
+                    # bounded checkpoint byte decoding; the lock is the contract.
+                    with original(path, *args, **kwargs) as stream:
+                        if path == target:
+                            reading.set()
+                            if not release.wait(5):
+                                raise AssertionError('fixture read was not released')
+                        yield stream
                 def reader():
                     try: service._load(task['id'])
                     except Exception as exc: errors.append(exc)
@@ -40,7 +43,7 @@ class GuidedReadLockTests(unittest.TestCase):
                         service._save(state, 'paused', status='paused')
                         saved.set()
                     except Exception as exc: errors.append(exc)
-                with patch.object(Path, 'read_text', hold_read):
+                with patch.object(Path, 'open', hold_open):
                     read_thread = threading.Thread(target=reader); read_thread.start()
                     write_thread = None
                     try:

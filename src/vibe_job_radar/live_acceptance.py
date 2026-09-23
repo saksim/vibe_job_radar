@@ -102,7 +102,7 @@ class AcceptanceLedger:
                     or dict(pairs).get('key') != data['keyword']):
                 raise ValueError()
         except (ValueError, TypeError, ZoneInfoNotFoundError, CrawlError):
-            raise InputError('请选择有效 IANA 时区与同一检索词的猎聘搜索条件。') from None
+            raise InputError('请选择有效 IANA 时区与同一检索词的猎聘搜索条件；Windows 请安装验收可选依赖 tzdata。') from None
         plan = {k:v for k,v in data.items() if k != 'consent'}
         plan.update(schema_version=1, id=uuid.uuid4().hex, created_at=self.clock(), platform='liepin',
                     adapter_version=adapter.version, search_url=url,
