@@ -348,7 +348,8 @@ class PublicTasks:
         message=('使用缓存结果生成本地报告，采集时间保持原值。' if result['cache_reused']
                  else '已取得所选公开来源结果并生成本地报告；完整正文与摘要保持区分。')
         if self.mode() == 'local_direct':
-            message+=' 本机直取 Anthropic 公开招聘；本页 '+str(len(jobs))+' 条，筛选匹配 '+str(result.get('matching_jobs',len(jobs)))+' 条。'
+            labels='、'.join(self.hybrid.registry[key].label for key in query.source_scope)
+            message+=' 本机直取 '+labels+'；本页 '+str(len(jobs))+' 条，筛选匹配 '+str(result.get('matching_jobs',len(jobs)))+' 条。'
         message+=' 最早的来源采集时间：'+summary['collected_at']+'。'
         if result['stale']:
             message+=' 刷新暂不可用，当前是过期缓存，不是实时结果。'

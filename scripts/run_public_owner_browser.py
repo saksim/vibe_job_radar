@@ -46,7 +46,7 @@ def main():
                     context.route('**/*',local_only)
                     def page_for(server):
                         page=context.new_page();page.on('pageerror',lambda e:result['page_errors'].append(str(e)))
-                        page.goto(server.entry_url);expect(page.locator('#public-source option')).to_have_count(1)
+                        page.goto(server.entry_url);expect(page.locator('#public-source option')).to_have_count(2)
                         return page
                     first=page_for(servers[0]);form=first.locator('#public-search')
                     form.locator('[name=query]').fill('Architect');form.locator('[name=consent]').check()

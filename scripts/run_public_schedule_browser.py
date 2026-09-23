@@ -55,7 +55,7 @@ def main():
                         page=context.new_page();page.on('pageerror',lambda e:result['page_errors'].append(str(e)))
                         page.goto(url or server.entry_url)
                         expect(page.locator('#schedule-save')).to_be_enabled()
-                        expect(page.locator('#public-source option')).to_have_count(1)
+                        expect(page.locator('#public-source option')).to_have_count(2)
                         page.locator('#public-schedule > summary').click()
                         return page
                     page=open_page();assert not server.public_schedule.path.exists()

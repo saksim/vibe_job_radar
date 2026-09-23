@@ -22,7 +22,7 @@ body{overflow-wrap:anywhere}
 <label class="wide">本次检索词<input name="keyword" maxlength="100" required placeholder="例如：时间序列算法工程师、架构师"></label></div>
 <button id="research-go" type="submit" disabled>带着目标进入平台采集</button></form>
 <p class="muted">三站自动采集仍需现场验证；平台要求登录时在原生页面完成，不交出密码或 Cookie。下一页会显示该任务的访问范围与预算，确认前不请求平台。</p>
-<p><a href="#public-entry">先用已接入的公开来源试用（仅 Anthropic）</a> · <a href="#manual-entry">我已有获准处理的真实 JD</a> · <a href="#analysis-entry">分析已保存的岗位</a></p></section><section id="public-entry"><h2>2. 获取岗位：已接入的公开来源</h2>
+<p><a href="#public-entry">先用已接入的公开来源试用（Anthropic、Cloudflare）</a> · <a href="#manual-entry">我已有获准处理的真实 JD</a> · <a href="#analysis-entry">分析已保存的岗位</a></p></section><section id="public-entry"><h2>2. 获取岗位：已接入的公开来源</h2>
 <p>免账号、免 Key、免采集浏览器。从官方公开接口获取一条 Anthropic Technical Architect 岗位并在本机生成报告。来源可能下架；它不是 BOSS 数据，也不是合成演示。</p>
 <button id="public-example" type="button">联网获取真实公开案例</button>
 <p id="public-status" role="status" aria-live="polite">点击确认前不联网。登录态、简历、个人证据和私人报告保留本地。</p>
@@ -46,7 +46,7 @@ body{overflow-wrap:anywhere}
 <p id="schedule-status" role="status" aria-live="polite">正在读取计划，不请求外部来源。</p>
 <p id="schedule-message" role="status" aria-live="polite"></p><p id="schedule-query" class="muted"></p>
 <ul id="schedule-history" aria-label="定时查询的最近结果"></ul></details>
-<p class="muted">默认来源仅为 Anthropic 公开招聘，不代表全市场，也不替代指定招聘平台。筛选按原文关键词，不推断远程资格。来源时间与缓存状态会明确标注。</p>
+<p class="muted">可选择 Anthropic 或 Cloudflare 的官方公开招聘目录，每次只获取所选来源，不代表全市场，也不替代指定招聘平台。筛选按原文关键词，不推断远程资格。来源时间与缓存状态会明确标注。</p>
 </details></section><p><a href="/guided">新手推荐：选平台 → 找岗位 → 勾选采集（无需手工整理 URL）</a></p>
 
 <section><h2>自动采集与个人证据</h2><a href="/advanced">进入自动采集 / 原文复核 / 附件与量化指标工作台</a><p>无需手写 JSON。原有录入、演示与报告入口继续保留。</p></section>
