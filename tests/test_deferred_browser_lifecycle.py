@@ -149,7 +149,7 @@ class DeferredBrowserLifecycleTests(unittest.TestCase):
 
     def test_worker_preserves_deadline_report_and_quota_when_queued_window_closes(self):
         report=self.workspace.root/'reports'/('a'*32)
-        report.mkdir();marker=report/'unchanged.txt';marker.write_text('ARTIFICIAL ORIGINAL REPORT')
+        report.mkdir();marker=report/'unchanged.txt';marker.write_text('ARTIFICIAL ORIGINAL REPORT',encoding='utf-8')
         self.service._save(self.state,report_id=report.name)
         self.service.ledger.reserve('liepin','request')
         before=self.service.ledger.summary('liepin')
@@ -166,7 +166,7 @@ class DeferredBrowserLifecycleTests(unittest.TestCase):
         self.assertEqual(state['code'],'automatic_resume_unavailable')
         self.assertEqual(state['next_allowed_at'],999.0)
         self.assertEqual(state['report_id'],report.name)
-        self.assertEqual(marker.read_text(),'ARTIFICIAL ORIGINAL REPORT')
+        self.assertEqual(marker.read_text(encoding='utf-8'),'ARTIFICIAL ORIGINAL REPORT')
         self.assertEqual(self.service.ledger.summary('liepin'),before)
         self.assertTrue(self.service._cancel.is_set())
 
