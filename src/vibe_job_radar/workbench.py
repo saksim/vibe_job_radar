@@ -22,6 +22,7 @@ from .guided.contracts import CrawlError
 from .collection_guidance import CollectionGuidance
 from .evidence_ui import Conflict, EvidenceService
 from .public_tasks import PublicTasks, PublicTaskBusy
+from .guided.ownership import GuidedTaskBusy
 from .public_schedule import PublicSchedule
 
 MAX_BODY = 2_000_000
@@ -265,6 +266,8 @@ class Handler(BaseHTTPRequestHandler):
             status, response = 409, {"error": str(exc)}
         except PublicTaskBusy as exc:
             status, response = 409, {"error": str(exc), "code": "public_task_busy"}
+        except GuidedTaskBusy as exc:
+            status, response = 409, {"error": str(exc), "code": "guided_task_busy"}
         except InputError as exc:
             status, response = 400, {"error": str(exc)}
         except (ValueError, TypeError) as exc:

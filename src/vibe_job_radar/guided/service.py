@@ -20,7 +20,7 @@ import tempfile
 import threading
 import uuid
 from dataclasses import asdict
-from contextlib import closing
+from contextlib import closing, contextmanager
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -54,6 +54,7 @@ from .browser_health import (BrowserStartupError, HEALTH_MESSAGES, environment_r
                              failed_report, probe_browser, safe_text, package_version)
 from .browser_install import install_commands, run_command
 from .browser_choice import BrowserChoice, CHOICES, validate_choice
+from .ownership import Ownership, owned_action, checkpoint_lock, MESSAGE as OWNER_MESSAGE
 from .. import tls_context
 
 MESSAGES = {
@@ -186,6 +187,10 @@ class GuidedService:
         self.native_factory = native_backend_factory
         self.ledger = ledger or RateLedger(self.root / 'rates.sqlite')
         self._lock = threading.RLock()
+        self._ownership=Ownership(self.root)
+        self._owner_depth=0
+        self._record_depth=0
+        self._closure_uncertain=False
         self._queue = queue.Queue(maxsize=1)
         self._cancel = threading.Event()
         self._shutdown = threading.Event()
@@ -221,14 +226,30 @@ class GuidedService:
             raise InputError('任务文件不能使用符号链接。')
         return p
 
+    def _release_owner_if_idle(self):
+        if not self._owner_depth and not self._busy and not self._backends and not self._closure_uncertain:
+            self._ownership.release()
+
+    @contextmanager
+    def _records(self):
+        with self._lock:
+            if self._record_depth:
+                yield
+            else:
+                with checkpoint_lock(self.root):
+                    self._record_depth+=1
+                    try:yield
+                    finally:self._record_depth-=1
+
     def _load(self, ident):
         # On Windows an open reader can deny os.replace(). Serialize local
         # reads with _save so polling cannot cancel a login-return checkpoint.
-        with self._lock:
+        with self._records():
             return decode_checkpoint(self._path(ident), ident)
 
+    @owned_action(allow_shutdown=True)
     def _save(self, state, code=None, **changes):
-        with self._lock:
+        with self._records():
             if code:
                 state['code'] = code
             state.update(changes)
@@ -246,13 +267,23 @@ class GuidedService:
         with self._lock:
             if self._busy:
                 raise InputError('已有浏览器动作正在运行；请等待或暂停它。')
+            if self._shutdown.is_set():raise InputError('此工作台已关闭，未提交新动作。')
+            self._ownership.acquire()
             self._busy, self._active = True, ident
             self._cancel.clear()
-            self._spawn()
-            self._queue.put_nowait((action, ident, secret))
+            try:
+                self._spawn()
+                self._queue.put_nowait((action, ident, secret))
+            except Exception:
+                if isinstance(secret,LoginCredentials):secret.clear()
+                self._busy,self._active=False,None
+                if self._thread is not None and not self._thread.is_alive():self._thread=None
+                self._release_owner_if_idle()
+                raise
 
     def state(self, data=None):
-        with self._lock:
+        with self._records():
+            foreign=self._ownership.foreign()
             jobs = []
             checkpoint_warnings = []
             for path in sorted(self.root.glob('*.json'), key=lambda p: p.stat().st_mtime, reverse=True)[:30]:
@@ -263,9 +294,10 @@ class GuidedService:
                 except InputError:
                     checkpoint_warnings.append('有任务文件损坏或版本不兼容，未加载且未改动原文件。')
                     continue
-                if item['status'] in {'queued', 'running'} and item['id'] != self._active:
+                if not foreign and item['status'] in {'queued', 'running'} and item['id'] != self._active:
                     item.update(status='interrupted', code='interrupted', message=MESSAGES['interrupted'])
                 item['browser_open'] = item['id'] in self._backends
+                item['owned_elsewhere']=foreign
                 item['automatic_resume_available'] = (item.get('auto_resume') is True
                                                       and item['browser_open']
                                                       and item['status'] == 'waiting_rate')
@@ -276,6 +308,8 @@ class GuidedService:
                     item['native_requests'] = dict(getattr(backend, 'native_counts', {}))
                 jobs.append(item)
             return {'jobs': jobs, 'busy': self._busy, 'active': self._active,
+                    'owned_elsewhere':foreign,'ownership_message':OWNER_MESSAGE if foreign else '',
+                    'closure_uncertain':self._closure_uncertain,
                     'checkpoint_warnings': list(dict.fromkeys(checkpoint_warnings)),
                     'sites': [{**site, 'native': native_capability(self.registry.get(site['key']))}
                               for site in self.registry.describe()], 'limits': asdict(self.ledger.limits),
@@ -298,6 +332,7 @@ class GuidedService:
         except importlib.metadata.PackageNotFoundError:
             return None
 
+    @owned_action
     def create(self, data):
         adapter = self.registry.get(data.get('platform'))
         if type(data.get('persist_session', False)) is not bool:
@@ -356,6 +391,7 @@ class GuidedService:
             self._submit('search', state['id'])
         return {'id': state['id'], 'queued': True}
 
+    @owned_action
     def action(self, data):
         ident, action = data.get('id'), data.get('action')
         state = self._load(ident)
@@ -435,6 +471,7 @@ class GuidedService:
         self._submit_setup('install', mode=data.get('mode', 'ensure'))
         return {'queued': True}
 
+    @owned_action
     def _submit_setup(self, action, *, mode='ensure'):
         with self._lock:
             if self._busy:
@@ -606,6 +643,7 @@ class GuidedService:
         except Exception:
             return None
 
+    @owned_action
     def diagnostics(self, data):
         """Authenticated local metadata preview; never a new site request."""
         if set(data) - {'id', 'enabled'}:
@@ -637,6 +675,11 @@ class GuidedService:
         try:
             if backend:
                 backend.close()
+        except Exception:
+            # A close exception does not prove that the browser process ended.
+            # Keep this process's ownership instead of handing off a live login.
+            self._closure_uncertain=True
+            raise
         finally:
             lease = self._session_leases.pop(ident, None)
             if lease:
@@ -1179,6 +1222,17 @@ class GuidedService:
                                auto_resume=False, next_allowed_at=None)
 
     def _worker(self):
+        try:self._work_loop()
+        finally:
+            for ident in list(self._backends):
+                try:self._close_backend(ident)
+                except Exception:pass
+            with self._lock:
+                self._busy,self._active=False,None
+                self._thread=None
+                self._release_owner_if_idle()
+
+    def _work_loop(self):
         while not self._shutdown.is_set():
             try:
                 action, ident, secret = self._queue.get(timeout=0.1)
@@ -1274,12 +1328,20 @@ class GuidedService:
                     self._save(self._load(ident), 'stopped', status='stopped')
                 with self._lock:
                     self._busy, self._active = False, None
+                    self._release_owner_if_idle()
                 self._queue.task_done()
-        for ident in list(self._backends):
-            try: self._close_backend(ident)
-            except Exception: pass
-
     def close(self):
-        self._cancel.set(); self._shutdown.set()
-        if self._thread:
-            self._thread.join(timeout=5)
+        with self._lock:
+            self._cancel.set(); self._shutdown.set()
+            thread=self._thread
+        if thread:
+            if thread is not threading.current_thread():thread.join(timeout=5)
+        else:
+            # Embedders/tests can construct a backend synchronously before a
+            # queue worker exists; close it on that same calling thread.
+            for ident in list(self._backends):
+                try:self._close_backend(ident)
+                except Exception:pass
+        with self._lock:
+            # A timed-out worker still owns its browser and cannot be stolen.
+            self._release_owner_if_idle()

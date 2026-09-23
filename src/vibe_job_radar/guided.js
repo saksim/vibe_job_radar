@@ -18,6 +18,7 @@ function options(element,values){const value=element.value;element.replaceChildr
 function active(){if(!current)throw Error('先在第2步创建任务。');return current.id;}
 function render(){
  if(!state)return;
+ const foreign=state.owned_elsewhere===true;
  $('guided-startup').disabled=false;$('guided-startup').setAttribute('aria-busy','false');$('guided-initializing').hidden=true;
  $('environment').textContent=`当前 Python：${state.python}。Playwright：${state.browser_package||'尚未安装'}。本次组件操作：${installationNames[state.installation]||state.installation}。`;
  const tls=state.tls_environment;
@@ -84,9 +85,10 @@ function render(){
  }
  if(current.report_id){for(const [file,label] of [['requirements_zh.csv','下载岗位要求 CSV'],['descriptions.md','下载描述模板'],...(current.outcome ? [['guided_acquisition.json','下载本批采集结果']] : [])]){const b=document.createElement('button');b.className='secondary';b.textContent=label;const id=current.report_id;b.onclick=()=>act(()=>downloadReport(id,file));$('result').append(b);}const view=document.createElement('a');view.href='/#report='+current.report_id;view.textContent=' 查看本批研究结论';const a=document.createElement('a');a.href='/advanced#report='+current.report_id;a.textContent=' 用本批要求进入个人证据中心';$('result').append(view);if(!current.outcome||current.outcome.target_jobs>0)$('result').append(a);}
  }
- for(const button of document.querySelectorAll('button'))button.disabled=state.busy && !['pause','stop'].includes(button.id);
- if(tls) $('repair-tls').disabled=state.busy||tls.restart_required||!tls.repair_available;
- note([sticky || (state.busy?(!state.active?state.setup?.message:current?.message)||'正在运行后端操作；可以暂停或停止。':''), ...(state.checkpoint_warnings||[])].filter(Boolean).join('\n'));
+ for(const button of document.querySelectorAll('button'))button.disabled=foreign ? !['copy-browser-diagnostic','export'].includes(button.id) : state.busy && !['pause','stop'].includes(button.id);
+ if(tls) $('repair-tls').disabled=foreign||state.busy||tls.restart_required||!tls.repair_available;
+ for(const input of document.querySelectorAll('#password-login-form input'))input.disabled=foreign;
+ note([state.ownership_message, state.closure_uncertain?'无法确认上次采集浏览器已关闭，请退出原工作台进程并核对浏览器后重开。':'', sticky || (state.busy?(!state.active?state.setup?.message:current?.message)||'正在运行后端操作；可以暂停或停止。':''), ...(state.checkpoint_warnings||[])].filter(Boolean).join('\n'));
 }
 function renderCards(){const root=$('cards');root.replaceChildren();if(!current.cards.length){root.textContent=current.code==='no_matching_jobs'?current.message:'尚未取得可用岗位清单。请查看上方任务状态；仅在平台明确要求时处理登录，不必先提供密码。';return;}
  current.cards.forEach(c=>{const box=document.createElement('div');box.className='card';const label=document.createElement('label');const input=document.createElement('input');input.type='checkbox';input.checked=selecting.has(c.id);input.addEventListener('change',()=>{if(input.checked)selecting.add(c.id);else selecting.delete(c.id);});label.append(input,document.createTextNode(' '+c.title));const source=document.createElement('small');source.textContent='列表观察到的链接：'+c.url;const outcome=document.createElement('small');outcome.textContent='结果：'+(cardStatus[c.status]||c.status)+(c.resolved_url?' · 详情真实地址：'+c.resolved_url:'');box.append(label,source,outcome);root.append(box);});}
