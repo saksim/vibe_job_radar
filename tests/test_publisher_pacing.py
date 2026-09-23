@@ -240,12 +240,25 @@ class PublisherTaskRecoveryTests(unittest.TestCase):
         self.assertTrue(all(c['status']=='ok' for c in self.job(ident)['cards']))
 
     def test_restart_retains_due_time_but_does_not_restore_credentials(self):
-        ident = self.create(); state = self.job(ident)
-        self.service._save(state, 'publisher_wait', status='waiting_rate', next_allowed_at=123456, auto_resume=True, retry_action='collect')
+        ident = self.create()
+        selected = [self.job(ident)['cards'][0]['id']]
+        due = self.service.ledger.clock() + 90
+        def deferred(*args, **kwargs):
+            raise RateLimit(90, 'publisher_wait', next_allowed_at=due)
+        self.service._backends[ident].open = deferred
+        # Produce a real deferred checkpoint on its owning worker. The old
+        # fixture wrote an already-expired deadline while that owner was alive;
+        # its valid automatic resume could erase the deadline before inspection.
+        self.service.action({'id':ident,'action':'collect','selected':selected})
+        self.wait()
+        self.assertEqual(self.job(ident)['status'], 'waiting_rate')
+        self.assertEqual(self.job(ident)['next_allowed_at'], due)
+        self.service.close()
         other = GuidedService(self.workspace, registry=Registry([fixture_adapter()]), backend_factory=FakeBackend)
         try:
             job = other.state()['jobs'][0]
-            self.assertEqual(job['next_allowed_at'], 123456)
+            self.assertEqual(job['next_allowed_at'], due)
+            self.assertEqual(job['selection'], selected)
             self.assertFalse(job['automatic_resume_available']); self.assertFalse(job['browser_open'])
             other._resume_due(); self.assertFalse(other._busy)
         finally: other.close()
