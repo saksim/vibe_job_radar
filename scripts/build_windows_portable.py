@@ -173,6 +173,7 @@ def build_candidate(out,evidence_path):
 
 def validate_runtime_evidence(bundle,report):
     if (not isinstance(report,dict) or report.get('success') is not True
+            or report.get('verified_browser')!='bundled'
             or not isinstance(report.get('files'),dict) or not report['files']
             or report['files']!=inventory(bundle)):
         raise ValueError('portable runtime evidence does not match payload')

@@ -18,7 +18,7 @@ class PortablePackagingTests(unittest.TestCase):
         (self.bundle/'VibeJobRadar.exe').write_bytes(b'artificial unit fixture, not an executable')
 
     def test_changed_added_and_removed_payload_invalidates_prior_runtime_check(self):
-        proof={'success':True,'files':self.builder.inventory(self.bundle)}
+        proof={'success':True,'verified_browser':'bundled','files':self.builder.inventory(self.bundle)}
         self.builder.validate_runtime_evidence(self.bundle,proof)
         binary=self.bundle/'VibeJobRadar.exe';original=binary.read_bytes()
         binary.write_bytes(b'different binary')
@@ -30,8 +30,12 @@ class PortablePackagingTests(unittest.TestCase):
 
     def test_failed_or_empty_check_cannot_qualify_even_with_matching_files(self):
         files=self.builder.inventory(self.bundle)
-        for report in (None,{}, {'success':1,'files':files},{'success':False,'files':files},
-                       {'success':True,'files':{}},{'success':True,'files':[]}):
+        for report in (None,{}, {'success':1,'verified_browser':'bundled','files':files},
+                       {'success':False,'verified_browser':'bundled','files':files},
+                       {'success':True,'verified_browser':'bundled','files':{}},
+                       {'success':True,'verified_browser':'bundled','files':[]},
+                       {'success':True,'files':files},
+                       {'success':True,'verified_browser':'msedge','files':files}):
             with self.subTest(report=report),self.assertRaises(ValueError):
                 self.builder.validate_runtime_evidence(self.bundle,report)
 

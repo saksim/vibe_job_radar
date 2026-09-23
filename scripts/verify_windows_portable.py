@@ -64,14 +64,24 @@ class RunningApp:
         self.proc.stdout.close()
 
 
-def verify(bundle,report_path):
+def browser_health_summary(health):
+    # Fixed facts only: no raw process logs, tokens, paths or credentials.
+    fields=('code','stage','mode','ready','launch_tested','executable_exists',
+        'process_started','process_exit_code','process_exit_hex','error_type',
+        'playwright_version','browser_channel','browser_version','selection_applied')
+    return {key:health[key] for key in fields if key in health}
+
+
+def verify(bundle,report_path,*,browser_choice='bundled'):
+    if browser_choice not in ('bundled','msedge'):raise ValueError('unsupported verification browser')
     if sys.platform!='win32':raise ValueError('portable executable verification requires Windows')
     if bundle.is_symlink():raise ValueError('portable bundle is a symlink')
     bundle=bundle.resolve();exe=bundle/'VibeJobRadar.exe'
     if not exe.is_file():raise ValueError('portable executable absent')
     before=inventory(bundle)
     result={'success':False,'stage':'doctor','checks':[],'page_errors':[],'external_browser_requests':[],
-        'scope':'Built Windows executable with Python PATH/environment removed, artificial manual JD, original report, bundled-browser blank-page check. No live recruiting certification.'}
+        'verified_browser':browser_choice,
+        'scope':'Built Windows executable with Python PATH/environment removed, artificial manual JD, original report, explicitly selected browser blank-page check. Only bundled-browser verification can qualify a build. No live recruiting certification.'}
     env={k:v for k,v in os.environ.items() if k not in {'PYTHONPATH','PYTHONHOME','VIRTUAL_ENV','CONDA_PREFIX','PLAYWRIGHT_BROWSERS_PATH'} and not k.startswith('VIBE_RADAR_')}
     env['PATH']=str(Path(os.environ['SystemRoot'])/'System32')
     env['PYTHONUTF8']='1'
@@ -101,18 +111,25 @@ def verify(bundle,report_path):
                 for mode in ('ensure','reinstall','upgrade','tls'):
                     if app.call('/api/guided/install',{'consent':True,'mode':mode})[0]!=400:
                         raise AssertionError('portable component mutation was not refused')
-                result['stage']='bundled_browser_check'
-                app.json('/api/guided/check_browser',{})
+                result['stage']='bundled_browser_check' if browser_choice=='bundled' else 'explicit_edge_check'
+                app.json('/api/guided/check_browser',{} if browser_choice=='bundled' else {'channel':'msedge','consent':True})
                 deadline=time.monotonic()+60
                 while time.monotonic()<deadline:
                     state=app.json('/api/guided/state')
-                    if not state['busy'] and state['browser_health']['launch_tested']:break
+                    if not state['busy'] and state['browser_health']['code']!='not_checked':break
                     time.sleep(.1)
                 health=state['browser_health']
-                if not health['ready'] or not health['launch_tested']:raise AssertionError('bundled browser did not pass real blank-page check')
-                browser_exe=Path(health['executable_path']).resolve()
-                if bundle/'browsers' not in browser_exe.parents or not browser_exe.is_file():raise AssertionError('browser is outside portable browser directory')
-                result['checks'].append('all static resources load; bundled runtime/metadata work; pip/repair mutations refused; real packaged Chromium starts and closes with original offline backend')
+                result['browser_health']=browser_health_summary(health)
+                if not health['ready'] or not health['launch_tested']:raise AssertionError('selected browser did not pass real blank-page check')
+                if browser_choice=='bundled':
+                    browser_exe=Path(health['executable_path']).resolve()
+                    if bundle/'browsers' not in browser_exe.parents or not browser_exe.is_file():raise AssertionError('browser is outside portable browser directory')
+                    browser_options={'executable_path':str(browser_exe)}
+                else:
+                    if health.get('browser_channel')!='msedge' or health.get('selection_applied') is not True:
+                        raise AssertionError('explicit Edge selection was not saved')
+                    browser_options={'channel':'msedge'}
+                result['checks'].append('all static resources load; bundled runtime/metadata work; pip/repair mutations refused; explicitly selected browser starts and closes with original offline backend')
                 result['stage']='original_report'
                 app.json('/api/job',{'title':'时间序列算法工程师','company':'便携包人工测试（非招聘事实）',
                     'platform':'manual','source_ref':'portable-acceptance:artificial',
@@ -125,7 +142,7 @@ def verify(bundle,report_path):
                 result['stage']='real_browser_ui'
                 from playwright.sync_api import sync_playwright,expect
                 with sync_playwright() as pw:
-                    browser=pw.chromium.launch(headless=True,executable_path=str(browser_exe))
+                    browser=pw.chromium.launch(headless=True,**browser_options)
                     try:
                         context=browser.new_context(viewport={'width':390,'height':844})
                         def local_only(route):
@@ -146,7 +163,7 @@ def verify(bundle,report_path):
                         page.screenshot(path=str(report_path.parent/'portable-guided-mobile.png'),full_page=True)
                         if result['page_errors'] or result['external_browser_requests']:raise AssertionError('portable browser UI failed')
                     finally:browser.close()
-                result['checks'].append('built application accepts artificial JD and produces original report/CSV; actual bundled browser renders report and portable guidance at 390px without external page requests')
+                result['checks'].append('built application accepts artificial JD and produces original report/CSV; selected real browser renders report and portable guidance at 390px without external page requests')
             finally:app.close()
             # All requested writes finished before stopping this owned test
             # process. A fresh executable process must reopen the same report.
@@ -172,8 +189,10 @@ def verify(bundle,report_path):
 if __name__=='__main__':
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--bundle',required=True,type=Path);parser.add_argument('--report',required=True,type=Path)
+    parser.add_argument('--browser',choices=('bundled','msedge'),default='bundled',
+        help='Explicit local verification choice; Edge results cannot qualify a portable build.')
     args=parser.parse_args()
-    try:result=verify(args.bundle,args.report)
+    try:result=verify(args.bundle,args.report,browser_choice=args.browser)
     except Exception as exc:
         # Playwright exception text may include the private loopback token URL.
         # Keep detailed stages in the structured report, never raw tracebacks.
