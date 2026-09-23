@@ -22,6 +22,7 @@ from .guided.contracts import CrawlError
 from .collection_guidance import CollectionGuidance
 from .evidence_ui import Conflict, EvidenceService
 from .public_tasks import PublicTasks
+from .public_schedule import PublicSchedule
 
 MAX_BODY = 2_000_000
 _DEFAULT_PUBLIC_CLIENT = object()
@@ -42,13 +43,22 @@ class LocalServer(ThreadingHTTPServer):
             from .local_public import LocalPublicDataClient
             public_client = LocalPublicDataClient(workspace)
         self.public_tasks = PublicTasks(workspace, hybrid_client=public_client)
+        self.public_schedule = PublicSchedule(workspace, self.public_tasks)
         self.token = secrets.token_urlsafe(32)
         self.mutation_lock = threading.Lock()
         super().__init__(("127.0.0.1", port), Handler)
         self.authority = f"127.0.0.1:{self.server_address[1]}"
         self.origin = f"http://{self.authority}"
 
+    def serve_forever(self, poll_interval=0.5):
+        self.public_schedule.start()
+        try:
+            super().serve_forever(poll_interval=poll_interval)
+        finally:
+            self.public_schedule.close()
+
     def server_close(self):
+        self.public_schedule.close()
         self.guided.close()
         self.public_tasks.close()
         super().server_close()
@@ -146,18 +156,20 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = unquote(urlsplit(self.path).path)
-        public = path in {"/", "/app.js", "/advanced", "/advanced.js", "/collection-help.js", "/guided", "/guided.js", "/network-settings.js"}
+        public = path in {"/", "/app.js", "/advanced", "/advanced.js", "/collection-help.js", "/guided", "/guided.js", "/network-settings.js", "/public-schedule.js"}
         if not self._authorized(token_required=not public):
             return
         try:
             if public:
-                name = {"/": "workbench.html", "/app.js": "workbench.js", "/advanced": "advanced.html", "/advanced.js": "advanced.js", "/collection-help.js": "collection_help.js", "/guided": "guided.html", "/guided.js": "guided.js", "/network-settings.js": "network_settings.js"}[path]
+                name = {"/": "workbench.html", "/app.js": "workbench.js", "/advanced": "advanced.html", "/advanced.js": "advanced.js", "/collection-help.js": "collection_help.js", "/guided": "guided.html", "/guided.js": "guided.js", "/network-settings.js": "network_settings.js", "/public-schedule.js": "public_schedule.js"}[path]
                 mime = "text/html" if name.endswith(".html") else "text/javascript"
                 self._respond(200, files("vibe_job_radar").joinpath(name).read_bytes(), mime + "; charset=utf-8")
             elif path == "/api/network/state":
                 self._json(200, self.server.workspace.network_state())
             elif path == "/api/public/state":
                 self._json(200, self.server.public_tasks.state())
+            elif path == "/api/public/schedule/state":
+                self._json(200, self.server.public_schedule.state())
             elif path == "/api/guided/state":
                 self._json(200, self.server.guided.state())
             elif path == "/api/evidence/export":
@@ -220,7 +232,10 @@ class Handler(BaseHTTPRequestHandler):
                    "/api/discover": "discover", "/api/analyze": "analyze", "/api/network/preferences": "network_preferences",
                    "/api/network/proxy": "network_proxy_preferences"}
         target = self.server.workspace
-        if route.startswith("/api/public/"):
+        if route.startswith("/api/public/schedule/"):
+            target = self.server.public_schedule
+            methods = {"/api/public/schedule/" + name: name for name in ("configure", "disable")}
+        elif route.startswith("/api/public/"):
             target = self.server.public_tasks
             methods = {"/api/public/" + name: name for name in ("start", "search", "cancel", "resume")}
         elif route.startswith("/api/guided/"):
