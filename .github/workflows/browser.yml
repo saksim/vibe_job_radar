@@ -29,6 +29,7 @@ jobs:
           python scripts/run_resume_browser.py
           python scripts/run_guided_browser.py
           python scripts/run_guided_review_browser.py
+          python scripts/run_proxy_auth_browser.py
           python scripts/run_recovery_browser.py
           python scripts/run_network_settings_browser.py
           python scripts/run_research_workflow_browser.py

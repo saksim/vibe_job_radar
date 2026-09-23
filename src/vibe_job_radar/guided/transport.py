@@ -116,7 +116,8 @@ class PinnedTransport:
             self.network_policy = current_policy()
         try:
             if not self.network_policy.encrypted_dns:
-                host, ip, target = validate_public_url(url, self.domains, all_addresses=True)
+                host, ip, target = validate_public_url(url, self.domains, all_addresses=True,
+                                                     network_policy=self.network_policy)
             self.reserve('request', origin='https://' + host)
             if self.network_policy.encrypted_dns:
                 # A fresh snapshot is obtained after publisher waits, not before.
