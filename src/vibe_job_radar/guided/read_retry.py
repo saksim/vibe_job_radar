@@ -21,10 +21,12 @@ def read_attempt(method):
     @wraps(method)
     def opened(backend, url, *, authentication=False):
         backend._read_target = None if authentication else url
+        backend._read_redirected = False
         try:
             return method(backend, url, authentication=authentication)
         finally:
             backend._read_target = None
+            backend._read_redirected = False
     return opened
 
 
@@ -32,6 +34,7 @@ def document_failure(backend, url, method, kind, status, retry_after='', *, main
     if (type(status) is int and status in STATUSES and method == 'GET'
             and kind == 'document' and main is True
             and not getattr(backend, 'auth_mode', False)
+            and not getattr(backend, '_read_redirected', False)
             and getattr(backend, '_read_target', None) == url):
         return TransientReadFailure(url, status, retry_after)
     return CrawlError('remote_server_error')

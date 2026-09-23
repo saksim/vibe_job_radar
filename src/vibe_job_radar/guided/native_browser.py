@@ -614,6 +614,8 @@ class NativeBackend(PlaywrightBackend):
                 main=bool(event.get('frameId') and event['frameId']==self._sessions.get(session)
                           and record['role']!='robots' and not self._loading_robots))
         if 300 <= status < 400:
+            if event.get('resourceType') == 'Document':
+                self._read_redirected = True
             if record['role']=='robots' or status==304:
                 raise CrawlError('robots_unavailable' if record['role']=='robots' else 'native_unaccounted_response')
             target=urljoin(url,headers.get('location',''))

@@ -40,6 +40,8 @@ class ReadRetryPolicyTests(unittest.TestCase):
         for auth,target in ((True,URL),(False,None),(False,URL+'/redirect')):
             b.auth_mode,b._read_target=auth,target
             self.assertNotIsInstance(document_failure(b,URL,'GET','document',503,main=True),TransientReadFailure)
+        b.auth_mode=False;b._read_target=URL;b._read_redirected=True
+        self.assertNotIsInstance(document_failure(b,URL,'GET','document',503,main=True),TransientReadFailure)
 
     def test_open_scope_is_removed_after_failure_and_for_login(self):
         seen=[]
@@ -226,7 +228,7 @@ class ReadRetryWorkerTests(unittest.TestCase):
                 self.service._defer_read_retry(state,action,failure)
         self.assertNotIn('read_retry',self.service._load(self.ident))
 
-    def test_exhausted_detail_is_failed_not_pending_and_previous_report_survives(self):
+    def test_exhausted_detail_is_failed_not_pending(self):
         self.create();ready=self.wait('ready')
         state=self.service._load(self.ident)
         state['read_retry']={'version':1,'used':2,'last_status':503}

@@ -25,7 +25,7 @@ def main():
     out=ROOT/'browser-acceptance'/'native-read-retry';out.mkdir(parents=True,exist_ok=True)
     result={'success':False,'checks':[],'source_requests':0,
         'scope':'Native browser/controller and real artificial TLS source; isolated CI fixture trust and quota clock. No live account/platform.'}
-    now=[1000.0];remaining=[1];instances=[]
+    now=[1000.0];remaining=[1];instances=[];versions=[]
     try:
         with tempfile.TemporaryDirectory(prefix='radar-native-read-retry-') as tmp:
             root=Path(tmp)
@@ -54,7 +54,7 @@ def main():
                     options={'headless':not args.headed}
                     if args.channel:options['channel']=args.channel
                     with use_policy(NetworkPolicy()):b=NativeBackend(a,l,c,p,**options,**saved)
-                    instances.append(b);return b
+                    instances.append(b);versions.append(b.browser.version);return b
                 workspace=Workspace(root/'workspace')
                 ledger=RateLedger(root/'rates.sqlite',Limits(page_interval=0,request_interval=0),clock=lambda:now[0])
                 service=GuidedService(workspace,registry=Registry([adapter()]),ledger=ledger,native_backend_factory=factory)
@@ -95,7 +95,7 @@ def main():
                 count=len(fixture.requests);time.sleep(.3);assert len(fixture.requests)==count
                 assert hashlib.sha256(report.read_bytes()).hexdigest()==digest
                 result['checks'].append('three failed native GETs exhaust two retry slots, mark the JD failed and preserve previous report without extra requests')
-                result.update(success=True,browser_versions=[b.browser.version for b in instances],
+                result.update(success=True,browser_versions=versions,
                     native_requests=len(fixture.requests))
     finally:
         (out/'results.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
