@@ -28,6 +28,8 @@ BOSS、猎聘、51job 的浏览器采集仍需逐站现场验收，不能因入�
 
 当前 main 为 Python 3.10+ 源码版本；本分支另增加 [Windows x64 便携候选包](docs/WINDOWS_PORTABLE.md)的构建与实际 exe 验收，包含 Python/Chromium，须以对应提交的成功 CI 产物为准，尚非正式签名发行或自动升级。源码用户在 Windows 可双击 `start_windows.bat`，其他系统使用原启动入口。新增的 `research_brief.md` 便于带走本批结论；底层完整原文、复核队列和历史报告保留。
 
+Windows便携包可在首页明确选择[登录后打开工作台](docs/WINDOWS_LOGIN_STARTUP.md)，默认关闭，只登记当前用户和当前工作区。原每日计划仍独立确认；移动或升级程序前关闭旧登记，再从新包启用。实际登录时机由Windows管理，不是全天服务保证。
+
 详细的主线范围与验收见 [首份岗位研究流程](docs/MAINLINE_WORKFLOW.md)。所有后续源码迭代从实际已合并的 main 开始，不把未合并分支写成主干功能。
 
 ## 已经打开过工作台
