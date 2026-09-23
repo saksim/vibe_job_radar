@@ -27,7 +27,7 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - name: Install optional browser version validator for tests
-        run: python -m pip install "packaging>=24.2"
+        run: python -m pip install "packaging>=24.2" tzdata
       - run: python scripts/run_tests.py --report acceptance/results.json
       - run: python scripts/run_demo.py
       - run: python scripts/start_workbench.py --doctor --workspace .ci-source-workspace

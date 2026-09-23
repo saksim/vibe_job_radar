@@ -93,6 +93,8 @@ python scripts/run_guided_browser.py
 
 构建候选前运行 `python scripts/verify_candidate.py`，再运行 `python scripts/build_candidate.py`。只有与当前源码一致且四项本地检查全部通过的证据才能构建；这不是普通用户查询岗位的前置步骤，也不证明实际 VPN/招聘站点认证。详见 [源码验收说明](docs/SOURCE_QUALIFICATION.md) 与 [当前交付清单](docs/DELIVERY_STATUS.md)。
 
+真实取数验收可先登记范围，再用[本机观测账本](docs/LIVE_ACCEPTANCE_LEDGER.md)离线核对原任务、原报告和入库记录。工具保留失败与未完整项，不能代替现场30条/3日期、完整尝试分母、用户审核或自动认证。
+
 ### 原生浏览器实验（D02 / #48）
 
 新建任务可显式选择原生实验并确认范围，旧HTTP桥仍默认。页面HTTP/TLS由浏览器完成，经过只透明转发加密字节的本机公网目标CONNECT守卫；不是Python重发页面。当前仅猎聘主站bootstrap契约，真实业务API/跨域依赖尚待逐站核实，BOSS/51job未启用native；不能把开关出现当成三站取数成功。详见[实现与限制](docs/NATIVE_BROWSER_D02.md)。
