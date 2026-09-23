@@ -106,8 +106,11 @@ def local_query_journey(pw, options, result, out):
                 assert source.call_count==2
                 result['checks'].append('complete catalog audit: baseline is not additions; explicit later fetch yields 1 added/1 modified/1 missing/19 unchanged; report audit persists and reload does not fetch; missing is not closure')
                 page.set_viewport_size({'width':390,'height':844})
-                assert page.evaluate('document.documentElement.scrollWidth<=window.innerWidth')
                 page.screenshot(path=str(out/'local-public-query.png'),full_page=True)
+                assert page.evaluate('document.documentElement.scrollWidth<=window.innerWidth'), page.evaluate("""() =>
+                    [...document.querySelectorAll('body *')].filter(e => !e.parentElement.closest('.scroll') &&
+                    e.getBoundingClientRect().right > innerWidth + 1).slice(0, 12).map(e =>
+                    ({tag:e.tagName,id:e.id,classes:e.className,width:e.getBoundingClientRect().width}))""")
                 assert not result['page_errors']
                 result['checks'].append('default local query needs no own server: consent -> one fixed fixture GET -> 20/1 local pages -> separate reports; reload does not fetch; no private query upload')
                 browser.close()
@@ -183,7 +186,11 @@ def main():
                 assert HandoffFixtureBrowser.opened==[task['details'][0]['url']]
                 assert server.collector._load(task['id'])['detail_attempts']==1
                 result['checks'].append('HTTP failure preview performs no network; cancel creates nothing; confirmation transfers exact failed URL, preserves budget and roles, produces isolated report in selected browser task')
-                page.goto(server.origin+'/advanced');page.locator('#collect-load').click()
+                page.goto(server.origin+'/advanced')
+                # Navigation finishes before the async history request. Wait
+                # for the exact saved parent instead of clicking an empty list.
+                page.locator('#collect-history').select_option(task['id'])
+                page.locator('#collect-load').click()
                 page.get_by_role('button',name='将未完成链接转交浏览器（先预览，不联网）',exact=True).click()
                 expect(page.get_by_role('link',name='继续已保存的浏览器任务（不重复创建）',exact=True)).to_be_visible()
                 assert len(server.guided.state()['jobs'])==1 and len(HandoffFixtureBrowser.opened)==1
