@@ -1,5 +1,6 @@
 """Immutable portable-component behavior; real artifact acceptance is separate."""
 import os
+from pathlib import Path
 import sys
 import tempfile
 import unittest
@@ -45,7 +46,8 @@ class PortableRuntimeTests(unittest.TestCase):
 
     def test_portable_sets_bundled_layout_but_preserves_explicit_cache(self):
         with self.frozen(),patch.dict(os.environ,{},clear=True):
-            prepare_portable();self.assertEqual(os.environ['PLAYWRIGHT_BROWSERS_PATH'],'0')
+            prepare_portable()
+            self.assertEqual(os.environ['PLAYWRIGHT_BROWSERS_PATH'],str(Path(sys.executable).resolve().parent/'browsers'))
         with self.frozen(),patch.dict(os.environ,{'PLAYWRIGHT_BROWSERS_PATH':'explicit-test-cache'},clear=True):
             prepare_portable();self.assertEqual(os.environ['PLAYWRIGHT_BROWSERS_PATH'],'explicit-test-cache')
 

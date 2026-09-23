@@ -111,7 +111,7 @@ def verify(bundle,report_path):
                 health=state['browser_health']
                 if not health['ready'] or not health['launch_tested']:raise AssertionError('bundled browser did not pass real blank-page check')
                 browser_exe=Path(health['executable_path']).resolve()
-                if bundle not in browser_exe.parents or not browser_exe.is_file():raise AssertionError('browser is outside portable package')
+                if bundle/'browsers' not in browser_exe.parents or not browser_exe.is_file():raise AssertionError('browser is outside portable browser directory')
                 result['checks'].append('all static resources load; bundled runtime/metadata work; pip/repair mutations refused; real packaged Chromium starts and closes with original offline backend')
                 result['stage']='original_report'
                 app.json('/api/job',{'title':'时间序列算法工程师','company':'便携包人工测试（非招聘事实）',

@@ -1,9 +1,10 @@
 """Runtime presentation and immutable portable-component boundary."""
 import os
+from pathlib import Path
 import sys
 
 PORTABLE_GUIDANCE = ('此便携包自带 Python、Playwright、配套 Chromium 和 Windows 证书验证组件。'
-    '检查浏览器即可使用；组件缺失或需要更新时，先停止任务/计划并关闭工作台，再完整解压已验证的新候选包。'
+    '请完整解压到较短目录，再检查浏览器；组件缺失或需要更新时，先停止任务/计划并关闭工作台，再完整解压已验证的新候选包。'
     '保留原工作区和备份，不覆盖正在运行的文件；也可明确检查并选择本机已安装的 Edge。')
 
 
@@ -26,6 +27,8 @@ def require_source_install():
 def prepare_portable():
     if not is_portable():
         raise RuntimeError('This entry point is reserved for the packaged application.')
-    # Matches Playwright's documented bundled-browser layout. An explicitly
-    # selected cache remains explicit; no OS or user environment is modified.
-    os.environ.setdefault('PLAYWRIGHT_BROWSERS_PATH','0')
+    # Keep Chromium out of the deeply nested Python package layout so ordinary
+    # Windows ZIP tools can extract it without enabling system long paths.
+    # Bind to the executable, never the launching cwd. Explicit caches remain
+    # explicit; this changes only this application process's environment.
+    os.environ.setdefault('PLAYWRIGHT_BROWSERS_PATH',str(Path(sys.executable).resolve().parent/'browsers'))

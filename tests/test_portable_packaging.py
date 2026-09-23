@@ -70,5 +70,21 @@ class PortablePackagingTests(unittest.TestCase):
                 for name,value in contents.items():archive.writestr(name,value)
             with self.subTest(names=list(contents)),self.assertRaises(ValueError):self.builder.validate_archive(path,expected)
 
+    def test_browser_relocation_preserves_bytes_and_limits_legacy_windows_paths(self):
+        original=self.bundle/'_internal/playwright/driver/package/.local-browsers'
+        chrome=original/'chromium-1243/chrome-win64/chrome.exe'
+        chrome.parent.mkdir(parents=True);chrome.write_bytes(b'artificial browser fixture')
+        expected=self.builder.inventory(original)
+        self.builder.relocate_browsers(self.bundle)
+        self.assertFalse(original.exists())
+        self.assertEqual(self.builder.inventory(self.bundle/'browsers'),expected)
+        self.builder.check_payload_path_lengths(self.bundle)
+        with self.assertRaises(ValueError):self.builder.relocate_browsers(self.bundle)
+        # Each directory component is legal, but their combined relative path
+        # would exceed the promised extraction budget.
+        deep=self.bundle/('a'*60)/('b'*60)/('c'*22)
+        deep.mkdir(parents=True)
+        with self.assertRaises(ValueError):self.builder.check_payload_path_lengths(self.bundle)
+
 
 if __name__=='__main__':unittest.main()

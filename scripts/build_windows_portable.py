@@ -36,6 +36,27 @@ def inventory(folder):
     return entries
 
 
+def relocate_browsers(bundle):
+    root=bundle.resolve()
+    source=bundle/'_internal/playwright/driver/package/.local-browsers'
+    target=bundle/'browsers'
+    if (source.is_symlink() or target.exists() or target.is_symlink()
+            or not source.resolve().is_relative_to(root) or not target.resolve().is_relative_to(root)):
+        raise ValueError('invalid portable browser relocation')
+    if not source.is_dir() or not any(source.rglob('chrome.exe')):
+        raise ValueError('packaged Chromium was not found')
+    # Both absolute paths were checked to remain inside this disposable bundle.
+    shutil.move(str(source),str(target))
+
+
+def check_payload_path_lengths(bundle):
+    # A <=110 UTF-16-unit bundle root plus separator + <=140-unit relative
+    # filenames stays below legacy Windows MAX_PATH, including its final NUL.
+    for path in bundle.rglob('*'):
+        if len(str(path.relative_to(bundle)).encode('utf-16-le'))//2>140:
+            raise ValueError('portable payload path is too deeply nested')
+
+
 def build(out,evidence_path):
     out=output_directory(ROOT,out);out.mkdir(parents=True,exist_ok=True)
     # A failed rerun must not leave a previous success as this run's manifest.
@@ -78,6 +99,7 @@ def build_candidate(out,evidence_path):
                        'PYTHONPATH':str(ROOT/'src')},check=True,timeout=600)
         bundle=stage/'程序目录 with spaces'/'VibeJobRadar'
         if not (bundle/'VibeJobRadar.exe').is_file():raise ValueError('executable was not built')
+        relocate_browsers(bundle)
         for source in (ROOT/'src'/'vibe_job_radar').iterdir():
             if source.is_file() and source.suffix in {'.json','.html','.js'}:
                 target=bundle/'_internal'/'vibe_job_radar'/source.name
@@ -103,6 +125,7 @@ def build_candidate(out,evidence_path):
         (bundle/'START_HERE.txt').write_text(
             'Vibe Job Radar Windows x64 便携候选包（尚非正式签名发行）\n\n'
             '完整解压整个目录后双击 VibeJobRadar.exe。不要只复制exe或从zip内部运行。\n'
+            '建议VibeJobRadar程序文件夹完整路径不超过110字符，避免Windows深层目录限制。无需修改系统长路径设置。\n'
             '自带Python、Playwright和配套Chromium；无需改动原Anaconda环境。\n'
             '打开本机地址后可检查采集浏览器，也可明确选择已安装的Edge。组件更新请更换完整候选包。\n'
             '默认数据仍在用户目录 .vibe-job-radar；程序不会将工作区放进本包。\n'
@@ -112,7 +135,9 @@ def build_candidate(out,evidence_path):
         atomic_json(bundle/'PORTABLE.json',{'schema_version':1,'status':'portable_candidate_not_release',
             'version':version,'platform':'windows-x64','source':expected,'python_version':platform.python_version(),
             'components':versions,'build_environment_packages':dependencies,'browser_bundled':True,'live_sites_certified':False,
+            'bundled_browser_directory':'browsers','recommended_max_bundle_path_units':110,
             'runtime_evidence':'portable-verification.json','dependency_licenses':collected})
+        check_payload_path_lengths(bundle)
         # Outside disposable build staging so an executable failure remains
         # inspectable in CI. The verifier never writes session tokens/logs.
         runtime_evidence=out/'portable-verification.json'

@@ -7,7 +7,7 @@
 在对应提交的 `windows-portable-candidate` 工作流中核对 `build-and-run-executable` 成功，下载 `windows-x64-portable-candidate` 及 `windows-portable-evidence`。这是保留 7 天的 CI 候选产物，尚非 GitHub Release；失败运行不会上传新的候选 ZIP。
 
 1. 按 evidence 中 `manifest.json` 的文件名和 SHA-256 核对 ZIP，可用 PowerShell `Get-FileHash -Algorithm SHA256 "候选文件路径.zip"`。摘要只核对文件一致性，不是发行签名。
-2. 将里面的 `VibeJobRadar` 整个目录解压到新目录，再双击 `VibeJobRadar.exe`。保留 `_internal` 及其他随包文件，不在 ZIP 内运行，也不只复制 exe。无需安装 Python 或改动原 Anaconda 环境。
+2. 将里面的 `VibeJobRadar` 整个目录解压到新目录，再双击 `VibeJobRadar.exe`。保留 `_internal`、`browsers` 及其他随包文件，不在 ZIP 内运行，也不只复制 exe。程序文件夹完整路径建议不超过110个UTF-16单元（常用中英文字符各一个），避免Windows深层目录限制；不要求修改系统长路径设置。无需安装 Python 或改动原 Anaconda 环境。
 3. 浏览器打开本机工作台；默认仍使用用户目录 `.vibe-job-radar`。从向导点击“检查浏览器（不采集）”，真实空白页检查通过后再创建任务。也可明确选择、检查已经安装的 Edge；不会自动安装 Edge 或接管日常浏览器。
 4. 组件缺失或需更新时，停止任务和每日计划、关闭所有同工作区服务并备份整个工作区，再完整解压已验证的新候选到另一个目录。候选不会自己执行 pip、覆盖正在运行的组件或自动更新。
 
@@ -20,6 +20,8 @@
 工作流使用独立 Windows x64 runner 上的官方 CPython 3.12。固定 PyInstaller 6.22.3、Playwright 1.63.0、packaging 26.0、truststore 0.10.4；其余实际构建环境包版本写入 `PORTABLE.json`，不宣称全部传递依赖锁定或字节可重现。Python、项目及随包主要依赖许可证放入 `licenses/`，Chromium/驱动原目录的许可文件保留。
 
 先设置 `PLAYWRIGHT_BROWSERS_PATH=0` 并通过该 Playwright 安装 Chromium，再运行 `python scripts/verify_candidate.py`、`python scripts/build_windows_portable.py`。打包器不负责安装构建环境。依据为 [Playwright 官方打包说明](https://playwright.dev/python/docs/library#pyinstaller)和 [PyInstaller 冻结运行时说明](https://pyinstaller.org/en/stable/runtime-information.html)。
+
+收集之后将浏览器原样移到包根目录`browsers/`，冻结入口默认把本进程`PLAYWRIGHT_BROWSERS_PATH`指向exe旁的该目录；不依赖启动cwd，已有显式缓存选择保留。最终包内相对路径最长140个UTF-16单元，给普通Windows解压工具留出程序目录空间。此前把浏览器留在Playwright深层包目录的候选虽通过CI启动，却在本机深层中文目录解压失败；该失败记录在#91，不能把CI长路径支持当作全部用户电脑支持。
 
 构建门槛与验收：
 
