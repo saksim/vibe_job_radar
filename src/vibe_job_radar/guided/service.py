@@ -108,14 +108,17 @@ MESSAGES.update(DNS_MESSAGES)
 MESSAGES.update(HEALTH_MESSAGES)
 MESSAGES.update({
     'local_proxy_configuration_conflict': 'HTTP与SOCKS专用覆盖同时存在。只保留一种；任务不会猜测路线。',
-    'local_socks_configuration_invalid': 'SOCKS5配置无效。只支持匿名本机socks5；不会将socks5h或SOCKS4降级。',
+    'local_socks_configuration_invalid': 'SOCKS5配置无效。仅支持无userinfo的本机socks5入口，凭据需单独设置；不会将socks5h或SOCKS4降级。',
     'local_socks_auth_unsupported': '所选SOCKS代理要求未支持的认证。已停止，不向网站发送请求或绕过代理。',
     'local_socks_protocol_error': 'SOCKS代理协议响应无效。保留任务，请检查所选入口提供的协议。',
     'local_socks_truncated_reply': 'SOCKS代理握手中断。未直连、未重放网站请求。',
     'local_socks_timeout': 'SOCKS代理握手超时。保留任务，待网络恢复后继续。',
     'local_socks_connection_failed': '无法连接所选SOCKS代理。任务已停止，不会偷偷直连。',
     'local_socks_request_rejected': 'SOCKS代理拒绝连接目标。已停止，不更换出口或身份绕过拒绝。',
-    'local_proxy_configuration_invalid': '本机HTTP代理配置不符合要求。仅接受明确的 http://127.0.0.1:端口 或 http://[::1]:端口；本版本不接受账号或远程代理；匿名本机SOCKS5由统一策略单独识别。',
+    'local_proxy_configuration_invalid': '本机HTTP代理配置不符合要求。仅接受明确的 http://127.0.0.1:端口 或 http://[::1]:端口；账号密码需使用独立代理凭据设置，不能写在地址里；不支持远程代理。',
+    'local_proxy_credentials_invalid': '代理用户名和密码必须同时提供，并符合受支持的字符和长度；未发送凭据或目标请求。',
+    'local_proxy_credentials_require_explicit': '已设置代理凭据，但没有明确的本程序HTTP或SOCKS5代理入口。未把凭据转交系统自动发现的其他代理。',
+    'local_proxy_auth_failed': '所选本机代理拒绝认证或选择了不同认证方式。请核对代理凭据；没有降为匿名、重复认证或改走直连。',
     'local_proxy_connection_failed': '已选择本机代理，但代理连接或CONNECT隧道失败。程序没有改走直连；请核对实际HTTP代理端口及代理是否运行。',
     'tls_verification_failed': 'TLS证书验证失败，已停止。检查系统时间、证书与网络环境，不要关闭TLS校验。',
     'tls_handshake_failed': 'TLS握手失败，已停止；这不是缺少招聘账号或浏览器安装问题。',
@@ -186,10 +189,13 @@ class GuidedService:
         return p
 
     def _load(self, ident):
-        try:
-            return json.loads(self._path(ident).read_text(encoding='utf-8'))
-        except (OSError, ValueError) as exc:
-            raise InputError('任务不存在或文件损坏。') from exc
+        # Windows can refuse atomic replacement while another thread keeps a
+        # read handle open. Use the same owner lock as _save until it is closed.
+        with self._lock:
+            try:
+                return json.loads(self._path(ident).read_text(encoding='utf-8'))
+            except (OSError, ValueError) as exc:
+                raise InputError('任务不存在或文件损坏。') from exc
 
     def _save(self, state, code=None, **changes):
         with self._lock:
