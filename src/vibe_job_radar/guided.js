@@ -60,6 +60,7 @@ function render(){
  if(current.code==='non_public_address'||current.code==='dns_error'||current.code?.startsWith('encrypted_dns_')){
  $('task-status').textContent+='\n此页面请求由本程序在网络校验阶段中止；采集浏览器可能显示 ERR_BLOCKED_BY_CLIENT。它不等于平台封禁或 Edge 自身拒绝。请检查同一平台的当前网络策略；旧任务错误与新诊断不是同一次请求。';
  }
+ if(current.read_retry){$('task-status').textContent+=`\n本任务已安排 ${current.read_retry.used}/2 次自动读页重试，重新启动或继续不会补回额度。`;}
  if(current.status==='waiting_rate'&&current.next_allowed_at){const remaining=Math.max(0,Math.ceil(current.next_allowed_at-Date.now()/1000));$('task-status').textContent+=`\n下次允许时间：${new Date(current.next_allowed_at*1000).toLocaleString()}（约 ${remaining} 秒）。${current.automatic_resume_available?'保留会话，到时自动继续。':'会话已退出或此动作需确认，届时点击继续；不必重填条件。'}`;}
  $('audit').textContent=JSON.stringify(current,null,2);renderCards();
  $('result').replaceChildren(document.createTextNode(`本批已保存 ${current.cards.filter(c=>c.status==='ok').length} 个岗位；发现 ${current.cards.length} 个候选链接。`));
