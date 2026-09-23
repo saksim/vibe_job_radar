@@ -7,7 +7,7 @@ network requests require a user's explicit start/search consent.
 from __future__ import annotations
 
 import copy
-from contextlib import contextmanager, ExitStack
+from contextlib import contextmanager
 import hashlib
 import json
 import tempfile
@@ -19,6 +19,7 @@ from pathlib import Path
 
 from .catalog_changes import compact_change
 from .collection import writer_lock
+from .record_lock import record_lock
 from .network_policy import current_policy
 from .public_contract import PublicQuery, as_record
 from .public_example import PublicExample
@@ -72,14 +73,7 @@ class PublicTasks:
         # Atomic replacement on Windows can fail while another instance reads
         # the old file. Readers/writers share a short lock; owner leases remain
         # nonblocking and are never inferred from PID/stale-file timestamps.
-        deadline=time.monotonic()+5
-        with ExitStack() as stack:
-            while True:
-                try:stack.enter_context(writer_lock(self.root));break
-                except InputError as exc:
-                    if not isinstance(exc.__cause__,OSError) or time.monotonic()>=deadline:raise
-                    time.sleep(.01)
-            yield
+        with record_lock(self.root):yield
 
     def _read_record(self):
         if self.root.is_symlink():
