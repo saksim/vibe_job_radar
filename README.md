@@ -24,7 +24,7 @@ BOSS、猎聘、51job 的浏览器采集仍需逐站现场验收，不能因入�
 
 本分支还增加[工作区网页代理偏好](docs/WORKSPACE_PROXY_SETTINGS.md)：三个工作台入口可保存匿名本机HTTP/SOCKS5入口，DNS与代理共享修订号，其他工作区不受影响。已有应用专用代理/凭据冲突时停止；保存不联网测试，更换后需停止并重开采集会话。首次保存代理写入v2网络偏好，旧源码会明确拒绝，回退需先备份并恢复原v1偏好。#83另增[明确指定的宿主机代理](docs/VM_HOST_PROXY.md)，使用单独模式和许可；不将来宾loopback当宿主机，不猜网关或扫描入口，具体虚拟机环境仍待实测。
 
-当前为 Python 3.10+ 源码版本，尚非包含 Python/Chromium 的免安装发行版。Windows 可双击 `start_windows.bat`，其他系统使用原启动入口。新增的 `research_brief.md` 便于带走本批结论；底层完整原文、复核队列和历史报告保留。
+当前 main 为 Python 3.10+ 源码版本；本分支另增加 [Windows x64 便携候选包](docs/WINDOWS_PORTABLE.md)的构建与实际 exe 验收，包含 Python/Chromium，须以对应提交的成功 CI 产物为准，尚非正式签名发行或自动升级。源码用户在 Windows 可双击 `start_windows.bat`，其他系统使用原启动入口。新增的 `research_brief.md` 便于带走本批结论；底层完整原文、复核队列和历史报告保留。
 
 详细的主线范围与验收见 [首份岗位研究流程](docs/MAINLINE_WORKFLOW.md)。所有后续源码迭代从实际已合并的 main 开始，不把未合并分支写成主干功能。
 
