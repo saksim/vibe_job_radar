@@ -16,6 +16,7 @@ from urllib.parse import quote, unquote, urlsplit
 
 from .workspace import InputError, Workspace
 from .collection import Collector
+from .collection_runtime import CollectionRunner, CollectionBusy
 from .collection_handoff import CollectionHandoff
 from .guided.service import GuidedService, MESSAGES
 from .guided.contracts import CrawlError
@@ -38,6 +39,7 @@ class LocalServer(ThreadingHTTPServer):
     def __init__(self, workspace: Workspace, port: int = 0, *, public_client=_DEFAULT_PUBLIC_CLIENT):
         self.workspace = workspace
         self.collector = Collector(workspace)
+        self.collection_runner = CollectionRunner(self.collector)
         self.guidance = CollectionGuidance(workspace)
         self.evidence = EvidenceService(workspace)
         self.guided = GuidedService(workspace)
@@ -61,10 +63,12 @@ class LocalServer(ThreadingHTTPServer):
             self.public_queue.start()
             super().serve_forever(poll_interval=poll_interval)
         finally:
+            self.collection_runner.close()
             self.public_queue.close()
             self.public_schedule.close()
 
     def server_close(self):
+        self.collection_runner.close()
         self.public_queue.close()
         self.public_schedule.close()
         self.guided.close()
@@ -273,6 +277,9 @@ class Handler(BaseHTTPRequestHandler):
         elif route in {"/api/collection/handoff_preview", "/api/collection/handoff_start"}:
             target = self.server.handoff
             methods = {"/api/collection/" + name: name for name in ("handoff_preview", "handoff_start")}
+        elif route.startswith("/api/collection/background/"):
+            target = self.server.collection_runner
+            methods = {"/api/collection/background/" + name: name for name in ("start", "state", "pause")}
         elif route.startswith("/api/collection/"):
             target = self.server.guidance if route == "/api/collection/preview" else self.server.collector
             methods = {"/api/collection/" + name: name for name in ("start", "step", "status", "list", "register", "preview", "category_next_preview", "category_next_start", "category_page_preview", "category_page_start", "category_recovery_preview", "category_recovery_start")}
@@ -291,6 +298,8 @@ class Handler(BaseHTTPRequestHandler):
             status, response = 409, {"error": str(exc)}
         except PublicTaskBusy as exc:
             status, response = 409, {"error": str(exc), "code": "public_task_busy"}
+        except CollectionBusy as exc:
+            status, response = 409, {"error": str(exc), "code": "collection_busy"}
         except GuidedTaskBusy as exc:
             status, response = 409, {"error": str(exc), "code": "guided_task_busy"}
         except StartupChanged as exc:

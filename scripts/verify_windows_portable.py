@@ -257,6 +257,29 @@ def verify_category_rate_recovery(app, workspace):
     return child['id'],child['category_rate_recovery'],child['details'],parent,before
 
 
+def verify_category_background(app, workspace):
+    """Actual exe background dispatch honors a real cooldown, with zero site HTTP."""
+    from vibe_job_radar.guided.rate import RateLedger
+    ledger=RateLedger(workspace/'guided/rates.sqlite');ledger.cool('liepin',3600)
+    before=ledger.summary('liepin')
+    task=app.json('/api/collection/start',dict(mode='liepin_category',category_id='architect',
+        roles=['architect'],platforms=['liepin'],permit_platforms=['liepin'],consent=True,
+        detail_budget=1,rights_note='Artificial background cooldown qualification; no recruiting request.'))
+    app.json('/api/collection/background/start',dict(id=task['id'],consent=True))
+    deadline=time.monotonic()+10
+    while time.monotonic()<deadline:
+        status=app.json('/api/collection/background/state',{})
+        if not status['active']:break
+        time.sleep(.05)
+    saved=status['task']
+    if (status['active'] or status['id']!=task['id'] or status['status']!='needs_attention'
+            or status['code']!='finished' or saved['category_outcomes'][0]['status']!='cooldown'
+            or saved['category_outcomes'][0]['fetch_diagnostic']['http_attempts']!=0
+            or saved['detail_attempts']!=0 or saved['report_id'] or ledger.summary('liepin')!=before):
+        raise AssertionError('frozen background dispatch ignored cooldown or changed the original batch scope')
+    return task['id'],(workspace/'collections'/f'{task["id"]}.json').read_bytes(),before
+
+
 def verify_collection_shared_cooldown(app, workspace, *, register=True):
     """Actual exe default factory sees a real ledger; reserved .invalid input only."""
     from vibe_job_radar.guided.rate import RateLedger
@@ -799,8 +822,23 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
                 if (workspace/'collections'/f'{rate_task_id}.json').read_bytes()!=rate_task_bytes:
                     raise AssertionError('frozen restart changed the original cooldown outcome')
                 result['advanced_shared_cooldown_restart_verified']=True
+                result['stage']='category_background_dispatch'
+                background_id,background_bytes,background_counts=verify_category_background(restarted,workspace)
+                result['category_background_dispatch_verified']=True
             finally:restarted.close()
             result['checks'].append('fresh exe process preserves original report, leaves daily plan off and requires a fresh browser check')
+            result['stage']='category_background_restart'
+            observed=RunningApp(exe,workspace,cwd,env)
+            try:
+                background=observed.json('/api/collection/background/state',{})
+                from vibe_job_radar.guided.rate import RateLedger
+                if (background['active'] or background['id']!=background_id
+                        or background['status']!='needs_attention' or background['code']!='finished'
+                        or (workspace/'collections'/f'{background_id}.json').read_bytes()!=background_bytes
+                        or RateLedger(workspace/'guided/rates.sqlite').summary('liepin')!=background_counts):
+                    raise AssertionError('new frozen process replayed or lost the completed background outcome')
+                result['category_background_restart_verified']=True
+            finally:observed.close()
         if inventory(bundle)!=before:raise AssertionError('portable application modified its bundled components')
         result.update(success=True,stage='complete',files=before)
     except Exception as exc:

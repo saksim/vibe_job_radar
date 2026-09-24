@@ -24,7 +24,7 @@ jobs:
       - name: Exercise repair consent and service restart in existing Edge
         run: python scripts/run_tls_repair_browser.py
       - name: Full regression with the native dependency installed
-        run: python scripts/run_tests.py --report native-tls-evidence/unit-results.json
+        run: python scripts/run_tests.py --report native-tls-evidence/unit-results.json --progress
       - name: Check real system trust with existing opt-in public source smoke
         run: python scripts/check_live_encrypted_dns.py --live
       - name: Preserve chain, UI, tests and limited live evidence
