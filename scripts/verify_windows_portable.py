@@ -98,6 +98,31 @@ def verify_startup_registration(app,exe,workspace,cwd,env):
     if registry.read(name) is not None:raise AssertionError('startup acceptance did not clean up')
 
 
+def verify_english_report(app,previous_id,previous_csv):
+    """Use the same API in source preflight and the actual frozen executable."""
+    app.json('/api/job',{'title':'Software Architect','company':'ARTIFICIAL PORTABLE FIXTURE',
+        'platform':'manual','source_ref':'portable-acceptance:authored-english',
+        'text':'About us:\nWe build Claude Code for software teams.\nBenefits:\nWe provide a Cursor subscription.\n'
+               'Qualifications:\nYou must use Cursor. You must not upload customer secrets.',
+        'rights_note':'Independently authored acceptance input, not a real job or personal achievement.',
+        'evidence_level':'full_text','full_text_confirmed':True})
+    english=app.json('/api/analyze',{'dataset':'real','roles':['architect']})
+    if english['id']==previous_id:raise AssertionError('new report overwrote the previous run')
+    rows=english['requirements']
+    if (english['manifest']['rule_engine']!='rules-0.2.0'
+            or english['manifest']['stats']['accepted_positive_requirement_rows']!=2
+            or any('subscription' in row['quote'] or 'software teams' in row['quote'] for row in rows)
+            or not any(row['quote']=='You must use Cursor.' and row['strength']=='required' for row in rows)
+            or not any(row['quote']=='You must not upload customer secrets.' and row['strength']=='prohibited' for row in rows)):
+        raise AssertionError('frozen English obligation extraction is incomplete')
+    status,english_csv=app.call(f"/api/download/{english['id']}/requirements_zh.csv")
+    if status!=200 or b'You must use Cursor.' not in english_csv or b'subscription' in english_csv:
+        raise AssertionError('frozen English report CSV is incorrect')
+    if app.call(f'/api/download/{previous_id}/requirements_zh.csv')!=(200,previous_csv):
+        raise AssertionError('new English analysis changed the previous report CSV')
+    return english
+
+
 def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=False):
     if verify_login_startup and os.environ.get('GITHUB_ACTIONS')!='true':
         raise ValueError('startup registration acceptance is restricted to ephemeral CI')
@@ -189,6 +214,13 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
                 report=app.json('/api/analyze',{'dataset':'real','roles':['time_series']});ident=report['id']
                 status,data=app.call(f'/api/download/{ident}/requirements_zh.csv')
                 if status!=200 or b'Cursor' not in data:raise AssertionError('portable original report/download failed')
+                result['stage']='english_report_isolation'
+                previous_files=inventory(workspace/'reports'/ident)
+                english=verify_english_report(app,ident,data)
+                if inventory(workspace/'reports'/ident)!=previous_files:
+                    raise AssertionError('English analysis changed an existing report file')
+                result['english_obligation_verified']=True
+                result['checks'].append('frozen English extractor excludes company/benefits, separates positive use from prohibition, exports original CSV and preserves prior report bytes')
                 result['stage']='real_browser_ui'
                 from playwright.sync_api import sync_playwright,expect
                 with sync_playwright() as pw:
@@ -232,6 +264,10 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
             restarted=RunningApp(exe,workspace,cwd,env)
             try:
                 if restarted.json('/api/report/'+ident)['id']!=ident:raise AssertionError('portable restart lost report')
+                if restarted.json('/api/report/'+english['id'])['requirements']!=english['requirements']:
+                    raise AssertionError('portable restart changed English evidence')
+                if inventory(workspace/'reports'/ident)!=previous_files:
+                    raise AssertionError('portable restart changed an existing report file')
                 if restarted.json('/api/public/schedule/state')['status']!='disabled':raise AssertionError('portable restart implicitly scheduled work')
                 if restarted.json('/api/guided/state')['browser_health']['ready']:raise AssertionError('portable restart trusted old browser readiness')
             finally:restarted.close()
