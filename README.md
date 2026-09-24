@@ -1,6 +1,6 @@
 # Vibe Job Radar｜招聘要求与个人证据工作台
 
-本分支基于#122的[28项改进统一候选](docs/CURRENT_DELIVERY_CANDIDATE.md)，另补#124的[计划完成回执](docs/PUBLIC_TASK_OUTCOMES.md)：计划查询完成后再手动查询，仍能核对原计划报告。源码使用`codex/public-outcomes`，Windows候选使用同一提交的成功CI产物，尚未合入main或正式发布；当前验证与未完成目标分别记录。
+本分支按#128提供[30项改进统一候选](docs/CURRENT_DELIVERY_CANDIDATE.md)，在原28项基础上纳入[计划完成回执](docs/PUBLIC_TASK_OUTCOMES.md)及登录测试失败清理与诊断。计划查询完成后再手动查询，仍能核对原计划报告。源码使用`codex/delivery-30`，Windows候选使用同一提交的成功CI产物，尚未合入main或正式发布；当前验证与未完成目标分别记录。
 
 ## 先完成一次目标岗位研究
 

@@ -2,7 +2,7 @@
 
 主控 #3，核对日期 2026-09-24。已合并基线 main@ec458799，最新合并 PR61；原 22 项承诺与 H 类增量均保留。以下待合并 PR 不计作主干功能；能力状态详见 [统一矩阵](ACQUISITION_CAPABILITIES.md)。
 
-本分支基于#122的[28项组合候选](CURRENT_DELIVERY_CANDIDATE.md)，包含原25项与#115的[独立公开计划进程](PUBLIC_WORKER.md)、#118的[Cursor公开目录](PUBLIC_SOURCES.md)、#120的[明确选择worker登录启动](WINDOWS_LOGIN_STARTUP.md)，另补#124的[计划完成回执](PUBLIC_TASK_OUTCOMES.md)。须以同一提交的完整回归/CI/产物为准，不沿用各单项绿灯作为组合证明。
+本分支按#128提供[30项组合候选](CURRENT_DELIVERY_CANDIDATE.md)，包含原28项、#124的[计划完成回执](PUBLIC_TASK_OUTCOMES.md)与#126的登录测试准备失败清理/超时证据。须以同一提交的完整回归/CI/产物为准；原#123的Windows3.12准备阶段超时根因仍未知，不沿用各单项绿灯作为组合证明。
 
 | 编号 | 主跟踪 | 当前范围和剩余条件 |
 |---|---|---|
