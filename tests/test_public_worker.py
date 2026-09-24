@@ -140,6 +140,25 @@ class WorkerTests(unittest.TestCase):
         self.wire.json.assert_not_called()
         self.assertFalse(self.worker.schedule.state()['history'])
 
+    def test_requested_stop_after_state_read_is_not_a_scheduler_failure(self):
+        def stop_at_observation(value):
+            self.events.append(value)
+            if value['event']=='worker_state':
+                self.worker.request_stop()
+                self.worker.schedule._thread.join(5)
+                self.assertFalse(self.worker.schedule.is_running())
+        self.assertEqual(self.worker.run(emit=stop_at_observation),0)
+        self.assertNotIn('worker_failed',[event['event'] for event in self.events])
+        self.wire.json.assert_not_called()
+
+    def test_scheduler_exit_without_worker_stop_is_still_a_failure(self):
+        def stop_only_scheduler(value):
+            self.events.append(value)
+            if value['event']=='worker_state':self.worker.schedule.close()
+        self.assertEqual(self.worker.run(emit=stop_only_scheduler),2)
+        self.assertIn({'event':'worker_failed','code':'scheduler_unavailable'},self.events)
+        self.wire.json.assert_not_called()
+
     def test_shutdown_during_read_preserves_checkpoint_without_replaying(self):
         seed(self.workspace);entered=threading.Event();release=threading.Event()
         self.addCleanup(release.set)
@@ -165,7 +184,7 @@ class WorkerTests(unittest.TestCase):
 class ProcessWorkerTests(unittest.TestCase):
     def setUp(self):
         tmp=tempfile.TemporaryDirectory();self.addCleanup(tmp.cleanup)
-        self.root=Path(tmp.name);self.workspace=Workspace(self.root);self.processes=[]
+        self.root=Path(tmp.name);self.workspace=Workspace(self.root);self.processes=[];self.outcomes={}
         self.addCleanup(self.cleanup)
         with patch('urllib.request.getproxies',return_value={}):seed(self.workspace)
 
@@ -183,8 +202,15 @@ class ProcessWorkerTests(unittest.TestCase):
         for label,process in self.processes:
             (self.root/('stop-'+label)).write_text('stop',encoding='utf-8')
         for label,process in self.processes:
-            try:process.communicate(timeout=30)
-            except subprocess.TimeoutExpired:process.kill();process.communicate(timeout=5)
+            try:output,_=process.communicate(timeout=30)
+            except subprocess.TimeoutExpired:process.kill();output,_=process.communicate(timeout=5)
+            facts=[]
+            for line in output.splitlines():
+                try:value=json.loads(line)
+                except ValueError:continue
+                if isinstance(value,dict):
+                    facts.append({k:value[k] for k in ('event','code','plan_status') if k in value})
+            self.outcomes[label]=facts[-12:]
 
     def request_count(self):
         path=self.root/'fixture-requests.txt'
@@ -204,7 +230,9 @@ class ProcessWorkerTests(unittest.TestCase):
         state=wait_for(lambda:(s if (s:=self.schedule_state())['history'] else None))
         self.assertEqual(state['status'],'scheduled');self.assertEqual(self.request_count(),1)
         self.assertTrue(self.workspace.report(state['history'][0]['report_id']))
-        self.cleanup();self.assertEqual(first.returncode,0);self.assertEqual(second.returncode,0)
+        self.cleanup()
+        self.assertEqual(first.returncode,0,self.outcomes['first'])
+        self.assertEqual(second.returncode,0,self.outcomes['second'])
 
     def test_killed_owner_leaves_uncertainty_paused_without_second_request(self):
         first=self.launch('first','hold');wait_for(lambda:self.request_count()==1)

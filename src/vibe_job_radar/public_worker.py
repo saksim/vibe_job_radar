@@ -52,7 +52,11 @@ class PublicWorker:
                     # Only fixed status fields; no query, source response,
                     # credentials, environment, local URL/token or path.
                     emit(value); last = value
-                if state['code']=='storage_error' or not self.schedule.is_running():
+                # A concurrent normal stop sets our flag before waking the
+                # scheduler. It can finish after this iteration began; read
+                # the stop flags AFTER observing that the thread has exited.
+                if state['code']=='storage_error' or (not self.schedule.is_running()
+                        and not self.stop.is_set() and not self._signalled):
                     emit({'event':'worker_failed', 'code':'scheduler_unavailable'})
                     code = 2; break
                 self.stop.wait(1)
