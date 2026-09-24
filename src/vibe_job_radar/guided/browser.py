@@ -12,8 +12,9 @@ from urllib.parse import urljoin, urlsplit
 
 from ..utils import domain_matches
 from ..network_policy import current_policy
-from .contracts import CrawlError, PageSnapshot
+from .contracts import CrawlError, PageSnapshot, PageSnapshotChanged
 from .rate import RateLimit
+from .read_retry import TransientReadFailure, document_failure, read_attempt
 from .transport import PinnedTransport
 from .diagnostic_trace import traced, notify
 from .browser_health import (BrowserStartupError, HEALTH_MESSAGES, environment_report,
@@ -184,6 +185,8 @@ class PlaywrightBackend:
                 notify(getattr(self, '_diagnostics', None), 'mark', code='paused')
                 route.abort('blockedbyclient')
                 return  # Idle polling must not poison the next explicit action.
+            if self.error == 'read_transient_failure':
+                raise self.wait_error or CrawlError(self.error)
             url, kind, method = request.url, request.resource_type, request.method
             p = urlsplit(url)
             if not self.wire.allowed_resource(url):
@@ -192,7 +195,15 @@ class PlaywrightBackend:
                 raise CrawlError('resource_domain_blocked')
             if method not in {'GET', 'HEAD', 'POST', 'OPTIONS'}:
                 raise CrawlError('method_blocked')
-            if method == 'POST' and (not self.auth_mode or p.hostname not in self.adapter.login_hosts):
+            if (self.adapter.key == 'liepin' and self.adapter.login_url == 'https://www.liepin.com/'
+                    and method in {'POST', 'OPTIONS'}):
+                # Use the same exact, observed operations as the native backend;
+                # adding a login host must not grant every write on that host.
+                from .native_policy import contract_for
+                rule = contract_for(self.adapter).match(url, method,
+                    {'xhr': 'XHR', 'fetch': 'Fetch'}.get(kind, 'Other'), authentication=self.auth_mode)
+                rule.validate_headers(method, request.all_headers())
+            elif method == 'POST' and (not self.auth_mode or p.hostname not in self.adapter.login_hosts):
                 raise CrawlError('write_not_allowed')
             if kind == 'document':
                 self.adapter.accept_url(url) if not self.auth_mode else self._auth_navigation(url)
@@ -206,6 +217,8 @@ class PlaywrightBackend:
             notify(getattr(self, '_diagnostics', None), 'mark', status=result.status)
             self._cookies(url, result.cookies)
             if 300 <= result.status < 400:
+                if kind == 'document':
+                    self._read_redirected = True
                 destination = urljoin(url, result.headers.get('location', ''))
                 self.adapter.accept_url(destination) if not self.auth_mode else self._auth_navigation(destination)
                 self.redirects += 1
@@ -218,7 +231,10 @@ class PlaywrightBackend:
                               body=f'<meta http-equiv="refresh" content="0;url={escaped}">')
                 return
             if result.status >= 500:
-                raise CrawlError('remote_server_error')
+                raise document_failure(self, url, method, kind, result.status,
+                    result.headers.get('retry-after', ''),
+                    main=bool(getattr(request, 'frame', None) is not None
+                              and request.frame == getattr(self.page, 'main_frame', None)))
             filtered = {k: v for k, v in result.headers.items() if k not in {
                 'content-length', 'content-encoding', 'transfer-encoding', 'connection',
                 'set-cookie', 'alt-svc', 'report-to', 'nel'}}
@@ -233,10 +249,10 @@ class PlaywrightBackend:
             if (request.resource_type == 'document' or exc.code not in {
                     'resource_domain_blocked', 'write_not_allowed', 'method_blocked'}):
                 transient = {'rate_wait', 'publisher_wait', 'cooldown', 'http_429',
-                             'hourly_limit', 'daily_limit'}
-                if not isinstance(exc, RateLimit) or self.error is None or self.error in transient:
+                             'hourly_limit', 'daily_limit', 'read_transient_failure'}
+                if not isinstance(exc, (RateLimit, TransientReadFailure)) or self.error is None or self.error in transient:
                     self.error = exc.code
-                    self.wait_error = exc if isinstance(exc, RateLimit) else None
+                    self.wait_error = exc if isinstance(exc, (RateLimit, TransientReadFailure)) else None
             try:
                 route.abort('blockedbyclient')
             except Exception:
@@ -274,6 +290,7 @@ class PlaywrightBackend:
             raise getattr(self, 'wait_error', None) or CrawlError(self.error)
 
     @traced('navigation', 'browser', url=True)
+    @read_attempt
     def open(self, url: str, *, authentication: bool = False) -> PageSnapshot:
         self.auth_mode, self.error, self.redirects = authentication, None, 0
         self.wait_error = None
@@ -298,10 +315,19 @@ class PlaywrightBackend:
         text = self.page.locator('body').inner_text(timeout=5000)
         if self.adapter.challenged(text, url):
             raise CrawlError('manual_required')
+        if (getattr(self, 'auth_mode', False) and self.adapter.key == 'liepin'
+                and self.page.locator('input[data-nick="login-pwd"]:visible').count()):
+            # A readable list behind the login dialog is not a completed login.
+            # Report a visible rejection without retaining its account text.
+            if re.search(r'(?:账号|账户|用户名|手机号|邮箱)(?:或|/|和)密码(?:错误|不正确)|密码(?:错误|不正确)|账号不存在', text):
+                raise CrawlError('login_credentials_rejected')
+            raise CrawlError('manual_required')
         content = self.page.content()
         if len(content) > 5_000_000:
             raise CrawlError('response_too_large')
-        return PageSnapshot(url, content)
+        if self.page.url != url:
+            raise PageSnapshotChanged()
+        return PageSnapshot(url, content, visible_text=text)
 
     def _visible(self, selectors, scope=None):
         for selector in selectors:
@@ -311,6 +337,13 @@ class PlaywrightBackend:
                 if candidate.is_visible() and candidate.is_enabled():
                     return candidate
         return None
+
+    def password_login(self, credentials):
+        from .password_login import submit_password_login
+        submit_password_login(self, credentials)
+
+    def _before_pagination_click(self) -> None:
+        """Backend state transition after permission/quota checks, before clicking."""
 
     @traced('pagination', 'browser')
     def next_page(self) -> bool:
@@ -323,6 +356,7 @@ class PlaywrightBackend:
         self.wire.reserve('page')  # Reserve once, before either a document or SPA action.
         self._pagination_page = self.page
         try:
+            self._before_pagination_click()
             button.click(timeout=90000)
             self._settle()
             return True
@@ -355,6 +389,8 @@ class PlaywrightBackend:
         return bool(self.browser and self.browser.is_connected() and self.page and not self.page.is_closed())
 
     def close(self):
+        policy = getattr(getattr(self, 'wire', None), 'network_policy', None)
+        if policy is not None: policy.close()
         if self.browser:
             try:
                 self.browser.close()

@@ -44,10 +44,62 @@ jobs:
         # and stack dump for the always() artifact step; failure remains fatal.
         timeout-minutes: 3
         run: python scripts/run_native_auth_probe.py --controlled --channel msedge ${{ matrix.mode == 'headed' && '--headed' || '' }}
+      - name: Verify recorded Liepin CORS search through native Chromium
+        if: runner.os == 'Linux'
+        timeout-minutes: 3
+        run: ${{ matrix.mode == 'headed' && 'xvfb-run -a' || '' }} python scripts/run_native_liepin_probe.py --controlled ${{ matrix.mode == 'headed' && '--headed' || '' }}
+      - name: Verify recorded Liepin CORS search through native Edge
+        if: runner.os == 'Windows'
+        timeout-minutes: 3
+        run: python scripts/run_native_liepin_probe.py --controlled --channel msedge ${{ matrix.mode == 'headed' && '--headed' || '' }}
+      - name: Verify native authenticated proxies on Linux
+        if: runner.os == 'Linux' && matrix.mode == 'headless'
+        timeout-minutes: 3
+        run: python scripts/run_native_proxy_auth.py --controlled
+      - name: Verify headed native authenticated proxies on Linux
+        if: runner.os == 'Linux' && matrix.mode == 'headed'
+        timeout-minutes: 3
+        run: xvfb-run -a python scripts/run_native_proxy_auth.py --controlled --headed
+      - name: Verify native authenticated proxies on Windows
+        if: runner.os == 'Windows'
+        timeout-minutes: 3
+        run: python scripts/run_native_proxy_auth.py --controlled --channel msedge ${{ matrix.mode == 'headed' && '--headed' || '' }}
+      # Native PAC is Windows-only; its temporary CA is never installed locally.
+      - name: Verify native PAC through HTTP and SOCKS5 on Windows
+        if: runner.os == 'Windows'
+        timeout-minutes: 3
+        run: python scripts/run_native_pac_browser.py --controlled ${{ matrix.mode == 'headed' && '--headed' || '' }}
+      - name: Verify PAC import and rollback in actual Edge
+        if: runner.os == 'Windows' && matrix.mode == 'headless'
+        run: python scripts/run_pac_browser.py --edge
+      - name: Verify configured PAC with native full artificial job acquisition
+        if: runner.os == 'Windows'
+        timeout-minutes: 3
+        run: python scripts/run_native_pac_browser.py --controlled --system ${{ matrix.mode == 'headed' && '--headed' || '' }}
+      - name: Verify configured PAC URL in actual Edge
+        if: runner.os == 'Windows' && matrix.mode == 'headless'
+        run: python scripts/run_system_pac_browser.py --edge
+      - name: Verify finite native document retries on Linux
+        if: runner.os == 'Linux' && matrix.mode == 'headless'
+        run: python scripts/run_native_read_retry_probe.py --controlled
+      - name: Verify headed finite native document retries on Linux
+        if: runner.os == 'Linux' && matrix.mode == 'headed'
+        run: xvfb-run -a python scripts/run_native_read_retry_probe.py --controlled --headed
+      - name: Verify finite native document retries on Windows
+        if: runner.os == 'Windows'
+        timeout-minutes: 3
+        run: python scripts/run_native_read_retry_probe.py --controlled --channel msedge ${{ matrix.mode == 'headed' && '--headed' || '' }}
       - name: Preserve native evidence including failures
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: native-browser-${{ runner.os }}-${{ matrix.mode }}
           retention-days: 7
-          path: browser-acceptance/native/
+          path: |
+            browser-acceptance/native/
+            browser-acceptance/native-proxy-auth/
+            browser-acceptance/native-pac/
+            browser-acceptance/native-system-pac/
+            browser-acceptance/windows-pac/
+            browser-acceptance/system-pac/
+            browser-acceptance/native-read-retry/

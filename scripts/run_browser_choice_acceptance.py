@@ -8,6 +8,7 @@ import json
 import sys
 import tempfile
 import threading
+from urllib.parse import urlsplit
 from pathlib import Path
 from unittest.mock import patch
 
@@ -18,10 +19,25 @@ from vibe_job_radar.workspace import Workspace
 from vibe_job_radar.workbench import LocalServer
 
 
+def open_workbench(page, server, expect):
+    """Check application readiness, not a late browser-wide load event.
+
+    One navigation, no retry/fallback. A 200 alone cannot pass: the real JS must
+    authenticate, populate counts and remove the fragment before proceeding.
+    """
+    response = page.goto(server.entry_url, wait_until='domcontentloaded', timeout=30000)
+    if response is None or response.status != 200:
+        raise AssertionError('workbench document did not return HTTP 200')
+    expect(page.locator('#counts')).to_contain_text('真实记录 0', timeout=30000)
+    if page.url != server.origin + '/':
+        raise AssertionError('workbench authentication initialization incomplete')
+    expect(page.locator('a[href="/guided"]')).to_be_visible()
+
+
 def main():
     from playwright.sync_api import sync_playwright, expect
     out=ROOT/'browser-acceptance'/'browser-choice';out.mkdir(parents=True,exist_ok=True)
-    result={'success':False,'checks':[],'page_errors':[], 'external_ui_requests':[],
+    result={'success':False,'stage':'startup','ui_events':[],'checks':[],'page_errors':[], 'external_ui_requests':[],
             'scope':'Real installed Edge headed collector and local UI; bundled native exception is artificial. Not user-PC crash reproduction or site certification.'}
     fixture=failed_report({**environment_report(),'stage':'launch'},RuntimeError(
         '<launched> pid=123\n[pid=123] <process did exit: exitCode=3221226356, signal=null>'))
@@ -45,7 +61,32 @@ def main():
                         context.route('**/*',route)
                         page=context.new_page();page.on('pageerror',lambda e:result['page_errors'].append(str(e)))
                         page.on('dialog',lambda d:d.accept())
-                        page.goto(server.entry_url);page.locator('a[href="/guided"]').click()
+                        # Fixed path classifications only: no token, query,
+                        # response body or exception text in developer evidence.
+                        def observe_response(response):
+                            if len(result['ui_events']) >= 32:
+                                return
+                            parsed = urlsplit(response.url)
+                            if parsed.scheme + '://' + parsed.netloc == server.origin:
+                                route_name = parsed.path if parsed.path in {'/', '/app.js', '/api/status', '/guided', '/guided.js'} else 'other_local'
+                                result['ui_events'].append({'route':route_name,'status':response.status})
+                        page.on('response', observe_response)
+                        result['stage'] = 'workbench-readiness'
+                        open_workbench(page, server, expect)
+                        result['checks'].append('local document 200, JS authenticated status and token-free URL are ready before navigation')
+                        result['stage'] = 'second-cold-workbench-readiness'
+                        second = browser.new_context(viewport={'width':1280,'height':960})
+                        try:
+                            second.route('**/*', route)
+                            second_page = second.new_page()
+                            second_page.on('pageerror', lambda e: result['page_errors'].append(str(e)))
+                            second_page.on('response', observe_response)
+                            open_workbench(second_page, server, expect)
+                            result['checks'].append('second independent cold UI context authenticates without reload or retry')
+                        finally:
+                            second.close()
+                        result['stage'] = 'collector-choice'
+                        page.locator('a[href="/guided"]').click()
                         expect(page.locator('#environment')).to_contain_text('不表示缺少组件')
                         page.locator('#check-browser').click()
                         expect(page.locator('#browser-summary')).to_contain_text('停止循环重装')
@@ -69,7 +110,7 @@ def main():
                         server.guided.close()
                         from vibe_job_radar.guided.service import GuidedService
                         server.guided=GuidedService(workspace)
-                        page.reload()
+                        page.reload(wait_until="domcontentloaded")
                         expect(page.locator('#browser-selected')).to_contain_text('本机 Microsoft Edge')
                         expect(page.locator('#browser-choice')).to_have_value('msedge')
                         expect(page.locator('#browser-summary')).to_contain_text('尚未验证')
@@ -85,9 +126,15 @@ def main():
                         assert not result['page_errors'] and not result['external_ui_requests']
                         assert not workspace.db.exists()
                         result['checks'].append('regular recheck uses the saved channel, no source requests or JS errors; narrow layout fits')
+                        result['stage']='passed'
                         result['success']=True
                     finally:browser.close()
             finally:server.shutdown();server.server_close();thread.join(timeout=5)
+    except Exception as exc:
+        result['error_type'] = type(exc).__name__
+        # Playwright's raw navigation exception embeds the local #token.
+        # Preserve failure and fixed stage without printing that secret.
+        raise RuntimeError('browser choice acceptance failed; see fixed stage and local response metadata') from None
     finally:(out/'results.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
     print(json.dumps(result,ensure_ascii=True,indent=2))
 
