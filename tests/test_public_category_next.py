@@ -13,7 +13,7 @@ from unittest.mock import patch
 from vibe_job_radar.collection import Collector, TERMINAL
 from vibe_job_radar.network import SiteFetcher
 from vibe_job_radar.workspace import Workspace, InputError
-from tests.test_public_category import Wire, card, data, listing, job_url, detail, BODY
+from test_public_category import Wire, card, data, listing, job_url, detail, BODY
 
 
 class CategoryNextTests(unittest.TestCase):
