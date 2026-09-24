@@ -191,7 +191,7 @@ def main():
                     page.locator('#collect-permits input[value=liepin]').check()
                     f.locator('[name=consent]').check()
                     from vibe_job_radar.public_category import URL as category_url
-                    cards = ''.join(f'<div class="job-card-pc-container"><a data-nick="job-detail-job-info" href="https://www.liepin.com/job/{i}.shtml">'
+                    cards = ''.join(f'<div class="job-card-pc-container"><a data-nick="job-detail-job-info" href="https://www.liepin.com/{"a" if i == 201 else "job"}/{i}.shtml">'
                         f'<div class="job-title-box"><div class="ellipsis-1" title="软件架构师人工样本{i}">软件架构师人工样本{i}</div></div></a></div>' for i in (201, 202, 203))
                     category_html = ('<html><head><title>【架构师招聘_招聘架构师人才】-猎聘</title></head><body><div id="main-container">'
                         '<div class="left-job-box"><div class="job-list-box"><div class="left-list-box">'+cards+'</div></div></div></div></body></html>')
@@ -208,10 +208,12 @@ def main():
                         expect(page.locator('#collect-progress')).to_contain_text('completed', timeout=30000)
                         expect(page.locator('#collect-start')).to_be_enabled()
                         assert [call.args[0] for call in source.return_value.fetch.call_args_list] == [category_url,
-                            'https://www.liepin.com/job/201.shtml', 'https://www.liepin.com/job/202.shtml']
+                            'https://www.liepin.com/a/201.shtml', 'https://www.liepin.com/job/202.shtml']
                     category_state = json.loads(page.locator('#collect-json').text_content())
                     assert category_state['category_attempts'] == 1 and category_state['detail_attempts'] == 2
                     assert category_state['category_outcomes'][0]['selected_positions'] == [1, 2]
+                    assert category_state['details'][0]['detail_parser'] == 'liepin_public_detail_v1'
+                    assert category_state['details'][0]['url'] == 'https://www.liepin.com/a/201.shtml'
                     assert category_state['report_id']
                     manifest = json.loads((workspace.root/'reports'/category_state['report_id']/'run_manifest.json').read_text(encoding='utf-8'))
                     assert manifest['stats']['full_text_job_groups'] == 2

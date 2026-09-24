@@ -22,7 +22,7 @@ def public_detail_parser(url: str) -> str:
     """Select the reviewed parser for a new, already validated public input."""
     parsed = urlsplit(url)
     if (parsed.scheme == 'https' and parsed.netloc == 'www.liepin.com'
-            and re.fullmatch(r'/job/[0-9]{1,80}\.shtml', parsed.path)
+            and re.fullmatch(r'/(?:job|a)/[0-9]{1,80}\.shtml', parsed.path)
             and not parsed.query):
         return LIEPIN_PUBLIC_DETAIL_V1
     return ''
