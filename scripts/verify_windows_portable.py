@@ -472,12 +472,19 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
                 result['checks'].append('frozen exe spawns native WinHTTP PAC worker with Python PATH removed, preserves SOCKS5 return, checks only fixed domain and rolls back without any proxy or target connection')
                 if verify_system_pac:
                     from system_pac_acceptance import configured_source,verify_app
-                    result['stage']='configured_system_pac'
+                    result['stage']='configured_system_pac_setup'
                     with configured_source() as fixture:
+                        counts=result['system_pac_source_request_counts']={'before_ui_check':len(fixture.requests)}
+                        result['stage']='configured_system_pac_ui_check'
                         verify_app(app,fixture)
+                        counts['after_ui_check']=len(fixture.requests)
+                        result['stage']='configured_system_pac_cached_worker'
                         result['system_pac_cached_worker']=verify_queued_worker(exe,root/'system-pac-worker',cwd,env,
                             system_pac_config_id=fixture.source.config_id)
+                        counts['after_cached_worker']=len(fixture.requests)
+                        result['stage']='configured_system_pac_request_count'
                         if len(fixture.requests)!=1:raise AssertionError('cached worker implicitly downloaded PAC')
+                        result['stage']='configured_system_pac_restore'
                     result['system_pac_verified']=True
                     result['checks'].append('actual frozen exe reads ephemeral CI current-user PAC URL via WinHTTP, saves v4 offline, downloads once in its own frozen child, evaluates SOCKS5 without target connection and rolls back; independent frozen worker consumes a cached query under the same policy with no extra PAC download; original CI registry value restored')
                 for mode in ('ensure','reinstall','upgrade','tls'):
@@ -596,7 +603,9 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
         if inventory(bundle)!=before:raise AssertionError('portable application modified its bundled components')
         result.update(success=True,stage='complete',files=before)
     except Exception as exc:
+        from portable_failure_diagnostics import failure_frames
         result['error_type']=type(exc).__name__
+        result['failure_frames']=failure_frames(exc)
         raise
     finally:
         report_path.parent.mkdir(parents=True,exist_ok=True)
