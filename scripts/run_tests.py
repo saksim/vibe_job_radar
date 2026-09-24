@@ -10,11 +10,13 @@ import platform
 import sys
 import time
 import unittest
+from unittest.mock import patch
 from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
+LEGACY_DEFERRED_RESULTS = sys.version_info[:2] == (3, 10)
 
 
 class ProgressResult(unittest.TextTestResult):
@@ -25,11 +27,30 @@ class ProgressResult(unittest.TextTestResult):
     def startTest(self,test):
         super().startTest(test);self.started=time.monotonic()
         self.failure_dumped = False
+        self.test_cleanup = ExitStack()
+        if LEGACY_DEFERRED_RESULTS:
+            # Python 3.10 feeds outcome.errors to the result only after cleanup.
+            # Observe that stored outcome before the original cleanup, without
+            # changing it, replacing TestCase.run, or intercepting exceptions.
+            for name in ('_callTearDown', 'doCleanups'):
+                original = getattr(test, name)
+                def observed(*args, _original=original, **kwargs):
+                    self._observe_deferred_outcome(test)
+                    return _original(*args, **kwargs)
+                self.test_cleanup.enter_context(patch.object(test, name, observed))
         self.progress.write('START '+test.id()+'\n');self.progress.flush()
         faulthandler.dump_traceback_later(120,file=self.progress)
 
+    def _observe_deferred_outcome(self, test):
+        try:
+            errors = getattr(getattr(test, '_outcome', None), 'errors', ())
+            if any(err is not None for _, err in errors):
+                self._failure_stack('PENDING_FAILURE', test)
+        except Exception:
+            pass
+
     def _failure_stack(self, kind, test):
-        # The result is already recorded. Capture before TestCase cleanup can
+        # The result or legacy outcome is already recorded. Before cleanup can
         # release a still-working thread; repeated subtest failures stay bounded.
         if self.failure_dumped:
             return
@@ -61,9 +82,12 @@ class ProgressResult(unittest.TextTestResult):
             self._failure_stack('SUBTEST_FAILURE', test)
 
     def stopTest(self,test):
-        faulthandler.cancel_dump_traceback_later()
-        self.progress.write(f'END {test.id()} {time.monotonic()-self.started:.3f}s\n');self.progress.flush()
-        super().stopTest(test)
+        try:
+            faulthandler.cancel_dump_traceback_later()
+            self.progress.write(f'END {test.id()} {time.monotonic()-self.started:.3f}s\n');self.progress.flush()
+        finally:
+            self.test_cleanup.close()
+            super().stopTest(test)
 
 
 def main() -> int:

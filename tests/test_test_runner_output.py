@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 import tempfile
 import threading
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -19,6 +20,46 @@ def runner_module():
 
 
 class RunnerOutputTests(unittest.TestCase):
+    def test_deferred_outcome_observer_preserves_cleanup_and_original_results(self):
+        runner = runner_module()
+        for method in ('_callTearDown', 'doCleanups'):
+            for kind in ('error', 'success', 'expected_failure'):
+                with self.subTest(method=method, kind=kind):
+                    events = []
+                    case = unittest.FunctionTestCase(lambda: None)
+                    err = (ValueError, ValueError('artificial private exception'), None)
+                    errors = [(case, None)] + ([(case, err)] if kind == 'error' else [])
+                    case._outcome = SimpleNamespace(errors=errors,
+                                                   expectedFailure=err if kind == 'expected_failure' else None)
+                    def original(*args, **kwargs):
+                        events.append('original')
+                        self.assertEqual(args, (17,))
+                        self.assertEqual(kwargs, dict(artificial='input'))
+                        return 'original result'
+                    setattr(case, method, original)
+                    with tempfile.TemporaryFile(mode='w', encoding='utf-8') as progress, \
+                            patch.object(runner, 'LEGACY_DEFERRED_RESULTS', True), \
+                            patch.object(runner.faulthandler, 'dump_traceback', side_effect=lambda **kw: events.append('stack')), \
+                            patch.object(runner.faulthandler, 'dump_traceback_later'), \
+                            patch.object(runner.faulthandler, 'cancel_dump_traceback_later'):
+                        result = runner.ProgressResult(unittest.runner._WritelnDecorator(io.StringIO()), True, 2,
+                                                       progress=progress)
+                        result.startTest(case)
+                        try:
+                            self.assertEqual(getattr(case, method)(17, artificial='input'), 'original result')
+                            self.assertEqual(events, ['stack', 'original'] if kind == 'error' else ['original'])
+                            self.assertIs(case._outcome.errors, errors)
+                            self.assertEqual(result.errors, [])
+                            if kind == 'error':
+                                result.addError(case, err)
+                                self.assertEqual(len(result.errors), 1)
+                                self.assertEqual(events.count('stack'), 1)
+                        finally:
+                            result.stopTest(case)
+                    self.assertIs(getattr(case, method), original)
+                    other = 'doCleanups' if method == '_callTearDown' else '_callTearDown'
+                    self.assertNotIn(other, case.__dict__)
+
     def test_failure_stacks_capture_live_worker_before_cleanup(self):
         runner = runner_module()
         original_dump = runner.faulthandler.dump_traceback
@@ -63,7 +104,10 @@ class RunnerOutputTests(unittest.TestCase):
                         patch.object(runner.faulthandler, 'cancel_dump_traceback_later'):
                     result = runner.ProgressResult(unittest.runner._WritelnDecorator(io.StringIO()), True, 2,
                                                    progress=progress)
-                    ArtificialCase().run(result)
+                    case = ArtificialCase()
+                    case.run(result)
+                    self.assertNotIn('_callTearDown', case.__dict__)
+                    self.assertNotIn('doCleanups', case.__dict__)
                 self.assertEqual(observed, [True])
                 self.assertEqual(cleaned, [True])
                 expected = (1, 0) if kind.endswith('failure') else (0, 1)
