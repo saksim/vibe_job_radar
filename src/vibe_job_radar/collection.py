@@ -204,8 +204,16 @@ class Collector:
             for url in urls:
                 if url.strip():
                     prepared, normalization = prepare_public_job_link(url.strip())
-                    if self._enqueue(state, prepared) and normalization:
-                        state['details'][-1]['link_normalization'] = normalization
+                    self._enqueue(state, prepared)
+                    if normalization:
+                        # A clean link may precede a shared duplicate. Keep the
+                        # stricter identity check and all removed field names
+                        # regardless of paste order, without another request.
+                        row = next((r for r in state['details'] if r['url'] == prepared), None)
+                        if row is not None:
+                            prior = row.get('link_normalization', {}).get('removed_parameters', [])
+                            row['link_normalization'] = {**normalization,
+                                'removed_parameters': sorted(set(prior) | set(normalization['removed_parameters']))}
             if not state["details"]:
                 raise InputError("没有与所选平台匹配的职位链接。")
         if mode == "feed":

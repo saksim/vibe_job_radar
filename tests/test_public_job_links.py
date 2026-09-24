@@ -110,6 +110,15 @@ class PublicJobLinkTests(unittest.TestCase):
                     self.collector.start(values)
         self.assertEqual(self.collector.list()['runs'], [])
 
+    def test_clean_first_duplicate_keeps_share_audit_and_identity_check(self):
+        urls = URL + '\n' + SHARE + '\n' + URL + '?d_sfrom=artificial'
+        state, wire = self.collect(urls=urls, wire=Responses(markup(canonical='/job/999.shtml')))
+        self.assertEqual(state['details'][0]['status'], 'job_identity_mismatch')
+        self.assertEqual(state['details'][0]['link_normalization']['removed_parameters'],
+                         ['d_curPage', 'd_sfrom', 'pgRef', 'sfrom', 'skId'])
+        self.assertEqual(wire.calls, ['https://www.liepin.com/robots.txt', URL])
+        self.assertEqual(state['report_id'], '')
+
     def test_other_hosts_and_job_families_are_not_rewritten(self):
         for url in ('https://m.liepin.com/job/123.shtml?pgRef=sample',
                     'https://www.liepin.com/a/123.shtml?pgRef=sample',

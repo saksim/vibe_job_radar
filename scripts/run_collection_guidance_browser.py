@@ -135,7 +135,7 @@ def main():
                     page.get_by_role('button', name='我有职位链接：套用 URL 入门参数').click()
                     shared = 'https://www.liepin.com/job/123.shtml?pgRef=artificial&skId=ARTIFICIAL-TRACKING'
                     clean = 'https://www.liepin.com/job/123.shtml'
-                    f.locator('[name=urls]').fill(shared + '\n' + clean)
+                    f.locator('[name=urls]').fill(clean + '\n' + shared)
                     page.get_by_role('button', name='从链接识别来源平台（不授予权限）').click()
                     expect(page.locator('#collect-check-results')).to_contain_text('已识别 1 个不同职位链接')
                     expect(page.locator('#collect-check-results')).to_contain_text('同一职位编号的公开地址')

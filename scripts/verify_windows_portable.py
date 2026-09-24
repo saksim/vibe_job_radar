@@ -78,7 +78,7 @@ def verify_public_share_input(app):
     shared = clean + '?pgRef=portable-artificial&skId=ARTIFICIAL-TRACKING'
     data = dict(mode='urls', roles=['architect'], platforms=['liepin'], permit_platforms=['liepin'],
                 consent=True, rights_note='Artificial portable input check; no site request.',
-                urls=shared+'\n'+clean, detail_budget=1)
+                urls=clean+'\n'+shared, detail_budget=1)
     preview = app.json('/api/collection/preview', data)
     if (not preview['ready'] or preview['unique_url_count'] != 1
             or preview['normalized_url_count'] != 1 or preview['external_network_requests'] != 0):
