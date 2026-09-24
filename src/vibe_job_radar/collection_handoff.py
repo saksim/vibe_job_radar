@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 
 from .collection import writer_lock
 from .guided.contracts import CrawlError
+from .guided.ownership import mutation
 from .utils import utc_now
 from .workspace import InputError
 
@@ -99,11 +100,12 @@ class CollectionHandoff:
             group['items'].append({'index': index, 'url': url, 'reason': status})
         for group in groups.values():
             child_id = self._child_id(ident, group['platform'])
-            if self.guided._path(child_id).exists():
-                child = self.guided._load(child_id)
-                if child.get('handoff', {}).get('parent_id') != ident or child.get('platform') != group['platform']:
-                    raise InputError('既有转交记录不匹配；不会覆盖任务。')
-                group['existing_url'] = '/guided?task=' + child_id
+            with self.guided._records():
+                if self.guided._path(child_id).exists():
+                    child = self.guided._load(child_id)
+                    if child.get('handoff', {}).get('parent_id') != ident or child.get('platform') != group['platform']:
+                        raise InputError('既有转交记录不匹配；不会覆盖任务。')
+                    group['existing_url'] = '/guided?task=' + child_id
         preview = {'id': ident, 'fingerprint': fingerprint,
                    'groups': [g for g in groups.values() if g['items']], 'excluded': excluded,
                    'rights_note': rights, 'roles': roles, 'source_report_id': state.get('report_id', ''),
@@ -130,7 +132,7 @@ class CollectionHandoff:
         if (not isinstance(indices, list) or not 1 <= len(indices) <= 20 or
                 any(type(i) is not int for i in indices) or len(set(indices)) != len(indices)):
             raise InputError('每次请选择1至20条预览中的岗位，不能重复。')
-        with writer_lock(self.collector.root), self.guided._lock:
+        with writer_lock(self.collector.root), mutation(self.guided):
             state, preview = self._snapshot(data.get('id'))
             if data.get('fingerprint') != preview['fingerprint']:
                 raise InputError('原任务已变化，请重新预览；尚未启动浏览器。')
@@ -168,6 +170,8 @@ class CollectionHandoff:
                                  'source_report_id': preview['source_report_id'], 'rows': rows,
                                  'http_budget': preview['budget'], 'additional_browser_budget': len(cards),
                                  'confirmed_at': now, 'credentials_transferred': False}}
+            from .guided.checkpoint import binding
+            child['execution_binding'] = binding(child, self.guided.registry.get(child['platform']))
             self.guided._save(child)
             self.guided._submit('collect', ident)
             return {'id': ident, 'reused': False, 'queued': True, 'url': '/guided?task=' + ident}

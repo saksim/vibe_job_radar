@@ -6,6 +6,7 @@ is not reproduced here. Real headed startup is checked by the companion script.
 from __future__ import annotations
 
 import json
+import os
 import socket
 import ssl
 import sys
@@ -42,7 +43,10 @@ def main():
             server.guided._installer=lambda command,**kw:(calls.append(command) or CommandResult(0,''))
             try:
                 with sync_playwright() as pw:
-                    browser=pw.chromium.launch(headless=True)
+                    options={'headless':True}
+                    if os.environ.get('RADAR_TEST_CHROMIUM'):
+                        options['executable_path']=os.environ['RADAR_TEST_CHROMIUM']
+                    browser=pw.chromium.launch(**options)
                     try:
                         context=browser.new_context(viewport={'width':1280,'height':960})
                         context.route('**/*',lambda route:route.continue_() if route.request.url.startswith(server.origin+'/') else route.abort())
@@ -80,7 +84,7 @@ def main():
                             page.locator('#network-preferences summary').click()
                             page.locator('#encrypted-dns-consent').check()
                             page.locator('#save-network-preferences').click()
-                            expect(page.locator('#network-preferences [role=status]')).to_contain_text('已保存')
+                            expect(page.locator('#network-dns-status')).to_contain_text('已保存')
                             page.locator('#network').click()
                             expect(page.locator('#diagnostic')).to_contain_text('effective_dns_ok')
                             expect(page.locator('#diagnostic')).to_contain_text('198.18.1.251')

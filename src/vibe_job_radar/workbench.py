@@ -7,6 +7,7 @@ import json
 import secrets
 import sys
 import threading
+import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
@@ -20,7 +21,11 @@ from .guided.service import GuidedService, MESSAGES
 from .guided.contracts import CrawlError
 from .collection_guidance import CollectionGuidance
 from .evidence_ui import Conflict, EvidenceService
-from .public_tasks import PublicTasks
+from .public_tasks import PublicTasks, PublicTaskBusy
+from .guided.ownership import GuidedTaskBusy
+from .public_schedule import PublicSchedule
+from .public_queue import PublicQueue
+from .windows_startup import WindowsStartup, StartupChanged
 
 MAX_BODY = 2_000_000
 _DEFAULT_PUBLIC_CLIENT = object()
@@ -41,13 +46,27 @@ class LocalServer(ThreadingHTTPServer):
             from .local_public import LocalPublicDataClient
             public_client = LocalPublicDataClient(workspace)
         self.public_tasks = PublicTasks(workspace, hybrid_client=public_client)
+        self.public_schedule = PublicSchedule(workspace, self.public_tasks)
+        self.public_queue = PublicQueue(workspace, self.public_tasks)
+        self.windows_startup = WindowsStartup(workspace)
         self.token = secrets.token_urlsafe(32)
         self.mutation_lock = threading.Lock()
         super().__init__(("127.0.0.1", port), Handler)
         self.authority = f"127.0.0.1:{self.server_address[1]}"
         self.origin = f"http://{self.authority}"
 
+    def serve_forever(self, poll_interval=0.5):
+        try:
+            self.public_schedule.start()
+            self.public_queue.start()
+            super().serve_forever(poll_interval=poll_interval)
+        finally:
+            self.public_queue.close()
+            self.public_schedule.close()
+
     def server_close(self):
+        self.public_queue.close()
+        self.public_schedule.close()
         self.guided.close()
         self.public_tasks.close()
         super().server_close()
@@ -73,6 +92,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
+        if self.close_connection:
+            self.send_header("Connection", "close")
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
@@ -85,8 +106,46 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         try:
             self.wfile.write(body)
-        except (BrokenPipeError, ConnectionResetError):
+            self.wfile.flush()
+            if code >= 400 and self.command == 'POST':
+                self._discard_rejected_body()
+        except OSError:
             pass
+
+    def _discard_rejected_body(self):
+        """After sending a refusal, drain only an unambiguous bounded frame.
+
+        Closing a Windows socket with unread inbound data can reset the peer
+        before it sees the 403. Never parse unauthorized JSON, dispatch it,
+        reuse the connection, or wait indefinitely for a slow/truncated body.
+        """
+        if getattr(self, '_body_consumed', False) or self.headers.get('Transfer-Encoding'):
+            return
+        lengths = self.headers.get_all('Content-Length', [])
+        if len(lengths) != 1 or not lengths[0].isascii() or not lengths[0].isdecimal():
+            return
+        try:
+            remaining = int(lengths[0])
+        except ValueError:
+            return
+        if not 0 < remaining <= MAX_BODY:
+            return
+        previous_timeout = self.connection.gettimeout()
+        deadline = time.monotonic() + .2
+        try:
+            while remaining:
+                wait = deadline - time.monotonic()
+                if wait <= 0:
+                    break
+                self.connection.settimeout(wait)
+                chunk = self.rfile.read1(min(remaining, 8192))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+        except OSError:
+            pass
+        finally:
+            self.connection.settimeout(previous_timeout)
 
     def _json(self, code: int, data: dict):
         self._respond(code, json.dumps(data, ensure_ascii=False).encode("utf-8"), "application/json; charset=utf-8")
@@ -105,18 +164,24 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = unquote(urlsplit(self.path).path)
-        public = path in {"/", "/app.js", "/advanced", "/advanced.js", "/collection-help.js", "/guided", "/guided.js", "/network-settings.js"}
+        public = path in {"/", "/app.js", "/advanced", "/advanced.js", "/collection-help.js", "/guided", "/guided.js", "/network-settings.js", "/public-schedule.js", "/public-queue.js", "/windows-startup.js"}
         if not self._authorized(token_required=not public):
             return
         try:
             if public:
-                name = {"/": "workbench.html", "/app.js": "workbench.js", "/advanced": "advanced.html", "/advanced.js": "advanced.js", "/collection-help.js": "collection_help.js", "/guided": "guided.html", "/guided.js": "guided.js", "/network-settings.js": "network_settings.js"}[path]
+                name = {"/": "workbench.html", "/app.js": "workbench.js", "/advanced": "advanced.html", "/advanced.js": "advanced.js", "/collection-help.js": "collection_help.js", "/guided": "guided.html", "/guided.js": "guided.js", "/network-settings.js": "network_settings.js", "/public-schedule.js": "public_schedule.js", "/public-queue.js": "public_queue.js", "/windows-startup.js": "windows_startup.js"}[path]
                 mime = "text/html" if name.endswith(".html") else "text/javascript"
                 self._respond(200, files("vibe_job_radar").joinpath(name).read_bytes(), mime + "; charset=utf-8")
             elif path == "/api/network/state":
                 self._json(200, self.server.workspace.network_state())
             elif path == "/api/public/state":
                 self._json(200, self.server.public_tasks.state())
+            elif path == "/api/public/schedule/state":
+                self._json(200, self.server.public_schedule.state())
+            elif path == "/api/public/queue/state":
+                self._json(200, self.server.public_queue.state())
+            elif path == "/api/windows/startup/state":
+                self._json(200, self.server.windows_startup.state())
             elif path == "/api/guided/state":
                 self._json(200, self.server.guided.state())
             elif path == "/api/evidence/export":
@@ -125,7 +190,8 @@ class Handler(BaseHTTPRequestHandler):
                 artifact = self.server.evidence._artifact_path(path.removeprefix("/api/evidence/attachment/"))
                 self._respond(200, artifact.read_bytes(), "application/octet-stream", filename=artifact.name)
             elif path == "/api/status":
-                self._json(200, self.server.workspace.status())
+                self._json(200, {**self.server.workspace.status(),
+                                'acquisition_sites':self.server.guided.registry.describe()})
             elif path == "/api/doctor":
                 self._json(200, self.server.workspace.doctor())
             elif path.startswith("/api/report/"):
@@ -165,6 +231,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             raw = self.rfile.read(length)
+            self._body_consumed = True
             if len(raw) != length:
                 raise ValueError
             data = json.loads(raw.decode("utf-8"))
@@ -175,11 +242,23 @@ class Handler(BaseHTTPRequestHandler):
             return
         route = urlsplit(self.path).path
         methods = {"/api/job": "add_job", "/api/import": "import_file", "/api/plan": "plan",
-                   "/api/discover": "discover", "/api/analyze": "analyze", "/api/network/preferences": "network_preferences"}
+                   "/api/discover": "discover", "/api/analyze": "analyze", "/api/network/preferences": "network_preferences",
+                   "/api/network/proxy": "network_proxy_preferences",
+                   "/api/network/pac": "network_pac_preferences",
+                   "/api/network/pac/check": "network_pac_check"}
         target = self.server.workspace
-        if route.startswith("/api/public/"):
+        if route.startswith("/api/windows/startup/"):
+            target = self.server.windows_startup
+            methods = {"/api/windows/startup/" + name: name for name in ("enable", "disable")}
+        elif route.startswith("/api/public/schedule/"):
+            target = self.server.public_schedule
+            methods = {"/api/public/schedule/" + name: name for name in ("configure", "disable")}
+        elif route.startswith("/api/public/queue/"):
+            target = self.server.public_queue
+            methods = {"/api/public/queue/" + name: name for name in ("enqueue", "remove", "pause", "resume")}
+        elif route.startswith("/api/public/"):
             target = self.server.public_tasks
-            methods = {"/api/public/" + name: name for name in ("start", "search")}
+            methods = {"/api/public/" + name: name for name in ("start", "search", "cancel", "resume")}
         elif route.startswith("/api/guided/"):
             target = self.server.guided
             methods = {"/api/guided/" + name: name for name in ("create", "action", "install", "check_browser", "diagnose", "export", "diagnostics")}
@@ -205,6 +284,12 @@ class Handler(BaseHTTPRequestHandler):
             status, response = 400, {"error": MESSAGES.get(exc.code, "请检查平台、输入和当前任务状态。"), "code": exc.code}
         except Conflict as exc:
             status, response = 409, {"error": str(exc)}
+        except PublicTaskBusy as exc:
+            status, response = 409, {"error": str(exc), "code": "public_task_busy"}
+        except GuidedTaskBusy as exc:
+            status, response = 409, {"error": str(exc), "code": "guided_task_busy"}
+        except StartupChanged as exc:
+            status, response = 409, {"error": str(exc), "code": "startup_changed"}
         except InputError as exc:
             status, response = 400, {"error": str(exc)}
         except (ValueError, TypeError) as exc:
@@ -226,10 +311,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--workspace", type=Path, default=Path.home() / ".vibe-job-radar")
     parser.add_argument("--port", type=int, default=0, help="默认由系统选择空闲端口，仅绑定 127.0.0.1")
     parser.add_argument("--no-browser", action="store_true")
-    parser.add_argument("--doctor", action="store_true", help="离线检查 Python、SQLite 和目录写入能力")
+    modes=parser.add_mutually_exclusive_group()
+    modes.add_argument("--doctor", action="store_true", help="离线检查 Python、SQLite 和目录写入能力")
+    modes.add_argument('--public-worker',action='store_true',help='仅运行已确认的公开查询计划和待办，不启动网页服务器或浏览器')
     args = parser.parse_args(argv)
     if not 0 <= args.port <= 65535:
         parser.error("port 必须为 0～65535")
+    if args.public_worker:
+        if args.port:parser.error('独立worker不监听端口，请移除--port')
+        from .public_worker import run_cli
+        return run_cli(args.workspace)
     try:
         workspace = Workspace(args.workspace)
         diagnostic = workspace.doctor()
