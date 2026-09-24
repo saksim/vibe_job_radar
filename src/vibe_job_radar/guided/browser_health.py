@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from ..utils import utc_now
+from ..runtime import is_portable, PORTABLE_GUIDANCE, description as runtime_description
 from .contracts import CrawlError
 
 PLAYWRIGHT_REQUIREMENT = 'playwright>=1.48,<2'
@@ -84,6 +85,7 @@ def supported_version(value: str | None) -> bool:
 
 
 def command_help() -> dict:
+    if is_portable():return {'portable_repair':PORTABLE_GUIDANCE}
     # Display-only commands, never parsed or executed from an HTTP parameter.
     exe = sys.executable.replace('\\', '/')
     quoted = '"' + exe.replace('"', '') + '"'
@@ -98,7 +100,7 @@ def command_help() -> dict:
 
 def environment_report() -> dict:
     browser_package = package_version('chromium')
-    return {'schema_version': 1, 'checked_at': utc_now(), 'python': sys.executable,
+    return {'schema_version': 1, 'checked_at': utc_now(), 'python': sys.executable, 'runtime':runtime_description(),
             'python_version': platform.python_version(), 'playwright_version': package_version('playwright'),
             'os': {'system': platform.system(), 'release': platform.release(),
                    'version': platform.version(), 'machine': platform.machine()},
