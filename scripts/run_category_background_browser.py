@@ -7,6 +7,7 @@ import sys
 import tempfile
 import threading
 import time
+from urllib.parse import urlsplit
 from unittest.mock import patch
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -23,9 +24,9 @@ def main():
     args=parser.parse_args()
     from playwright.sync_api import sync_playwright, expect
     output=ROOT/'browser-acceptance/category-background';output.mkdir(parents=True,exist_ok=True)
-    result=dict(success=False,checks=[],page_errors=[],external_browser_requests=[],
+    result=dict(success=False,checks=[],page_errors=[],external_browser_requests=[],api_responses=[],phase='starting',
                 scope='Real browser, local server, default factory and temporary ledger; authored upstream responses only.')
-    releases=[]
+    releases=[];page=None
     with tempfile.TemporaryDirectory() as tmp:
         workspace=Workspace(tmp)
         ledger=RateLedger(workspace.root/'guided/rates.sqlite',Limits(page_interval=0,request_interval=0))
@@ -40,10 +41,18 @@ def main():
                     if route.request.url.startswith(server.origin+'/'):route.continue_()
                     else:result['external_browser_requests'].append(route.request.url);route.abort()
                 context.route('**/*',local_only)
-                def page_for_batch():
+                context.on('response',lambda response:result['api_responses'].append(
+                    {'path':urlsplit(response.url).path,'status':response.status})
+                    if urlsplit(response.url).path.startswith('/api/') else None)
+                page=None
+                def start_page():
+                    nonlocal page
                     page=context.new_page();page.on('pageerror',lambda e:result['page_errors'].append(str(e)))
                     page.goto(server.entry_url)
                     page.get_by_role('link',name='进入猎聘架构师公开分类采集').click()
+                    return page
+                def page_for_batch():
+                    page=start_page()
                     form=page.locator('#collect-form')
                     form.locator('[name=detail_budget]').fill('2')
                     form.locator('[name=rights_note]').fill('后台分类人工上游验收，临时工作区。')
@@ -65,7 +74,48 @@ def main():
                     deadline=time.monotonic()+8
                     while not entered.is_set() and time.monotonic()<deadline:
                         page.wait_for_timeout(20)
-                    assert entered.is_set()
+                    if not entered.is_set():
+                        result['failure_ui']={key:page.locator(selector).inner_text() for key,selector in
+                            [('notice','#notice'),('preview','#collect-check-results'),('progress','#collect-progress')]}
+                        form=page.locator('#collect-form')
+                        result['failure_ui'].update(mode=form.locator('[name=mode]').input_value(),
+                            budget=form.locator('[name=detail_budget]').input_value(),
+                            consent=form.locator('[name=consent]').is_checked(),
+                            permission=page.locator('#collect-permits input[value=liepin]').is_checked())
+                    assert entered.is_set(), 'first body not reached; see phase, API responses and failure_ui'
+                # Hold the actual initialization responses. The previous UI
+                # accepted input here, then its later preset erased it.
+                held={}
+                for endpoint in ('/api/evidence/state','/api/collection/background/state'):
+                    context.route(server.origin+endpoint,lambda route:held.setdefault(urlsplit(route.request.url).path,route))
+                result['phase']='delayed_initialization'
+                page=start_page();form=page.locator('#collect-form')
+                expect(page.locator('#collection-guide')).to_contain_text('自动读取猎聘架构师公开分类')
+                for selector in ('[name=detail_budget]','[name=consent]','[name=rights_note]'):
+                    expect(form.locator(selector)).to_be_disabled()
+                expect(page.locator('#collect-start')).to_be_disabled()
+                held['/api/evidence/state'].continue_()
+                expect(page.locator('#guide-liepin_category')).to_be_visible()
+                expect(form.locator('[name=detail_budget]')).to_have_value('5')
+                expect(form.locator('[name=detail_budget]')).to_be_disabled()
+                expect(page.locator('#collect-start')).to_be_disabled()
+                assert server.collector.list()['runs']==[]
+                deadline=time.monotonic()+8
+                while '/api/collection/background/state' not in held and time.monotonic()<deadline:
+                    page.wait_for_timeout(20)
+                assert '/api/collection/background/state' in held
+                held['/api/collection/background/state'].continue_()
+                for endpoint in held:context.unroute(server.origin+endpoint)
+                expect(form.locator('[name=detail_budget]')).to_be_enabled()
+                form.locator('[name=detail_budget]').fill('2')
+                page.locator('#collect-permits input[value=liepin]').check();form.locator('[name=consent]').check()
+                expect(form.locator('[name=detail_budget]')).to_have_value('2')
+                expect(form.locator('[name=consent]')).to_be_checked()
+                expect(page.locator('#collect-permits input[value=liepin]')).to_be_checked()
+                assert server.collector.list()['runs']==[]
+                page.close()
+                result['checks'].append('delayed profile and background-state responses keep native form controls disabled until the final preset is applied; user input then persists without creating a task')
+                result['phase']='close_during_first_body'
                 wire,entered,release,fetch=blocked_wire(41)
                 with patch.object(SafeHTTP,'public_get',side_effect=fetch):
                     page=page_for_batch();page.locator('#collect-start').click()
@@ -86,6 +136,7 @@ def main():
                 report=workspace.root/'reports'/saved['report_id']
                 report_hashes={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in report.iterdir() if p.is_file()}
                 result['checks'].append('closing the actual page during its first body still completes exactly the two selected bodies and original report without UI step calls')
+                result['phase']='reopen_completed'
                 page=page_for_batch()
                 page.locator('#collect-history').select_option(ident);page.locator('#collect-load').click()
                 expect(page.locator('#collect-progress')).to_contain_text('completed')
@@ -93,6 +144,7 @@ def main():
                 result['checks'].append('a new page reopens the same completed task and report without starting another capture')
 
                 wire,entered,release,fetch=blocked_wire(51)
+                result['phase']='pause_reload_resume'
                 with patch.object(SafeHTTP,'public_get',side_effect=fetch):
                     page.get_by_role('button',name='自动读取猎聘架构师公开分类').click()
                     form=page.locator('#collect-form');form.locator('[name=detail_budget]').fill('2')
@@ -119,8 +171,23 @@ def main():
                 result['ledger']=ledger.summary('liepin')
                 assert result['ledger']['page']['day']==6 and result['ledger']['request']['day']==8
                 result['checks'].append('both original batches use the same persistent ledger: six page reservations, eight actual HTTP reservations, no added list or login')
-                result['success']=True;browser.close()
+                result['success']=True;result['phase']='completed';browser.close()
         finally:
+            if not result['success']:
+                result['tasks']=server.collector.list()['runs']
+                result['background']=server.collection_runner.state({})
+                try:
+                    if 'failure_ui' not in result and page is not None and not page.is_closed():
+                        result['failure_ui']=page.evaluate('''() => {
+                            const form=document.getElementById('collect-form');
+                            return {notice:document.getElementById('notice')?.textContent,
+                                preview:document.getElementById('collect-check-results')?.textContent,
+                                progress:document.getElementById('collect-progress')?.textContent,
+                                mode:form?.elements.mode.value,budget:form?.elements.detail_budget.value,
+                                consent:form?.elements.consent.checked,
+                                permission:document.querySelector('#collect-permits input[value=liepin]')?.checked};
+                        }''')
+                except Exception as error:result['diagnostic_error']=type(error).__name__
             for release in releases:release.set()
             server.shutdown();server.server_close();serving.join(5)
             (output/'results.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')

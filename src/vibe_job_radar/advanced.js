@@ -2,7 +2,7 @@
 const $ = id => document.getElementById(id);
 const token = sessionStorage.getItem("radar-session") || "";
 let profile = null, page = 0, total = 0, runId = "", activeCollection = "", looping = false, collecting = false;
-let collectionGuide = null;
+let collectionGuide = null, initializing = true;
 let collectionMode = "", backgroundCollection = false, foreignCollection = false;
 const linkedReport = new URLSearchParams(location.hash.slice(1)).get("report");
 let linkedReportLoaded = false;
@@ -15,7 +15,8 @@ async function api(path, data={}) {
   return result;
 }
 function updateButtons() {
-  const locked=busy||collecting;
+  const locked=initializing||busy||collecting;
+  $("collection-controls").disabled=initializing;
   document.querySelectorAll("button").forEach(b=>{b.disabled=locked;});
   $("collect-pause").disabled=!collecting||foreignCollection;
   $("prev-page").disabled=locked||page===0;
@@ -23,6 +24,7 @@ function updateButtons() {
   if (collectionGuide) collectionGuide.sync(locked);
 }
 async function act(fn) {
+  if (initializing) { note("正在读取采集配置与后台状态，请稍候。"); return; }
   if (busy || collecting) { note("已有操作执行中，请先暂停连续采集或完成当前操作。"); return; }
   busy = true; updateButtons();
   try { await fn(); } catch(error) { note(error.message || "操作失败"); } finally { busy=false; updateButtons(); }
@@ -39,7 +41,7 @@ function checks(id, values, checked=[]) {
 const chosen=id=>[...$(id).querySelectorAll("input:checked")].map(i=>i.value);
 function setChecks(id, values) { for(const i of $(id).querySelectorAll("input"))i.checked=values.includes(i.value); }
 function text(tag, value) { const e=document.createElement(tag); e.textContent=value;return e; }
-function button(label, fn) {const b=text("button",label); b.type="button";b.disabled=busy||collecting;b.addEventListener("click",()=>act(fn));return b;}
+function button(label, fn) {const b=text("button",label); b.type="button";b.disabled=initializing||busy||collecting;b.addEventListener("click",()=>act(fn));return b;}
 function table(id, headers, rows) {
   const t=document.createElement("table"),head=document.createElement("tr");headers.forEach(h=>head.append(text("th",h)));t.append(head);
   rows.forEach(row=>{const tr=document.createElement("tr");row.forEach(v=>tr.append(text("td",String(v??""))));t.append(tr);});$(id).replaceChildren(t);
@@ -253,7 +255,7 @@ async function watchCategory(initial){
   }catch(error){note(error.message+"；后台可能仍在执行，请重新打开页面查看进度。");}
   finally{looping=false;collecting=false;backgroundCollection=false;foreignCollection=false;try{await refreshCollections();}finally{updateButtons();}}
 }
-async function continueCollection(){if(busy||collecting)return;
+async function continueCollection(){if(initializing||busy||collecting)return;
   if(collectionMode==="liepin_category"){
     collecting=true;updateButtons();
     try{const started=await api("/api/collection/background/start",{id:activeCollection,consent:true});await watchCategory(started);}
@@ -261,10 +263,10 @@ async function continueCollection(){if(busy||collecting)return;
   }
   $("collect-background-note").textContent="";
   collecting=true;looping=true;updateButtons();try{while(looping){const s=await api("/api/collection/step",{id:activeCollection,api_key:$("collect-form").elements.api_key.value});showCollection(s);if(["completed","needs_attention","empty"].includes(s.status)){looping=false;$("collect-form").elements.api_key.value="";note(`采集结束：${s.status}。请核对各平台失败和预算跳过项。`);await refreshProfile();break;}await new Promise(resolve=>setTimeout(resolve,30));}}catch(error){note(error.message);looping=false;}finally{looping=false;try{await refreshCollections();}catch(error){note(error.message);}finally{collecting=false;updateButtons();}}}
-$("collect-form").onsubmit=async event=>{event.preventDefault();if(collecting||busy)return;let created=false;await act(async()=>{const d=collectionGuide.data();const check=await api("/api/collection/preview",d);collectionGuide.render(check);if(!check.ready)return;delete d.api_key;showCollection(await api("/api/collection/start",d));await refreshCollections();created=true;});if(created)await continueCollection();};
+$("collect-form").onsubmit=async event=>{event.preventDefault();if(initializing||collecting||busy)return;let created=false;await act(async()=>{const d=collectionGuide.data();const check=await api("/api/collection/preview",d);collectionGuide.render(check);if(!check.ready)return;delete d.api_key;showCollection(await api("/api/collection/start",d));await refreshCollections();created=true;});if(created)await continueCollection();};
 $("collect-pause").onclick=async()=>{if(backgroundCollection){try{await api("/api/collection/background/pause",{id:activeCollection});}catch(error){note(error.message);return;}}else{looping=false;}note("已请求暂停；当前请求结束后不再发出下一次请求。任务进度已保留。");};
 $("collect-resume").onclick=async()=>{
-  if(collecting||busy)return;
+  if(initializing||collecting||busy)return;
   activeCollection=$("collect-history").value||activeCollection;
   if(!activeCollection){note("请先创建或选择一个任务。");return;}
   let resume=false;
@@ -321,9 +323,13 @@ async function openLinkedReport() {
   $('source-run').closest('section').scrollIntoView({block:'start'});
   note('已加载来自研究结果的同一份报告。请先复核原文，再用本人实际项目举证；没有自动批准或修改个人资料。');
 }
+updateButtons();
+note("正在读取采集配置与后台状态，请稍候。");
 init().then(async()=>{
   if(location.hash==="#liepin-category")collectionGuide.preset("liepin_category");
   if(location.hash==="#liepin-algorithm")collectionGuide.preset("liepin_category", "algorithm");
   const background=await api("/api/collection/background/state");
+  initializing=false;updateButtons();
+  if(!location.hash)note("");
   if(background.active||(background.task&&background.status==="paused"))await watchCategory(background);
-}).catch(error=>note(error.message));
+}).catch(error=>note(error.message+"；请刷新页面重新读取配置与后台状态。"));
