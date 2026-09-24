@@ -241,4 +241,6 @@ async function openLinkedReport() {
   $('source-run').closest('section').scrollIntoView({block:'start'});
   note('已加载来自研究结果的同一份报告。请先复核原文，再用本人实际项目举证；没有自动批准或修改个人资料。');
 }
-init().catch(error=>note(error.message));
+init().then(()=>{
+  if(location.hash==="#liepin-category")collectionGuide.preset("liepin_category");
+}).catch(error=>note(error.message));
