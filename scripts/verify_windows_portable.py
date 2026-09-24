@@ -217,6 +217,28 @@ def verify_category_page_checkpoint(app, workspace, category_key='architect'):
     return child['id'],context,child['category_outcomes'],parent,before
 
 
+def verify_collection_shared_cooldown(app, workspace, *, register=True):
+    """Actual exe default factory sees a real ledger; reserved .invalid input only."""
+    from vibe_job_radar.guided.rate import RateLedger
+    if register:
+        app.json('/api/collection/register',dict(key='rate_acceptance',label='人工限额验收',domains='quota-probe.invalid'))
+        RateLedger(workspace/'guided/rates.sqlite').cool('rate_acceptance',3600)
+    state=app.json('/api/collection/start',dict(mode='urls',urls='https://quota-probe.invalid/job/1',
+        roles=['architect'],platforms=['rate_acceptance'],permit_platforms=['rate_acceptance'],consent=True,
+        detail_budget=1,rights_note='Artificial shared-cooldown fixture on a reserved invalid domain; no recruiting request.'))
+    for _ in range(4):
+        state=app.json('/api/collection/step',{'id':state['id']})
+        if state['status']=='needs_attention':break
+    row=state['details'][0]
+    ledger=RateLedger(workspace/'guided/rates.sqlite')
+    counts=ledger.summary('rate_acceptance')
+    if (state['status']!='needs_attention' or row['status']!='cooldown' or state['report_id']
+            or row['fetch_diagnostic']['http_attempts']!=0 or not row.get('retry_after_seconds')
+            or any(counts[k]['day'] for k in counts)):
+        raise AssertionError('frozen default advanced factory ignored the shared cooldown or reserved an HTTP visit')
+    return state['id'],(workspace/'collections'/f'{state["id"]}.json').read_bytes()
+
+
 def verify_detail_history(app, workspace):
     """Author metadata only; the actual exe must preserve it through stop/restart.
 
@@ -525,6 +547,10 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
                 category_pages=[verify_category_page_checkpoint(app,workspace,key) for key in ('architect','algorithm')]
                 result['public_category_page_checkpoint_verified']=True
                 result['public_algorithm_category_page_checkpoint_verified']=True
+                result['stage']='advanced_shared_cooldown'
+                rate_task_id,rate_task_bytes=verify_collection_shared_cooldown(app,workspace)
+                result['advanced_shared_cooldown_verified']=True
+                result['checks'].append('actual frozen default advanced HTTP factory reads the guided ledger and blocks a reserved .invalid fixture before HTTP; no request/page reservation or historical report')
                 result['checks'].append('frozen adjacent-page API freezes authored same-category page links and ancestry, preserves the unselected old list, and returns one paused child on repeated confirmation without acquisition')
                 result['checks'].append('actual frozen API explains and deduplicates synthetic Liepin share inputs, preserves unknown parameters and saves a paused checkpoint without tracking values or any collection step')
                 if app.json('/api/public/schedule/state')['status']!='disabled':
@@ -714,6 +740,10 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
                         raise AssertionError('fresh frozen process duplicated the saved adjacent-page task')
                 result['public_category_page_restart_verified']=True
                 result['public_algorithm_category_page_restart_verified']=True
+                verify_collection_shared_cooldown(restarted,workspace,register=False)
+                if (workspace/'collections'/f'{rate_task_id}.json').read_bytes()!=rate_task_bytes:
+                    raise AssertionError('frozen restart changed the original cooldown outcome')
+                result['advanced_shared_cooldown_restart_verified']=True
             finally:restarted.close()
             result['checks'].append('fresh exe process preserves original report, leaves daily plan off and requires a fresh browser check')
         if inventory(bundle)!=before:raise AssertionError('portable application modified its bundled components')

@@ -376,6 +376,41 @@ def main():
                     continued = json.loads(page.locator('#collect-json').text_content())
                     assert continued['category_id'] == 'algorithm' and continued['category_attempts'] == 0
                     result['checks'].append('algorithm continuation preserves its category and consumes only the remaining saved-list detail with fully corroborated unheaded numbered qualifications')
+                    # Use the real default factory here. A shared guided cooldown
+                    # must stop advanced HTTP before even the one-hop transport.
+                    server.guided.ledger.cool('liepin',3600)
+                    before_rate=server.guided.ledger.summary('liepin')
+                    with patch('vibe_job_radar.network.SafeHTTP.public_get',side_effect=AssertionError('cooldown must block HTTP')) as upstream:
+                        page.get_by_role('button',name='我有职位链接：套用 URL 入门参数').click()
+                        f.locator('[name=urls]').fill('https://www.liepin.com/job/90000000000000201.shtml')
+                        page.get_by_role('button',name='从链接识别来源平台（不授予权限）').click()
+                        f.locator('[name=rights_note]').fill('人工共享冷却回归，不访问网站。')
+                        page.locator('#collect-permits input[value=liepin]').check()
+                        f.locator('[name=consent]').check()
+                        page.locator('#collect-start').click()
+                        expect(page.locator('#collect-progress')).to_contain_text('needs_attention',timeout=30000)
+                        expect(page.locator('#collect-start')).to_be_enabled()
+                        expect(page.locator('#collect-result')).to_contain_text('工作区共享冷却')
+                        blocked=json.loads(page.locator('#collect-json').text_content())
+                        assert blocked['details'][0]['status']=='cooldown' and not blocked['report_id']
+                        assert blocked['details'][0]['fetch_diagnostic']['http_attempts']==0
+                        upstream.assert_not_called()
+                    result['checks'].append('guided shared cooldown blocks the original default advanced URL factory before HTTP, shows an actionable outcome and never reuses a historical report')
+                    with patch('vibe_job_radar.network.SafeHTTP.public_get',side_effect=AssertionError('new task cannot reset cooldown')) as upstream:
+                        page.reload()
+                        page.get_by_role('button',name='自动读取猎聘架构师公开分类').click()
+                        f.locator('[name=rights_note]').fill('人工新任务共享冷却回归，不访问网站。')
+                        page.locator('#collect-permits input[value=liepin]').check()
+                        f.locator('[name=consent]').check()
+                        page.locator('#collect-start').click()
+                        expect(page.locator('#collect-progress')).to_contain_text('needs_attention',timeout=30000)
+                        expect(page.locator('#collect-start')).to_be_enabled()
+                        expect(page.locator('#collect-result')).to_contain_text('工作区共享冷却')
+                        blocked_page=json.loads(page.locator('#collect-json').text_content())
+                        assert blocked_page['category_outcomes'][0]['status']=='cooldown' and not blocked_page['report_id']
+                        assert server.guided.ledger.summary('liepin')==before_rate
+                        upstream.assert_not_called()
+                    result['checks'].append('reloading and creating a category task retains the same shared cooldown and consumes no HTTP reservation or source request')
                     page.set_viewport_size({'width': 390, 'height': 844})
                     page.locator('section').first.screenshot(path=str(output / 'mobile-case.png'))
                     assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')

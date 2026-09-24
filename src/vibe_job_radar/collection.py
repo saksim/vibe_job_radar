@@ -115,6 +115,12 @@ class Collector:
         transport.resolver = policy.resolver
         return client
 
+    def _site_client(self, domains, platform):
+        from .collection_rate import SharedSiteRate
+        client = SiteFetcher(domains)
+        client.rate_gate = SharedSiteRate(self.workspace.root, platform)
+        return client
+
     @serialized
     def _recover(self):
         # A saved in-flight request has an uncertain outcome after process restart.
@@ -361,7 +367,7 @@ class Collector:
         state["in_flight"] = {"queue": "details", "index": state["details"].index(row)}
         self._save(state)
         domains = set(self.workspace.config["platforms"][row["platform"]]["domains"])
-        client = self._client((state["id"], row["platform"]), lambda: SiteFetcher(domains), site=True)
+        client = self._client((state["id"], row["platform"]), lambda: self._site_client(domains, row['platform']), site=True)
         try:
             response = client.fetch(row["url"])
             markup = response.text()
@@ -380,7 +386,11 @@ class Collector:
             row.update(status="ok", record_id=record.record_id, final_url=record.url)
         except (FetchError, ValueError, TypeError) as exc:
             row["status"] = exc.code if isinstance(exc, FetchError) else "parse_error"
-            if row["status"] in {"http_401", "http_403", "http_429", "login_or_challenge", "host_circuit_open", "redirect_login_required", "redirect_verification_required", "manual_required"}:
+            if isinstance(exc, FetchError) and exc.retry_after is not None:
+                row['retry_after_seconds'] = exc.retry_after
+            if row["status"] in {"http_401", "http_403", "http_429", "login_or_challenge", "host_circuit_open", "redirect_login_required", "redirect_verification_required", "manual_required",
+                    'rate_wait', 'publisher_wait', 'hourly_limit', 'daily_limit', 'cooldown', 'clock_rollback',
+                    'rate_storage_error', 'publisher_policy_invalid', 'unsafe_workspace'}:
                 state["blocked_hosts"].append(host)
         finally:
             diagnostic = getattr(client, "last_diagnostic", None)
@@ -401,7 +411,7 @@ class Collector:
         row['capture_started_at'] = utc_now()
         state['in_flight'] = {'queue': 'category_outcomes', 'index': 0}
         self._save(state)
-        client = self._client((state['id'], 'liepin'), lambda: SiteFetcher({'liepin.com'}), site=True)
+        client = self._client((state['id'], 'liepin'), lambda: self._site_client({'liepin.com'}, 'liepin'), site=True)
         try:
             response = client.fetch(row['url'])
             row.update(raw_sha256=hashlib.sha256(response.body).hexdigest(), final_url=response.url or row['url'])
@@ -428,6 +438,8 @@ class Collector:
                 state['details'].append(detail)
         except (FetchError, ValueError, TypeError) as exc:
             row['status'] = exc.code if isinstance(exc, FetchError) else 'category_structure_changed'
+            if isinstance(exc, FetchError) and exc.retry_after is not None:
+                row['retry_after_seconds'] = exc.retry_after
         finally:
             diagnostic = getattr(client, 'last_diagnostic', None)
             if isinstance(diagnostic, dict):

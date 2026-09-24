@@ -14,7 +14,8 @@ from .workspace import InputError
 HARD_STOP = frozenset({'http_401', 'http_403', 'http_429', 'robots_denied', 'robots_unavailable',
     'host_stopped', 'host_circuit_open', 'login_or_challenge', 'redirect_login_required',
     'redirect_verification_required', 'manual_required', 'tls_verification_failed',
-    'tls_handshake_failed', 'interrupted_uncertain', 'cooldown'})
+    'tls_handshake_failed', 'interrupted_uncertain', 'cooldown', 'rate_wait', 'publisher_wait',
+    'hourly_limit', 'daily_limit', 'clock_rollback', 'rate_storage_error', 'publisher_policy_invalid', 'unsafe_workspace'})
 
 
 def _fields(data, allowed):
