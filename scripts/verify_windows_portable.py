@@ -99,7 +99,16 @@ def verify_public_share_input(app):
             or clean_state['details'][0]['detail_parser'] != 'liepin_public_detail_v1'
             or 'link_normalization' in clean_state['details'][0]):
         raise AssertionError('frozen clean input lost its strict parser or was incorrectly marked as a share')
-    return [(row['id'], row['details']) for row in (state, clean_state)]
+    a_url = 'https://www.liepin.com/a/123.shtml'
+    a_preview = app.json('/api/collection/preview', {**data, 'urls': a_url})
+    if not a_preview['ready'] or a_preview['url_rows'][0]['detail_parser'] != 'liepin_public_detail_v1':
+        raise AssertionError('frozen a detail input did not select the strict parser')
+    a_state = app.json('/api/collection/start', {**data, 'urls': a_url})
+    if (a_state['details'][0]['detail_parser'] != 'liepin_public_detail_v1'
+            or a_state['detail_attempts'] != 0 or a_state['report_id']
+            or a_state['status'] != 'paused' or a_state['details'][0]['url'] != a_url):
+        raise AssertionError('frozen a detail checkpoint fetched or lost the selected identity')
+    return [(row['id'], row['details']) for row in (state, clean_state, a_state)]
 
 
 def verify_public_category_input(app):
@@ -395,6 +404,7 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
                 public_input_checkpoints=verify_public_share_input(app)
                 result['public_share_input_verified']=True
                 result['public_clean_detail_input_verified']=True
+                result['public_a_detail_input_verified']=True
                 category_id,category_outcomes=verify_public_category_input(app)
                 result['public_category_input_verified']=True
                 result['checks'].append('actual frozen API explains and deduplicates synthetic Liepin share inputs, preserves unknown parameters and saves a paused checkpoint without tracking values or any collection step')
@@ -536,6 +546,7 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
                         raise AssertionError('fresh frozen process changed or executed the paused public input task')
                 result['public_share_restart_verified']=True
                 result['public_clean_detail_restart_verified']=True
+                result['public_a_detail_restart_verified']=True
                 saved=restarted.json('/api/collection/status', {'id':category_id})
                 if (saved['category_outcomes']!=category_outcomes or saved['category_attempts']!=0
                         or saved['details'] or saved['detail_attempts']!=0 or saved['report_id']):

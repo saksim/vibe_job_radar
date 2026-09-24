@@ -58,7 +58,7 @@ Windows便携包可在首页明确选择[登录后打开工作台](docs/WINDOWS_
 
 本地粘贴、导入和规则分析不需要任何 Key 或额外运行依赖。先点击“运行合成演示”认识报告，再粘贴你有权处理的真实完整 JD，保存并分析。下载 `requirements_zh.csv` 核对逐条原文。
 
-原 `/advanced` 保留 URL、Brave Search API 和授权 JSON 数据源路线。已有链接走 URL；想用搜索服务找链接，需要自己的 Brave Key；没有数据供应方就不选 JSON 接口。见 [逐格填写案例](docs/COLLECTION_FORM_CASES.md)。旧 HTTP 路线不共享新向导的浏览器会话。
+原 `/advanced` 保留 URL、Brave Search API 和授权 JSON 数据源路线，并提供[猎聘架构师公开分类](docs/LIEPIN_PUBLIC_CATEGORY.md)：无需 Key，自动读取主列表前1～5个职位并生成本批报告。该分类不含自定义关键词、地区或翻页。已有链接走 URL；想用搜索服务找链接，需要自己的 Brave Key；没有数据供应方就不选 JSON 接口。见 [逐格填写案例](docs/COLLECTION_FORM_CASES.md)。旧 HTTP 路线不共享新向导的浏览器会话。
 
 高级页同时提供原文复核、个人项目、附件和指标、精确要求映射、个人报告与证据包。没有本人证据的数字保持待填，能力覆盖率不是胜任度或录用概率。
 
