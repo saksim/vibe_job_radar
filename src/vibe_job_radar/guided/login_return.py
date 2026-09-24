@@ -12,7 +12,7 @@ import json
 import time
 from urllib.parse import parse_qsl, urlsplit
 
-from .contracts import CrawlError
+from .contracts import CrawlError, PageSnapshotChanged
 
 
 def matching_list_signature(adapter, expected_url, page):
@@ -190,7 +190,10 @@ class LoginReturnManager:
                         adapter, watch.detail_target.expected_url, page)
                     surface = 'detail'
             except CrawlError as exc:
-                if exc.code in {'manual_required', 'not_job_list', 'wrong_platform', 'invalid_url',
+                # A navigation between DOM reads invalidates the observation,
+                # not the explicitly armed wait. Keep its original deadline and
+                # require two fresh stable reads; do not issue a request/retry.
+                if isinstance(exc, PageSnapshotChanged) or exc.code in {'manual_required', 'not_job_list', 'wrong_platform', 'invalid_url',
                                 'not_job_url', 'job_identity_mismatch', 'structure_changed',
                                 'jd_incomplete', 'invalid_job_data', 'credential_url'}:
                     watch.signature = watch.surface = None

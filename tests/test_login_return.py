@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import Mock
 
 from vibe_job_radar.guided.adapters import Registry, builtins
-from vibe_job_radar.guided.contracts import CrawlError, PageSnapshot
+from vibe_job_radar.guided.contracts import CrawlError, PageSnapshot, PageSnapshotChanged
 from vibe_job_radar.guided.login_return import LoginReturnManager, matching_list_signature
 from vibe_job_radar.guided.service import GuidedService
 from vibe_job_radar.workspace import Workspace, InputError
@@ -142,6 +142,29 @@ class ReturnWatcherTests(unittest.TestCase):
         self.assertEqual(self.state['login_continuation'],'needs_attention')
         self.backend.snapshot.assert_called_once()
         self.service._submit.assert_not_called()
+
+    def test_navigation_during_local_read_keeps_deadline_and_requires_two_fresh_observations(self):
+        self.tick();deadline=self.manager._watches['task'].expires
+        self.backend.snapshot.side_effect=PageSnapshotChanged();self.tick()
+        self.assertEqual(self.manager._watches['task'].expires,deadline)
+        self.backend.snapshot.side_effect=None
+        self.tick();self.service._submit.assert_not_called()
+        self.tick();self.service._submit.assert_called_once_with('capture','task')
+        self.backend.open.assert_not_called()
+
+    def test_repeated_changing_page_expires_without_navigation_or_extending_wait(self):
+        self.backend.snapshot.side_effect=PageSnapshotChanged()
+        for _ in range(11):self.tick()
+        self.assertEqual(self.state['login_continuation'],'timed_out')
+        self.assertNotIn('task',self.manager._watches)
+        self.assertEqual(self.backend.snapshot.call_count,10)
+        self.service._submit.assert_not_called();self.backend.open.assert_not_called()
+
+    def test_unclassified_page_not_ready_still_requires_attention(self):
+        self.backend.snapshot.side_effect=CrawlError('page_not_ready');self.tick();self.tick()
+        self.assertEqual(self.state['login_continuation'],'needs_attention')
+        self.assertEqual(self.state['code'],'page_not_ready')
+        self.backend.snapshot.assert_called_once();self.service._submit.assert_not_called()
 
     def test_rejected_password_is_reported_and_never_retried(self):
         self.backend.snapshot.side_effect=CrawlError('login_credentials_rejected')
