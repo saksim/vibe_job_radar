@@ -164,6 +164,12 @@ def main():
                         assert finished['cards'][1]['acquisition_path']=='login_returned_detail'
                         assert finished['authentication']=='user_resumed'
                         assert finished['login_continuation']=='resumed_detail'
+                        history=finished['detail_attempt_history']
+                        assert history['origin']=='task_creation'
+                        assert [a['outcome'] for a in history['attempts']]==['ok','manual_required','ok']
+                        assert [a['mode'] for a in history['attempts']]==['navigation','navigation','login_returned_detail']
+                        assert all(a['elapsed_ms']>=0 and a['finished_at'] for a in history['attempts'])
+                        assert len(history['selections'])==1 and len(history['selections'][0]['items'])==2
                         result['stage']='final_request_counts'
                         assert calls.count(('POST','/normal-login'))==1
                         # Failed visit + explicitly opened login gate + natural
@@ -176,6 +182,15 @@ def main():
                         assert workspace.report_file(first_report,'run_manifest.json').is_file()
                         assert first_report!=finished['report_id']
                         assert workspace.report(finished['report_id'])['manifest']['stats']['current_source_records']==2
+                        audit=json.loads(workspace.report_file(finished['report_id'],'guided_acquisition.json').read_text(encoding='utf-8'))
+                        assert audit['detail_attempt_history']['attempts']==history['attempts']
+                        assert audit['detail_attempt_history']['selections']==history['selections']
+                        prior=json.loads(workspace.report_file(first_report,'guided_acquisition.json').read_text(encoding='utf-8'))
+                        assert [a['outcome'] for a in prior['detail_attempt_history']['attempts']]==['ok','manual_required']
+                        result['detail_attempts']={'recorded':3,'outcomes':['ok','manual_required','ok'],
+                            'modes':['navigation','navigation','login_returned_detail'],'measured_durations':3,
+                            'original_report_bound':True,'prior_failure_retained':True}
+                        result['checks'].append('durable detail history retains failed gate before successful login return and measured processing time; HTTP counts remain separate')
                         if args.automatic:assert result.get('snapshot_url_change_injected') is True
                         result['checks'].append('one manual fixture login returns to selected detail; no Capture/Resume, home/list detour or duplicate detail GET')
                         result['checks'].append('returned full JD enters original report, previous result/report retained, no recommended job fetched')

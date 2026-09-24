@@ -21,6 +21,7 @@ from .collection import writer_lock
 from .config import load_config
 from .guided.adapters import builtins
 from .guided.contracts import CrawlError
+from .guided import attempt_history
 from .html_parser import _unique_object
 from .models import JobRecord
 from .utils import atomic_json, parse_time, utc_now
@@ -214,6 +215,10 @@ class AcceptanceLedger:
         folder,plan = self._plan(ident)
         with writer_lock(folder):
             history,previous = self._history(folder,plan)
+            prior_attempts = {}
+            for observed in history:
+                for task in observed['tasks']:
+                    prior_attempts[task['id']] = task.get(attempt_history.KEY)
             if len(history) >= MAX_CAPTURES: raise InputError('验收观测已达到上限。')
             paths = sorted(self._path('guided').glob('*.json'))
             paths = [p for p in paths if HEX32.fullmatch(p.stem)]
@@ -236,6 +241,12 @@ class AcceptanceLedger:
                         or len({r['id'] for r in cards})!=len(cards)
                         or not set(selection)<={r['id'] for r in cards}):
                     raise InputError('任务选择与卡片不一致，不能忽略缺失条目。')
+                try:
+                    attempts = attempt_history.snapshot(state)
+                    attempt_history.extends(prior_attempts.get(state['id']), attempts)
+                except CrawlError:
+                    raise InputError('逐次采集历史损坏、缺失或已覆盖，未忽略早期失败。') from None
+                historical_selected = {i for selection in (attempts or {}).get('selections', []) for i in selection['items']}
                 report,report_error,report_hash = None,'',''
                 if any(r['id'] in selection and r.get('status')=='ok' for r in cards):
                     try:
@@ -244,10 +255,12 @@ class AcceptanceLedger:
                     except (InputError,OSError,ValueError,KeyError,TypeError): report_error='report_evidence_invalid'
                 items = []
                 for row in cards:
-                    if row['id'] not in selection: continue
+                    if row['id'] not in set(selection) | historical_selected: continue
                     item = {'id':row['id'],'status':row['status'],'full_target_verified':False,
                             'permission':'not_granted' if row['status']=='robots_denied' else 'not_independently_verified'}
-                    if row['status']=='ok':
+                    if row['id'] not in selection:
+                        item['historical_selection_only'] = True
+                    elif row['status']=='ok':
                         try:
                             if report_error: raise InputError(report_error)
                             item.update(self._verified_item(state,row,report,plan))
@@ -259,11 +272,21 @@ class AcceptanceLedger:
                 if self._json(path) != state: raise InputError('采集任务在观测期间改变，请稳定后重试。')
                 tasks.append({'id':state['id'],'created_at':state['created_at'],'status':state['status'],'code':state.get('code',''),
                     'source_sha256':_hash(_encoded(state)),'report_id':state.get('report_id',''),
-                    'report_sha256':report_hash,'selected':len(selection),'items':items})
+                    'report_sha256':report_hash,'selected':len(selection),'items':items,
+                    attempt_history.KEY:attempts})
+            unknown = ['runtime_environment','per_request_cost', 'search_login_and_http_attempts_not_recorded',
+                       'human_identity_title_full_text_review']
+            if not tasks or any(not task[attempt_history.KEY] or task[attempt_history.KEY]['origin'] != 'task_creation' for task in tasks):
+                unknown += ['per_attempt_latency', 'complete_retry_history_before_capture']
+            if any(a['outcome'] == 'unfinished' for task in tasks for a in (task[attempt_history.KEY] or {}).get('attempts', [])):
+                unknown.append('unfinished_detail_attempts_have_unknown_outcome_and_duration')
+            if any(item['status'] == 'ok' and not any(a['item_id'] == item['id'] and a['outcome'] == 'ok'
+                    for a in (task[attempt_history.KEY] or {}).get('attempts', []))
+                    for task in tasks for item in task['items']):
+                unknown.append('saved_items_without_recorded_successful_detail_attempt')
             capture = {'schema_version':1,'plan_sha256':plan['sha256'],'previous_sha256':previous,
                 'captured_at':self.clock(),'tasks':tasks,'excluded_tasks':excluded,
-                'unknown_evidence':['runtime_environment','per_request_cost','per_attempt_latency',
-                    'complete_retry_history_before_capture','human_identity_title_full_text_review']}
+                'unknown_evidence':unknown}
             capture['sha256']=_hash(_encoded(capture))
             if len(_encoded(capture)) > 5_000_000: raise InputError('验收观测过大。')
             atomic_json(folder/f'capture-{len(history)+1:04}.json',capture)
@@ -274,11 +297,25 @@ class AcceptanceLedger:
         folder,plan = self._plan(ident)
         history,_ = self._history(folder,plan)
         latest,origins,previous_outcomes,unknown = {},{},Counter(),set()
+        attempts_by_task = {}
         for capture in history:
-            unknown.update(capture['unknown_evidence'])
+            unknown.update(k for k in capture['unknown_evidence']
+                           if k != 'unfinished_detail_attempts_have_unknown_outcome_and_duration')
             for task in capture['tasks']:
+                attempts = task.get(attempt_history.KEY)
+                try:
+                    # Historical captures do not have task cards. Their complete
+                    # selected union supplies the identities needed for validation.
+                    if attempts is not None:
+                        attempt_history.validate({'cards': task['items'], attempt_history.KEY: attempts})
+                    attempt_history.extends(attempts_by_task.get(task['id']), attempts)
+                except CrawlError:
+                    raise InputError('验收观测中的逐次历史缺失或改变，不能删除早期失败。') from None
+                attempts_by_task[task['id']] = attempts
                 for item in task['items']:
                     key = (task['id'],item['id'])
+                    if item.get('historical_selection_only') and key in latest:
+                        continue
                     if key in latest and latest[key] != item:
                         previous_outcomes[latest[key]['status']] += 1
                     latest[key] = item
@@ -297,7 +334,7 @@ class AcceptanceLedger:
                 row = next(r for r in report[1]['items'] if r['id']==item['id'])
                 row = {**row,'title':report[2][item['record_id']].title}
                 checked = self._verified_item({'id':task['id'],'created_at':task['created_at'],
-                    'selection':[r['id'] for r in task['items']]},row,report,plan)
+                    'selection':[r['id'] for r in task['items'] if not r.get('historical_selection_only')]},row,report,plan)
                 if any(item.get(k) != v for k,v in checked.items()): raise InputError('原始条目已改变。')
                 complete.append(item)
             except (InputError,OSError,ValueError,KeyError,TypeError,sqlite3.Error,CrawlError,StopIteration):
@@ -306,6 +343,8 @@ class AcceptanceLedger:
         denied = sum(i['permission']=='not_granted' for i in items)
         denominator = len(items)-denied
         ratio = len(complete)/denominator if denominator else None
+        if any(a['outcome'] == 'unfinished' for h in attempts_by_task.values() if h for a in h['attempts']):
+            unknown.add('unfinished_detail_attempts_have_unknown_outcome_and_duration')
         gaps = sorted(unknown)
         if not history: gaps.append('no_observations')
         if len(entities)<30: gaps.append('fewer_than_30_unique_full_target_jobs')
@@ -319,4 +358,5 @@ class AcceptanceLedger:
             'verified_full_target_items':len(complete),'unique_full_target_jobs':len(entities),'local_dates':dates,
             'observed_completion_ratio':ratio,'statuses':dict(Counter(i['status'] for i in items)),
             'previous_observed_outcomes':dict(previous_outcomes),'gaps':gaps,
+            'detail_attempts':attempt_history.summarize(attempts_by_task),
             'scope':'本机观测的选中条目及历史变化；非全部 HTTP 尝试分母，不能据此自动认证或发布'}
