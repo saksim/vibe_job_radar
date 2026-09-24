@@ -15,24 +15,87 @@ class Span:
     section: str
     vibe_section: bool
 
+    @property
+    def matching_text(self) -> str:
+        # Only spans admitted by _soft_wrap_scan can contain line breaks.
+        # Rejoin CJK words, retain Latin word spacing; never rewrite the quote.
+        text = re.sub(r'(?<=[\u3400-\u9fff])[ \t]*\r?\n[ \t]*(?=[\u3400-\u9fff])', '', self.text)
+        return re.sub(r'[ \t]*\r?\n[ \t]*', ' ', text)
+
 
 _HEADINGS = (
-    ('responsibilities', r'岗位职责|工作职责|职位描述|responsibilities|(?:job|role)\s+description|what\s+you(?:\s+will|[\'’]ll)\s+do|about\s+(?:the|this)\s+role'),
+    ('responsibilities', r'岗位职责|工作职责|工作职能|职位描述|responsibilities|(?:job|role)\s+description|what\s+you(?:\s+will|[\'’]ll)\s+do|about\s+(?:the|this)\s+role'),
     ('company', r'公司介绍|关于我们|about\s+(?:us|the\s+company|[a-z][a-z0-9 &.-]{0,40})|who\s+we\s+are|company(?:\s+(?:overview|description))?'),
     ('benefits', r'福利待遇|薪酬福利|benefits(?:\s+and\s+perks)?|perks(?:\s+and\s+benefits)?|compensation(?:\s+and\s+benefits)?|what\s+we\s+offer'),
     ('preferred', r'加分项|优先条件|nice\s+to\s+have|(?:preferred|desired|bonus)\s+(?:qualifications|skills)|bonus\s+points'),
-    ('requirements', r'任职要求|岗位要求|基本要求|招聘要求|(?:minimum\s+|basic\s+|required\s+)?qualifications|(?:job\s+)?requirements|required\s+skills|what\s+you\s+bring|you\s+(?:may\s+be\s+)?(?:a\s+)?(?:good\s+)?fit\s+if'),
+    ('requirements', r'任职要求|任职资格|岗位要求|基本要求|招聘要求|(?:minimum\s+|basic\s+|required\s+)?qualifications|(?:job\s+)?requirements|required\s+skills|what\s+you\s+bring|you\s+(?:may\s+be\s+)?(?:a\s+)?(?:good\s+)?fit\s+if'),
     ('ai', r'AI\s*编程要求|Vibe\s*Coding要求|(?:AI[ -]coding|vibe\s+coding)\s+(?:requirements|skills)'),
 )
 
 
 def _heading_kind(text: str) -> str:
     heading = re.sub(r'^#{1,4}\s+', '', text).rstrip('：:。!?？ ')
+    if heading.startswith('【') and heading.endswith('】'):
+        heading = heading[1:-1].strip().rstrip('：: ')
     if len(heading) > 80:
         return ''
     if re.fullmatch(r'about\s+you', heading, re.I):
         return 'requirements'
     return next((kind for kind, pattern in _HEADINGS if re.fullmatch(pattern, heading, re.I)), '')
+
+
+_NUMBERED_PREFIX = re.compile(r'(?:[（(]\d{1,2}[）)]|\d{1,2}[、.)）])(?!\d)[ \t]*')
+_NEW_OBLIGATION = re.compile(
+    r'(?:(?:但是|但|然而|不过|同时|并且|并|且)[ \t]*){0,2}'
+    r'(?:必须|需要|应|须|需|禁止|不得|严禁|不能|不允许|不要求|不必|不强制|无需|不需要|'
+    r'不接受|不依赖|要求|熟练|精通|掌握|熟悉|具备|能够|负责|使用|推动|参与|'
+    r'建立|构建|维护|设计|完成|开发|公司|关于|福利|薪酬)')
+_NEGATION_BREAKS = tuple((word[:i], word[i:])
+    for word in ('不要求', '不需要', '不必', '不强制', '不允许', '不能', '不得', '禁止', '严禁', '无需')
+    for i in range(1, len(word)))
+
+
+def _soft_wrap_scan(text: str) -> str:
+    """Same-length scan view for bounded Chinese numbered-item continuations.
+
+    An explicit new obligation is not evidence of a layout wrap. Unnumbered,
+    English-only, oversized or uncertain boundaries retain their original LF.
+    """
+    lines = list(re.finditer(r'[^\n]*\n|[^\n]+$', text))
+    scan = list(text)
+
+    def continuation(previous: str, following: str) -> bool:
+        previous, following = previous.strip(), following.strip()
+        if not previous or not re.match(r'[\u3400-\u9fff]', following):
+            return False
+        if re.search(r'[。！？；;.!?：:][”’"）)\]】]*$', previous):
+            return False
+        if re.match(r'[一二三四五六七八九十百]+[、.）)]', following):
+            return False
+        if _heading_kind(following) or re.match(r'[^：:]{1,80}[：:]', following):
+            return False
+        if _NEW_OBLIGATION.match(following):
+            # A split negation (不 / 要求) is a continuation, not a new positive
+            # obligation. Only the existing, finite negation vocabulary qualifies.
+            return any(previous.endswith(left) and following.startswith(right) for left, right in _NEGATION_BREAKS)
+        return True
+
+    i = 0
+    while i < len(lines):
+        first = lines[i].group().strip()
+        if not _NUMBERED_PREFIX.match(first) or not re.search(r'[\u3400-\u9fff]', first):
+            i += 1
+            continue
+        end = i + 1
+        while end < len(lines) and continuation(lines[end-1].group(), lines[end].group()):
+            end += 1
+        if end - i <= 8 and lines[end-1].end() - lines[i].start() <= 2000:
+            for line in lines[i:end-1]:
+                for position in range(line.end()-2, line.end()):
+                    if position >= line.start() and text[position] in '\r\n':
+                        scan[position] = ' '
+        i = end
+    return ''.join(scan)
 
 
 def spans(text: str):
@@ -44,7 +107,7 @@ def spans(text: str):
     # Only clear new English clauses. Decimal/version dots, initials and
     # abbreviations such as e.g. / U.S. are not arbitrary sentence boundaries.
     english = re.compile(r'[.!?](?=[ \t]+(?:You|We|The|Our|This|Must|Do|Use|Build|Write|Review|Maintain|Experience|Knowledge|Proficiency|No|Please|Candidates?|Applicants?)\b)')
-    for match in re.finditer(pattern, text):
+    for match in re.finditer(pattern, _soft_wrap_scan(text)):
         raw_match = match.group()
         endings = [m.end() for m in english.finditer(raw_match)
                    if not re.search(r'(?:\b(?:e\.g|i\.e|vs|Dr|Mr|Ms|Prof|Inc|Ltd|No)|(?:\b[A-Z]\.)+[A-Z])\.$', raw_match[:m.end()], re.I)]
@@ -52,7 +115,7 @@ def spans(text: str):
         for lo, hi in zip(bounds, bounds[1:]):
             raw = match.group()[lo:hi]
             left = len(raw) - len(raw.lstrip())
-            prefix = re.match(r"(?:[-*•·]\s*|[（(]?\d{1,2}[）)、.)]\s*)", raw[left:])
+            prefix = re.match(r"[-*•·][ \t]*", raw[left:]) or _NUMBERED_PREFIX.match(raw[left:])
             if prefix:
                 left += len(prefix.group())
             right = len(raw.rstrip())
@@ -96,7 +159,7 @@ def strength(text: str, section: str = "") -> str:
 
 
 class RuleExtractor:
-    version = "rules-0.2.0"
+    version = "rules-0.2.1"
 
     def __init__(self, config: dict):
         self.config = config
@@ -126,15 +189,16 @@ class RuleExtractor:
 
     def extract(self, job: JobRecord, roles: list[str], *, group_id: str | None = None) -> list[Requirement]:
         units = list(spans(job.text))
-        anchors = [s for s in units if self.direct(s.text) and strength(s.text, s.section) in {"required", "expected", "preferred"}
+        anchors = [s for s in units if self.direct(s.matching_text) and strength(s.matching_text, s.section) in {"required", "expected", "preferred"}
                    and _heading_kind(s.section) not in {'benefits', 'company'}]
         group_id = group_id or "g_" + job.fingerprint[:24]
         rows = []
         for s in units:
             if _heading_kind(s.section) in {'benefits', 'company'}:
                 continue
-            tools = self.tools_in(s.text)
-            is_direct = self.direct(s.text)
+            clause = s.matching_text
+            tools = self.tools_in(clause)
+            is_direct = self.direct(clause)
             nearby = next((a for a in anchors if a.line == s.line and a != s and abs(a.start - s.start) <= 250), None)
             if is_direct:
                 relation, score = "direct", 0.95
@@ -144,22 +208,22 @@ class RuleExtractor:
                 relation, score = "role_related", 0.55
             else:
                 continue
-            capabilities = {k for k, ps in self.cap_patterns.items() if any(p.search(s.text) for p in ps)}
+            capabilities = {k for k, ps in self.cap_patterns.items() if any(p.search(clause) for p in ps)}
             if is_direct:
                 capabilities.add("ai_coding")
             if tools:
                 capabilities.add("tool_fluency")
             if not capabilities:
                 continue
-            priority = strength(s.text, s.section)
-            mixed = bool(re.search(r"(?:无需|不要求|禁止|不得).{0,100}(?:但|同时|不过).{0,100}(?:必须|要求|熟练|需要)", s.text))
-            ambiguous = bool(re.search(r"不接受只会|不能只|不依赖|不能依赖|\bnot (?:just|only)\b|\b(?:cannot|can't|must not) rely\b", s.text, re.I))
+            priority = strength(clause, s.section)
+            mixed = bool(re.search(r"(?:无需|不要求|禁止|不得).{0,100}(?:但|同时|不过).{0,100}(?:必须|要求|熟练|需要)", clause))
+            ambiguous = bool(re.search(r"不接受只会|不能只|不依赖|不能依赖|\bnot (?:just|only)\b|\b(?:cannot|can't|must not) rely\b", clause, re.I))
             # Building/selling the named product is not proof of using it as
             # a coding tool. Keep the original clause for explicit review.
             product_mention = any(re.search(
                 r'\b(?:build|develop|design|sell|market|maintain|support)(?:ing|s)?\s+(?:the\s+)?$',
-                s.text[:match.start()], re.I)
-                for tool in tools for match in self.tool_patterns[tool].finditer(s.text))
+                clause[:match.start()], re.I)
+                for tool in tools for match in self.tool_patterns[tool].finditer(clause))
             for cap in sorted(capabilities):
                 rid = "r_" + digest(group_id + f"|{s.start}|{s.end}|{cap}")[:24]
                 review = "needs_review" if job.evidence_level == "snippet" or mixed or ambiguous or product_mention or relation != "direct" or priority == "unspecified" else "rule_accepted"
@@ -195,11 +259,11 @@ def hard_constraints(job: JobRecord, group_id: str, roles: list[str]) -> list[di
     rows = []
     for s in spans(job.text):
         for category, pattern in patterns.items():
-            if re.search(pattern, s.text, re.I):
+            if re.search(pattern, s.matching_text, re.I):
                 rows.append({"constraint_id": "h_" + digest(group_id + str(s.start) + category)[:20],
                              "job_group_id": group_id, "record_id": job.record_id, "roles": roles,
                              "category": category, "quote": s.text, "start": s.start, "end": s.end,
-                             "strength": strength(s.text, s.section), "url": job.url,
+                             "strength": strength(s.matching_text, s.section), "url": job.url,
                              "evidence_level": job.evidence_level, "is_synthetic": job.is_synthetic,
                              "note": "Do not infer satisfaction from polished wording; verify separately."})
     return rows

@@ -378,7 +378,7 @@ def verify_english_report(app,previous_id,previous_csv):
     english=app.json('/api/analyze',{'dataset':'real','roles':['architect']})
     if english['id']==previous_id:raise AssertionError('new report overwrote the previous run')
     rows=english['requirements']
-    if (english['manifest']['rule_engine']!='rules-0.2.0'
+    if (english['manifest']['rule_engine']!='rules-0.2.1'
             or english['manifest']['stats']['accepted_positive_requirement_rows']!=2
             or any('subscription' in row['quote'] or 'software teams' in row['quote'] for row in rows)
             or not any(row['quote']=='You must use Cursor.' and row['strength']=='required' for row in rows)
@@ -390,6 +390,30 @@ def verify_english_report(app,previous_id,previous_csv):
     if app.call(f'/api/download/{previous_id}/requirements_zh.csv')!=(200,previous_csv):
         raise AssertionError('new English analysis changed the previous report CSV')
     return english
+
+
+def verify_numbered_wrap_report(app, previous):
+    """Check new extraction in the actual program, without changing old reports."""
+    quote = '推动AI编程在研发小组中\n的应用，提升交付效率。'
+    text = '【岗位职责】\n1、' + quote + '\n2、禁止使用 Codex。\n【福利待遇】\n公司提供 Cursor 会员。'
+    app.json('/api/job', {'title':'软件架构师', 'company':'ARTIFICIAL WRAP FIXTURE',
+        'platform':'manual', 'source_ref':'portable-acceptance:authored-wrap', 'text':text,
+        'rights_note':'Independently authored wrap fixture, not a real job.',
+        'evidence_level':'full_text', 'full_text_confirmed':True})
+    report = app.json('/api/analyze', {'dataset':'real', 'roles':['architect']})
+    rows = [r for r in report['requirements'] if r['company']=='ARTIFICIAL WRAP FIXTURE']
+    if (report['id']==previous['id'] or report['manifest']['rule_engine']!='rules-0.2.1'
+            or len(rows)!=4 or any(text[r['start']:r['end']]!=r['quote'] for r in rows)
+            or not any(r['quote']==quote and r['strength']=='expected' and r['relation']=='direct' for r in rows)
+            or any(r['strength']!='prohibited' for r in rows if 'Codex' in r['quote'])
+            or any('会员' in r['quote'] for r in rows)):
+        raise AssertionError('frozen numbered wrap extraction or original offsets are incorrect')
+    status, data = app.call(f"/api/download/{report['id']}/requirements_zh.csv")
+    if status!=200 or quote.encode('utf-8') not in data or '会员'.encode('utf-8') in data:
+        raise AssertionError('frozen numbered wrap CSV is incomplete')
+    if app.json('/api/report/'+previous['id'])['requirements']!=previous['requirements']:
+        raise AssertionError('wrapped analysis changed previous English evidence')
+    return report
 
 
 def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=False,verify_system_pac=False):
@@ -538,6 +562,10 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
                     raise AssertionError('English analysis changed an existing report file')
                 result['english_obligation_verified']=True
                 result['checks'].append('frozen English extractor excludes company/benefits, separates positive use from prohibition, exports original CSV and preserves prior report bytes')
+                result['stage']='numbered_wrap_report'
+                wrapped=verify_numbered_wrap_report(app,english)
+                result['numbered_wrap_report_verified']=True
+                result['checks'].append('frozen numbered Chinese wrap retains full original quote and offsets in report/CSV; next prohibition and company/benefits stay separate')
                 result['stage']='real_browser_ui'
                 from playwright.sync_api import sync_playwright,expect
                 with sync_playwright() as pw:
@@ -585,6 +613,9 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
                 if restarted.json('/api/report/'+ident)['id']!=ident:raise AssertionError('portable restart lost report')
                 if restarted.json('/api/report/'+english['id'])['requirements']!=english['requirements']:
                     raise AssertionError('portable restart changed English evidence')
+                if restarted.json('/api/report/'+wrapped['id'])['requirements']!=wrapped['requirements']:
+                    raise AssertionError('portable restart changed numbered wrap evidence')
+                result['numbered_wrap_restart_verified']=True
                 if inventory(workspace/'reports'/ident)!=previous_files:
                     raise AssertionError('portable restart changed an existing report file')
                 if restarted.json('/api/public/schedule/state')['status']!='disabled':raise AssertionError('portable restart implicitly scheduled work')
