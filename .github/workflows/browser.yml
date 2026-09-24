@@ -28,11 +28,31 @@ jobs:
           python scripts/run_collection_guidance_browser.py
           python scripts/run_resume_browser.py
           python scripts/run_guided_browser.py
+          python scripts/verify_password_form.py
+          python scripts/run_guided_startup_browser.py
           python scripts/run_guided_review_browser.py
+          python scripts/run_deferred_browser.py
+          python scripts/run_proxy_auth_browser.py
+          python scripts/run_read_retry_browser.py
+          python scripts/run_read_retry_browser.py --automatic
           python scripts/run_recovery_browser.py
           python scripts/run_network_settings_browser.py
+          python scripts/run_workspace_proxy_browser.py
+          python scripts/run_workspace_proxy_browser.py --vm
+          python scripts/run_pac_browser.py
+          python scripts/run_public_schedule_browser.py
+          python scripts/run_public_worker_browser.py
+          python scripts/run_public_sources_browser.py
+          python scripts/run_cursor_public_browser.py
+          python scripts/run_public_revalidation_browser.py
+          python scripts/run_windows_startup_browser.py
+          python scripts/run_english_obligation_browser.py
+          python scripts/run_public_owner_browser.py
+          python scripts/run_guided_owner_browser.py
           python scripts/run_research_workflow_browser.py
           python scripts/run_native_login_browser.py
+          python scripts/run_login_detail_return_browser.py
+          python scripts/run_login_detail_return_browser.py --automatic
           python scripts/run_target_acquisition_browser.py
           python scripts/run_browser_policy_binding.py
       - name: Save browser evidence

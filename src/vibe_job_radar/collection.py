@@ -19,6 +19,7 @@ from .discovery import BRAVE_ENDPOINT, build_plan
 from .html_parser import parse_job_html, plain_text
 from .models import JobRecord
 from .network import FetchError, SafeHTTP, SiteFetcher
+from .network_policy import current_policy, use_policy
 from .store import Store
 from .utils import atomic_json, canonical_url, domain_matches, parse_time, utc_now
 from .workspace import InputError, Workspace, text_field
@@ -100,6 +101,18 @@ class Collector:
             workspace.config = load_config(self.platform_config)
         self.clients = {}
         self._recover()
+
+    def _client(self, key, factory, *, site=False):
+        if key not in self.clients:
+            self.clients[key] = factory()
+        client = self.clients[key]
+        # A new explicit step uses the current workspace preference, while the
+        # same transport retains publisher pacing and prior host refusals.
+        transport = client.transport if site else client
+        policy = current_policy()
+        transport.network_policy = policy
+        transport.resolver = policy.resolver
+        return client
 
     @serialized
     def _recover(self):
@@ -254,7 +267,7 @@ class Collector:
         task["attempts"] += 1
         state["in_flight"] = {"queue": "tasks", "index": index}
         self._save(state)
-        client = self.clients.setdefault("search:" + state["id"], SafeHTTP({"api.search.brave.com"}, interval=1.1))
+        client = self._client("search:" + state["id"], lambda: SafeHTTP({"api.search.brave.com"}, interval=1.1))
         try:
             payload = client.json(BRAVE_ENDPOINT + "?" + urlencode({"q": task["query"], "count": 20,
                 "offset": task["offset"], "search_lang": "zh-hans", "country": "cn"}), headers={"X-Subscription-Token": key})
@@ -318,7 +331,7 @@ class Collector:
         state["in_flight"] = {"queue": "details", "index": state["details"].index(row)}
         self._save(state)
         domains = set(self.workspace.config["platforms"][row["platform"]]["domains"])
-        client = self.clients.setdefault((state["id"], row["platform"]), SiteFetcher(domains))
+        client = self._client((state["id"], row["platform"]), lambda: SiteFetcher(domains), site=True)
         try:
             response = client.fetch(row["url"])
             markup = response.text()
@@ -356,7 +369,7 @@ class Collector:
         p = urlsplit(state["endpoint"])
         params = parse_qsl(p.query) + ([("cursor", state["feed_cursor"])] if state["feed_cursor"] else [])
         url = urlunsplit((p.scheme, p.netloc, p.path, urlencode(params), ""))
-        client = self.clients.setdefault("feed:" + state["id"], SafeHTTP({p.hostname}, interval=1.1))
+        client = self._client("feed:" + state["id"], lambda: SafeHTTP({p.hostname}, interval=1.1))
         try:
             payload = client.json(url, headers={"Authorization": "Bearer " + key} if key else {})
             rows = payload.get("jobs")
@@ -407,13 +420,18 @@ class Collector:
         key = text_field(data, "api_key", limit=1000).strip()
         if state["mode"] == "search":
             key = key or os.environ.get("BRAVE_SEARCH_API_KEY", "")
-        state["status"] = "running"
-        if state["phase"] == "search":
-            self._search(state, key)
-        elif state["phase"] == "detail":
-            self._detail(state)
-        elif state["phase"] == "feed":
-            self._feed(state, key)
+        if state["phase"] in {"search", "detail", "feed"}:
+            # Read/validate consent before reserving any attempt or saving an
+            # in-flight marker. This also covers the CLI, outside HTTP handlers.
+            policy = self.workspace.network_policy()
+            with use_policy(policy):
+                state["status"] = "running"
+                if state["phase"] == "search":
+                    self._search(state, key)
+                elif state["phase"] == "detail":
+                    self._detail(state)
+                else:
+                    self._feed(state, key)
         else:
             if self.workspace.db.is_file():
                 from .pipeline import analyze
