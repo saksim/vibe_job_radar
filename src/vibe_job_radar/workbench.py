@@ -236,7 +236,9 @@ class Handler(BaseHTTPRequestHandler):
         route = urlsplit(self.path).path
         methods = {"/api/job": "add_job", "/api/import": "import_file", "/api/plan": "plan",
                    "/api/discover": "discover", "/api/analyze": "analyze", "/api/network/preferences": "network_preferences",
-                   "/api/network/proxy": "network_proxy_preferences"}
+                   "/api/network/proxy": "network_proxy_preferences",
+                   "/api/network/pac": "network_pac_preferences",
+                   "/api/network/pac/check": "network_pac_check"}
         target = self.server.workspace
         if route.startswith("/api/windows/startup/"):
             target = self.server.windows_startup
