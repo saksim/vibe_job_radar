@@ -72,6 +72,36 @@ def browser_health_summary(health):
     return {key:health[key] for key in fields if key in health}
 
 
+def verify_public_share_input(app):
+    """The actual packaged API prepares a synthetic share input, never fetches."""
+    clean = 'https://www.liepin.com/job/123.shtml'
+    shared = clean + '?pgRef=portable-artificial&skId=ARTIFICIAL-TRACKING'
+    data = dict(mode='urls', roles=['architect'], platforms=['liepin'], permit_platforms=['liepin'],
+                consent=True, rights_note='Artificial portable input check; no site request.',
+                urls=clean+'\n'+shared, detail_budget=1)
+    preview = app.json('/api/collection/preview', data)
+    if (not preview['ready'] or preview['unique_url_count'] != 1
+            or preview['normalized_url_count'] != 1 or preview['external_network_requests'] != 0):
+        raise AssertionError('frozen share preflight did not prepare/deduplicate the copied URL')
+    unknown = app.json('/api/collection/preview', {**data, 'urls': shared+'&jobId=999'})
+    if unknown['normalized_url_count'] != 0:
+        raise AssertionError('frozen preflight removed an unreviewed identity parameter')
+    state = app.json('/api/collection/start', data)
+    if (state['status'] != 'paused' or state['detail_attempts'] != 0 or state['report_id']
+              or len(state['details']) != 1 or state['details'][0]['url'] != clean
+              or state['details'][0]['detail_parser'] != 'liepin_public_detail_v1'
+              or state['details'][0]['link_normalization']['policy'] != 'liepin_share_v1'
+            or 'ARTIFICIAL-TRACKING' in json.dumps(state)):
+        raise AssertionError('frozen share checkpoint changed scope, fetched or retained tracking values')
+    clean_state = app.json('/api/collection/start', {**data, 'urls': clean})
+    if (clean_state['status'] != 'paused' or clean_state['detail_attempts'] != 0 or clean_state['report_id']
+            or len(clean_state['details']) != 1 or clean_state['details'][0]['url'] != clean
+            or clean_state['details'][0]['detail_parser'] != 'liepin_public_detail_v1'
+            or 'link_normalization' in clean_state['details'][0]):
+        raise AssertionError('frozen clean input lost its strict parser or was incorrectly marked as a share')
+    return [(row['id'], row['details']) for row in (state, clean_state)]
+
+
 def verify_detail_history(app, workspace):
     """Author metadata only; the actual exe must preserve it through stop/restart.
 
@@ -339,6 +369,11 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
                 history_id,history_saved=verify_detail_history(app,workspace)
                 result['detail_history_checkpoint_verified']=True
                 result['checks'].append('actual frozen worker preserves authored failed/unfinished detail history, never opens a browser and marks an unsynchronized old-writer checkpoint as partial; no acquisition or measured latency is claimed by this fixture')
+                result['stage']='public_share_input'
+                public_input_checkpoints=verify_public_share_input(app)
+                result['public_share_input_verified']=True
+                result['public_clean_detail_input_verified']=True
+                result['checks'].append('actual frozen API explains and deduplicates synthetic Liepin share inputs, preserves unknown parameters and saves a paused checkpoint without tracking values or any collection step')
                 if app.json('/api/public/schedule/state')['status']!='disabled':
                     raise AssertionError('packaged daily plan did not default to off')
                 queue_default=app.json('/api/public/queue/state')
@@ -471,6 +506,12 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
                 if history_row['detail_attempt_history']!=history_saved or history_row['browser_open']:
                     raise AssertionError('fresh frozen process changed saved detail history')
                 result['detail_history_restart_verified']=True
+                for ident,details in public_input_checkpoints:
+                    saved=restarted.json('/api/collection/status', {'id':ident})
+                    if saved['details']!=details or saved['detail_attempts']!=0 or saved['report_id']:
+                        raise AssertionError('fresh frozen process changed or executed the paused public input task')
+                result['public_share_restart_verified']=True
+                result['public_clean_detail_restart_verified']=True
             finally:restarted.close()
             result['checks'].append('fresh exe process preserves original report, leaves daily plan off and requires a fresh browser check')
         if inventory(bundle)!=before:raise AssertionError('portable application modified its bundled components')
