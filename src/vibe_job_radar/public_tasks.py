@@ -24,6 +24,7 @@ from .network_policy import current_policy
 from .public_contract import PublicQuery, as_record
 from .public_example import PublicExample
 from .public_lifecycle import PublicTaskCancelled, check_cancelled
+from .public_outcomes import PublicOutcomes
 from .store import Store
 from .utils import atomic_json, utc_now, parse_time
 from .workspace import InputError
@@ -109,6 +110,10 @@ class PublicTasks:
             if self._foreign:
                 task['message']='另一个本机服务正在执行公开任务；此处只查看进度，请回到原工作台停止。'
             return task
+
+    def previous_outcome(self,task_id,attempt=1):
+        """A prior terminal attempt, never inferred from report directories."""
+        return PublicOutcomes(self.root).get(task_id,attempt)
 
     def _save(self, **changes):
         with self._lock:
@@ -226,6 +231,10 @@ class PublicTasks:
                         raise InputError('原任务已变化，请刷新后核对；没有继续旧页面的任务。')
                     kind,query=self._state['kind'],self._state['query']
                 binding = self._binding(kind, query)
+                # Preserve the outgoing terminal attempt before changing its
+                # current record. Failure refuses the new query before any
+                # thread/network starts; a crash leaves the old record intact.
+                PublicOutcomes(self.root).remember(self._state)
                 previous = self._state if resume_id else {}
                 self._cancel.clear()
                 self._state={'id':previous.get('id', uuid.uuid4().hex),'kind':kind,'query':copy.deepcopy(query),

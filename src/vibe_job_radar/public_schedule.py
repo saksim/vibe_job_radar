@@ -215,9 +215,23 @@ class PublicSchedule:
         # proxy settings. Lock is shared with manual submit/cancel operations.
         return self.tasks.snapshot()
 
+    def _plan_task(self,value):
+        """Scheduled dispatch always starts attempt 1 of a new task identity.
+
+        A later manual resume of that ID is a different attempt. A terminal
+        receipt preserves the original outcome when the current slot moves on.
+        """
+        task=self._task();ident=value['active_task_id']
+        if not ident:return {}
+        if task.get('id')!=ident or task.get('attempt',1)!=1:
+            task=self.tasks.previous_outcome(ident,1) or {}
+        if task.get('kind')!='search' or task.get('resume_binding')!=value['binding']:
+            return {}
+        return task
+
     def _cancel_active(self,value):
         with self.tasks._lock:
-            task=self._task()
+            task=self._plan_task(value)
             if (not task.get('owned_elsewhere') and value['active_task_id'] and task.get('id')==value['active_task_id']
                     and task.get('status') in {'queued','running','cancelling'}):
                 self.tasks.cancel({'id':task['id']})
@@ -227,7 +241,7 @@ class PublicSchedule:
         with self._edit():
             value=self._read()
             if not value['attempt_id']:return
-            task=self._task()
+            task=self._plan_task(value)
             matched=bool(value['active_task_id']) and task.get('id')==value['active_task_id']
             if matched and task.get('owned_elsewhere') and task.get('status') in {'queued','running','cancelling'}:return
             complete=matched and task.get('status')=='completed'
@@ -243,7 +257,7 @@ class PublicSchedule:
             self._last_seen=now
             if value['active_task_id']:
                 with self.tasks._lock:
-                    task=self._task()
+                    task=self._plan_task(value)
                     if task.get('id')!=value['active_task_id']:
                         self._finish(value,{},now,interrupted=True);return
                     if task.get('status') in {'queued','running','cancelling'}:
