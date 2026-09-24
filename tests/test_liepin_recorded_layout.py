@@ -14,7 +14,7 @@ import unittest
 
 from vibe_job_radar.guided.adapters import DOMAdapter, Registry, builtins
 from vibe_job_radar.guided.contracts import CrawlError, PageSnapshot
-from vibe_job_radar.guided.liepin import _jsonld_whitespace
+from vibe_job_radar.guided.liepin import _jsonld_whitespace, semantic_detail
 from vibe_job_radar.guided.service import GuidedService
 from vibe_job_radar.store import Store
 from vibe_job_radar.workspace import Workspace
@@ -187,6 +187,23 @@ class RecordedLayoutTests(unittest.TestCase):
     def test_zero_ai_body_remains_successful_acquisition(self):
         body='岗位职责：负责时间序列预测模型与离线评估。\n任职要求：熟悉Python、统计学和回归分析，能编写测试和维护实验记录。'
         self.assertEqual(self.parse(markup(posting(description=body),body))['text'],body)
+
+    def test_observed_work_functions_and_qualifications_labels_in_structured_intro(self):
+        for label in ('工作职能', '任职资格'):
+            body=label+'：负责合成系统的模块设计，熟悉数据库建模、软件测试和版本管理，能够维护人工回归项目的技术文档。'
+            with self.subTest(label=label):
+                self.assertEqual(self.parse(markup(posting(description=body),body))['text'],body)
+
+    def test_observed_labels_also_work_in_bounded_semantic_intro(self):
+        body='工作职能：负责合成系统的模块设计和测试。任职资格：熟悉软件建模和版本管理，能够维护人工回归项目的技术文档。'
+        html='<h1>合成架构师</h1><dl><dt>职位介绍</dt><dd>'+body+'</dd></dl>'
+        self.assertEqual(semantic_detail(html)['text'],body)
+
+    def test_generic_qualification_word_does_not_make_promotional_text_a_job(self):
+        body='企业资格认证与品牌推广活动，欢迎了解本公司的发展历史和文化。'*4
+        with self.assertRaises(CrawlError):self.parse(markup(posting(description=body),body))
+        with self.assertRaises(CrawlError):
+            semantic_detail('<h1>合成架构师</h1><dl><dt>职位介绍</dt><dd>'+body+'</dd></dl>')
 
     def test_missing_title_cannot_be_guessed_from_page_title(self):
         with self.assertRaises(CrawlError): self.parse(markup(posting(title=''))+'<title>伪标题</title>')
