@@ -1,6 +1,6 @@
 # Vibe Job Radar｜招聘要求与个人证据工作台
 
-本分支按#128提供[30项改进统一候选](docs/CURRENT_DELIVERY_CANDIDATE.md)，在原28项基础上纳入[计划完成回执](docs/PUBLIC_TASK_OUTCOMES.md)及[登录跳转接续与失败清理](docs/LOGIN_RETURN_NAVIGATION.md)。计划查询完成后再手动查询，仍能核对原计划报告；正常登录跳转中的一次页面观察变化不再终止已确认的接续等待。源码使用`codex/delivery-30`，Windows候选使用同一提交的成功CI产物，尚未合入main或正式发布；当前验证与未完成目标分别记录。
+本分支在#128的[30项改进统一候选](docs/CURRENT_DELIVERY_CANDIDATE.md)上按#131增加[多组公开查询待办](docs/PUBLIC_QUERY_QUEUE.md)：最多5条一次性查询，按顺序沿用原任务、缓存、额度和报告，工作台或独立进程均可执行。默认空，逐条明确同意，重启保留未开始条目，不自动重放不确定尝试。此功能源码为`codex/public-query-queue`；统一30项候选仍为`codex/delivery-30`，本分支结果须核对同一提交的CI产物，尚未合入main或正式发布。
 
 ## 先完成一次目标岗位研究
 

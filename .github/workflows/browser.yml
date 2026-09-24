@@ -43,6 +43,7 @@ jobs:
           python scripts/run_public_schedule_browser.py
           python scripts/run_public_outcomes_browser.py
           python scripts/run_public_worker_browser.py
+          python scripts/run_public_queue_browser.py
           python scripts/run_public_sources_browser.py
           python scripts/run_cursor_public_browser.py
           python scripts/run_public_revalidation_browser.py

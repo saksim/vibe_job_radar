@@ -1,7 +1,7 @@
-"""Independent local worker for an already confirmed public query plan.
+"""Independent local worker for already confirmed public plans and queued queries.
 
-No HTTP server, browser, new consent, service registration or queue format.
-The existing scheduler owns dispatch/recovery and PublicTasks owns acquisition.
+No HTTP server, browser, new consent or service registration.
+The plan/queue own dispatch/recovery and PublicTasks owns acquisition.
 """
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ import threading
 
 from .local_public import LocalPublicDataClient
 from .public_schedule import PublicSchedule
+from .public_queue import PublicQueue
 from .public_tasks import PublicTasks
 from .workspace import Workspace
 
@@ -25,6 +26,7 @@ class PublicWorker:
     def __init__(self, workspace, *, client=None):
         self.tasks = PublicTasks(workspace, hybrid_client=client if client is not None else LocalPublicDataClient(workspace))
         self.schedule = PublicSchedule(workspace, self.tasks)
+        self.queue = PublicQueue(workspace, self.tasks)
         self.stop = threading.Event()
         self._signalled = False
 
@@ -32,6 +34,7 @@ class PublicWorker:
         # Wake the scheduler's stop path before waiting for current reads.
         self.stop.set()
         self.schedule.request_stop()
+        self.queue.request_stop()
 
     def run(self, *, emit=print_status):
         code = 0
@@ -39,15 +42,20 @@ class PublicWorker:
             # Validate an existing record before claiming ownership or starting
             # a thread. A corrupt record is never replaced with a default plan.
             self.schedule.state()
+            self.queue.state()
             if self.stop.is_set() or self._signalled:return 0
             self.schedule.start()
+            self.queue.start()
             emit({'event':'worker_started', 'http_server':False, 'browser':False})
             last = None
             while not self.stop.is_set() and not self._signalled:
                 state = self.schedule.state()
+                queued = self.queue.state()
                 value = {'event':'worker_state', 'plan_status':state['status'],
                          'code':state['code'], 'owns_schedule':state['worker_active'],
-                         'retained_runs':len(state['history'])}
+                         'retained_runs':len(state['history']),
+                         'queue_status':queued['status'],'queue_code':queued['code'],
+                         'queued_queries':len(queued['items']),'owns_queue':queued['worker_active']}
                 if value != last:
                     # Only fixed status fields; no query, source response,
                     # credentials, environment, local URL/token or path.
@@ -59,15 +67,20 @@ class PublicWorker:
                         and not self.stop.is_set() and not self._signalled):
                     emit({'event':'worker_failed', 'code':'scheduler_unavailable'})
                     code = 2; break
+                if queued['code']=='storage_error' or (not self.queue.is_running()
+                        and not self.stop.is_set() and not self._signalled):
+                    emit({'event':'worker_failed','code':'queue_unavailable'})
+                    code = 2; break
                 self.stop.wait(1)
         except (OSError, ValueError, RuntimeError) as error:
             emit({'event':'worker_failed', 'code':'local_worker_error', 'error_type':type(error).__name__})
             code = 2
         finally:
             self.request_stop()
+            self.queue.close()
             self.schedule.close()
             self.tasks.close()
-            if self.schedule.is_running() or self.tasks.is_running():
+            if self.schedule.is_running() or self.queue.is_running() or self.tasks.is_running():
                 code = 2
                 emit({'event':'worker_failed', 'code':'shutdown_incomplete'})
             else:
@@ -96,11 +109,11 @@ def run_cli(workspace_path, *, emit=print_status):
     finally:
         for number, handler in previous.items():signal.signal(number, handler)
         if worker is not None and not entered:
-            worker.request_stop();worker.schedule.close();worker.tasks.close()
+            worker.request_stop();worker.queue.close();worker.schedule.close();worker.tasks.close()
 
 
 def main(argv=None):
-    parser=argparse.ArgumentParser(description='仅执行本工作区已明确确认的公开查询计划；不启动网页服务器或浏览器。')
+    parser=argparse.ArgumentParser(description='仅执行本工作区已明确确认的公开查询计划和待办；不启动网页服务器或浏览器。')
     parser.add_argument('--workspace',required=True,type=Path)
     return run_cli(parser.parse_args(argv).workspace)
 

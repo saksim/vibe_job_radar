@@ -24,6 +24,7 @@ from .evidence_ui import Conflict, EvidenceService
 from .public_tasks import PublicTasks, PublicTaskBusy
 from .guided.ownership import GuidedTaskBusy
 from .public_schedule import PublicSchedule
+from .public_queue import PublicQueue
 from .windows_startup import WindowsStartup, StartupChanged
 
 MAX_BODY = 2_000_000
@@ -46,6 +47,7 @@ class LocalServer(ThreadingHTTPServer):
             public_client = LocalPublicDataClient(workspace)
         self.public_tasks = PublicTasks(workspace, hybrid_client=public_client)
         self.public_schedule = PublicSchedule(workspace, self.public_tasks)
+        self.public_queue = PublicQueue(workspace, self.public_tasks)
         self.windows_startup = WindowsStartup(workspace)
         self.token = secrets.token_urlsafe(32)
         self.mutation_lock = threading.Lock()
@@ -54,13 +56,16 @@ class LocalServer(ThreadingHTTPServer):
         self.origin = f"http://{self.authority}"
 
     def serve_forever(self, poll_interval=0.5):
-        self.public_schedule.start()
         try:
+            self.public_schedule.start()
+            self.public_queue.start()
             super().serve_forever(poll_interval=poll_interval)
         finally:
+            self.public_queue.close()
             self.public_schedule.close()
 
     def server_close(self):
+        self.public_queue.close()
         self.public_schedule.close()
         self.guided.close()
         self.public_tasks.close()
@@ -159,12 +164,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = unquote(urlsplit(self.path).path)
-        public = path in {"/", "/app.js", "/advanced", "/advanced.js", "/collection-help.js", "/guided", "/guided.js", "/network-settings.js", "/public-schedule.js", "/windows-startup.js"}
+        public = path in {"/", "/app.js", "/advanced", "/advanced.js", "/collection-help.js", "/guided", "/guided.js", "/network-settings.js", "/public-schedule.js", "/public-queue.js", "/windows-startup.js"}
         if not self._authorized(token_required=not public):
             return
         try:
             if public:
-                name = {"/": "workbench.html", "/app.js": "workbench.js", "/advanced": "advanced.html", "/advanced.js": "advanced.js", "/collection-help.js": "collection_help.js", "/guided": "guided.html", "/guided.js": "guided.js", "/network-settings.js": "network_settings.js", "/public-schedule.js": "public_schedule.js", "/windows-startup.js": "windows_startup.js"}[path]
+                name = {"/": "workbench.html", "/app.js": "workbench.js", "/advanced": "advanced.html", "/advanced.js": "advanced.js", "/collection-help.js": "collection_help.js", "/guided": "guided.html", "/guided.js": "guided.js", "/network-settings.js": "network_settings.js", "/public-schedule.js": "public_schedule.js", "/public-queue.js": "public_queue.js", "/windows-startup.js": "windows_startup.js"}[path]
                 mime = "text/html" if name.endswith(".html") else "text/javascript"
                 self._respond(200, files("vibe_job_radar").joinpath(name).read_bytes(), mime + "; charset=utf-8")
             elif path == "/api/network/state":
@@ -173,6 +178,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, self.server.public_tasks.state())
             elif path == "/api/public/schedule/state":
                 self._json(200, self.server.public_schedule.state())
+            elif path == "/api/public/queue/state":
+                self._json(200, self.server.public_queue.state())
             elif path == "/api/windows/startup/state":
                 self._json(200, self.server.windows_startup.state())
             elif path == "/api/guided/state":
@@ -246,6 +253,9 @@ class Handler(BaseHTTPRequestHandler):
         elif route.startswith("/api/public/schedule/"):
             target = self.server.public_schedule
             methods = {"/api/public/schedule/" + name: name for name in ("configure", "disable")}
+        elif route.startswith("/api/public/queue/"):
+            target = self.server.public_queue
+            methods = {"/api/public/queue/" + name: name for name in ("enqueue", "remove", "pause", "resume")}
         elif route.startswith("/api/public/"):
             target = self.server.public_tasks
             methods = {"/api/public/" + name: name for name in ("start", "search", "cancel", "resume")}
@@ -303,7 +313,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-browser", action="store_true")
     modes=parser.add_mutually_exclusive_group()
     modes.add_argument("--doctor", action="store_true", help="离线检查 Python、SQLite 和目录写入能力")
-    modes.add_argument('--public-worker',action='store_true',help='仅运行已确认的公开查询计划，不启动网页服务器或浏览器')
+    modes.add_argument('--public-worker',action='store_true',help='仅运行已确认的公开查询计划和待办，不启动网页服务器或浏览器')
     args = parser.parse_args(argv)
     if not 0 <= args.port <= 65535:
         parser.error("port 必须为 0～65535")

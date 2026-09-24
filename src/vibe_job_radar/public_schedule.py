@@ -38,7 +38,9 @@ def _default():
 
 
 def _finite(value):
-    return type(value) in (int,float) and math.isfinite(value) and 0 <= value < 253402300799
+    # Reject out-of-range integers before math.isfinite converts to float.
+    # A corrupt persisted number must not overflow the status/worker path.
+    return type(value) in (int,float) and 0 <= value < 253402300799 and math.isfinite(value)
 
 
 class ScheduleBusy(InputError):
