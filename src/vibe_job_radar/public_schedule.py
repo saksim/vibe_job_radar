@@ -19,7 +19,7 @@ DAY = 86400
 CONSENT = 'local-public-daily-v1'
 MESSAGES = {
     'disabled': '计划未启用，不会定时联网。',
-    'scheduled': '已保存，每24小时执行一次；工作台服务需保持运行，关闭网页不影响计划。',
+    'scheduled': '已保存，每24小时执行一次；工作台或独立后台进程需保持运行，关闭网页不影响计划。',
     'dispatching': '正在记录并启动本次公开查询。',
     'running': '本次公开查询正在运行，结果沿用原报告流程。',
     'interrupted': '上次执行中断或结果不确定，计划已暂停；请先核对原任务，再重新确认计划。',
@@ -27,7 +27,7 @@ MESSAGES = {
     'result_attention': '本次查询失败、被停止或使用过期缓存，计划已暂停；原结果保留，请先处理原因。',
     'clock_rollback': '系统时间回拨，计划已暂停；核对时间后重新确认，不补跑历史次数。',
     'storage_error': '计划记录暂不可用，调度已停止；请保留原记录并检查工作区。',
-    'owner_busy': '另一工作台服务持有调度锁；此实例等待，不重复执行。',
+    'owner_busy': '另一个本机进程持有调度锁；此实例等待，不重复执行。',
 }
 
 
@@ -141,8 +141,12 @@ class PublicSchedule:
     def state(self):
         with self._lock:
             value=self._read()
+            code=self._error or value['code']
+            message=MESSAGES[code]
+            if self._error=='owner_busy':
+                message=MESSAGES[value['code']]+' '+message
             return {**{k:copy.deepcopy(value[k]) for k in ('revision','status','query','next_due','active_task_id','history')},
-                    'code':self._error or value['code'],'message':MESSAGES[self._error or value['code']],
+                    'code':code,'message':message,
                     'interval_seconds':DAY,'worker_active':self._owner,
                     'available':self.tasks.mode()=='local_direct','network_tested':False}
 
@@ -297,6 +301,12 @@ class PublicSchedule:
                 return
             finally:self._owner=False
 
-    def close(self):
+    def is_running(self):
+        return bool(self._thread and self._thread.is_alive())
+
+    def request_stop(self):
         self._stop.set();self._wake.set()
+
+    def close(self):
+        self.request_stop()
         if self._thread:self._thread.join(timeout=10)

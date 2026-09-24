@@ -72,6 +72,40 @@ def browser_health_summary(health):
     return {key:health[key] for key in fields if key in health}
 
 
+def verify_idle_worker(app,exe,workspace,cwd,env):
+    """Start the actual independent executable; never enable a daily plan."""
+    if app.json('/api/public/schedule/state')['status']!='disabled':
+        raise AssertionError('idle worker acceptance requires a disabled plan')
+    child=subprocess.Popen([str(exe),'--workspace',str(workspace),'--public-worker'],cwd=cwd,env=env,
+        stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,creationflags=subprocess.CREATE_NO_WINDOW)
+    observed=queue.Queue(maxsize=8)
+    def read():
+        for raw in child.stdout:
+            if len(raw)>4096:continue
+            try:value=json.loads(raw)
+            except (ValueError,UnicodeError):continue
+            if isinstance(value,dict) and value.get('event') in {'worker_started','worker_state','worker_failed'}:
+                try:observed.put_nowait(value)
+                except queue.Full:pass
+    reader=threading.Thread(target=read,daemon=True);reader.start()
+    try:
+        started=observed.get(timeout=30);state=observed.get(timeout=10)
+        if started!={'event':'worker_started','http_server':False,'browser':False}:
+            raise AssertionError('frozen independent worker did not start')
+        if state.get('event')!='worker_state' or state.get('plan_status')!='disabled' or state.get('retained_runs')!=0:
+            raise AssertionError('frozen worker implicitly enabled a plan')
+        if app.json('/api/public/state')['task']['status']!='idle':
+            raise AssertionError('frozen idle worker created a public task')
+    finally:
+        if child.poll() is None:
+            child.terminate()
+            try:child.wait(5)
+            except subprocess.TimeoutExpired:child.kill();child.wait(5)
+        reader.join(5);child.stdout.close()
+    if app.json('/api/public/schedule/state')['status']!='disabled':
+        raise AssertionError('stopped worker changed the disabled plan')
+
+
 def verify_startup_registration(app,exe,workspace,cwd,env):
     """Real HKCU writes are opt-in and confined to an ephemeral Windows runner."""
     if os.environ.get('GITHUB_ACTIONS')!='true':raise ValueError('startup registration acceptance requires ephemeral CI')
@@ -168,6 +202,10 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
                     raise AssertionError('packaged task ownership state is absent')
                 if app.json('/api/public/schedule/state')['status']!='disabled':
                     raise AssertionError('packaged daily plan did not default to off')
+                result['stage']='independent_idle_worker'
+                verify_idle_worker(app,exe,workspace,cwd,env)
+                result['public_worker_idle_verified']=True
+                result['checks'].append('separate frozen exe starts the independent worker without Python PATH, keeps the plan disabled and creates no task; only the owned idle test process is terminated')
                 result['stage']='native_pac_worker'
                 network=app.json('/api/network/state')
                 if network['proxy_mode']!='auto' or not network['pac_available']:

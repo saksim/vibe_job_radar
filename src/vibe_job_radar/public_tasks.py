@@ -359,6 +359,10 @@ class PublicTasks:
             message+=' 刷新暂不可用，当前是过期缓存，不是实时结果。'
         return {**summary,'report_id':report_id,'code':'public_results_received','message':message}
 
+    def is_running(self):
+        with self._lock:
+            return bool(self._thread and self._thread.is_alive())
+
     def close(self):
         with self._lock:
             self._closed=True
