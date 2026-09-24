@@ -199,7 +199,7 @@ def main():
                         ident = url.rsplit('/', 1)[-1].split('.')[0]
                         content = category_html if url == category_url else (
                             f'<h1>软件架构师人工样本{ident}</h1><dl><dt>职位介绍</dt><dd>'
-                            '岗位职责：负责系统架构与数据库设计。岗位要求：熟悉软件设计，编写文档与自动测试。人工回归材料。'
+                            '工作职能：与公司信息部协作，负责系统架构与数据库设计。任职资格：熟悉软件设计，编写文档与自动测试。人工回归材料。'
                             '</dd></dl>')
                         return Response(200, {'content-type': 'text/html'}, content.encode(), url)
                     with patch('vibe_job_radar.collection.SiteFetcher') as source:
@@ -235,7 +235,7 @@ def main():
                     assert next_state['category_outcomes'][0]['selected_positions'] == [3]
                     assert next_state['report_id'] and next_state['report_id'] != category_state['report_id']
                     assert len(server.collector.list()['runs']) == before_next + 1
-                    result['checks'].append('saved category next-batch preview makes no request; confirmation fetches only the remaining detail and creates a separate original report')
+                    result['checks'].append('saved category next-batch preview makes no request; confirmation fetches only the remaining detail with observed role-heading synonyms and creates a separate original report')
                     page.get_by_role('button', name='预览这份名单的下一批（不联网）').click()
                     expect(page.locator('#collect-result')).to_contain_text('这份名单已全部选择完毕')
                     page.locator('#collect-history').select_option(category_state['id'])
