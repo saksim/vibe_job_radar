@@ -72,11 +72,14 @@ def browser_health_summary(health):
     return {key:health[key] for key in fields if key in health}
 
 
-def verify_idle_worker(app,exe,workspace,cwd,env):
+def verify_idle_worker(app,exe,workspace,cwd,env,*,registered_command=None):
     """Start the actual independent executable; never enable a daily plan."""
     if app.json('/api/public/schedule/state')['status']!='disabled':
         raise AssertionError('idle worker acceptance requires a disabled plan')
-    child=subprocess.Popen([str(exe),'--workspace',str(workspace),'--public-worker'],cwd=cwd,env=env,
+    # During ephemeral startup acceptance, execute the exact fixed registered
+    # string with CreateProcess (shell=False), not a reconstructed argv list.
+    command=registered_command if registered_command is not None else [str(exe),'--workspace',str(workspace),'--public-worker']
+    child=subprocess.Popen(command,cwd=cwd,env=env,
         stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,creationflags=subprocess.CREATE_NO_WINDOW)
     observed=queue.Queue(maxsize=8)
     def read():
@@ -109,27 +112,35 @@ def verify_idle_worker(app,exe,workspace,cwd,env):
 def verify_startup_registration(app,exe,workspace,cwd,env):
     """Real HKCU writes are opt-in and confined to an ephemeral Windows runner."""
     if os.environ.get('GITHUB_ACTIONS')!='true':raise ValueError('startup registration acceptance requires ephemeral CI')
-    from vibe_job_radar.windows_startup import WindowsRun,command_line,CONSENT
+    from vibe_job_radar.windows_startup import WindowsRun,command_line,MODE_CONSENT
     state=app.json('/api/windows/startup/state')
     if state['status']!='disabled' or not state['can_enable']:raise AssertionError('startup was not initially off')
-    registry=WindowsRun();name=state['value_name'];command=command_line(exe,workspace)
+    registry=WindowsRun();name=state['value_name']
     if registry.read(name) is not None:raise AssertionError('refusing pre-existing startup entry')
-    try:
-        enabled=app.json('/api/windows/startup/enable',dict(revision=state['revision'],consent=True,consent_version=CONSENT))
-        if enabled['status']!='registered' or registry.read(name)!=(1,command):raise AssertionError('exe did not register fixed startup command')
-        second=RunningApp(exe,workspace,cwd,env)
+    for mode in ('workbench','public_worker'):
+        command=command_line(exe,workspace,mode)
+        state=app.json('/api/windows/startup/state')
         try:
-            reopened=second.json('/api/windows/startup/state')
-            if reopened['status']!='registered':raise AssertionError('new exe process did not observe owned startup entry')
-            disabled=second.json('/api/windows/startup/disable',{'revision':reopened['revision']})
-            if disabled['status']!='disabled' or registry.read(name) is not None:raise AssertionError('exe did not remove startup entry')
-            if second.json('/api/public/schedule/state')['status']!='disabled':raise AssertionError('startup registration changed daily schedule')
-        finally:second.close()
-    finally:
-        actual=registry.read(name)
-        if actual==(1,command):registry.remove(name,command)
-        elif actual is not None:raise AssertionError('unexpected startup value retained for inspection, not removed')
-    if registry.read(name) is not None:raise AssertionError('startup acceptance did not clean up')
+            enabled=app.json('/api/windows/startup/enable',dict(revision=state['revision'],consent=True,consent_version=MODE_CONSENT,mode=mode))
+            if (enabled['status']!='registered' or enabled['mode']!=mode
+                    or registry.read(name)!=(1,command)):
+                raise AssertionError('exe did not register selected fixed startup command')
+            if mode=='public_worker':
+                verify_idle_worker(app,exe,workspace,cwd,env,registered_command=command)
+            second=RunningApp(exe,workspace,cwd,env)
+            try:
+                reopened=second.json('/api/windows/startup/state')
+                if reopened['status']!='registered' or reopened['mode']!=mode:
+                    raise AssertionError('new exe process did not observe owned startup mode')
+                disabled=second.json('/api/windows/startup/disable',{'revision':reopened['revision']})
+                if disabled['status']!='disabled' or registry.read(name) is not None:raise AssertionError('exe did not remove startup entry')
+                if second.json('/api/public/schedule/state')['status']!='disabled':raise AssertionError('startup registration changed daily schedule')
+            finally:second.close()
+        finally:
+            actual=registry.read(name)
+            if actual==(1,command):registry.remove(name,command)
+            elif actual is not None:raise AssertionError('unexpected startup value retained for inspection, not removed')
+        if registry.read(name) is not None:raise AssertionError('startup acceptance did not clean up')
 
 
 def verify_english_report(app,previous_id,previous_csv):
@@ -167,7 +178,7 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
     if not exe.is_file():raise ValueError('portable executable absent')
     before=inventory(bundle)
     result={'success':False,'stage':'doctor','checks':[],'page_errors':[],'external_browser_requests':[],
-        'verified_browser':browser_choice,'startup_registration_verified':False,
+        'verified_browser':browser_choice,'startup_registration_verified':False,'startup_worker_verified':False,
         'scope':'Built Windows executable with Python PATH/environment removed, artificial manual JD, original report, explicitly selected browser blank-page check. Only bundled-browser verification can qualify a build. No live recruiting certification.'}
     env={k:v for k,v in os.environ.items() if k not in {'PYTHONPATH','PYTHONHOME','VIRTUAL_ENV','CONDA_PREFIX','PLAYWRIGHT_BROWSERS_PATH'} and not k.startswith('VIBE_RADAR_')}
     env['PATH']=str(Path(os.environ['SystemRoot'])/'System32')
@@ -295,7 +306,8 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
                     result['stage']='startup_registration'
                     verify_startup_registration(app,exe,workspace,cwd,env)
                     result['startup_registration_verified']=True
-                    result['checks'].append('ephemeral CI: actual exe explicitly registers fixed HKCU login command, second exe observes/removes it, cleanup leaves no entry or enabled daily plan; actual Windows logon not tested')
+                    result['startup_worker_verified']=True
+                    result['checks'].append('ephemeral CI: actual exe explicitly registers both fixed HKCU launch modes, exact registered worker command runs with disabled plan, second exe observes/removes each; cleanup leaves no entry or enabled plan; actual Windows logon not tested')
             finally:app.close()
             # All requested writes finished before stopping this owned test
             # process. A fresh executable process must reopen the same report.

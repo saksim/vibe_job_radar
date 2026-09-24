@@ -67,6 +67,9 @@ class PortablePackagingTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.builder.validate_runtime_evidence(self.bundle,proof,require_login_startup=True)
         proof['startup_registration_verified']=True
+        with self.assertRaises(ValueError):
+            self.builder.validate_runtime_evidence(self.bundle,proof,require_login_startup=True)
+        proof['startup_worker_verified']=True
         self.builder.validate_runtime_evidence(self.bundle,proof,require_login_startup=True)
         with patch.dict(self.builder.os.environ,{'GITHUB_ACTIONS':'false'}), \
              patch.object(self.builder,'build_candidate') as build:

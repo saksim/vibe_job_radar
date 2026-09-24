@@ -9,6 +9,7 @@ import threading
 ROOT=Path(__file__).resolve().parents[1]
 sys.path[:0]=[str(ROOT/'src'),str(ROOT/'tests')]
 from test_windows_startup import fixture
+from vibe_job_radar.windows_startup import command_line
 from vibe_job_radar.workbench import LocalServer
 
 
@@ -39,6 +40,7 @@ def main():
                         expect(page.locator('#startup-enable')).to_be_enabled()
                         return page
                     first=open_page();second=open_page()
+                    expect(first.locator('#startup-mode')).to_have_value('workbench')
                     expect(first.locator('#startup-consent')).not_to_be_checked()
                     first.locator('#startup-enable').click()
                     expect(first.locator('#startup-message')).to_contain_text('勾选登录启动')
@@ -79,6 +81,28 @@ def main():
                     assert not registry.values and server.public_schedule.state()['status']=='disabled'
                     assert server.public_tasks.snapshot()['status']=='idle'
                     result['checks'].append('write failure stays off, external changes disable actions without exposing command, explicit removal preserves schedule and idle query')
+
+                    first.locator('#startup-consent').check()
+                    first.locator('#startup-mode').select_option('public_worker')
+                    expect(first.locator('#startup-consent')).not_to_be_checked()
+                    writes=len(registry.writes)
+                    first.locator('#startup-enable').click()
+                    expect(first.locator('#startup-message')).to_contain_text('勾选登录启动')
+                    assert len(registry.writes)==writes
+                    first.locator('#startup-consent').check();first.locator('#startup-enable').click()
+                    expect(first.locator('#startup-status')).to_contain_text('只运行已确认公开计划')
+                    assert registry.values[manager.name]==(1,command_line(exe,workspace.root,'public_worker'))
+                    expect(first.locator('#startup-mode')).to_be_disabled()
+                    first.reload();first.locator('#windows-startup summary').click()
+                    expect(first.locator('#startup-mode')).to_have_value('public_worker')
+                    expect(first.locator('#startup-status')).to_contain_text('只运行已确认公开计划')
+                    assert first.evaluate('document.documentElement.scrollWidth<=innerWidth')
+                    first.locator('#windows-startup').screenshot(path=str(out/'windows-worker-startup-mobile.png'))
+                    first.locator('#startup-disable').click();expect(first.locator('#startup-status')).to_contain_text('尚未登记')
+                    expect(first.locator('#startup-mode')).to_have_value('workbench')
+                    assert not registry.values and server.public_tasks.snapshot()['status']=='idle'
+                    assert server.public_schedule.state()['status']=='disabled'
+                    result['checks'].append('changing launch mode revokes consent; fixed worker command persists across reload, cannot switch while registered and explicitly removes without enabling a plan; 390px fits')
 
                     manager.supported=False;first.reload();first.locator('#windows-startup summary').click()
                     expect(first.locator('#startup-status')).to_contain_text('仅支持 Windows 便携包')

@@ -173,14 +173,16 @@ def build_candidate(out,evidence_path,*,verify_login_startup=False):
         atomic_json(out/'manifest.json',{'file':dest.name,'sha256':digest,'source_sha256':expected['sha256'],
             'status':'portable_candidate_not_release','runtime_verified':True,'live_sites_certified':False,
             'components':versions,'platform':'windows-x64','size_bytes':dest.stat().st_size,
-            'startup_registration_verified':report.get('startup_registration_verified') is True})
+            'startup_registration_verified':report.get('startup_registration_verified') is True,
+            'startup_worker_verified':report.get('startup_worker_verified') is True})
         return dest
 
 
 def validate_runtime_evidence(bundle,report,*,require_login_startup=False):
     if (not isinstance(report,dict) or report.get('success') is not True
             or report.get('verified_browser')!='bundled'
-            or (require_login_startup and report.get('startup_registration_verified') is not True)
+            or (require_login_startup and (report.get('startup_registration_verified') is not True
+                                          or report.get('startup_worker_verified') is not True))
             or not isinstance(report.get('files'),dict) or not report['files']
             or report['files']!=inventory(bundle)):
         raise ValueError('portable runtime evidence does not match payload')
