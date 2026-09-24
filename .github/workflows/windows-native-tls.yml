@@ -18,7 +18,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install native verifier and developer-only fixtures
-        run: python -m pip install "truststore>=0.10.4,<0.11" "cryptography>=44,<47" "playwright>=1.48,<2" "packaging>=24.2"
+        run: python -m pip install "truststore>=0.10.4,<0.11" "cryptography>=44,<47" "playwright>=1.48,<2" "packaging>=24.2" tzdata
       - name: Reproduce missing intermediate and verify native chain recovery
         run: python scripts/check_windows_native_tls.py
       - name: Exercise repair consent and service restart in existing Edge

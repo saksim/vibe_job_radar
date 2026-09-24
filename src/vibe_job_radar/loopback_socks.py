@@ -1,7 +1,8 @@
 """SOCKS5 CONNECT to verified numeric public targets via an explicit local peer.
 
-This is deliberately NOT socks5h, remote DNS, PAC, authentication, a LAN proxy
-or a change to target validation. Final TLS remains in PinnedHTTPSConnection.
+This is deliberately NOT socks5h, remote DNS, PAC, a LAN proxy
+or a change to target validation. Explicit credentials use RFC1929 without
+anonymous fallback. Final TLS remains in PinnedHTTPSConnection.
 """
 from __future__ import annotations
 
@@ -14,6 +15,7 @@ from dataclasses import dataclass
 from urllib.parse import urlsplit
 
 from .loopback_proxy import LocalProxyError, LoopbackProxy
+from .proxy_credentials import configured as credentials_configured
 
 
 @dataclass(frozen=True)
@@ -24,8 +26,10 @@ class LoopbackSocks5(LoopbackProxy):
     def from_environment(cls) -> LoopbackSocks5 | None:
         raw = os.environ.get('VIBE_RADAR_SOCKS_PROXY', '')
         if not raw.strip():
+            if credentials_configured():
+                raise LocalProxyError('local_proxy_credentials_require_explicit')
             return None
-        return cls.from_url(raw)
+        return cls.from_url(raw).with_environment_credentials()
 
     @classmethod
     def from_url(cls, raw: str) -> LoopbackSocks5:
@@ -79,13 +83,23 @@ class LoopbackSocks5(LoopbackProxy):
 
         try:
             sock = socket.create_connection((self.host, self.port), remaining(), source_address)
-            # Only NO AUTH is offered; do not negotiate a method we cannot honor.
-            send(b'\x05\x01\x00')
+            # Offer exactly the configured method. Credentials cannot silently
+            # downgrade to anonymous if the peer selects a different method.
+            expected = 2 if self.credentials is not None else 0
+            send(bytes((5, 1, expected)))
             version, method = receive(2)
             if version != 5:
                 raise LocalProxyError('local_socks_protocol_error')
-            if method != 0:
-                raise LocalProxyError('local_socks_auth_unsupported')
+            if method != expected:
+                raise LocalProxyError('local_proxy_auth_failed' if self.credentials is not None
+                                      else 'local_socks_auth_unsupported')
+            if self.credentials is not None:
+                send(self.credentials.socks_frame())
+                version, status = receive(2)
+                if version != 1:
+                    raise LocalProxyError('local_socks_protocol_error')
+                if status != 0:
+                    raise LocalProxyError('local_proxy_auth_failed')
             atyp = 1 if address.version == 4 else 4
             # Explicit numeric target, port 443. Never send a hostname for DNS.
             send(bytes((5, 1, 0, atyp)) + address.packed + b'\x01\xbb')

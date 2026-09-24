@@ -6,9 +6,13 @@
 <title>Vibe Job Radar · 本地工作台</title>
 <style>
 :root{font-family:system-ui,-apple-system,"Microsoft YaHei",sans-serif;color:#192b3f;background:#f3f6fa;line-height:1.65}*{box-sizing:border-box}[hidden]{display:none!important}.brief-card{padding:12px 0;border-bottom:1px solid #e0e6ee}.brief-card p{margin:6px 0;overflow-wrap:anywhere}#research-brief{background:#f8fbff}#research-start a{display:inline-block;padding:5px 0}body{margin:0}main{max-width:1100px;margin:auto;padding:26px 22px 70px}header{padding:12px 0 20px}h1{font-size:30px;margin:0}h2{font-size:21px;margin:0 0 14px}h3{font-size:17px;margin:16px 0 8px}.tag{font-size:13px;letter-spacing:.08em;color:#526780}.intro{max-width:850px;color:#485d75}section{background:white;border:1px solid #dce3ec;border-radius:12px;padding:22px;margin:18px 0}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 20px}.wide{grid-column:1/-1}label{display:block;font-weight:600}input,textarea,select{font:inherit;width:100%;padding:9px 11px;border:1px solid #aebdd0;border-radius:6px;background:white;color:#192b3f}textarea{resize:vertical}input[type=checkbox]{width:auto;margin-right:8px}label.check{font-weight:400;margin:8px 0}.choices{display:flex;flex-wrap:wrap;gap:4px 20px}.choices label{font-weight:400}button{font:inherit;cursor:pointer;padding:8px 15px;border:1px solid #265b94;border-radius:7px;background:#265b94;color:white;margin:5px 8px 5px 0}button.secondary{background:white;color:#265b94}button:disabled{opacity:.5;cursor:wait}small,.muted{color:#536a83}#notice{position:sticky;top:8px;z-index:2;white-space:pre-wrap;border:1px solid #b8cce0;background:#eef5ff;padding:12px 16px;border-radius:8px}#notice:empty{display:none}.warning{border-left:4px solid #d49538;background:#fff8e9;padding:10px 14px}.stats{font-size:18px;font-weight:600}.scroll{overflow:auto}table{width:100%;border-collapse:collapse;text-align:left;font-size:14px}th,td{padding:10px;border-bottom:1px solid #e0e6ee;vertical-align:top;min-width:75px}td.quote{min-width:260px;white-space:pre-wrap}th{background:#f3f6fa}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f7f9fc;border:1px solid #dce3ec;padding:14px;border-radius:7px;max-height:440px;overflow:auto}details{margin:14px 0}summary{cursor:pointer;font-weight:600}a{color:#245e9d}#runs button{display:block;text-align:left}.files{display:flex;flex-wrap:wrap}.files button{font-size:13px}footer{color:#536a83;font-size:13px}@media(max-width:650px){.grid{grid-template-columns:1fr}main{padding:18px 12px}section{padding:16px}h1{font-size:25px}}
+body{overflow-wrap:anywhere}
 </style>
+<style>#workspace,#public-saved-query{overflow-wrap:anywhere}</style>
 <script src="/app.js" defer></script>
 <script src="/network-settings.js" defer></script>
+<script src="/public-schedule.js" defer></script>
+<script src="/windows-startup.js" defer></script>
 </head>
 <body><main><header><div class="tag">EVIDENCE FIRST / LOCAL WORKSPACE</div><h1>招聘要求 → 逐条证据 → 可量化描述</h1>
 <p class="intro">研究目标岗位如何要求 AI 辅助编程，保留招聘原文，再用自己的项目和观测数据形成可信描述。先取得相关 JD，再复核要求，最后补本人证据。</p>
@@ -19,7 +23,7 @@
 <label class="wide">本次检索词<input name="keyword" maxlength="100" required placeholder="例如：时间序列算法工程师、架构师"></label></div>
 <button id="research-go" type="submit" disabled>带着目标进入平台采集</button></form>
 <p class="muted">三站自动采集仍需现场验证；平台要求登录时在原生页面完成，不交出密码或 Cookie。下一页会显示该任务的访问范围与预算，确认前不请求平台。</p>
-<p><a href="#public-entry">先用已接入的公开来源试用（仅 Anthropic）</a> · <a href="#manual-entry">我已有获准处理的真实 JD</a> · <a href="#analysis-entry">分析已保存的岗位</a></p></section><section id="public-entry"><h2>2. 获取岗位：已接入的公开来源</h2>
+<p><a href="#public-entry">先用已接入的公开来源试用（Anthropic、Cloudflare、Cursor）</a> · <a href="#manual-entry">我已有获准处理的真实 JD</a> · <a href="#analysis-entry">分析已保存的岗位</a></p></section><section id="public-entry"><h2>2. 获取岗位：已接入的公开来源</h2>
 <p>免账号、免 Key、免采集浏览器。从官方公开接口获取一条 Anthropic Technical Architect 岗位并在本机生成报告。来源可能下架；它不是 BOSS 数据，也不是合成演示。</p>
 <button id="public-example" type="button">联网获取真实公开案例</button>
 <p id="public-status" role="status" aria-live="polite">点击确认前不联网。登录态、简历、个人证据和私人报告保留本地。</p>
@@ -30,7 +34,20 @@
 <label class="check"><input name="consent" type="checkbox" required><span id="public-consent-text">同意本机请求所选公开来源，查询词和地区仅在本机筛选，不上传个人材料。</span></label>
 <button id="public-search-button" type="submit" disabled>获取并在本机筛选</button></form>
 <button id="public-next" type="button" hidden>读取下一页（本地缓存）</button>
-<p class="muted">默认来源仅为 Anthropic 公开招聘，不代表全市场，也不替代指定招聘平台。筛选按原文关键词，不推断远程资格。来源时间与缓存状态会明确标注。</p>
+<button id="public-cancel" type="button" hidden>停止当前公开任务</button>
+<button id="public-resume" type="button" hidden>确认继续已保存的公开查询</button>
+<p id="public-saved-query" class="muted"></p>
+<details id="public-schedule"><summary>每24小时自动更新这组公开查询</summary>
+<p>默认关闭。沿用上方查询词、地区与来源，每次最多20条首屏结果，不自动翻页。保存后首次在24小时后运行；关闭网页不影响，工作台或独立后台进程需保持运行。重启后只补一次到期查询。</p>
+<p>来源或网络路线变化、失败或过期缓存会暂停计划，需要重新确认。停止会取消后续步骤；已经开始的只读请求或本地保存结束后停止，已有报告保留。</p>
+<fieldset id="schedule-controls" disabled><legend>本机执行计划</legend>
+<label class="check"><input id="schedule-consent" type="checkbox">我同意按上方当前来源与查询每24小时执行一次，并把计划保存在此工作区</label>
+<button id="schedule-save" type="button">保存24小时计划</button>
+<button id="schedule-stop" type="button" class="secondary">停止计划</button></fieldset>
+<p id="schedule-status" role="status" aria-live="polite">正在读取计划，不请求外部来源。</p>
+<p id="schedule-message" role="status" aria-live="polite"></p><p id="schedule-query" class="muted"></p>
+<ul id="schedule-history" aria-label="定时查询的最近结果"></ul></details>
+<p class="muted">可选择 Anthropic、Cloudflare 或 Cursor 的官方公开招聘目录，每次只获取所选来源，不代表全市场，也不替代指定招聘平台。筛选按原文关键词，不推断远程资格。来源时间与缓存状态会明确标注。</p>
 </details></section><p><a href="/guided">新手推荐：选平台 → 找岗位 → 勾选采集（无需手工整理 URL）</a></p>
 
 <section><h2>自动采集与个人证据</h2><a href="/advanced">进入自动采集 / 原文复核 / 附件与量化指标工作台</a><p>无需手写 JSON。原有录入、演示与报告入口继续保留。</p></section>
@@ -39,8 +56,19 @@
 <button id="doctor" type="button" class="secondary">环境自检（不联网）</button><button id="demo" type="button">运行合成演示</button><button id="refresh" type="button" class="secondary">刷新数据</button>
 <small>演示只写入独立 demo.sqlite，绝不混入真实数据库。</small>
 <details><summary>平台接入状态与账号说明</summary><div id="sources" class="scroll"></div>
-<p>若平台要求登录，请你在自己的浏览器/App 中登录并完成验证码；只将获准处理的职位文本带入本工作台。不要粘贴密码、验证码、Cookie、候选人简历或不必要的联系人信息。</p>
+<p>使用浏览器采集时，请在程序打开的采集浏览器中登录并完成人工验证。猎聘另有可选的单次密码提交，仅通过受控测试，尚未验通实站登录。已有材料可直接导入；不要把密码、验证码、Cookie、候选人简历或不必要的联系人信息粘贴到招聘文本中。</p>
 <p id="key-status"></p></details></section>
+<section id="windows-startup"><details><summary>登录 Windows 后启动（可选）</summary>
+<p>默认关闭。明确选择后，当前 Windows 用户登录时按所选方式运行下方便携程序和工作区。保存的每日计划仍按原条件执行，失败暂停、过期最多补一次；关闭终端会停止本次进程。</p>
+<p id="startup-status" role="status" aria-live="polite">正在读取登录启动设置，不更改系统配置。</p>
+<pre id="startup-paths"></pre><fieldset id="startup-controls" disabled><legend>登录启动选择</legend>
+<label>登录后启动方式<select id="startup-mode"><option value="workbench">打开工作台</option><option value="public_worker">只运行已确认公开计划</option></select></label>
+<p>独立计划进程不打开网页，只执行本工作区已确认的查询计划；没有计划就等待。两种方式都保留可关闭的终端。切换方式须先关闭旧登记，再重新勾选。</p>
+<label class="check"><input id="startup-consent" type="checkbox">我同意登录 Windows 后按所选方式运行上方程序和工作区</label>
+<button id="startup-enable" type="button">启用登录启动</button><button id="startup-disable" type="button" class="secondary">关闭登录启动</button></fieldset>
+<button id="startup-refresh" type="button" class="secondary">刷新登录启动状态</button><p id="startup-message" role="status" aria-live="polite"></p>
+<p class="muted">只为当前用户登记；Windows 可能延迟启动，也可能在系统的启动应用设置中将它关闭。登记成功不代表已通过实际重新登录验证。关闭此设置只移除未来登录启动，不停止当前任务，也不更改每日计划。移动或升级便携包前请先关闭旧登记，再从新包启用。</p>
+</details></section>
 <section id="manual-entry"><h2>已有材料：添加真实招聘文本</h2>
 <form id="job-form"><div class="grid">
 <label>职位名称<input name="title" required maxlength="2000" placeholder="使用真实标题，例如：时间序列算法工程师"></label>
