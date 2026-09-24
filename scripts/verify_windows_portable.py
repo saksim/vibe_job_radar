@@ -102,6 +102,28 @@ def verify_public_share_input(app):
     return [(row['id'], row['details']) for row in (state, clean_state)]
 
 
+def verify_public_category_input(app):
+    """Actual frozen API persists this explicit route, without a site request."""
+    data = dict(mode='liepin_category', roles=['architect'], platforms=['liepin'],
+                permit_platforms=['liepin'], consent=True, detail_budget=5,
+                rights_note='Artificial portable category checkpoint; no upstream request.')
+    preview = app.json('/api/collection/preview', data)
+    if (not preview['ready'] or preview['external_network_requests'] != 0
+            or preview['category_url'] != 'https://www.liepin.com/career/360321/'
+            or preview['credential_configured']):
+        raise AssertionError('frozen category preview changed its scope or requires a credential')
+    if app.json('/api/collection/preview', {**data, 'detail_budget': 6})['ready']:
+        raise AssertionError('frozen category preview exceeds five selections')
+    state = app.json('/api/collection/start', data)
+    if (state['status'] != 'paused' or state['phase'] != 'category'
+            or state['category_attempts'] != 0 or state['detail_attempts'] != 0
+            or state['details'] or state['report_id']
+            or state['category_outcomes'][0]['status'] != 'pending'
+            or state['category_outcomes'][0]['submitted_keyword']):
+        raise AssertionError('frozen category task changed scope or attempted acquisition before execution')
+    return state['id'], state['category_outcomes']
+
+
 def verify_detail_history(app, workspace):
     """Author metadata only; the actual exe must preserve it through stop/restart.
 
@@ -373,6 +395,8 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
                 public_input_checkpoints=verify_public_share_input(app)
                 result['public_share_input_verified']=True
                 result['public_clean_detail_input_verified']=True
+                category_id,category_outcomes=verify_public_category_input(app)
+                result['public_category_input_verified']=True
                 result['checks'].append('actual frozen API explains and deduplicates synthetic Liepin share inputs, preserves unknown parameters and saves a paused checkpoint without tracking values or any collection step')
                 if app.json('/api/public/schedule/state')['status']!='disabled':
                     raise AssertionError('packaged daily plan did not default to off')
@@ -512,6 +536,11 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
                         raise AssertionError('fresh frozen process changed or executed the paused public input task')
                 result['public_share_restart_verified']=True
                 result['public_clean_detail_restart_verified']=True
+                saved=restarted.json('/api/collection/status', {'id':category_id})
+                if (saved['category_outcomes']!=category_outcomes or saved['category_attempts']!=0
+                        or saved['details'] or saved['detail_attempts']!=0 or saved['report_id']):
+                    raise AssertionError('fresh frozen process changed or executed the paused category task')
+                result['public_category_restart_verified']=True
             finally:restarted.close()
             result['checks'].append('fresh exe process preserves original report, leaves daily plan off and requires a fresh browser check')
         if inventory(bundle)!=before:raise AssertionError('portable application modified its bundled components')
