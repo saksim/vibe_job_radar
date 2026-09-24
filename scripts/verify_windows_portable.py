@@ -133,6 +133,38 @@ def verify_public_category_input(app):
     return state['id'], state['category_outcomes']
 
 
+def verify_category_next_checkpoint(app, workspace):
+    """Actual frozen API consumes authored legacy-list metadata, never fetches."""
+    from vibe_job_radar.utils import atomic_json
+    state = app.json('/api/collection/start', dict(mode='liepin_category', roles=['architect'],
+        platforms=['liepin'], permit_platforms=['liepin'], consent=True, detail_budget=5,
+        rights_note='Artificial saved category metadata only; no recruiting request or actual previous job collection.'))
+    candidates = [dict(position=i, title=f'人工冻结验证架构师{i}',
+                      url=f'https://www.liepin.com/job/{90000000000000000+i}.shtml', status='available') for i in range(1,7)]
+    state.update(status='completed', phase='report', category_attempts=1, detail_attempts=5,
+                 details=[dict(url=r['url'], platform='liepin', status='ok', record_id='artificial-metadata',
+                    category_position=r['position'], category_title=r['title']) for r in candidates[:5]])
+    state['category_outcomes'][0].update(status='ok', raw_sha256='f'*64, candidates=candidates,
+                                         card_count=6, selected_positions=[1,2,3,4,5])
+    parent = workspace/'collections'/f'{state["id"]}.json'
+    atomic_json(parent,state)
+    before=parent.read_bytes()
+    plan=app.json('/api/collection/category_next_preview',{'id':state['id']})
+    if ([r['position'] for r in plan['items']] != [6] or plan['external_network_requests'] != 0
+            or plan['source_time_known']):
+        raise AssertionError('frozen next-batch preview changed the legacy snapshot or invented its capture time')
+    args=dict(id=state['id'],fingerprint=plan['fingerprint'],consent=True)
+    created=app.json('/api/collection/category_next_start',args)
+    repeated=app.json('/api/collection/category_next_start',args)
+    child=created['task']
+    if (not created['created'] or repeated['created'] or repeated['task']['id']!=child['id']
+            or child['status']!='paused' or child['category_attempts']!=0 or child['detail_attempts']!=0
+            or child['report_id'] or child['category_outcomes'][0]['selected_positions']!=[6]
+            or child['details'][0]['url']!=candidates[-1]['url'] or parent.read_bytes()!=before):
+        raise AssertionError('frozen next-batch checkpoint changed the parent, repeated or requested a page')
+    return child['id'],child['details'],child['category_outcomes']
+
+
 def verify_detail_history(app, workspace):
     """Author metadata only; the actual exe must preserve it through stop/restart.
 
@@ -407,6 +439,8 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
                 result['public_a_detail_input_verified']=True
                 category_id,category_outcomes=verify_public_category_input(app)
                 result['public_category_input_verified']=True
+                category_next_id,category_next_details,category_next_outcomes=verify_category_next_checkpoint(app,workspace)
+                result['public_category_next_checkpoint_verified']=True
                 result['checks'].append('actual frozen API explains and deduplicates synthetic Liepin share inputs, preserves unknown parameters and saves a paused checkpoint without tracking values or any collection step')
                 if app.json('/api/public/schedule/state')['status']!='disabled':
                     raise AssertionError('packaged daily plan did not default to off')
@@ -552,6 +586,11 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
                         or saved['details'] or saved['detail_attempts']!=0 or saved['report_id']):
                     raise AssertionError('fresh frozen process changed or executed the paused category task')
                 result['public_category_restart_verified']=True
+                saved=restarted.json('/api/collection/status', {'id':category_next_id})
+                if (saved['details']!=category_next_details or saved['category_outcomes']!=category_next_outcomes
+                        or saved['category_attempts']!=0 or saved['detail_attempts']!=0 or saved['report_id']):
+                    raise AssertionError('fresh frozen process changed or executed the paused next-batch task')
+                result['public_category_next_restart_verified']=True
             finally:restarted.close()
             result['checks'].append('fresh exe process preserves original report, leaves daily plan off and requires a fresh browser check')
         if inventory(bundle)!=before:raise AssertionError('portable application modified its bundled components')

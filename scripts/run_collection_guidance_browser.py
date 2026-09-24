@@ -219,6 +219,33 @@ def main():
                     assert manifest['stats']['full_text_job_groups'] == 2
                     expect(page.locator('#collect-result')).to_contain_text('主列表卡片 3 条，已选 2 条')
                     result['checks'].append('category UI selects the first requested cards and generates a batch-only report through the existing API and Store')
+                    before_next = len(server.collector.list()['runs'])
+                    page.get_by_role('button', name='预览这份名单的下一批（不联网）').click()
+                    expect(page.locator('#collect-result')).to_contain_text('名单第 3 项')
+                    assert len(server.collector.list()['runs']) == before_next
+                    with patch('vibe_job_radar.collection.SiteFetcher') as source:
+                        source.return_value.fetch.side_effect = category_response
+                        page.get_by_role('button', name='确认采集这批职位').click()
+                        expect(page.locator('#collect-progress')).to_contain_text('completed', timeout=30000)
+                        expect(page.locator('#collect-json')).to_contain_text('"snapshot_reused": true', timeout=30000)
+                        expect(page.locator('#collect-start')).to_be_enabled()
+                        source.return_value.fetch.assert_called_once_with('https://www.liepin.com/job/203.shtml')
+                    next_state = json.loads(page.locator('#collect-json').text_content())
+                    assert next_state['id'] != category_state['id'] and next_state['category_attempts'] == 0
+                    assert next_state['category_outcomes'][0]['selected_positions'] == [3]
+                    assert next_state['report_id'] and next_state['report_id'] != category_state['report_id']
+                    assert len(server.collector.list()['runs']) == before_next + 1
+                    result['checks'].append('saved category next-batch preview makes no request; confirmation fetches only the remaining detail and creates a separate original report')
+                    page.get_by_role('button', name='预览这份名单的下一批（不联网）').click()
+                    expect(page.locator('#collect-result')).to_contain_text('这份名单已全部选择完毕')
+                    page.locator('#collect-history').select_option(category_state['id'])
+                    page.locator('#collect-load').click()
+                    expect(page.locator('#collect-json')).to_contain_text(category_state['id'])
+                    page.get_by_role('button', name='预览这份名单的下一批（不联网）').click()
+                    page.get_by_role('button', name='打开已保存的下一批').click()
+                    expect(page.locator('#collect-json')).to_contain_text(next_state['id'])
+                    assert len(server.collector.list()['runs']) == before_next + 1
+                    result['checks'].append('exhaustion is limited to the saved list and reopening an existing continuation never creates or executes another task')
                     page.set_viewport_size({'width': 390, 'height': 844})
                     page.locator('section').first.screenshot(path=str(output / 'mobile-case.png'))
                     assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')
