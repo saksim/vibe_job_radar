@@ -389,7 +389,7 @@ class Collector:
             state.pop("in_flight", None)
 
     def _category(self, state):
-        from .public_category import category_for_state, parse_category
+        from .public_category import category_for_state, page_for_state, parse_category_page
         from .public_job_links import public_detail_parser
         category = category_for_state(state)
         row = state['category_outcomes'][0]
@@ -403,13 +403,22 @@ class Collector:
         self._save(state)
         client = self._client((state['id'], 'liepin'), lambda: SiteFetcher({'liepin.com'}), site=True)
         try:
-            response = client.fetch(category.url)
-            candidates = parse_category(response.url or category.url, response.text(), category.key)
-            selected = [c for c in candidates if c['status'] != 'duplicate'][:state['detail_budget']]
+            response = client.fetch(row['url'])
+            row.update(raw_sha256=hashlib.sha256(response.body).hexdigest(), final_url=response.url or row['url'])
+            candidates, paging = parse_category_page(response.url or row['url'], response.text(), category.key,
+                                                     page=page_for_state(state))
+            seen = set(state.get('category_page_context', {}).get('seen_urls', []))
+            for candidate in candidates:
+                if candidate['status'] != 'duplicate' and candidate['url'] in seen:
+                    candidate['status'] = 'previous_page_duplicate'
+            row.update(candidates=candidates, card_count=len(candidates), page_snapshot=paging)
+            selected = [c for c in candidates if c['status'] not in {'duplicate', 'previous_page_duplicate'}][:state['detail_budget']]
+            if not selected:
+                raise FetchError('category_repeated_page')
             row.update(status='ok', candidates=candidates, card_count=len(candidates),
                        selected_positions=[c['position'] for c in selected],
                        raw_sha256=hashlib.sha256(response.body).hexdigest(),
-                       final_url=category.url, selection_rule='first_unique_cards_in_publisher_order')
+                       selection_rule='first_unique_cards_in_publisher_order')
             for candidate in selected:
                 detail = dict(url=candidate['url'], platform='liepin', record_id='',
                               category_position=candidate['position'], category_title=candidate['title'],
@@ -434,6 +443,15 @@ class Collector:
     @serialized
     def category_next_start(self, data):
         from .public_category_next import start
+        return start(self, data)
+
+    def category_page_preview(self, data):
+        from .public_category_page import preview
+        return preview(self, data)
+
+    @serialized
+    def category_page_start(self, data):
+        from .public_category_page import start
         return start(self, data)
 
     def _feed(self, state, key):
@@ -501,6 +519,13 @@ class Collector:
             return self._view(state)
         if state.get("in_flight"):
             raise InputError("此任务有未结束的请求，请勿并发执行。")
+        if state['mode'] == CATEGORY_MODE and 'category_page_context' in state:
+            from .public_category import category_for_state
+            from .public_category_page import validate_parent
+            # Recheck before every step, including detail work after a pause.
+            # Loading a page once cannot authorize a changed ancestry later.
+            category_for_state(state)
+            validate_parent(self, state)
         key = text_field(data, "api_key", limit=1000).strip()
         if state["mode"] == "search":
             key = key or os.environ.get("BRAVE_SEARCH_API_KEY", "")

@@ -174,6 +174,49 @@ def verify_category_next_checkpoint(app, workspace, category_key='architect'):
     return child['id'],child['details'],child['category_outcomes']
 
 
+def verify_category_page_checkpoint(app, workspace, category_key='architect'):
+    """Actual frozen API freezes authored pagination metadata without fetching."""
+    from vibe_job_radar.utils import atomic_json
+    from vibe_job_radar.public_category import get_category, PAGINATION_PARSER
+    category = get_category(category_key)
+    state = app.json('/api/collection/start', dict(mode='liepin_category', category_id=category_key,
+        roles=list(category.roles), platforms=['liepin'], permit_platforms=['liepin'], consent=True,
+        detail_budget=1, rights_note='Artificial pagination metadata only; no live page or recruiting request.'))
+    candidates = [dict(position=i, title=f'人工分页验证{category.name}{i}',
+        url=f'https://www.liepin.com/job/{90000000000000100+i}.shtml', status='available') for i in (1,2)]
+    state.update(status='completed', phase='report', category_attempts=1, detail_attempts=1,
+        details=[dict(url=candidates[0]['url'], platform='liepin', status='ok', record_id='artificial-metadata',
+                      category_position=1, category_title=candidates[0]['title'])])
+    state['category_outcomes'][0].update(status='ok', raw_sha256='e'*64, candidates=candidates,
+        card_count=2, selected_positions=[1], page_snapshot=dict(parser=PAGINATION_PARSER, page=0,
+            url=category.url, status='available', next_url=category.url+'pn1/'))
+    parent = workspace/'collections'/f'{state["id"]}.json'
+    atomic_json(parent,state)
+    before=parent.read_bytes()
+    plan=app.json('/api/collection/category_page_preview',{'id':state['id']})
+    if (not plan['can_start'] or plan['external_network_requests']!=0 or plan['task_created']
+            or plan['current_page']!=1 or plan['next_page']!=2 or plan['remaining_on_current_page']!=1
+            or plan['next_url']!=category.url+'pn1/' or plan['selection_limit']!=1):
+        raise AssertionError('frozen pagination preview changed its page, budget or remaining-list evidence')
+    args=dict(id=state['id'],fingerprint=plan['fingerprint'],consent=True)
+    created=app.json('/api/collection/category_page_start',args)
+    repeated=app.json('/api/collection/category_page_start',args)
+    child=created['task'];context=child['category_page_context']
+    if (not created['created'] or repeated['created'] or repeated['task']['id']!=child['id']
+            or child['status']!='paused' or child['phase']!='category'
+            or child['category_attempts']!=0 or child['detail_attempts']!=0 or child['details'] or child['report_id']
+            or child['category_id']!=category_key or child['roles']!=list(category.roles)
+            or context['page']!=1 or context['parent_id']!=state['id']
+            or context['parent_fingerprint']!=plan['fingerprint'] or context['visited_urls']!=[category.url]
+            or context['seen_urls']!=[row['url'] for row in candidates]
+            or child['category_outcomes'][0]['url']!=category.url+'pn1/' or parent.read_bytes()!=before):
+        raise AssertionError('frozen pagination checkpoint fetched, changed scope or rewrote its parent')
+    same_page=app.json('/api/collection/category_next_preview',{'id':state['id']})
+    if [row['position'] for row in same_page['items']]!=[2]:
+        raise AssertionError('creating an adjacent-page task lost the original unselected list')
+    return child['id'],context,child['category_outcomes'],parent,before
+
+
 def verify_detail_history(app, workspace):
     """Author metadata only; the actual exe must preserve it through stop/restart.
 
@@ -478,6 +521,11 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
                 algorithm_next_id,algorithm_next_details,algorithm_next_outcomes=verify_category_next_checkpoint(app,workspace,'algorithm')
                 result['public_algorithm_category_next_checkpoint_verified']=True
                 result['public_category_next_checkpoint_verified']=True
+                result['stage']='public_category_page_checkpoint'
+                category_pages=[verify_category_page_checkpoint(app,workspace,key) for key in ('architect','algorithm')]
+                result['public_category_page_checkpoint_verified']=True
+                result['public_algorithm_category_page_checkpoint_verified']=True
+                result['checks'].append('frozen adjacent-page API freezes authored same-category page links and ancestry, preserves the unselected old list, and returns one paused child on repeated confirmation without acquisition')
                 result['checks'].append('actual frozen API explains and deduplicates synthetic Liepin share inputs, preserves unknown parameters and saves a paused checkpoint without tracking values or any collection step')
                 if app.json('/api/public/schedule/state')['status']!='disabled':
                     raise AssertionError('packaged daily plan did not default to off')
@@ -653,6 +701,19 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
                         or saved['detail_attempts']!=0 or saved['report_id']):
                     raise AssertionError('frozen algorithm continuation lost its scope or executed on restart')
                 result['public_algorithm_category_next_restart_verified']=True
+                for page_id,context,outcomes,parent,parent_bytes in category_pages:
+                    saved=restarted.json('/api/collection/status',{'id':page_id})
+                    if (saved['category_page_context']!=context or saved['category_outcomes']!=outcomes
+                            or saved['status']!='paused' or saved['phase']!='category'
+                            or saved['category_attempts']!=0 or saved['detail_attempts']!=0
+                            or saved['details'] or saved['report_id'] or parent.read_bytes()!=parent_bytes):
+                        raise AssertionError('fresh frozen process changed or executed a paused adjacent-page checkpoint')
+                    reopened=restarted.json('/api/collection/category_page_start',dict(
+                        id=context['parent_id'],fingerprint=context['parent_fingerprint'],consent=True))
+                    if reopened['created'] or reopened['task']['id']!=page_id:
+                        raise AssertionError('fresh frozen process duplicated the saved adjacent-page task')
+                result['public_category_page_restart_verified']=True
+                result['public_algorithm_category_page_restart_verified']=True
             finally:restarted.close()
             result['checks'].append('fresh exe process preserves original report, leaves daily plan off and requires a fresh browser check')
         if inventory(bundle)!=before:raise AssertionError('portable application modified its bundled components')

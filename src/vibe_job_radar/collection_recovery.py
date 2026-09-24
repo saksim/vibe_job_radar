@@ -45,6 +45,8 @@ REASONS = {
     'category_identity_mismatch': ('公开分类页面身份不匹配', '未使用该页发现岗位；需核对发布方页面。'),
     'category_structure_changed': ('公开分类结构无法确认', '未把页面改版当成没有岗位，也不从推荐区补充。'),
     'category_no_confirmed_jobs': ('分类页没有可确认的主列表职位', '这不能证明零岗位；保留页面诊断等待核验。'),
+    'category_pagination_invalid': ('分类页的实际页号或分页链接无法确认', '未读取该页正文；请保留页标题、当前页标志和来源记录核验。'),
+    'category_repeated_page': ('这一页的有效职位均已在前页出现', '已停止，不把重复页算作新岗位或继续翻页；旧结果与本次观察保留。'),
     'category_invalid_card': ('已选卡片无法确认具体职位', '本项保留在已选结果中，不以另一岗位补齐。'),
     'category_unsupported_detail': ('已选职位属于尚未核验的公开详情类型', '保留该项且不发正文请求，不以另一岗位补齐。'),
     'category_job_title_changed': ('详情标题与分类卡片不一致', '本次未保存为匹配岗位；请核对发布方信息。'),
