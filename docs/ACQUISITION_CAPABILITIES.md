@@ -1,6 +1,6 @@
 # 当前取数能力与验证范围
 
-核对日期 2026-09-23，已合并主干基线 `ec458799`（PR61）。本表由 `acquisition_status.py` 生成，同一份数据进入适配注册表、采集页与新报告的 `software_acquisition_capabilities`。修改后执行 `python scripts/check_acquisition_status.py --write` 并核对证据；自动测试检查文字表格未与程序脱节。
+核对日期 2026-09-24，已合并主干基线 `ec458799`（PR61）。下表记录浏览器通道，由 `acquisition_status.py` 生成，同一份数据进入适配注册表、采集页与新报告的 `software_acquisition_capabilities`。修改生成数据后执行 `python scripts/check_acquisition_status.py --write` 并核对证据；自动测试检查文字表格未与程序脱节。当前候选新增的公开HTTP采集范围见表后说明，不改变浏览器实站认证状态。
 
 <!-- acquisition-status:start -->
 | 平台 / 适配版本 | 后端 / 默认 | 实现 | 最近记录的受控验证 | 实站 / 剩余跟踪 |
@@ -12,6 +12,10 @@
 | 前程无忧 / 1 | bridge / 默认 | implemented | [2026-09-18 人工夹具](https://github.com/saksim/vibe_job_radar/actions/runs/35358529040) | not_verified；[#56](https://github.com/saksim/vibe_job_radar/issues/56) |
 | 前程无忧 / 1 | native / 不可用 | blocked | 无匹配记录 | not_verified；[#56](https://github.com/saksim/vibe_job_radar/issues/56) |
 <!-- acquisition-status:end -->
+
+当前[42项候选](CURRENT_DELIVERY_CANDIDATE.md)另提供明确选择的猎聘公开HTTP路径：所给详情/分享链接，以及发布方架构师、算法工程师两个职业分类，可自动发现正文并按保存名单逐批继续。已取得74个不同完整正文，其中39个符合原三类角色规则，实际只有2026-09-24一个日期。完整性、身份、原失败及来源证据分别保留；原文和私有报告不上传。具体范围见[公开分类](LIEPIN_PUBLIC_CATEGORY.md)及#144/#146/#150/#158/#160。
+
+这个公开路径不需要账号，不执行自定义关键词/地区检索或发布方分页。它不等于表中浏览器搜索、正常登录、重启会话和过期恢复已验通；这些状态仍受#50/#54/#63约束，不能用公开正文数量提升浏览器认证或启用默认切换。
 
 表中的受控验证记录绑定历史源码 `cde1e1c`、适配定义与访问契约，保留对应 CI、日期、浏览器/OS、网络和人工页面范围。它不证明修改后的全部代码、当前用户环境或真实平台。定义变化会撤下匹配的受控记录，不能只沿用同名平台的旧成功。报告中的软件快照不改变某条岗位的来源方式或证据等级；真实正文仍以逐条原文、采集时间和来源链判断。
 
@@ -32,7 +36,7 @@ PR60 已合并人工登录返回后的自动接续、当前会话复用与完整
 - [PR67](https://github.com/saksim/vibe_job_radar/pull/67)：Windows 拒绝 POST 时可靠返回错误。
 - [PR69](https://github.com/saksim/vibe_job_radar/pull/69)：公开任务停止和重启后确认继续。
 
-三站真实正常登录、首条/小批完整 JD、跨日期至少 30 条/3 日期、过期与结构变化现场恢复仍须逐项验收。无 href、特殊 iframe/SSO/业务响应需专用契约。PAC、代理认证、VM宿主机、所有 VPN/TUN 产品、长期调度和跨设备账户配额均未完成。完整清单见 [交付状态](DELIVERY_STATUS.md)。
+三站浏览器正常登录、原关键词列表到小批完整JD、跨日期至少30条/3日期、过期与结构变化现场恢复仍须逐项验收。猎聘公开HTTP已有完整正文，不补足这些浏览器与跨日期缺口。无href、特殊iframe/SSO/业务响应需专用契约。PAC、代理认证、VM宿主机等已有待审有限实现，其全路径和实际VPN/TUN现场、长期运行和跨设备账户配额仍未完成。完整清单见 [交付状态](DELIVERY_STATUS.md)。
 
 ## 数据与回退
 
