@@ -24,6 +24,11 @@ TITLE = '时间序列算法工程师'
 BODY = ('岗位职责：负责时间序列预测与离线评估。\n'
         '任职要求：熟悉 Python，使用 AI 编程工具辅助开发，'
         '对生成代码编写单元测试并进行代码审查。')
+NUMBERED = ('综合薪资：按能力面议。\n'
+            '1.本科及以上，计算机相关专业，能够编写接口和自动测试。\n'
+            '2.掌握时间序列建模，熟练使用Python和数据库。\n'
+            '3.了解能源业务，具备模型评估和误差分析经验。\n'
+            '4.具备代码审查能力，核对生成代码的正确性。')
 
 
 def posting(**updates):
@@ -72,6 +77,35 @@ class RecordedLayoutTests(unittest.TestCase):
 
     def test_valid_json_with_dd_also_does_not_need_h1(self):
         self.assertEqual(self.parse(markup(raw_breaks=False))['text'], BODY)
+
+    def test_unheaded_numbered_qualifications_require_complete_structured_agreement(self):
+        for breaks in (False, True):
+            with self.subTest(raw_breaks=breaks):
+                result = self.parse(markup(posting(description=NUMBERED), body=NUMBERED, raw_breaks=breaks))
+                self.assertEqual(result['text'], NUMBERED)
+                self.assertEqual(result['title'], TITLE)
+                self.assertEqual(result['parser'], 'liepin:job_intro_jsonld:v1')
+
+    def test_unheaded_prefix_or_absent_visible_intro_does_not_gain_new_acceptance(self):
+        for html in (markup(posting(description=NUMBERED[:35]), body=NUMBERED),
+                     markup(posting(description=NUMBERED), body=NUMBERED, anchor=False),
+                     '<h1>'+TITLE+'</h1><dl><dt>职位介绍</dt><dd>'+NUMBERED+'</dd></dl>'):
+            with self.subTest(html=html[:40]), self.assertRaises(CrawlError):
+                self.parse(html)
+
+    def test_ordinary_incomplete_or_nonconsecutive_lists_are_not_qualifications(self):
+        for body in (NUMBERED.replace('2.掌握', '3.掌握'), NUMBERED.replace('3.了解', '5.了解'),
+                     '\n'.join(NUMBERED.splitlines()[:3]), NUMBERED.replace('4.具备', '4.公司成立于'),
+                     '1.公司不断发展，持续提供优质服务。\n2.业务遍布各地，客户群体不断扩大。\n3.品牌持续创新，产品覆盖多个市场。'):
+            with self.subTest(body=body[:30]), self.assertRaises(CrawlError):
+                self.parse(markup(posting(description=body), body=body))
+
+    def test_numbered_format_keeps_identity_truncation_and_foreign_content_rejections(self):
+        for data, body in ((posting(description=NUMBERED,url=URL.replace('123','456')), NUMBERED),
+                           (posting(description=NUMBERED+'\n展开全部'), NUMBERED+'\n展开全部'),
+                           (posting(description=NUMBERED+'\n公司简介：其他内容'), NUMBERED+'\n公司简介：其他内容')):
+            with self.subTest(body=body[-20:]), self.assertRaises(CrawlError):
+                self.parse(markup(data, body=body))
 
     def test_repaired_structured_description_without_dd(self):
         parsed = self.parse(markup(anchor=False))
