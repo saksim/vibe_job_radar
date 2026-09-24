@@ -43,8 +43,22 @@ def main():
                 try:
                     page.goto(server.entry_url)
                     expect(page.locator('#counts')).to_contain_text('真实记录 0')
-                    page.get_by_role('link', name='进入自动采集 / 原文复核 / 附件与量化指标工作台').click()
+                    with patch('vibe_job_radar.collection.SiteFetcher') as source:
+                        page.get_by_role('link', name='进入猎聘架构师公开分类采集').click()
+                        expect(page.locator('#guide-liepin_category')).to_be_visible()
+                        page.reload()
+                        expect(page.locator('#guide-liepin_category')).to_be_visible()
+                        expect(page.locator('#collect-roles input[value=architect]')).to_be_checked()
+                        expect(page.locator('#collect-platforms input[value=liepin]')).to_be_checked()
+                        expect(page.locator('#collect-permits input[value=liepin]')).not_to_be_checked()
+                        expect(page.locator('#collect-form [name=consent]')).not_to_be_checked()
+                        expect(page.locator('#collect-form [name=detail_budget]')).to_have_value('5')
+                        expect(page.locator('#collect-form [name=api_key]')).to_be_hidden()
+                        expect(page.locator('#collect-form [name=urls]')).to_be_hidden()
+                        assert server.collector.list()['runs'] == []
+                        source.assert_not_called()
                     expect(page.locator('#revision')).to_contain_text('版本 0')
+                    result['checks'].append('home category link and reload select the original fixed-scope preset without consent, task creation or upstream requests')
                     page.get_by_role('button', name='我有职位链接：套用 URL 入门参数').click()
                     f = page.locator('#collect-form')
                     expect(page.locator('#guide-urls')).to_be_visible()
