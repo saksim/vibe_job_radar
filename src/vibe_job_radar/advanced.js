@@ -127,6 +127,27 @@ function showCollection(s){
     root.append(text("p",`${pageLabel} · ${row.status_message||row.status}；主列表卡片 ${row.card_count??"尚未确认"} 条，已选 ${(row.selected_positions||[]).length} 条。${duplicates?` 前页已出现 ${duplicates} 项，未重复请求。`:''}`));
   }
   if(s.mode==="liepin_category"&&["completed","needs_attention","empty"].includes(s.status)){
+    if(s.details.some(row=>["rate_wait","publisher_wait","hourly_limit","daily_limit","cooldown"].includes(row.status))){
+      const recovery=text("div","");recovery.className="guide-box";root.append(recovery);
+      recovery.append(button("预览因等待未完成的正文（不联网）",async()=>{
+        const plan=await api("/api/collection/category_recovery_preview",{id:s.id});
+        recovery.replaceChildren(text("p",plan.notice));
+        recovery.append(text("p",`保留原成功 ${plan.inherited_success_count} 条；本次最多 ${plan.selection_limit} 次正文尝试，原预算不退款。`));
+        if(plan.existing_task_id){
+          recovery.append(button("打开已保存的恢复任务",async()=>{
+            const saved=await api("/api/collection/status",{id:plan.existing_task_id});
+            collectionGuide.selectMode(saved.mode);showCollection(saved);await refreshCollections();
+          }));return;
+        }
+        for(const item of plan.items)recovery.append(text("p",`名单第 ${item.position} 项：${item.title} ${item.url}`));
+        recovery.append(text("p","沿用原用途与许可范围："+plan.rights_note));
+        recovery.append(button("确认保存恢复任务（暂不联网）",async()=>{
+          const result=await api("/api/collection/category_recovery_start",{id:plan.id,fingerprint:plan.fingerprint,consent:true});
+          collectionGuide.selectMode(result.task.mode);showCollection(result.task);await refreshCollections();
+          note("恢复任务已保存。等待原因解除后点击继续；程序会重新检查共享额度，尚未访问网站。");
+        }));
+      }));
+    }
     const next=text("div","");next.className="guide-box";root.append(next);
     next.append(button("预览这份名单的下一批（不联网）",async()=>{
       const plan=await api("/api/collection/category_next_preview",{id:s.id});

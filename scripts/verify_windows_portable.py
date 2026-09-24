@@ -217,6 +217,46 @@ def verify_category_page_checkpoint(app, workspace, category_key='architect'):
     return child['id'],context,child['category_outcomes'],parent,before
 
 
+def verify_category_rate_recovery(app, workspace):
+    """Authored partial-result metadata; actual exe preview/save only, no site GET."""
+    from vibe_job_radar.models import JobRecord
+    from vibe_job_radar.store import Store
+    from vibe_job_radar.utils import atomic_json
+    from vibe_job_radar.public_job_links import public_detail_parser
+    created=app.json('/api/collection/start',dict(mode='liepin_category',category_id='architect',
+        roles=['architect'],platforms=['liepin'],permit_platforms=['liepin'],consent=True,
+        detail_budget=3,rights_note='Artificial saved-list recovery checkpoint; no recruiting request.'))
+    parent=workspace/'collections'/f'{created["id"]}.json'
+    state=json.loads(parent.read_text(encoding='utf-8'))
+    candidates=[dict(position=i,title=f'软件架构师人工恢复样本{i}',
+        url=f'https://www.liepin.com/job/{90000000000000500+i}.shtml',status='available') for i in (1,2,3)]
+    record=JobRecord(title=candidates[0]['title'],url=candidates[0]['url'],platform='liepin',
+        text='岗位职责：负责软件架构与接口设计。岗位要求：熟悉Python、数据库、接口设计与自动测试。仅用于临时工作区的人工验收正文。',
+        source_mode='public_fetch',rights_note=state['rights_note'],source_ref='artificial-recovery-checkpoint')
+    with Store(workspace/'jobs.sqlite') as store:store.add(record)
+    state.update(status='needs_attention',phase='report',category_attempts=1,detail_attempts=2,
+        blocked_hosts=['www.liepin.com'],details=[dict(url=c['url'],platform='liepin',
+            category_position=c['position'],category_title=c['title'],detail_parser=public_detail_parser(c['url']),
+            status=('ok','daily_limit','host_stopped')[i],record_id=record.record_id if i==0 else '') for i,c in enumerate(candidates)])
+    state['category_outcomes'][0].update(status='ok',raw_sha256='d'*64,candidates=candidates,
+        card_count=3,selected_positions=[1,2,3])
+    atomic_json(parent,state);before=parent.read_bytes()
+    plan=app.json('/api/collection/category_recovery_preview',{'id':state['id']})
+    if ([row['position'] for row in plan['items']]!=[2,3] or plan['selection_limit']!=2
+            or plan['inherited_success_count']!=1 or plan['external_network_requests']!=0 or plan['task_created']):
+        raise AssertionError('frozen recovery preview lost the saved result or changed its remaining range')
+    args=dict(id=state['id'],fingerprint=plan['fingerprint'],consent=True)
+    saved=app.json('/api/collection/category_recovery_start',args)
+    repeated=app.json('/api/collection/category_recovery_start',args);child=saved['task']
+    if (not saved['created'] or repeated['created'] or repeated['task']['id']!=child['id']
+            or child['status']!='paused' or child['phase']!='detail' or child['category_attempts']!=0
+            or child['detail_attempts']!=0 or child['detail_budget']!=2 or child['report_id']
+            or [row['status'] for row in child['details']]!=['ok','pending','pending']
+            or child['details'][0]['record_id']!=record.record_id or parent.read_bytes()!=before):
+        raise AssertionError('frozen recovery save replayed work, duplicated a child or changed its original result')
+    return child['id'],child['category_rate_recovery'],child['details'],parent,before
+
+
 def verify_collection_shared_cooldown(app, workspace, *, register=True):
     """Actual exe default factory sees a real ledger; reserved .invalid input only."""
     from vibe_job_radar.guided.rate import RateLedger
@@ -547,6 +587,10 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
                 category_pages=[verify_category_page_checkpoint(app,workspace,key) for key in ('architect','algorithm')]
                 result['public_category_page_checkpoint_verified']=True
                 result['public_algorithm_category_page_checkpoint_verified']=True
+                result['stage']='category_rate_recovery_checkpoint'
+                recovery_id,recovery_context,recovery_details,recovery_parent,recovery_parent_bytes=verify_category_rate_recovery(app,workspace)
+                result['category_rate_recovery_checkpoint_verified']=True
+                result['checks'].append('actual exe validates authored partial category results and saves one paused remaining-details checkpoint without visiting a site; original body and parent preserved')
                 result['stage']='advanced_shared_cooldown'
                 rate_task_id,rate_task_bytes=verify_collection_shared_cooldown(app,workspace)
                 result['advanced_shared_cooldown_verified']=True
@@ -740,6 +784,17 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
                         raise AssertionError('fresh frozen process duplicated the saved adjacent-page task')
                 result['public_category_page_restart_verified']=True
                 result['public_algorithm_category_page_restart_verified']=True
+                saved=restarted.json('/api/collection/status',{'id':recovery_id})
+                if (saved['status']!='paused' or saved['details']!=recovery_details
+                        or saved['category_rate_recovery']!=recovery_context or saved['detail_attempts']!=0
+                        or saved['category_attempts']!=0 or saved['report_id']
+                        or recovery_parent.read_bytes()!=recovery_parent_bytes):
+                    raise AssertionError('fresh frozen process executed or changed the saved recovery checkpoint')
+                repeated=restarted.json('/api/collection/category_recovery_start',dict(id=recovery_context['parent_id'],
+                    fingerprint=recovery_context['parent_fingerprint'],consent=True))
+                if repeated['created'] or repeated['task']['id']!=recovery_id:
+                    raise AssertionError('fresh frozen process duplicated a recovery task')
+                result['category_rate_recovery_restart_verified']=True
                 verify_collection_shared_cooldown(restarted,workspace,register=False)
                 if (workspace/'collections'/f'{rate_task_id}.json').read_bytes()!=rate_task_bytes:
                     raise AssertionError('frozen restart changed the original cooldown outcome')

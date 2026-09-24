@@ -5,6 +5,7 @@ import json
 import sys
 import tempfile
 import threading
+import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -376,6 +377,65 @@ def main():
                     continued = json.loads(page.locator('#collect-json').text_content())
                     assert continued['category_id'] == 'algorithm' and continued['category_attempts'] == 0
                     result['checks'].append('algorithm continuation preserves its category and consumes only the remaining saved-list detail with fully corroborated unheaded numbered qualifications')
+                    # Exercise recovery through the original default factory and
+                    # real temporary SQLite; only the one-hop source is authored.
+                    from vibe_job_radar.guided.rate import Limits, RateLedger
+                    rate_clock=[time.time()-2*86400]
+                    recovery_ledger=RateLedger(workspace.root/'guided/rates.sqlite',
+                        Limits(page_interval=0,request_interval=0,pages_day=2),clock=lambda:rate_clock[0])
+                    recovery_html=category_html.replace('201','901').replace('202','902').replace('203','903')
+                    recovery_calls=[]
+                    def recovery_response(url):
+                        recovery_calls.append(url)
+                        if url=='https://www.liepin.com/robots.txt':
+                            return Response(200,{'content-type':'text/plain'},b'User-agent: *\nDisallow: /*?*\n',url)
+                        if url==category_url:return Response(200,{'content-type':'text/html'},recovery_html.encode(),url)
+                        assert url in {'https://www.liepin.com/a/901.shtml','https://www.liepin.com/job/902.shtml','https://www.liepin.com/job/903.shtml'}
+                        return category_response(url)
+                    with patch('vibe_job_radar.collection_rate.RateLedger',return_value=recovery_ledger), patch(
+                            'vibe_job_radar.network.SafeHTTP.public_get',side_effect=recovery_response):
+                        page.get_by_role('button',name='自动读取猎聘架构师公开分类').click()
+                        f.locator('[name=detail_budget]').fill('3')
+                        f.locator('[name=rights_note]').fill('人工等待恢复回归，临时工作区，仅上游响应模拟。')
+                        page.locator('#collect-permits input[value=liepin]').check();f.locator('[name=consent]').check()
+                        page.locator('#collect-start').click()
+                        expect(page.locator('#collect-progress')).to_contain_text('needs_attention',timeout=30000)
+                        expect(page.locator('#collect-start')).to_be_enabled()
+                        rate_parent=json.loads(page.locator('#collect-json').text_content())
+                        assert [d['status'] for d in rate_parent['details']]==['ok','daily_limit','host_stopped']
+                        parent_bytes=server.collector._path(rate_parent['id']).read_bytes()
+                        calls_before=list(recovery_calls)
+                        page.get_by_role('button',name='预览因等待未完成的正文（不联网）').click()
+                        expect(page.locator('#collect-result')).to_contain_text('保留原成功 1 条；本次最多 2 次')
+                        page.get_by_role('button',name='确认保存恢复任务（暂不联网）').click()
+                        expect(page.locator('#collect-progress')).to_contain_text('paused')
+                        expect(page.locator('#collect-start')).to_be_enabled()
+                        rate_child=json.loads(page.locator('#collect-json').text_content())
+                        assert rate_child['detail_budget']==2 and rate_child['detail_attempts']==0
+                        assert recovery_calls==calls_before and server.collector._path(rate_parent['id']).read_bytes()==parent_bytes
+                        result['checks'].append('original default category factory stops at a real temporary daily limit; recovery preview and explicit save preserve the successful body and parent without another request')
+                        page.reload();page.locator('#collect-history').select_option(rate_child['id']);page.locator('#collect-load').click()
+                        expect(page.locator('#collect-progress')).to_contain_text('paused')
+                        assert recovery_calls==calls_before
+                        rate_clock[0]+=86401
+                        page.locator('#collect-resume').click()
+                        expect(page.locator('#collect-progress')).to_contain_text('completed',timeout=30000)
+                        expect(page.locator('#collect-start')).to_be_enabled()
+                        recovered=json.loads(page.locator('#collect-json').text_content())
+                        assert recovered['saved_detail_count']==3 and recovered['detail_attempts']==2
+                        assert recovered['category_attempts']==0 and recovered['details'][0]==rate_parent['details'][0]
+                        assert recovery_calls[len(calls_before):]==['https://www.liepin.com/robots.txt',
+                            'https://www.liepin.com/job/902.shtml','https://www.liepin.com/job/903.shtml']
+                        assert server.collector._path(rate_parent['id']).read_bytes()==parent_bytes
+                        result['checks'].append('after reload and the controlled quota window, the saved recovery reads only the two remaining details and produces a combined three-body report without re-fetching its list or old success')
+                        calls_after=list(recovery_calls)
+                        page.locator('#collect-history').select_option(rate_parent['id']);page.locator('#collect-load').click()
+                        page.get_by_role('button',name='预览因等待未完成的正文（不联网）').click()
+                        page.get_by_role('button',name='打开已保存的恢复任务').click()
+                        expect(page.locator('#collect-progress')).to_contain_text('completed')
+                        assert json.loads(page.locator('#collect-json').text_content())['id']==recovered['id']
+                        assert recovery_calls==calls_after
+                        result['checks'].append('reopening a completed recovery from its original failed batch returns the same task and report without network replay')
                     # Use the real default factory here. A shared guided cooldown
                     # must stop advanced HTTP before even the one-hop transport.
                     server.guided.ledger.cool('liepin',3600)

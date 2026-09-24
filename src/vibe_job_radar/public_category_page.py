@@ -99,5 +99,6 @@ def start(collector, data):
         created_at=utc_now(), updated_at=utc_now(), category_page_context=plan['context'],
         category_outcomes=[new_outcome(plan['category_id'], page=plan['next_page']-1)])
     child.pop('category_continuation', None)
+    child.pop('category_rate_recovery', None)
     collector._save(child)
     return dict(created=True, task=collector._view(child))
