@@ -394,6 +394,7 @@ class Collector:
             return
         state['category_attempts'] += 1
         row['status'] = 'requesting'
+        row['capture_started_at'] = utc_now()
         state['in_flight'] = {'queue': 'category_outcomes', 'index': 0}
         self._save(state)
         client = self._client((state['id'], 'liepin'), lambda: SiteFetcher({'liepin.com'}), site=True)
@@ -419,7 +420,17 @@ class Collector:
             if isinstance(diagnostic, dict):
                 row['fetch_diagnostic'] = diagnostic
             state.pop('in_flight', None)
+            row['capture_finished_at'] = utc_now()
             state['phase'] = 'detail'
+
+    def category_next_preview(self, data):
+        from .public_category_next import preview
+        return preview(self, data)
+
+    @serialized
+    def category_next_start(self, data):
+        from .public_category_next import start
+        return start(self, data)
 
     def _feed(self, state, key):
         # Explicit publisher contract: GET endpoint?cursor=opaque -> {jobs:[JobRecord], next_cursor:str|null}.
