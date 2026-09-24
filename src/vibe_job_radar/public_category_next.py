@@ -27,7 +27,7 @@ def _fingerprint(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode()).hexdigest()
 
 
-def _snapshot(collector, ident):
+def _snapshot(collector, ident, *, rate_recovery=False):
     state = collector._load(ident)
     if state.get('id') != ident:
         raise InputError('来源任务编号与保存记录不一致。')
@@ -35,6 +35,9 @@ def _snapshot(collector, ident):
             or state.get('status') not in {'completed', 'needs_attention', 'empty'}):
         raise InputError('请先让公开分类的当前批次结束；其他来源或仍在运行的任务不能续取名单。')
     category = category_for_state(state)
+    if 'category_rate_recovery' in state:
+        from .public_category_recovery import validate_parent
+        validate_parent(collector, state)
     if 'category_page_context' in state:
         from .public_category_page import validate_parent
         validate_parent(collector, state)
@@ -43,7 +46,10 @@ def _snapshot(collector, ident):
     details = state.get('details')
     if not isinstance(details, list) or any(not isinstance(row, dict) for row in details):
         raise InputError('原批次的逐条结果不完整。')
-    if (state.get('blocked_hosts') or any(row.get('status') in HARD_STOP for row in details)):
+    if rate_recovery:
+        from .public_category_recovery import waiting_positions
+        waiting_positions(state)
+    elif (state.get('blocked_hosts') or any(row.get('status') in HARD_STOP for row in details)):
         raise InputError('原批次有访问拒绝、登录验证、证书或未知中断；先处理原因，不能用下一批继续访问该站。')
     outcomes = state.get('category_outcomes', [])
     if not isinstance(outcomes, list) or len(outcomes) != 1 or not isinstance(outcomes[0], dict):
@@ -150,6 +156,7 @@ def start(collector, data):
                  category_attempts=0, detail_attempts=0, search_requests=0, feed_requests=0,
                  warnings=[], created_at=utc_now(), updated_at=utc_now())
     child['category_continuation'] = dict(version=1, parent_id=parent['id'], parent_fingerprint=plan['fingerprint'])
+    child.pop('category_rate_recovery', None)
     source = child['category_outcomes'][0]
     source.update(snapshot_reused=True, source_collection_id=plan['source_collection_id'],
                   source_task_created_at=plan['source_task_created_at'],

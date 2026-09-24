@@ -74,6 +74,9 @@ def explain(state: dict) -> dict:
     saved = sum(d['status'] in {'ok', 'fresh_reused'} for d in details)
     skipped = sum(d['status'] == 'budget_skipped' for d in details)
     text = f'本批 {len(details)} 条链接，已尝试 {state["detail_attempts"]} 条，取得或复用 {saved} 条正文，预算未执行 {skipped} 条。'
+    if state.get('category_rate_recovery'):
+        inherited = state['category_rate_recovery']['inherited_success_count']
+        text += f' 这是原批次的恢复任务；其中{inherited}条正文继承原成功结果，本次只执行预览确认的未完成项，旧任务和预算保留。'
     if state['mode'] == 'urls':
         text += ' 搜索和数据源预算不参与URL路线；报告阶段不代表取得了正文。'
     category_outcomes = []

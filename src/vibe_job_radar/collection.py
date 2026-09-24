@@ -448,6 +448,15 @@ class Collector:
             row['capture_finished_at'] = utc_now()
             state['phase'] = 'detail'
 
+    def category_recovery_preview(self, data):
+        from .public_category_recovery import preview
+        return preview(self, data)
+
+    @serialized
+    def category_recovery_start(self, data):
+        from .public_category_recovery import start
+        return start(self, data)
+
     def category_next_preview(self, data):
         from .public_category_next import preview
         return preview(self, data)
@@ -531,6 +540,9 @@ class Collector:
             return self._view(state)
         if state.get("in_flight"):
             raise InputError("此任务有未结束的请求，请勿并发执行。")
+        if 'category_rate_recovery' in state:
+            from .public_category_recovery import validate_parent
+            validate_parent(self, state)
         if state['mode'] == CATEGORY_MODE and 'category_page_context' in state:
             from .public_category import category_for_state
             from .public_category_page import validate_parent
