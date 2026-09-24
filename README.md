@@ -1,6 +1,6 @@
 # Vibe Job Radar｜招聘要求与个人证据工作台
 
-本分支在#128的[30项改进统一候选](docs/CURRENT_DELIVERY_CANDIDATE.md)上按#131增加[多组公开查询待办](docs/PUBLIC_QUERY_QUEUE.md)：最多5条一次性查询，按顺序沿用原任务、缓存、额度和报告，工作台或独立进程均可执行。默认空，逐条明确同意，重启保留未开始条目，不自动重放不确定尝试。此功能源码为`codex/public-query-queue`；统一30项候选仍为`codex/delivery-30`，本分支结果须核对同一提交的CI产物，尚未合入main或正式发布。
+本分支按#133提供[31项改进统一候选](docs/CURRENT_DELIVERY_CANDIDATE.md)，在已验证的30项基础上纳入[多组公开查询待办](docs/PUBLIC_QUERY_QUEUE.md)：最多5条一次性查询，按顺序沿用原任务、缓存、额度和报告，工作台或独立进程均可执行。默认空，逐条明确同意，重启保留未开始条目，不自动重放不确定尝试。源码使用`codex/delivery-31`，Windows候选须核对本提交的成功CI产物；尚未合入main或正式发布，当前验证和剩余现场目标分别记录。
 
 ## 先完成一次目标岗位研究
 
