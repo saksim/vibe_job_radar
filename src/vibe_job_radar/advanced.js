@@ -243,4 +243,5 @@ async function openLinkedReport() {
 }
 init().then(()=>{
   if(location.hash==="#liepin-category")collectionGuide.preset("liepin_category");
+  if(location.hash==="#liepin-algorithm")collectionGuide.preset("liepin_category", "algorithm");
 }).catch(error=>note(error.message));

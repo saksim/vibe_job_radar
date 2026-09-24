@@ -111,20 +111,23 @@ def verify_public_share_input(app):
     return [(row['id'], row['details']) for row in (state, clean_state, a_state)]
 
 
-def verify_public_category_input(app):
+def verify_public_category_input(app, category_key='architect'):
     """Actual frozen API persists this explicit route, without a site request."""
-    data = dict(mode='liepin_category', roles=['architect'], platforms=['liepin'],
+    from vibe_job_radar.public_category import get_category
+    category = get_category(category_key)
+    data = dict(mode='liepin_category', category_id=category_key, roles=list(category.roles), platforms=['liepin'],
                 permit_platforms=['liepin'], consent=True, detail_budget=5,
                 rights_note='Artificial portable category checkpoint; no upstream request.')
     preview = app.json('/api/collection/preview', data)
     if (not preview['ready'] or preview['external_network_requests'] != 0
-            or preview['category_url'] != 'https://www.liepin.com/career/360321/'
+            or preview['category_url'] != category.url
             or preview['credential_configured']):
         raise AssertionError('frozen category preview changed its scope or requires a credential')
     if app.json('/api/collection/preview', {**data, 'detail_budget': 6})['ready']:
         raise AssertionError('frozen category preview exceeds five selections')
     state = app.json('/api/collection/start', data)
-    if (state['status'] != 'paused' or state['phase'] != 'category'
+    if (state['status'] != 'paused' or state['phase'] != 'category' or state['category_id'] != category_key
+            or state['roles'] != list(category.roles) or state['category_outcomes'][0]['parser'] != category.parser
             or state['category_attempts'] != 0 or state['detail_attempts'] != 0
             or state['details'] or state['report_id']
             or state['category_outcomes'][0]['status'] != 'pending'
@@ -133,24 +136,29 @@ def verify_public_category_input(app):
     return state['id'], state['category_outcomes']
 
 
-def verify_category_next_checkpoint(app, workspace):
+def verify_category_next_checkpoint(app, workspace, category_key='architect'):
     """Actual frozen API consumes authored legacy-list metadata, never fetches."""
     from vibe_job_radar.utils import atomic_json
-    state = app.json('/api/collection/start', dict(mode='liepin_category', roles=['architect'],
+    from vibe_job_radar.public_category import get_category
+    category = get_category(category_key)
+    state = app.json('/api/collection/start', dict(mode='liepin_category', category_id=category_key, roles=list(category.roles),
         platforms=['liepin'], permit_platforms=['liepin'], consent=True, detail_budget=5,
         rights_note='Artificial saved category metadata only; no recruiting request or actual previous job collection.'))
-    candidates = [dict(position=i, title=f'人工冻结验证架构师{i}',
+    candidates = [dict(position=i, title=f'人工冻结验证{category.name}{i}',
                       url=f'https://www.liepin.com/job/{90000000000000000+i}.shtml', status='available') for i in range(1,7)]
     state.update(status='completed', phase='report', category_attempts=1, detail_attempts=5,
                  details=[dict(url=r['url'], platform='liepin', status='ok', record_id='artificial-metadata',
                     category_position=r['position'], category_title=r['title']) for r in candidates[:5]])
     state['category_outcomes'][0].update(status='ok', raw_sha256='f'*64, candidates=candidates,
                                          card_count=6, selected_positions=[1,2,3,4,5])
+    if category_key == 'architect':
+        state.pop('category_id')  # Original checkpoint remains readable.
     parent = workspace/'collections'/f'{state["id"]}.json'
     atomic_json(parent,state)
     before=parent.read_bytes()
     plan=app.json('/api/collection/category_next_preview',{'id':state['id']})
     if ([r['position'] for r in plan['items']] != [6] or plan['external_network_requests'] != 0
+            or plan['source_url'] != category.url or plan['category_id'] != category_key
             or plan['source_time_known']):
         raise AssertionError('frozen next-batch preview changed the legacy snapshot or invented its capture time')
     args=dict(id=state['id'],fingerprint=plan['fingerprint'],consent=True)
@@ -160,6 +168,7 @@ def verify_category_next_checkpoint(app, workspace):
     if (not created['created'] or repeated['created'] or repeated['task']['id']!=child['id']
             or child['status']!='paused' or child['category_attempts']!=0 or child['detail_attempts']!=0
             or child['report_id'] or child['category_outcomes'][0]['selected_positions']!=[6]
+            or child.get('category_id','architect')!=category_key or child['roles']!=list(category.roles)
             or child['details'][0]['url']!=candidates[-1]['url'] or parent.read_bytes()!=before):
         raise AssertionError('frozen next-batch checkpoint changed the parent, repeated or requested a page')
     return child['id'],child['details'],child['category_outcomes']
@@ -438,8 +447,12 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
                 result['public_clean_detail_input_verified']=True
                 result['public_a_detail_input_verified']=True
                 category_id,category_outcomes=verify_public_category_input(app)
+                algorithm_id,algorithm_outcomes=verify_public_category_input(app,'algorithm')
+                result['public_algorithm_category_input_verified']=True
                 result['public_category_input_verified']=True
                 category_next_id,category_next_details,category_next_outcomes=verify_category_next_checkpoint(app,workspace)
+                algorithm_next_id,algorithm_next_details,algorithm_next_outcomes=verify_category_next_checkpoint(app,workspace,'algorithm')
+                result['public_algorithm_category_next_checkpoint_verified']=True
                 result['public_category_next_checkpoint_verified']=True
                 result['checks'].append('actual frozen API explains and deduplicates synthetic Liepin share inputs, preserves unknown parameters and saves a paused checkpoint without tracking values or any collection step')
                 if app.json('/api/public/schedule/state')['status']!='disabled':
@@ -598,6 +611,17 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
                         or saved['category_attempts']!=0 or saved['detail_attempts']!=0 or saved['report_id']):
                     raise AssertionError('fresh frozen process changed or executed the paused next-batch task')
                 result['public_category_next_restart_verified']=True
+                saved=restarted.json('/api/collection/status', {'id':algorithm_id})
+                if (saved['category_id']!='algorithm' or saved['category_outcomes']!=algorithm_outcomes
+                        or saved['category_attempts']!=0 or saved['detail_attempts']!=0 or saved['report_id']):
+                    raise AssertionError('frozen algorithm checkpoint lost its category or executed on restart')
+                result['public_algorithm_category_restart_verified']=True
+                saved=restarted.json('/api/collection/status', {'id':algorithm_next_id})
+                if (saved['category_id']!='algorithm' or saved['details']!=algorithm_next_details
+                        or saved['category_outcomes']!=algorithm_next_outcomes or saved['category_attempts']!=0
+                        or saved['detail_attempts']!=0 or saved['report_id']):
+                    raise AssertionError('frozen algorithm continuation lost its scope or executed on restart')
+                result['public_algorithm_category_next_restart_verified']=True
             finally:restarted.close()
             result['checks'].append('fresh exe process preserves original report, leaves daily plan off and requires a fresh browser check')
         if inventory(bundle)!=before:raise AssertionError('portable application modified its bundled components')
