@@ -101,7 +101,7 @@ def preview(workspace, data: dict) -> dict:
     query_count, valid_urls, normalized_urls = 0, 0, 0
     credential_configured = False
     if mode == "urls":
-        from .public_job_links import prepare_public_job_link
+        from .public_job_links import prepare_public_job_link, public_detail_parser
         raw = data.get("urls", "")
         if not isinstance(raw, str) or not raw.strip() or len(raw) > 100000:
             fail("urls", "先在招聘网站打开一个具体职位，复制地址栏中的完整 HTTPS 地址粘贴到这里；每行一个。")
@@ -126,6 +126,9 @@ def preview(workspace, data: dict) -> dict:
                 duplicate = url in seen
                 rows.append({"line": line, "platform": platform,
                              "label": workspace.config["platforms"][platform]["label"], "duplicate": duplicate})
+                parser = public_detail_parser(url)
+                if parser:
+                    rows[-1]['detail_parser'] = parser
                 if normalization:
                     normalized_urls += 1
                     rows[-1]['link_normalization'] = normalization

@@ -155,8 +155,20 @@ def main():
                     state = json.loads(page.locator('#collect-json').text_content())
                     assert state['detail_attempts'] == 1 and state['report_id']
                     assert state['details'][0]['link_normalization']['policy'] == 'liepin_share_v1'
+                    assert state['details'][0]['detail_parser'] == 'liepin_public_detail_v1'
                     assert 'ARTIFICIAL-TRACKING' not in json.dumps(state)
                     result['checks'].append('shared Liepin URL is explained, deduplicated and collected into the original report without tracking values')
+                    f.locator('[name=urls]').fill(clean)
+                    with patch('vibe_job_radar.collection.SiteFetcher') as source:
+                        page.locator('#collect-start').click()
+                        expect(page.locator('#collect-json')).to_contain_text('fresh_reused', timeout=30000)
+                        expect(page.locator('#collect-progress')).to_contain_text('completed', timeout=30000)
+                        source.assert_not_called()
+                    cached = json.loads(page.locator('#collect-json').text_content())
+                    assert cached['id'] != state['id'] and cached['detail_attempts'] == 0 and cached['report_id']
+                    assert cached['details'][0]['detail_parser'] == 'liepin_public_detail_v1'
+                    assert 'link_normalization' not in cached['details'][0]
+                    result['checks'].append('clean Liepin input reuses strictly verified cache in a new report without another upstream request')
                     page.set_viewport_size({'width': 390, 'height': 844})
                     page.locator('section').first.screenshot(path=str(output / 'mobile-case.png'))
                     assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')

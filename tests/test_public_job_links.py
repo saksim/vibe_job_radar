@@ -6,6 +6,7 @@ import unittest
 
 from vibe_job_radar.collection import Collector, TERMINAL
 from vibe_job_radar.collection_guidance import preview
+from vibe_job_radar.models import JobRecord
 from vibe_job_radar.network import Response, SiteFetcher
 from vibe_job_radar.store import Store
 from vibe_job_radar.workspace import Workspace, InputError
@@ -119,6 +120,77 @@ class PublicJobLinkTests(unittest.TestCase):
         self.assertEqual(wire.calls, ['https://www.liepin.com/robots.txt', URL])
         self.assertEqual(state['report_id'], '')
 
+    def test_clean_link_alone_uses_same_liepin_parser_and_report(self):
+        state, wire = self.collect(urls=URL)
+        self.assertEqual(state['details'][0]['status'], 'ok')
+        self.assertEqual(state['details'][0]['detail_parser'], 'liepin_public_detail_v1')
+        self.assertNotIn('link_normalization', state['details'][0])
+        checked = preview(self.workspace, data(URL))
+        self.assertEqual(checked['normalized_url_count'], 0)
+        self.assertEqual(checked['url_rows'][0]['detail_parser'], 'liepin_public_detail_v1')
+        with Store(self.workspace.db) as store:
+            jobs = store.records()
+        self.assertEqual(len(jobs), 1)
+        self.assertTrue(jobs[0].parser.startswith('liepin_public_detail_v1:'))
+        self.assertEqual(jobs[0].text, BODY)
+        self.assertTrue(state['report_id'])
+        self.assertEqual(wire.calls, ['https://www.liepin.com/robots.txt', URL])
+
+    def assert_clean_link_refused(self, html, expected):
+        state, wire = self.collect(urls=URL, wire=Responses(html))
+        self.assertEqual(state['details'][0]['status'], expected)
+        self.assertEqual(state['report_id'], '')
+        with Store(self.workspace.db) as store:
+            self.assertEqual(store.records(), [])
+        self.assertEqual(wire.calls, ['https://www.liepin.com/robots.txt', URL])
+
+    def test_clean_link_identity_conflict_never_becomes_full_jd(self):
+        self.assert_clean_link_refused(markup(canonical='/job/999.shtml'), 'job_identity_mismatch')
+
+    def test_clean_link_truncation_never_becomes_full_jd(self):
+        self.assert_clean_link_refused(markup(body=BODY + '展开全部'), 'jd_incomplete')
+
+    def test_clean_job_parser_survives_restart_before_first_fetch(self):
+        state = self.collector.start(data(URL))
+        self.collector = Collector(self.workspace)
+        wire = Responses(markup(canonical='/job/999.shtml'))
+        self.collector.clients[(state['id'], 'liepin')] = SiteFetcher({'liepin.com'}, transport=wire)
+        state = self.collector.step({'id': state['id']})
+        self.assertEqual(state['details'][0]['status'], 'job_identity_mismatch')
+        self.assertEqual(state['details'][0]['detail_parser'], 'liepin_public_detail_v1')
+        self.assertEqual(state['report_id'], '')
+
+    def test_unverified_generic_cache_cannot_skip_identity_or_completeness(self):
+        prior = JobRecord(url=URL, platform='liepin', title=TITLE, text=BODY,
+                          parser='json_ld_jobposting', source_mode='public_fetch', rights_note='Artificial legacy cache')
+        with Store(self.workspace.db) as store:
+            store.add(prior)
+        for value in (URL, SHARE):
+            with self.subTest(value=value):
+                state, wire = self.collect(urls=value, wire=Responses(markup(body=BODY + '展开全部')))
+                self.assertEqual(state['details'][0]['status'], 'jd_incomplete')
+                self.assertEqual(state['report_id'], '')
+                self.assertEqual(state['detail_attempts'], 1)
+                self.assertEqual(wire.calls, ['https://www.liepin.com/robots.txt', URL])
+        with Store(self.workspace.db) as store:
+            self.assertEqual([r.record_id for r in store.records()], [prior.record_id])
+
+    def test_verified_cache_is_reused_by_clean_link_after_restart_without_request(self):
+        prior = JobRecord(url=URL, platform='liepin', title=TITLE, text=BODY,
+                          parser='json_ld_jobposting', source_mode='public_fetch', rights_note='Artificial legacy cache')
+        with Store(self.workspace.db) as store:
+            store.add(prior)
+        initial, first_wire = self.collect()
+        self.assertEqual(initial['details'][0]['status'], 'ok')
+        self.assertEqual(first_wire.calls, ['https://www.liepin.com/robots.txt', URL])
+        self.collector = Collector(self.workspace)
+        state, wire = self.collect(urls=URL)
+        self.assertEqual(state['details'][0]['status'], 'fresh_reused')
+        self.assertEqual(state['details'][0]['record_id'], initial['details'][0]['record_id'])
+        self.assertEqual(state['detail_attempts'], 0)
+        self.assertTrue(state['report_id'])
+        self.assertEqual(wire.calls, [])
+
     def test_other_hosts_and_job_families_are_not_rewritten(self):
         for url in ('https://m.liepin.com/job/123.shtml?pgRef=sample',
                     'https://www.liepin.com/a/123.shtml?pgRef=sample',
@@ -129,6 +201,7 @@ class PublicJobLinkTests(unittest.TestCase):
                 state = self.collector.start(data(url))
                 self.assertEqual(state['details'][0]['url'], url)
                 self.assertNotIn('link_normalization', state['details'][0])
+                self.assertNotIn('detail_parser', state['details'][0])
 
     def test_redirected_other_job_cannot_be_imported_as_selected_share(self):
         state, wire = self.collect(wire=Responses(redirect='/job/999.shtml'))
@@ -159,6 +232,7 @@ class PublicJobLinkTests(unittest.TestCase):
         # no preparation marker. step() must not migrate or retry it elsewhere.
         old = self.collector._load(state['id'])
         old['details'][0]['url'] = SHARE
+        old['details'][0].pop('detail_parser', None)
         self.collector._save(old)
         wire = Responses()
         self.collector.clients[(state['id'], 'liepin')] = SiteFetcher({'liepin.com'}, transport=wire)

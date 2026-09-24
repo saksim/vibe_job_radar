@@ -197,7 +197,7 @@ class Collector:
             "feed_done": False, "feed_cursor": "", "seen_cursors": [], "blocked_hosts": [], "warnings": [],
             "feed_outcomes": [], "report_id": "", "complete_market_coverage": False, "created_at": utc_now()}
         if mode == "urls":
-            from .public_job_links import prepare_public_job_link
+            from .public_job_links import prepare_public_job_link, public_detail_parser
             urls = text_field(data, "urls", required=True, limit=100000).splitlines()
             if len(urls) > 300:
                 raise InputError("每批最多 300 个链接。")
@@ -205,12 +205,15 @@ class Collector:
                 if url.strip():
                     prepared, normalization = prepare_public_job_link(url.strip())
                     self._enqueue(state, prepared)
-                    if normalization:
-                        # A clean link may precede a shared duplicate. Keep the
-                        # stricter identity check and all removed field names
-                        # regardless of paste order, without another request.
-                        row = next((r for r in state['details'] if r['url'] == prepared), None)
-                        if row is not None:
+                    row = next((r for r in state['details'] if r['url'] == prepared), None)
+                    if row is not None:
+                        parser = public_detail_parser(prepared)
+                        if parser:
+                            row['detail_parser'] = parser
+                        if normalization:
+                            # Keep all removed field names regardless of paste
+                            # order, without another request. Parser selection
+                            # applies equally to a clean link entered alone.
                             prior = row.get('link_normalization', {}).get('removed_parameters', [])
                             row['link_normalization'] = {**normalization,
                                 'removed_parameters': sorted(set(prior) | set(normalization['removed_parameters']))}
@@ -328,8 +331,10 @@ class Collector:
             row["status"] = "host_stopped"
             return
         now = parse_time(utc_now())
+        from .public_job_links import public_detail_cache_matches
         with Store(self.workspace.db) as store:
             prior = next((r for r in store.records() if r.url == row["url"] and r.evidence_level == "full_text" and not r.is_synthetic
+                and public_detail_cache_matches(row, r)
                 and 0 <= (now - parse_time(r.collected_at)).total_seconds() <= state["fresh_hours"] * 3600
                 and (not r.expires_at or parse_time(r.expires_at) > now)), None)
         if prior:
@@ -347,7 +352,7 @@ class Collector:
             response = client.fetch(row["url"])
             markup = response.text()
             final_url = safe_url(response.url or row["url"])
-            if row.get('link_normalization'):
+            if row.get('detail_parser') or row.get('link_normalization'):
                 from .public_job_links import parse_prepared_job
                 parsed = parse_prepared_job(row, final_url, markup)
             else:
