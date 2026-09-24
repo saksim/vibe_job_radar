@@ -196,7 +196,7 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
                 state=app.json('/api/guided/state')
                 if state['runtime']['kind']!='portable' or Path(state['python']).resolve()!=exe:raise AssertionError('not executing bundled application')
                 public=app.json('/api/public/state')
-                if {source['id'] for source in public['sources']}!={'greenhouse_anthropic','greenhouse_cloudflare'}:
+                if {source['id'] for source in public['sources']}!={'greenhouse_anthropic','greenhouse_cloudflare','ashby_cursor'}:
                     raise AssertionError('packaged public source registry is incomplete')
                 if public['task'].get('owned_elsewhere') is not False or state.get('owned_elsewhere') is not False:
                     raise AssertionError('packaged task ownership state is absent')
@@ -272,9 +272,10 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
                         page=context.new_page();page.on('pageerror',lambda exc:result['page_errors'].append(type(exc).__name__))
                         page.goto(app.entry+'&report='+ident)
                         expect(page.locator('#report')).to_be_visible();expect(page.locator('#brief-capabilities')).to_contain_text('Cursor')
-                        expect(page.locator('#public-source option')).to_have_count(2)
+                        expect(page.locator('#public-source option')).to_have_count(3)
                         expect(page.locator('#public-source')).to_have_value('greenhouse_anthropic')
                         page.locator('#public-source').select_option('greenhouse_cloudflare')
+                        page.locator('#public-source').select_option('ashby_cursor')
                         if app.json('/api/public/state')['task']['status']!='idle':
                             raise AssertionError('source selection implicitly submitted a public query')
                         page.screenshot(path=str(report_path.parent/'portable-report-mobile.png'),full_page=True)
@@ -289,7 +290,7 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
                         if result['page_errors'] or result['external_browser_requests']:raise AssertionError('portable browser UI failed')
                     finally:browser.close()
                 result['checks'].append('built application accepts artificial JD and produces original report/CSV; selected real browser renders report and portable guidance at 390px without external page requests')
-                result['checks'].append('packaged two-source registry and both ownership states present; source selection submits no job; daily plan stays off')
+                result['checks'].append('packaged three-source registry and both ownership states present; source selection submits no job; daily plan stays off')
                 if verify_login_startup:
                     result['stage']='startup_registration'
                     verify_startup_registration(app,exe,workspace,cwd,env)

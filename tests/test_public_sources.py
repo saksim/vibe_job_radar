@@ -12,7 +12,7 @@ from test_local_public import payload, query
 from vibe_job_radar.guided.rate import RateLimit
 from vibe_job_radar.local_public import LocalPublicDataClient, parse_board
 from vibe_job_radar.network import FetchError
-from vibe_job_radar.public_boards import ANTHROPIC, CLOUDFLARE
+from vibe_job_radar.public_boards import ANTHROPIC, CLOUDFLARE, CURSOR
 from vibe_job_radar.public_contract import ContractError, validate_batch
 from vibe_job_radar.public_schedule import DAY, PublicSchedule
 from vibe_job_radar.public_tasks import PublicTasks
@@ -51,7 +51,7 @@ class PublicSourcesTests(unittest.TestCase):
         return tasks.snapshot()
 
     def test_fixed_source_requires_selection_and_never_acquires_on_startup(self):
-        self.assertEqual(list(self.client.registry),[ANTHROPIC.source.key,CLOUDFLARE.source.key])
+        self.assertEqual(list(self.client.registry),[ANTHROPIC.source.key,CLOUDFLARE.source.key,CURSOR.source.key])
         self.assertIsNone(self.client.cached(cloudflare_query()))
         for sources in ((ANTHROPIC.source.key,CLOUDFLARE.source.key),('unknown_board',)):
             with self.assertRaises(ContractError):self.client.search(query(source_scope=sources),consent=True)
