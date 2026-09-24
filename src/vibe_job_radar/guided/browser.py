@@ -12,7 +12,7 @@ from urllib.parse import urljoin, urlsplit
 
 from ..utils import domain_matches
 from ..network_policy import current_policy
-from .contracts import CrawlError, PageSnapshot
+from .contracts import CrawlError, PageSnapshot, PageSnapshotChanged
 from .rate import RateLimit
 from .read_retry import TransientReadFailure, document_failure, read_attempt
 from .transport import PinnedTransport
@@ -326,7 +326,7 @@ class PlaywrightBackend:
         if len(content) > 5_000_000:
             raise CrawlError('response_too_large')
         if self.page.url != url:
-            raise CrawlError('page_not_ready')
+            raise PageSnapshotChanged()
         return PageSnapshot(url, content, visible_text=text)
 
     def _visible(self, selectors, scope=None):
