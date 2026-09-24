@@ -98,9 +98,10 @@ def preview(workspace, data: dict) -> dict:
         permits = []
 
     rows, detected, queries = [], [], []
-    query_count, valid_urls = 0, 0
+    query_count, valid_urls, normalized_urls = 0, 0, 0
     credential_configured = False
     if mode == "urls":
+        from .public_job_links import prepare_public_job_link
         raw = data.get("urls", "")
         if not isinstance(raw, str) or not raw.strip() or len(raw) > 100000:
             fail("urls", "先在招聘网站打开一个具体职位，复制地址栏中的完整 HTTPS 地址粘贴到这里；每行一个。")
@@ -112,7 +113,7 @@ def preview(workspace, data: dict) -> dict:
                 if not value.strip():
                     continue
                 try:
-                    url = url_hint(value, detail=True)
+                    url, normalization = prepare_public_job_link(url_hint(value, detail=True))
                 except InputError as exc:
                     fail("urls", f"第 {line} 行：{exc}")
                     continue
@@ -125,6 +126,9 @@ def preview(workspace, data: dict) -> dict:
                 duplicate = url in seen
                 rows.append({"line": line, "platform": platform,
                              "label": workspace.config["platforms"][platform]["label"], "duplicate": duplicate})
+                if normalization:
+                    normalized_urls += 1
+                    rows[-1]['link_normalization'] = normalization
                 seen.add(url)
                 if not duplicate:
                     valid_urls += 1
@@ -137,6 +141,8 @@ def preview(workspace, data: dict) -> dict:
             fail("detail_budget", "URL 路线需要至少 1 次正文预算；0 表示完全不取正文。")
         if valid_urls > budgets.get("detail_budget", 0):
             warnings.append("链接数多于正文尝试预算；未复用的超额链接会跳过，不会保证全部获取。")
+        if normalized_urls:
+            warnings.append(f"已识别 {normalized_urls} 条猎聘分享链接；将去除分享跟踪参数，按同一职位编号的公开地址采集。")
         warnings.append("识别出平台不等于已取得授权或已验证链接有效；登录页、动态页面、robots 拒绝仍可能无法取得正文。")
     elif mode == "search":
         key = data.get("api_key", "")
@@ -178,6 +184,7 @@ def preview(workspace, data: dict) -> dict:
     return {"ready": not errors, "mode": mode, "errors": errors, "warnings": warnings,
             "budgets": budgets, "detected_platforms": detected, "url_rows": rows,
             "unique_url_count": valid_urls, "query_count": query_count, "query_preview": queries,
+            "normalized_url_count": normalized_urls,
             "credential_configured": credential_configured, "credential_verified": False,
             "external_network_requests": 0, "task_created": False,
             "message": "填写检查通过，可核对后点击创建执行；未验证实站、凭据或授权。" if not errors else "尚有字段需要处理；下方按字段说明怎么补，不会发起采集。"}

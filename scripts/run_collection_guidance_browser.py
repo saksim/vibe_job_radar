@@ -1,5 +1,6 @@
 """Actual browser field-guidance acceptance; all upstream responses are artificial."""
 from __future__ import annotations
+import argparse
 import json
 import sys
 import tempfile
@@ -16,6 +17,9 @@ from vibe_job_radar.utils import utc_now
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--channel', choices=['msedge'])
+    args = parser.parse_args()
     from playwright.sync_api import sync_playwright, expect
     output = ROOT / 'browser-acceptance' / 'field-guidance'
     output.mkdir(parents=True, exist_ok=True)
@@ -26,7 +30,7 @@ def main():
         thread = threading.Thread(target=server.serve_forever, kwargs={'poll_interval': 0.01}, daemon=True); thread.start()
         try:
             with sync_playwright() as pw:
-                browser = pw.chromium.launch(headless=True)
+                browser = pw.chromium.launch(headless=True, **({'channel': args.channel} if args.channel else {}))
                 result['browser_version'] = browser.version
                 context = browser.new_context(viewport={'width': 1440, 'height': 1050})
                 def local_only(route):
@@ -129,6 +133,30 @@ def main():
                     expect(page.locator('#collect-check-results')).to_contain_text('向实际的数据提供方索取')
                     result['checks'].append('mode changes clear credentials and feed route explains missing supplier inputs')
                     page.get_by_role('button', name='我有职位链接：套用 URL 入门参数').click()
+                    shared = 'https://www.liepin.com/job/123.shtml?pgRef=artificial&skId=ARTIFICIAL-TRACKING'
+                    clean = 'https://www.liepin.com/job/123.shtml'
+                    f.locator('[name=urls]').fill(shared + '\n' + clean)
+                    page.get_by_role('button', name='从链接识别来源平台（不授予权限）').click()
+                    expect(page.locator('#collect-check-results')).to_contain_text('已识别 1 个不同职位链接')
+                    expect(page.locator('#collect-check-results')).to_contain_text('同一职位编号的公开地址')
+                    expect(page.locator('#collect-permits input[value=liepin]')).not_to_be_checked()
+                    page.locator('#collect-permits input[value=liepin]').check()
+                    f.locator('[name=rights_note]').fill('人工分享链接回归，不是真实岗位或授权。')
+                    f.locator('[name=consent]').check()
+                    share_html = ('<h1>时间序列算法工程师</h1><dl><dt>职位介绍</dt><dd>'
+                        '岗位职责：负责时间序列预测系统与模型设计。任职要求：熟悉统计学和数据库，编写测试和设计文档。人工回归材料。'
+                        '</dd></dl>')
+                    with patch('vibe_job_radar.collection.SiteFetcher') as source:
+                        source.return_value.fetch.return_value = Response(200, {'content-type': 'text/html'}, share_html.encode(), clean)
+                        page.locator('#collect-start').click()
+                        expect(page.locator('#collect-progress')).to_contain_text('completed', timeout=30000)
+                        expect(page.locator('#collect-start')).to_be_enabled()
+                        source.return_value.fetch.assert_called_once_with(clean)
+                    state = json.loads(page.locator('#collect-json').text_content())
+                    assert state['detail_attempts'] == 1 and state['report_id']
+                    assert state['details'][0]['link_normalization']['policy'] == 'liepin_share_v1'
+                    assert 'ARTIFICIAL-TRACKING' not in json.dumps(state)
+                    result['checks'].append('shared Liepin URL is explained, deduplicated and collected into the original report without tracking values')
                     page.set_viewport_size({'width': 390, 'height': 844})
                     page.locator('section').first.screenshot(path=str(output / 'mobile-case.png'))
                     assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')
