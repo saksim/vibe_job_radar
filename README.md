@@ -1,6 +1,6 @@
 # Vibe Job Radar｜招聘要求与个人证据工作台
 
-本分支按#137提供[32项改进统一候选](docs/CURRENT_DELIVERY_CANDIDATE.md)，在已验证的31项基础上纳入[确认后使用Windows已配置PAC地址](docs/WINDOWS_SYSTEM_PAC.md)：不必手工导出文件，每会话读取一次并冻结，来源变更或许可撤销后停止。原[多组公开查询待办](docs/PUBLIC_QUERY_QUEUE.md)、计划、独立进程、配额和报告保留。源码使用`codex/delivery-32`，Windows候选须核对本提交的成功CI产物；尚未合入main或正式发布，当前验证和剩余现场目标分别记录。
+本分支按#142提供[33项改进统一候选](docs/CURRENT_DELIVERY_CANDIDATE.md)，在已验证32项基础上纳入[逐次正文采集记录](docs/LIVE_ACCEPTANCE_LEDGER.md)：失败后重试成功仍保留早期结果和处理耗时，中断及旧版缺失历史明确标出，原报告与离线验收一起核对。原系统PAC、[多组公开查询待办](docs/PUBLIC_QUERY_QUEUE.md)、计划、独立进程、配额和报告保留。源码使用`codex/delivery-33`，Windows候选须核对本提交的成功CI产物；尚未合入main或正式发布，三站真实登录取数仍待验通。
 
 ## 先完成一次目标岗位研究
 
