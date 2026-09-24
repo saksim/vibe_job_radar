@@ -68,7 +68,7 @@ def browser_health_summary(health):
     # Fixed facts only: no raw process logs, tokens, paths or credentials.
     fields=('code','stage','mode','ready','launch_tested','executable_exists',
         'process_started','process_exit_code','process_exit_hex','error_type',
-        'playwright_version','browser_channel','browser_version','selection_applied')
+        'playwright_version','browser_channel','browser_version','selection_applied','blank_page_check')
     return {key:health[key] for key in fields if key in health}
 
 

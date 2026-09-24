@@ -36,6 +36,8 @@ python scripts/run_public_worker.py --workspace "D:\Radar\workspace"
 
 Windows CI以实际冻结exe、无Python PATH启动空计划worker，确认独立入口和默认关闭；只终止该次自有空闲进程，不把它算作正常Ctrl+C或真实长跑证明。当前head结果以Issue/PR记录为准。
 
+首轮#116的独立exe worker/PAC检查通过，但其后的包内Chromium空白页超时，单独由#117跟踪。原离线探针与便携工件现在记录`set_content`、`read_title`、`verify_title`/`verified`，每步耗时以及主动清理前的加载/崩溃/关闭事件计数。只记录固定事实，不记录页面正文、标题内容、URL或事件参数。按[Playwright接口](https://playwright.dev/python/docs/api/class-page#page-set-content)保留原`set_content`完成条件和6000ms默认超时，没有重试或替换成更宽松的检查。新增证据不等于最初超时根因已解决。
+
 这不是Windows Service、多任务持久队列或无人登录全天保证。已有Windows登录启动仍打开工作台，不自动改成worker模式。生产服务、签名发行、跨设备权限/配额、实际24小时/重登录长跑和中国三站正常登录→完整JD仍独立验收。
 
 回退前先停用计划、等待当前步骤结束、关闭全部同工作区worker和工作台并备份。没有新增队列数据格式；原计划/任务/频次/报告继续使用既有格式。旧源码不得与新worker同时写入工作区。恢复新版时，未撤销的旧许可仍可能使已到期计划执行一次。
