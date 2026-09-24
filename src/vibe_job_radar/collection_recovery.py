@@ -42,6 +42,12 @@ REASONS = {
     'job_unavailable': ('该职位已暂停或结束招聘', '本次未保存为可用正文；请选择仍可阅读的具体职位。'),
     'manual_required': ('页面要求人工完成登录或验证', '本次已停止；请在原平台完成正常操作。'),
     'interrupted_uncertain': ('上次请求中断，结果不确定', '预算已计入，不自动重试；确认后新建任务。'),
+    'category_identity_mismatch': ('公开分类页面身份不匹配', '未使用该页发现岗位；需核对发布方页面。'),
+    'category_structure_changed': ('公开分类结构无法确认', '未把页面改版当成没有岗位，也不从推荐区补充。'),
+    'category_no_confirmed_jobs': ('分类页没有可确认的主列表职位', '这不能证明零岗位；保留页面诊断等待核验。'),
+    'category_invalid_card': ('已选卡片无法确认具体职位', '本项保留在已选结果中，不以另一岗位补齐。'),
+    'category_unsupported_detail': ('已选职位属于尚未核验的公开详情类型', '保留该项且不发正文请求，不以另一岗位补齐。'),
+    'category_job_title_changed': ('详情标题与分类卡片不一致', '本次未保存为匹配岗位；请核对发布方信息。'),
 }
 
 
@@ -56,8 +62,19 @@ def explain(state: dict) -> dict:
     text = f'本批 {len(details)} 条链接，已尝试 {state["detail_attempts"]} 条，取得或复用 {saved} 条正文，预算未执行 {skipped} 条。'
     if state['mode'] == 'urls':
         text += ' 搜索和数据源预算不参与URL路线；报告阶段不代表取得了正文。'
+    category_outcomes = []
+    for original in state.get('category_outcomes', []):
+        message = ('已读取公开分类主列表' if original['status'] == 'ok' else
+                   REASONS.get(original['status'], ('分类状态：' + original['status'], ''))[0])
+        category_outcomes.append({**original, 'status_message': message})
+    if state['mode'] == 'liepin_category':
+        text += f' 分类读取尝试 {state.get("category_attempts", 0)} 次；仅架构师分类第一页，不含关键词或地区筛选。'
+        if category_outcomes:
+            text += ' ' + category_outcomes[0]['status_message'] + '。'
     return {'details': details, 'user_summary': text,
+            'category_outcomes': category_outcomes,
             'route_label': {'urls': '公开HTTP（无浏览器登录会话）', 'search': '搜索API＋公开HTTP',
+                            'liepin_category': '猎聘架构师公开分类（第一页，最多5个职位）',
                             'feed': '用户配置的授权JSON源'}.get(state['mode'], state['mode']),
             'saved_detail_count': saved, 'budget_skipped_count': skipped}
 

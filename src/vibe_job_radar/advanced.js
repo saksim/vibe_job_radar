@@ -121,6 +121,9 @@ function showCollection(s){
   $("collect-json").textContent=JSON.stringify(s,null,2);
   const root=$("collect-result");root.replaceChildren();
   root.append(text("p",s.user_summary||"请核对每条实际结果。"));
+  for(const row of s.category_outcomes||[]){
+    root.append(text("p",`${row.status_message||row.status}；主列表卡片 ${row.card_count??"尚未确认"} 条，已选 ${(row.selected_positions||[]).length} 条。`));
+  }
   for(const row of s.details){
     const card=text("div","");card.className="card";
     card.append(text("strong",row.status_message||row.status),text("p",row.url),text("p",row.next_action||""));

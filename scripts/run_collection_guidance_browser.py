@@ -169,6 +169,54 @@ def main():
                     assert cached['details'][0]['detail_parser'] == 'liepin_public_detail_v1'
                     assert 'link_normalization' not in cached['details'][0]
                     result['checks'].append('clean Liepin input reuses strictly verified cache in a new report without another upstream request')
+                    page.get_by_role('button', name='自动读取猎聘架构师公开分类').click()
+                    expect(page.locator('#guide-liepin_category')).to_be_visible()
+                    expect(page.locator('#collect-roles input[value=architect]')).to_be_checked()
+                    expect(page.locator('#collect-platforms input[value=liepin]')).to_be_checked()
+                    expect(page.locator('#collect-permits input[value=liepin]')).not_to_be_checked()
+                    expect(f.locator('[name=consent]')).not_to_be_checked()
+                    expect(f.locator('[name=detail_budget]')).to_have_value('5')
+                    for name in ('api_key', 'urls', 'endpoint', 'search_budget', 'pages'):
+                        expect(f.locator(f'[name={name}]')).to_be_hidden()
+                        expect(f.locator(f'[name={name}]')).to_be_disabled()
+                    before = len(server.collector.list()['runs'])
+                    page.locator('#collect-check').click()
+                    expect(page.locator('#collect-check-results')).to_contain_text('分类读取最多1次')
+                    expect(page.locator('#collect-check-results')).to_contain_text('请确认本次猎聘公开分类页')
+                    assert len(server.collector.list()['runs']) == before
+                    result['checks'].append('category preset fixes its scope, hides Key and URLs, and requires explicit permission without requests')
+
+                    f.locator('[name=detail_budget]').fill('2')
+                    f.locator('[name=rights_note]').fill('人工公开分类回归，响应全部模拟；不是真实岗位或授权。')
+                    page.locator('#collect-permits input[value=liepin]').check()
+                    f.locator('[name=consent]').check()
+                    from vibe_job_radar.public_category import URL as category_url
+                    cards = ''.join(f'<div class="job-card-pc-container"><a data-nick="job-detail-job-info" href="https://www.liepin.com/job/{i}.shtml">'
+                        f'<div class="job-title-box"><div class="ellipsis-1" title="软件架构师人工样本{i}">软件架构师人工样本{i}</div></div></a></div>' for i in (201, 202, 203))
+                    category_html = ('<html><head><title>【架构师招聘_招聘架构师人才】-猎聘</title></head><body><div id="main-container">'
+                        '<div class="left-job-box"><div class="job-list-box"><div class="left-list-box">'+cards+'</div></div></div></div></body></html>')
+                    def category_response(url):
+                        ident = url.rsplit('/', 1)[-1].split('.')[0]
+                        content = category_html if url == category_url else (
+                            f'<h1>软件架构师人工样本{ident}</h1><dl><dt>职位介绍</dt><dd>'
+                            '岗位职责：负责系统架构与数据库设计。岗位要求：熟悉软件设计，编写文档与自动测试。人工回归材料。'
+                            '</dd></dl>')
+                        return Response(200, {'content-type': 'text/html'}, content.encode(), url)
+                    with patch('vibe_job_radar.collection.SiteFetcher') as source:
+                        source.return_value.fetch.side_effect = category_response
+                        page.locator('#collect-start').click()
+                        expect(page.locator('#collect-progress')).to_contain_text('completed', timeout=30000)
+                        expect(page.locator('#collect-start')).to_be_enabled()
+                        assert [call.args[0] for call in source.return_value.fetch.call_args_list] == [category_url,
+                            'https://www.liepin.com/job/201.shtml', 'https://www.liepin.com/job/202.shtml']
+                    category_state = json.loads(page.locator('#collect-json').text_content())
+                    assert category_state['category_attempts'] == 1 and category_state['detail_attempts'] == 2
+                    assert category_state['category_outcomes'][0]['selected_positions'] == [1, 2]
+                    assert category_state['report_id']
+                    manifest = json.loads((workspace.root/'reports'/category_state['report_id']/'run_manifest.json').read_text(encoding='utf-8'))
+                    assert manifest['stats']['full_text_job_groups'] == 2
+                    expect(page.locator('#collect-result')).to_contain_text('主列表卡片 3 条，已选 2 条')
+                    result['checks'].append('category UI selects the first requested cards and generates a batch-only report through the existing API and Store')
                     page.set_viewport_size({'width': 390, 'height': 844})
                     page.locator('section').first.screenshot(path=str(output / 'mobile-case.png'))
                     assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')
