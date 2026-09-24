@@ -13,7 +13,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from vibe_job_radar.guided.adapters import DOMAdapter, Registry, builtins
-from vibe_job_radar.guided.contracts import CrawlError, PageSnapshot
+from vibe_job_radar.guided.contracts import CrawlError, PageSnapshot, PageSnapshotChanged
 from vibe_job_radar.guided.login_return import (
     DetailTarget, LoginReturnManager, ReturnedDetail,
     matching_detail_signature, pending_detail_target,
@@ -42,9 +42,11 @@ def task_state():
 
 def wait_diagnostic(service, view):
     """Fixed task facts and bounded function frames; no inputs, locals or paths."""
-    task=next((j for j in view['jobs'] if j['id']==view['active']),{})
+    task=next((j for j in view['jobs'] if j['id']==view['active']),next(iter(view['jobs']),{}))
     allowed={'status':{'queued','running','ready','completed','waiting_manual','waiting_rate','paused','stopped'},
-             'phase':{'search','select','collect','report','login'},'code':set(MESSAGES)}
+             'phase':{'search','select','collect','report','login'},'code':set(MESSAGES),
+             'authentication':{'manual_pending','user_resumed'},
+             'login_continuation':{'off','watching','checking_detail','resumed_detail','resumed','timed_out','needs_attention','cancelled'}}
     state={key:task.get(key) if task.get(key) in values else 'unknown' for key,values in allowed.items()}
     worker=service._thread;frames=[]
     if worker is not None and worker.ident is not None:
@@ -58,6 +60,18 @@ def wait_diagnostic(service, view):
             'task':state,'worker_stack':frames}
 
 class DetailSignatureTests(unittest.TestCase):
+    def test_browser_marks_url_change_during_dom_read_without_returning_mixed_snapshot(self):
+        from vibe_job_radar.guided.browser import PlaywrightBackend
+        backend=PlaywrightBackend.__new__(PlaywrightBackend)
+        backend.error=None;backend.auth_mode=False;backend.adapter=ADAPTER
+        backend.page=Mock(url=URL);backend.page.is_closed.return_value=False
+        backend.page.locator.return_value.inner_text.return_value=BODY
+        def content():
+            backend.page.url=URL+'?d_sfrom=returned';return markup()
+        backend.page.content.side_effect=content
+        with self.assertRaises(PageSnapshotChanged) as caught:backend.snapshot()
+        self.assertEqual(caught.exception.code,'page_not_ready')
+
     def test_full_selected_detail_is_ready(self):
         self.assertTrue(matching_detail_signature(ADAPTER, URL, PageSnapshot(URL, markup())))
 
@@ -179,6 +193,15 @@ class DetailWatcherTests(unittest.TestCase):
         self.backend.snapshot.return_value=PageSnapshot(URL,markup())
         self.tick();self.service._submit.assert_not_called()
         self.tick();self.service._submit.assert_called_once()
+    def test_changing_detail_discards_previous_signature_without_reopening_or_losing_target(self):
+        self.tick();watch=self.manager._watches['task'];target=watch.detail_target;deadline=watch.expires
+        self.backend.snapshot.side_effect=PageSnapshotChanged();self.tick()
+        self.assertIs(self.manager._watches['task'],watch);self.assertEqual(watch.detail_target,target)
+        self.assertEqual(watch.expires,deadline);self.assertIsNone(watch.signature)
+        self.backend.snapshot.side_effect=None;self.tick();self.service._submit.assert_not_called()
+        self.tick();self.service._submit.assert_called_once()
+        self.assertEqual(self.service._submit.call_args.args[0],'resume_returned_detail')
+        self.backend.open.assert_not_called()
     def test_changed_body_does_not_reuse_previous_stability(self):
         self.tick()
         self.backend.snapshot.return_value=PageSnapshot(URL,markup(BODY+'另一职责。'))
@@ -400,7 +423,8 @@ class DetailReturnFixtureTests(unittest.TestCase):
                 case.wait_idle()
             message=str(caught.exception);self.assertIn('after 5s',message)
             evidence=json.loads(message.split(': ',1)[1])
-            self.assertEqual(evidence['task'],{'status':'running','phase':'collect','code':'collecting'})
+            self.assertEqual(evidence['task'],{'status':'running','phase':'collect','code':'collecting',
+                'authentication':'unknown','login_continuation':'unknown'})
             self.assertTrue(evidence['busy']);self.assertTrue(evidence['worker_alive'])
             self.assertTrue(any(f['function']=='blocked_worker' for f in evidence['worker_stack']))
             self.assertLessEqual(len(evidence['worker_stack']),24)
