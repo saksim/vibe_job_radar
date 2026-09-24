@@ -74,14 +74,14 @@ jobs:
         run: python scripts/run_pac_browser.py --edge
       - name: Verify finite native document retries on Linux
         if: runner.os == 'Linux' && matrix.mode == 'headless'
-        run: python scripts/run_native_read_retry.py --controlled
+        run: python scripts/run_native_read_retry_probe.py --controlled
       - name: Verify headed finite native document retries on Linux
         if: runner.os == 'Linux' && matrix.mode == 'headed'
-        run: xvfb-run -a python scripts/run_native_read_retry.py --controlled --headed
+        run: xvfb-run -a python scripts/run_native_read_retry_probe.py --controlled --headed
       - name: Verify finite native document retries on Windows
         if: runner.os == 'Windows'
         timeout-minutes: 3
-        run: python scripts/run_native_read_retry.py --controlled --channel msedge ${{ matrix.mode == 'headed' && '--headed' || '' }}
+        run: python scripts/run_native_read_retry_probe.py --controlled --channel msedge ${{ matrix.mode == 'headed' && '--headed' || '' }}
       - name: Preserve native evidence including failures
         if: always()
         uses: actions/upload-artifact@v4
