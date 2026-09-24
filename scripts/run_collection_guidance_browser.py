@@ -199,7 +199,7 @@ def main():
                         ident = url.rsplit('/', 1)[-1].split('.')[0]
                         content = category_html if url == category_url else (
                             f'<h1>软件架构师人工样本{ident}</h1><dl><dt>职位介绍</dt><dd>'
-                            '工作职能：负责系统架构与数据库设计。任职资格：熟悉软件设计，编写文档与自动测试。人工回归材料。'
+                            '工作职能：与公司信息部协作，负责系统架构与数据库设计。任职资格：熟悉软件设计，编写文档与自动测试。人工回归材料。'
                             '</dd></dl>')
                         return Response(200, {'content-type': 'text/html'}, content.encode(), url)
                     with patch('vibe_job_radar.collection.SiteFetcher') as source:

@@ -205,6 +205,17 @@ class RecordedLayoutTests(unittest.TestCase):
         with self.assertRaises(CrawlError):
             semantic_detail('<h1>合成架构师</h1><dl><dt>职位介绍</dt><dd>'+body+'</dd></dl>')
 
+    def test_company_information_department_is_a_duty_but_information_panel_stays_rejected(self):
+        body='岗位职责：与公司信息部协作，完成合成系统的模块设计和测试。任职要求：熟悉软件建模和版本管理，维护人工项目技术文档。'
+        self.assertEqual(self.parse(markup(posting(description=body),body))['text'],body)
+        self.assertEqual(semantic_detail('<h1>合成架构师</h1><dl><dt>职位介绍</dt><dd>'+body+'</dd></dl>')['text'],body)
+        for extra in ('公司信息：宣传资料', '推荐职位：其他岗位'):
+            other=body+extra
+            with self.subTest(extra=extra), self.assertRaises(CrawlError):
+                self.parse(markup(posting(description=other),other))
+            with self.subTest(extra=extra), self.assertRaises(CrawlError):
+                semantic_detail('<h1>合成架构师</h1><dl><dt>职位介绍</dt><dd>'+other+'</dd></dl>')
+
     def test_missing_title_cannot_be_guessed_from_page_title(self):
         with self.assertRaises(CrawlError): self.parse(markup(posting(title=''))+'<title>伪标题</title>')
 
