@@ -153,24 +153,32 @@ class PacTests(unittest.TestCase):
             slots.release.assert_not_called()
 
 
-@unittest.skipUnless(os.name=='nt','native Windows WinHTTP PAC')
-class NativePacTests(unittest.TestCase):
-    def test_real_native_returns_original_direct_http_socks5_and_unknown(self):
+class PlatformPacTests(unittest.TestCase):
+    def evaluate_platform(self, source):
+        if os.name=='nt':
+            return pac_native.evaluate(source,'https://target.example/',lambda:True)
+        self.assertFalse(pac_native.available())
+        with self.assertRaisesRegex(LocalProxyError,'pac_unavailable'):
+            pac_native.evaluate(source,'https://target.example/',lambda:True)
+        return None
+
+    def test_original_directives_on_windows_and_explicit_refusal_elsewhere(self):
         for raw in ('DIRECT','PROXY 127.0.0.1:8001; DIRECT','SOCKS5 127.0.0.1:1080; DIRECT',
                     'SOCKS 127.0.0.1:1080; DIRECT','UNKNOWN 127.0.0.1:1080; DIRECT'):
             source='function FindProxyForURL(url,host){return '+json.dumps(raw)+';}'
             with self.subTest(raw=raw):
-                self.assertEqual(pac_native.evaluate(source,'https://target.example/',lambda:True),raw)
+                self.assertEqual(self.evaluate_platform(source),raw if os.name=='nt' else None)
 
     def test_native_domain_helpers_receive_only_canonical_root(self):
         source=('function FindProxyForURL(url,host){if(dnsDomainIs(host,".example") && '
                 'shExpMatch(url,"https://target.example/"))return "PROXY 127.0.0.1:8001";return "DIRECT";}')
-        self.assertEqual(pac_native.evaluate(source,'https://target.example/',lambda:True),'PROXY 127.0.0.1:8001')
+        self.assertEqual(self.evaluate_platform(source),'PROXY 127.0.0.1:8001' if os.name=='nt' else None)
 
     def test_bad_script_and_nonstring_fail_without_direct_fallback(self):
         for source in ('function FindProxyForURL( {', 'function FindProxyForURL(){return 7;}',
                        'function FindProxyForURL(){return "DIRECT\\n";}'):
-            with self.subTest(source=source), self.assertRaises(LocalProxyError):
+            expected='pac_invalid_script' if os.name=='nt' else 'pac_unavailable'
+            with self.subTest(source=source), self.assertRaisesRegex(LocalProxyError,expected):
                 pac_native.evaluate(source,'https://target.example/',lambda:True)
 
 
