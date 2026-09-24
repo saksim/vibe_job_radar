@@ -12,6 +12,7 @@ import platform
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -203,15 +204,39 @@ def probe_browser(*, headless: bool = False, executable_path: str | None = None,
     from .adapters import builtins
     from .browser import PlaywrightBackend
     backend = None
+    detail = None
+    events = {name:0 for name in ('domcontentloaded', 'load', 'crash', 'close', 'disconnected')}
+    def observed(name):
+        def count(*unused):
+            events[name] = min(events[name] + 1, 999)
+        return count
+    def check_step(name, operation):
+        detail['step'] = name
+        started = time.monotonic()
+        try:
+            return operation()
+        finally:
+            detail['elapsed_ms'][name] = max(0, round((time.monotonic() - started)*1000))
     try:
         backend = PlaywrightBackend(builtins().get('boss'), None, Event(), headless=headless,
                                     executable_path=executable_path, transport_factory=_OfflineTransport,
                                     **({'channel': channel} if channel else {}))
         # Actual same page/context initialization as collection, no navigation to a site.
         backend.startup_report['stage'] = 'blank_page'
-        backend.page.set_content('<title>Vibe Radar browser check</title><p>本机浏览器检查成功</p>')
-        if backend.page.title() != 'Vibe Radar browser check':
+        detail = {'step':'observe', 'elapsed_ms':{}}
+        backend.startup_report['blank_page_check'] = detail
+        # Fixed names/counts only. Do not retain page URLs, console messages,
+        # exception arguments, event payloads or the title returned by the page.
+        for name in ('domcontentloaded', 'load', 'crash', 'close'):
+            backend.page.on(name, observed(name))
+        backend.browser.on('disconnected', observed('disconnected'))
+        check_step('set_content', lambda: backend.page.set_content(
+            '<title>Vibe Radar browser check</title><p>本机浏览器检查成功</p>'))
+        title = check_step('read_title', backend.page.title)
+        detail['step'] = 'verify_title'
+        if title != 'Vibe Radar browser check':
             raise RuntimeError('blank page verification failed')
+        detail['step'] = 'verified'
         return {**backend.startup_report, 'stage': 'ready', 'code': 'browser_ready', 'ready': True,
                 'message': HEALTH_MESSAGES['browser_ready']}
     except BrowserStartupError as exc:
@@ -221,4 +246,15 @@ def probe_browser(*, headless: bool = False, executable_path: str | None = None,
                              exc, code='browser_check_failed')
     finally:
         if backend:
+            if detail is not None:
+                # Freeze observations before our own intentional close so that
+                # cleanup cannot be mistaken for a browser crash/disconnection.
+                detail['events_before_cleanup'] = dict(events)
+                for key, read in (('page_closed', lambda: backend.page is None or backend.page.is_closed()),
+                                  ('browser_connected', lambda: backend.browser is not None and backend.browser.is_connected())):
+                    try:
+                        value = read()
+                        detail[key] = value if type(value) is bool else None
+                    except Exception:
+                        detail[key] = None
             backend.close()

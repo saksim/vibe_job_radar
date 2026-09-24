@@ -301,10 +301,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--workspace", type=Path, default=Path.home() / ".vibe-job-radar")
     parser.add_argument("--port", type=int, default=0, help="默认由系统选择空闲端口，仅绑定 127.0.0.1")
     parser.add_argument("--no-browser", action="store_true")
-    parser.add_argument("--doctor", action="store_true", help="离线检查 Python、SQLite 和目录写入能力")
+    modes=parser.add_mutually_exclusive_group()
+    modes.add_argument("--doctor", action="store_true", help="离线检查 Python、SQLite 和目录写入能力")
+    modes.add_argument('--public-worker',action='store_true',help='仅运行已确认的公开查询计划，不启动网页服务器或浏览器')
     args = parser.parse_args(argv)
     if not 0 <= args.port <= 65535:
         parser.error("port 必须为 0～65535")
+    if args.public_worker:
+        if args.port:parser.error('独立worker不监听端口，请移除--port')
+        from .public_worker import run_cli
+        return run_cli(args.workspace)
     try:
         workspace = Workspace(args.workspace)
         diagnostic = workspace.doctor()
