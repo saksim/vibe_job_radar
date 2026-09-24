@@ -23,7 +23,7 @@ from .contracts import CrawlError
 from .diagnostic_trace import notify, observe, observe_robots, traced
 from .native_policy import NativeRobots, contract_for
 from .native_tunnel import NativeTunnel
-from .native_errors import native_transport_failure
+from .native_errors import native_transport_failure, target_closed_by_driver
 from .native_documents import continue_document_response
 from .rate import RateLimit
 from .transport import PinnedTransport, WireResponse
@@ -152,16 +152,22 @@ class NativeBackend(PlaywrightBackend):
                 self._fatal('native_surface_unsupported')
             try:
                 route.abort('blockedbyclient')
-            except Exception:
+            except Exception as exc:
                 # Deferred rejection can close the target while abort yields
                 # to Playwright. A confirmed closed page cannot send this
-                # request; retain the original refusal/cancellation. Never
-                # hide an abort failure on a live or unobservable page.
+                # request; retain the original refusal/cancellation.
+                # The driver's exact closed-target exception is also evidence
+                # of termination, even before the page close event arrives.
+                # Unknown errors still escape; no route is continued here.
                 try:
                     closed = page is not None and page.is_closed() is True
                 except Exception:
                     closed = False
-                if not closed:
+                reason = ('closed_page' if closed else 'closed_target'
+                          if target_closed_by_driver(exc) else 'unconfirmed')
+                counts = self.__dict__.setdefault('_ownership_abort_counts', {})
+                counts[reason] = counts.get(reason, 0) + 1
+                if reason == 'unconfirmed':
                     raise
             return
         # No parameter overrides, fetch, response reconstruction or retries.

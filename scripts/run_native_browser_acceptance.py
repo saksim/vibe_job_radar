@@ -190,6 +190,11 @@ def main():
         fixtures.clear()
     faulthandler.dump_traceback_later(75,repeat=True)
     try:
+        from playwright._impl._errors import TargetClosedError
+        from vibe_job_radar.guided.native_errors import target_closed_by_driver
+        result['driver_closed_type_supported'] = target_closed_by_driver(TargetClosedError())
+        assert result['driver_closed_type_supported']
+        assert not target_closed_by_driver(RuntimeError('Target page, context or browser has been closed'))
         with tempfile.TemporaryDirectory(prefix='vjr-native-fixture-') as d, ExitStack() as cleanup:
             cleanup.callback(cleanup_resources)
             root=Path(d)
@@ -355,6 +360,7 @@ def main():
                     assert len(b.context.pages)==1, 'uncontrolled popup escaped the owned-page boundary'
                     assert not any(r['path']=='/apply' for r in good.requests)
                     result['popup_refusal'] = b.error or 'browser_open_returned_null'
+                    result['popup_abort_observations'] = dict(b.__dict__.get('_ownership_abort_counts', {}))
                     result['checks'].append('script popups, including noopener, do not create uncontrolled requests')
                     b.close();backends.remove(b)
                     for name,path,expected in [('cross','/cross','redirect_requires_attention'),('unknown','/unknown','native_operation_unreviewed'),('origin-auth','/origin-auth','http_401'),('denied','/denied','http_403'),('limited','/limited','http_429')]:
