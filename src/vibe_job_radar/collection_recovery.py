@@ -6,14 +6,17 @@ REASONS = {
     'fresh_reused': ('复用了已保存的新鲜正文', '没有为这条记录重复访问网站。'),
     'budget_skipped': ('未执行：本批正文尝试预算已用完', '不是抓取失败；先确认已尝试条目的问题，再为剩余链接新建小批次。'),
     'local_proxy_configuration_conflict': ('本程序的HTTP与SOCKS设置同时存在', '请只保留一种专用覆盖；系统自动模式不会猜测冲突配置。'),
-    'local_socks_configuration_invalid': ('SOCKS5入口配置无效', '仅接受无账号的本机socks5入口；socks5h、SOCKS4及远程入口不会静默降级。'),
+    'local_socks_configuration_invalid': ('SOCKS5入口配置无效', '仅接受无userinfo的本机socks5入口，凭据需单独设置；socks5h、SOCKS4及远程入口不会静默降级。'),
     'local_socks_auth_unsupported': ('SOCKS代理要求未支持的认证', '未发送网站请求，也不会绕过所选代理；不要把网站密码填写到代理配置。'),
     'local_socks_protocol_error': ('SOCKS代理响应格式不正确', '任务已停止且保留进度；检查所选端口是否提供SOCKS5协议。'),
     'local_socks_truncated_reply': ('SOCKS代理握手中断', '未改走直连，未重放网站请求。'),
     'local_socks_timeout': ('SOCKS代理握手超时', '等待网络恢复后继续；增加岗位预算不能解决握手超时。'),
     'local_socks_connection_failed': ('无法连接所选SOCKS代理', '保留任务，代理恢复后再继续；不会偷偷直连。'),
     'local_socks_request_rejected': ('SOCKS代理拒绝目标连接', '已停止，不通过切换身份、出口或直连绕过拒绝。'),
-    'local_proxy_configuration_invalid': ('本机HTTP代理配置不符合要求', '只能填写明确的本机HTTP代理地址；此版本不支持代理账号或远程代理；匿名本机SOCKS5由统一策略单独识别。不要在职位URL中填写代理地址。'),
+    'local_proxy_configuration_invalid': ('本机HTTP代理配置不符合要求', '只能填写明确的本机HTTP代理地址，凭据需单独设置；不支持远程代理。不要在职位URL中填写代理地址。'),
+    'local_proxy_credentials_invalid': ('代理凭据配置无效', '用户名和密码需同时提供并符合字符/长度限制；未发送凭据或目标请求。'),
+    'local_proxy_credentials_require_explicit': ('代理凭据没有绑定明确入口', '请配置本程序专用HTTP或SOCKS5入口；不会将凭据交给系统发现的其他代理。'),
+    'local_proxy_auth_failed': ('本机代理认证未通过', '核对所选代理凭据；不会降为匿名、重复认证或改走直连。'),
     'local_proxy_connection_failed': ('所选本机代理无法建立连接或隧道', '核对代理实际HTTP监听端口。程序不会因代理失败自动直连；增加职位预算不能修复代理连接。'),
     'tls_verification_failed': ('TLS证书验证失败', '请检查系统时间和证书，不要关闭TLS验证。'),
     'tls_handshake_failed': ('TLS握手失败', '检查网络及服务端TLS支持；不自动重放已发送请求。'),
@@ -34,7 +37,17 @@ REASONS = {
     'host_stopped': ('同一站点已因先前拒绝而停止', '先处理前面条目的原因，不换任务反复请求。'),
     'non_public_address': ('DNS返回非公网地址', '先做网络检查；这不是账号或浏览器安装错误。'),
     'parse_error': ('取得页面但不能确认独立职位正文', '可能是动态页面或结构变化，可转浏览器或手工录入。'),
+    'job_identity_mismatch': ('返回的岗位与所选分享链接不一致', '未保存这份正文；请核对具体职位链接。'),
+    'jd_incomplete': ('页面没有提供完整职位正文', '未将摘要或折叠内容作为完整JD；请在原平台核对可见正文。'),
+    'job_unavailable': ('该职位已暂停或结束招聘', '本次未保存为可用正文；请选择仍可阅读的具体职位。'),
+    'manual_required': ('页面要求人工完成登录或验证', '本次已停止；请在原平台完成正常操作。'),
     'interrupted_uncertain': ('上次请求中断，结果不确定', '预算已计入，不自动重试；确认后新建任务。'),
+    'category_identity_mismatch': ('公开分类页面身份不匹配', '未使用该页发现岗位；需核对发布方页面。'),
+    'category_structure_changed': ('公开分类结构无法确认', '未把页面改版当成没有岗位，也不从推荐区补充。'),
+    'category_no_confirmed_jobs': ('分类页没有可确认的主列表职位', '这不能证明零岗位；保留页面诊断等待核验。'),
+    'category_invalid_card': ('已选卡片无法确认具体职位', '本项保留在已选结果中，不以另一岗位补齐。'),
+    'category_unsupported_detail': ('已选职位属于尚未核验的公开详情类型', '保留该项且不发正文请求，不以另一岗位补齐。'),
+    'category_job_title_changed': ('详情标题与分类卡片不一致', '本次未保存为匹配岗位；请核对发布方信息。'),
 }
 
 
@@ -49,8 +62,21 @@ def explain(state: dict) -> dict:
     text = f'本批 {len(details)} 条链接，已尝试 {state["detail_attempts"]} 条，取得或复用 {saved} 条正文，预算未执行 {skipped} 条。'
     if state['mode'] == 'urls':
         text += ' 搜索和数据源预算不参与URL路线；报告阶段不代表取得了正文。'
+    category_outcomes = []
+    for original in state.get('category_outcomes', []):
+        message = (('使用已保存的公开分类名单' if original.get('snapshot_reused') else '已读取公开分类主列表') if original['status'] == 'ok' else
+                   REASONS.get(original['status'], ('分类状态：' + original['status'], ''))[0])
+        category_outcomes.append({**original, 'status_message': message})
+    if state['mode'] == 'liepin_category':
+        from .public_category import get_category
+        category = get_category(state.get('category_id', 'architect'))
+        text += f' 分类读取尝试 {state.get("category_attempts", 0)} 次；仅{category.name}分类第一页，不含关键词或地区筛选。'
+        if category_outcomes:
+            text += ' ' + category_outcomes[0]['status_message'] + '。'
     return {'details': details, 'user_summary': text,
+            'category_outcomes': category_outcomes,
             'route_label': {'urls': '公开HTTP（无浏览器登录会话）', 'search': '搜索API＋公开HTTP',
+                            'liepin_category': f'{category.label}（第一页，最多5个职位）' if state['mode'] == 'liepin_category' else '',
                             'feed': '用户配置的授权JSON源'}.get(state['mode'], state['mode']),
             'saved_detail_count': saved, 'budget_skipped_count': skipped}
 
@@ -58,3 +84,5 @@ def explain(state: dict) -> dict:
 from .network_settings import DNS_MESSAGES
 
 REASONS.update({code: ("网络解析未完成", message) for code, message in DNS_MESSAGES.items()})
+from .vm_proxy import ERROR_MESSAGES as VM_MESSAGES
+REASONS.update({code: ("宿主机代理未连接", message) for code, message in VM_MESSAGES.items()})

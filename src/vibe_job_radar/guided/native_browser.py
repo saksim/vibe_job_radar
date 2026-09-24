@@ -2,8 +2,10 @@
 
 CDP Fetch observes/authorizes each owned-page hop. A context route rejects
 unowned pages before their initial request (a page event can arrive too late).
-Owned traffic continues unchanged; no route.fetch/fulfill or HTTP replay is used.
-Cross-origin preflights remain outside the supported site contracts.
+Owned requests use native networking without HTTP request replay. CORS contexts
+deliver native-fetched document bytes with one extra restrictive CSP; original
+publisher security policies remain enforced.
+Cross-origin requests require an exact, code-owned CORS operation contract.
 Only application-owned browser targets are used. Worker/OOPIF targets are stopped
 before running until their complete request accounting is separately supported.
 """
@@ -11,19 +13,21 @@ from __future__ import annotations
 
 import base64
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import json
 import time
 from urllib.parse import urljoin, urlsplit
 
 from .browser import PlaywrightBackend
 from .contracts import CrawlError
-from .diagnostic_trace import notify, observe, traced
+from .diagnostic_trace import notify, observe, observe_robots, traced
 from .native_policy import NativeRobots, contract_for
 from .native_tunnel import NativeTunnel
-from .native_errors import native_failure_code
+from .native_errors import native_transport_failure, target_closed_by_driver
+from .native_documents import continue_document_response
 from .rate import RateLimit
-from .transport import PinnedTransport
+from .transport import PinnedTransport, WireResponse
+from .read_retry import TransientReadFailure, document_failure, read_attempt
 from ..network import USER_AGENT
 
 
@@ -33,6 +37,7 @@ class BusinessObservation:
     operation: str
     received_at: float
     payload: dict | list = field(repr=False)
+    context: dict = field(default_factory=dict, repr=False)
 
 
 class NativeControl(PinnedTransport):
@@ -53,6 +58,8 @@ class NativeControl(PinnedTransport):
             raise CrawlError('robots_denied')
 
     def install_robots(self, origin, response, content_type, body):
+        observe_robots(getattr(self, '_diagnostics', None),
+                       WireResponse(response, {'content-type': content_type}, body))
         rules = NativeRobots(response, content_type, body)
         self.ledger.set_publisher(self.adapter.key, origin, delay=rules.delay)
         for count, seconds in rules.windows:
@@ -70,11 +77,13 @@ class NativeBackend(PlaywrightBackend):
         self._command = self._epoch = 0
         self._observations = deque(maxlen=20)
         self._observed_bytes = 0
+        self._latest_business = {}
         self._closing = self._halted = self._loading_robots = False
         self._robots_url = ''
         self._auth_attempts = set()
         self._adopting = set()
         self._page_sessions, self._bound_pages = {}, {}
+        self._committed_pages = set()
         self._page_creation = 0
         self._rejected_targets = set()
         self._pending_rejected_targets = []
@@ -94,7 +103,13 @@ class NativeBackend(PlaywrightBackend):
     def _configure_context(self):
         # Install before any page is created. Target debugger pause does not
         # alone prevent the browser's initial popup network request.
-        self.context.route('**/*', self._ownership_route)
+        self._native_cors = any(rule.cors_origin for rule in self.contract.rules)
+        # Playwright's route layer auto-fulfills CORS OPTIONS. For reviewed
+        # CORS contracts use direct CDP controls, so the publisher really
+        # receives and decides preflight. Unsupported targets get an abort-only
+        # Fetch guard before their deferred close, never collection controls.
+        if not self._native_cors:
+            self.context.route('**/*', self._ownership_route)
         self.context.route_web_socket('**/*', lambda ws: ws.close())
         self.context.on('page', self._page_created)
         self._cdp = self.browser.new_browser_cdp_session()
@@ -121,6 +136,7 @@ class NativeBackend(PlaywrightBackend):
         original headers, TLS, cookies, method and body. Site operations and
         redirects still require the independent native controller's approval.
         """
+        page = None
         try:
             frame = route.request.frame
             page = frame.page
@@ -134,7 +150,25 @@ class NativeBackend(PlaywrightBackend):
             if not owned:
                 self.cancelled.set()
                 self._fatal('native_surface_unsupported')
-            route.abort('blockedbyclient')
+            try:
+                route.abort('blockedbyclient')
+            except Exception as exc:
+                # Deferred rejection can close the target while abort yields
+                # to Playwright. A confirmed closed page cannot send this
+                # request; retain the original refusal/cancellation.
+                # The driver's exact closed-target exception is also evidence
+                # of termination, even before the page close event arrives.
+                # Unknown errors still escape; no route is continued here.
+                try:
+                    closed = page is not None and page.is_closed() is True
+                except Exception:
+                    closed = False
+                reason = ('closed_page' if closed else 'closed_target'
+                          if target_closed_by_driver(exc) else 'unconfirmed')
+                counts = self.__dict__.setdefault('_ownership_abort_counts', {})
+                counts[reason] = counts.get(reason, 0) + 1
+                if reason == 'unconfirmed':
+                    raise
             return
         # No parameter overrides, fetch, response reconstruction or retries.
         route.continue_()
@@ -167,6 +201,9 @@ class NativeBackend(PlaywrightBackend):
             return
         rejected.add(target)
         self.__dict__.setdefault('_pending_rejected_targets', []).append(target)
+        if self.__dict__.get('_native_cors', False):
+            from .native_cors import quarantine_target
+            quarantine_target(self, target)
 
     def _drain_rejected_pages(self):
         # Called outside target/page events. Our controller sends no resume
@@ -174,6 +211,14 @@ class NativeBackend(PlaywrightBackend):
         targets = self.__dict__.setdefault('_pending_rejected_targets', [])
         while targets:
             target = targets.pop(0)
+            # Cancellation and rejection already stopped this target. Retire
+            # its protocol callbacks BEFORE closeTarget yields to the driver:
+            # a late quarantine-command error must not close the main job tab.
+            # This only removes our bookkeeping; it never resumes a target,
+            # disables interception or continues a pending network request.
+            for session, owned_target in tuple(self._sessions.items()):
+                if owned_target == target:
+                    self._detached({'sessionId': session})
             try:
                 self._cdp.send('Target.closeTarget', {'targetId': target})
             except Exception:
@@ -219,6 +264,7 @@ class NativeBackend(PlaywrightBackend):
         # Retire the temporary target-creation attachment BEFORE configuring
         # Fetch on the public Playwright page session. Edge does not deliver
         # interception events through the old non-flattened relay reliably.
+        # Removing the old attachment first preserves page-level interception.
         for old, known in tuple(self._sessions.items()):
             if known == target:
                 self._cdp.send('Target.detachFromTarget', {'sessionId':old})
@@ -232,8 +278,31 @@ class NativeBackend(PlaywrightBackend):
             client.on(method, lambda data, name=method: self._received({
                 'sessionId':session, 'message':json.dumps({'method':name, 'params':data})}))
         page.on('close', lambda *_: self._detached({'sessionId':session}))
+        page.on('framenavigated', lambda frame: self._main_navigation(page, frame))
         self._install_target(session, info)
         super()._bind_page(page)
+
+    def _main_navigation(self, page, frame):
+        """A live page leaving for blank is a stop, not an empty job result.
+
+        Do not infer why it happened, undo the navigation or modify publisher
+        scripts. Initial/scratch/child frames are not collection documents.
+        """
+        if (self._closing or self._loading_robots or page is not self.page
+                or frame != page.main_frame or page not in self._bound_pages):
+            return
+        committed = self.__dict__.setdefault('_committed_pages', set())
+        if frame.url.startswith('https://'):
+            committed.add(page)
+        elif page in committed and frame.url == 'about:blank':
+            self._epoch += 1
+            self._observations.clear()
+            self.__dict__.get('_latest_business', {}).clear()
+            self._observed_bytes = 0
+            with observe(getattr(self, '_diagnostics', None), 'navigation', actor='browser',
+                         resource='document', impact='required_by_backend'):
+                notify(getattr(self, '_diagnostics', None), 'mark', code='native_page_cleared')
+                self._fatal('native_page_cleared')
 
     def _send(self, session, method, params=None, callback=None):
         if self._closing:
@@ -350,6 +419,7 @@ class NativeBackend(PlaywrightBackend):
         for page, bound in tuple(self._bound_pages.items()):
             if bound == session:
                 self._bound_pages.pop(page, None)
+                self.__dict__.get('_committed_pages', set()).discard(page)
         for key in [k for k,v in self._pending.items() if v[0] == session]:
             self._pending.pop(key, None)
         for key in [k for k in self._requests if k[0] == session]:
@@ -423,7 +493,7 @@ class NativeBackend(PlaywrightBackend):
                 self._hops.pop(key,None)
                 if record and record['role'] != 'asset' and not self.cancelled.is_set() and not self.error:
                     err = data.get('errorText','')
-                    code = native_failure_code(err) or self.tunnel.last_error or 'network_error'
+                    code = native_transport_failure(err, self.tunnel.last_error) or 'network_error'
                     self._fatal(code)
         except Exception:
             self._fatal('native_protocol_error')
@@ -431,7 +501,7 @@ class NativeBackend(PlaywrightBackend):
     def _fatal(self, code, error=None):
         if not self.error:
             self.error = code
-            self.wait_error = error if isinstance(error,RateLimit) else None
+            self.wait_error = error if isinstance(error,(RateLimit,TransientReadFailure)) else None
         self._halted = True
         if code == 'native_protocol_error' and self._cdp:
             # A failed interception command must not leave a page running with
@@ -460,11 +530,12 @@ class NativeBackend(PlaywrightBackend):
     def _paused(self, session, event):
         request = event['request']; url = request['url']; kind=event.get('resourceType','Other')
         response = 'responseStatusCode' in event or 'responseErrorReason' in event
+        ignored = not response and self.contract.ignored_request(url, request['method'], kind)
         resource = {'XHR':'xhr','Fetch':'fetch','Document':'document','Stylesheet':'stylesheet',
                     'Script':'script','Image':'image','Font':'font','Media':'media'}.get(kind,'other')
         with observe(getattr(self,'_diagnostics',None), 'http_request' if response else 'route',
                 actor='browser', url=url, method=request['method'], resource=resource,
-                impact='optional' if resource in {'script','stylesheet','image','font','media'} else 'required_by_backend'):
+                impact='optional' if ignored or resource in {'script','stylesheet','image','font','media'} else 'required_by_backend'):
             try:
                 if self.cancelled.is_set():
                     raise CrawlError('paused')
@@ -472,6 +543,11 @@ class NativeBackend(PlaywrightBackend):
                     raise CrawlError('native_policy_changed')
                 if self._halted:
                     raise self.wait_error or CrawlError(self.error or 'site_stopped')
+                if ignored:
+                    notify(getattr(self,'_diagnostics',None),'mark',code='native_optional_request_blocked')
+                    self.native_counts['blocked'] += 1
+                    self._send(session,'Fetch.failRequest',{'requestId':event['requestId'],'errorReason':'BlockedByClient'})
+                    return
                 if response:
                     self._response_paused(session,event)
                 else:
@@ -482,7 +558,7 @@ class NativeBackend(PlaywrightBackend):
                 self.native_counts['blocked'] += 1
                 # An unknown business request must not become a silent empty list.
                 # Unknown optional assets are reported without poisoning the task.
-                if kind in {'Document','Fetch','XHR'} or code not in {'native_operation_unreviewed','resource_domain_blocked'}:
+                if kind in {'Document','Fetch','XHR','Preflight'} or code not in {'native_operation_unreviewed','resource_domain_blocked'}:
                     self._fatal(code,exc)
                 try:
                     self._send(session,'Fetch.failRequest',{'requestId':event['requestId'],'errorReason':'BlockedByClient'})
@@ -499,6 +575,7 @@ class NativeBackend(PlaywrightBackend):
             role, operation='robots','robots'
         else:
             rule=self.contract.match(url,r['method'],kind,authentication=self.auth_mode)
+            rule.validate_headers(r['method'], r.get('headers', {}))
             role,operation=rule.role,rule.key
             if role != 'asset':
                 self.wire.ensure_robots(url)
@@ -515,7 +592,16 @@ class NativeBackend(PlaywrightBackend):
         key=(session,event.get('networkId',event['requestId']))
         if len(self._requests) >= 128 and key not in self._requests:
             raise CrawlError('native_observation_limit')
-        self._requests[key]={'epoch':self._epoch,'operation':operation,'role':role,'size':0,
+        context = {}
+        bind = getattr(self.adapter, 'native_request_context', None)
+        if role == 'business' and r['method'] != 'OPTIONS' and callable(bind):
+            context = bind(operation, r, self.page.url)
+        if role == 'business' and r['method'] != 'OPTIONS':
+            self._business_sequence = getattr(self, '_business_sequence', 0) + 1
+            context['sequence'] = self._business_sequence
+            self.__dict__.setdefault('_latest_business', {})[operation] = self._business_sequence
+            self._observations = deque((o for o in self._observations if o.operation != operation), maxlen=20)
+        self._requests[key]={'context': context, 'epoch':self._epoch,'operation':operation,'role':role,'size':0,
                              'url':url,'status':None, 'json':False}
         self.native_counts[role] += 1
         self._send(session,'Fetch.continueRequest',{'requestId':event['requestId']})
@@ -540,8 +626,15 @@ class NativeBackend(PlaywrightBackend):
                 raise RateLimit(delay,'http_429',next_allowed_at=self.wire.ledger.clock()+delay)
             raise CrawlError('http_'+str(status))
         if status >= 500 and record['role']!='asset':
-            raise CrawlError('remote_server_error')
+            deadlines=[h['value'] for h in event.get('responseHeaders',[]) if h['name'].lower()=='retry-after']
+            raise document_failure(self,url,event['request']['method'],
+                'document' if event.get('resourceType')=='Document' else 'other',status,
+                deadlines[0] if len(deadlines)==1 else ('invalid' if deadlines else ''),
+                main=bool(event.get('frameId') and event['frameId']==self._sessions.get(session)
+                          and record['role']!='robots' and not self._loading_robots))
         if 300 <= status < 400:
+            if event.get('resourceType') == 'Document':
+                self._read_redirected = True
             if record['role']=='robots' or status==304:
                 raise CrawlError('robots_unavailable' if record['role']=='robots' else 'native_unaccounted_response')
             target=urljoin(url,headers.get('location',''))
@@ -559,8 +652,12 @@ class NativeBackend(PlaywrightBackend):
         record['status']=status
         record['json']=headers.get('content-type','').split(';')[0].strip().lower()=='application/json'
         self.native_counts['responses']+=1
-        # No response byte/header reconstruction, decompression or Cookie parsing.
-        self._send(session,'Fetch.continueResponse',{'requestId':event['requestId']})
+        # CORS documents need a fully parsed policy before scripts execute.
+        # No HTTP request is repeated; actual preflight/business replies remain
+        # native. See native_documents for the bounded decoded-body delivery.
+        # Robots error pages are control data, never a login/content page. In
+        # particular an HTML 404 must not execute scripts while being inspected.
+        continue_document_response(self, session, event, robots=record['role'] == 'robots')
 
     def _finished(self, session, event):
         key=(session,event['requestId']); record=self._requests.pop(key,None)
@@ -568,10 +665,14 @@ class NativeBackend(PlaywrightBackend):
         if (not record or record['role']!='business' or not record['json']
                 or record['epoch']!=self._epoch or record['status']!=200 or self._halted):
             return
+        sequence = record.get('context', {}).get('sequence')
+        if sequence is not None and self.__dict__.get('_latest_business', {}).get(record['operation']) != sequence:
+            return
         if record['size'] > 1_000_000:
             self._fatal('native_observation_limit'); return
         def store(result):
-            if record['epoch']!=self._epoch or self._closing or self._halted:
+            if (record['epoch'] != self._epoch or self._closing or self._halted
+                    or (sequence is not None and self.__dict__.get('_latest_business', {}).get(record['operation']) != sequence)):
                 return
             data=result.get('body','')
             if len(data)>1_400_000:
@@ -585,9 +686,13 @@ class NativeBackend(PlaywrightBackend):
                     raise ValueError()
             except (ValueError, RecursionError):
                 self._fatal('native_business_response_invalid'); return
-            self._observations.append(BusinessObservation(self._epoch,record['operation'],time.time(),payload))
+            self._observations.append(BusinessObservation(self._epoch,record['operation'],time.time(),payload,record.get('context', {})))
             self._observed_bytes+=len(raw)
         self._send(session,'Network.getResponseBody',{'requestId':event['requestId']},store)
+
+    def snapshot(self):
+        self._check_error()
+        return replace(super().snapshot(), business=self.observations())
 
     def observations(self):
         """Private local payloads for a reviewed site adapter, never diagnostic API."""
@@ -605,6 +710,9 @@ class NativeBackend(PlaywrightBackend):
     def _load_robots(self):
         main=self.page
         for origin in self.contract.rule_origins:
+            if not any('https://' + rule.host == origin and
+                       (not rule.authentication or self.auth_mode) for rule in self.contract.rules):
+                continue
             if origin in self.wire.rules:
                 continue
             self._loading_robots=True; self._robots_url=origin+'/robots.txt'
@@ -620,7 +728,7 @@ class NativeBackend(PlaywrightBackend):
             except CrawlError:
                 raise
             except Exception as exc:
-                code = self.error or self.tunnel.last_error or native_failure_code(exc)
+                code = self.error or native_transport_failure(exc, self.tunnel.last_error)
                 raise CrawlError(code or 'robots_unavailable') from exc
             finally:
                 try:
@@ -630,11 +738,13 @@ class NativeBackend(PlaywrightBackend):
                     self._loading_robots=False; self._robots_url=''; self.page=main
 
     @traced('navigation','browser',url=True)
+    @read_attempt
     def open(self,url,*,authentication=False):
         self.adapter.accept_url(url)
         self.contract.match(url,'GET','Document',authentication=authentication)
         self.auth_mode=authentication; self.error=self.wait_error=None; self._halted=False
-        self._epoch+=1; self._observations.clear(); self._observed_bytes=0
+        self._epoch+=1; self._observations.clear()
+        self.__dict__.get('_latest_business', {}).clear(); self._observed_bytes=0
         self._load_robots()
         self.wire.ensure_robots(url)
         try:
@@ -644,7 +754,7 @@ class NativeBackend(PlaywrightBackend):
         except CrawlError:
             raise
         except Exception as exc:
-            raise self.wait_error or CrawlError(self.error or self.tunnel.last_error or native_failure_code(exc) or 'page_not_ready') from exc
+            raise self.wait_error or CrawlError(self.error or native_transport_failure(exc, self.tunnel.last_error) or 'page_not_ready') from exc
 
     def _settle(self):
         deadline=time.monotonic()+15
@@ -652,7 +762,14 @@ class NativeBackend(PlaywrightBackend):
             self._check_error()
             # Readiness is site content/response/challenge, not network-idle or a
             # fixed sleep. The existing parser still determines usable job data.
-            text=self.page.locator('body').inner_text(timeout=1000)
+            body = self.page.locator('body')
+            if not body.count():
+                # A navigation can replace the document after DOMContentLoaded.
+                # Stay within the existing overall deadline instead of failing
+                # the entire login after a one-second locator timeout.
+                self.page.wait_for_timeout(100)
+                continue
+            text=body.inner_text(timeout=1000)
             if self.adapter.challenged(text,self.page.url):
                 raise CrawlError('manual_required')
             if self.auth_mode and text.strip():
@@ -674,10 +791,18 @@ class NativeBackend(PlaywrightBackend):
 
     def next_page(self):
         self._check_error()
+        return super().next_page()
+
+    def _before_pagination_click(self):
+        # Looking for a next button is not a navigation. Retain the current
+        # API result when the button is absent/disabled or permission/quota
+        # rejects the action. Invalidate only immediately before an actual
+        # click, so late responses cannot populate the next page with old data.
+        self._check_error()
         self._epoch += 1
         self._observations.clear()
+        self.__dict__.get('_latest_business', {}).clear()
         self._observed_bytes = 0
-        return super().next_page()
 
     def collection_mode(self):
         super().collection_mode()
@@ -689,6 +814,11 @@ class NativeBackend(PlaywrightBackend):
         if not self._closing and not getattr(self, 'policy_check', lambda: True)():
             self._fatal('native_policy_changed')
         super().pump()
+        # A page can clear itself after open() returned while the service waits
+        # for normal login. Surface the fatal event on the owning worker then,
+        # instead of leaving the UI indefinitely claiming the login page is open.
+        if not self._closing and self.error:
+            raise self.wait_error or CrawlError(self.error)
 
     def close(self):
         self._closing=True
@@ -696,6 +826,8 @@ class NativeBackend(PlaywrightBackend):
         if self.tunnel:
             self.tunnel.close(); self.tunnel=None
         self._sessions.clear(); self._pending.clear(); self._requests.clear(); self._hops.clear()
-        self._observations.clear(); self._auth_attempts.clear()
+        self._observations.clear()
+        self.__dict__.get('_latest_business', {}).clear(); self._auth_attempts.clear()
         self._page_sessions.clear(); self._bound_pages.clear()
+        self.__dict__.get('_committed_pages', set()).clear()
         self._rejected_targets.clear(); self._pending_rejected_targets.clear(); self._rejected_pages.clear()

@@ -14,6 +14,7 @@ from vibe_job_radar.collection_handoff import CollectionHandoff
 from vibe_job_radar.guided.adapters import builtins
 from vibe_job_radar.guided.contracts import PageSnapshot
 from vibe_job_radar.guided.service import GuidedService
+from vibe_job_radar.guided.ownership import GuidedTaskBusy
 from vibe_job_radar.store import Store
 from vibe_job_radar.workbench import LocalServer
 from vibe_job_radar.workspace import Workspace, InputError
@@ -97,6 +98,28 @@ class HandoffTests(unittest.TestCase):
         self.assertEqual(one['id'], two['id']); self.assertTrue(two['reused'])
         self.assertEqual(submit.call_count, 1)
         self.assertEqual(self.preview()['groups'][0]['existing_url'], one['url'])
+
+    def test_handoff_respects_foreign_browser_owner_before_child_creation(self):
+        other=GuidedService(self.workspace,backend_factory=DetailBackend)
+        self.addCleanup(other.close)
+        other._ownership.acquire()
+        before=self.collector._path(self.state['id']).read_bytes()
+        with patch.object(self.guided,'_submit') as submit:
+            with self.assertRaises(GuidedTaskBusy):self.bridge.handoff_start(self.request())
+            submit.assert_not_called()
+        self.assertEqual(list(self.guided.root.glob('*.json')),[])
+        self.assertEqual(self.collector._path(self.state['id']).read_bytes(),before)
+
+    def test_handoff_holds_claim_across_child_save_and_enqueue(self):
+        other=GuidedService(self.workspace,backend_factory=DetailBackend)
+        self.addCleanup(other.close);observed=[]
+        def queued(*args):
+            with self.assertRaises(GuidedTaskBusy):other._ownership.acquire()
+            observed.append(True)
+        with patch.object(self.guided,'_submit',side_effect=queued):
+            self.bridge.handoff_start(self.request())
+        self.assertEqual(observed,[True])
+        other._ownership.acquire()  # No queue/backend was created by this fixture.
 
     def test_existing_task_survives_service_restart_without_replay(self):
         data = self.request()
@@ -229,9 +252,18 @@ class HandoffTests(unittest.TestCase):
 
     def test_actual_worker_produces_isolated_report_without_redoing_saved_row(self):
         DetailBackend.opens = []
-        r = self.bridge.handoff_start(self.request())
-        deadline = time.monotonic() + 5
-        while self.guided._busy and time.monotonic() < deadline: time.sleep(.01)
+        # Wait for the actual queue completion, not a five-second snapshot of
+        # _busy. On Windows the JD can be saved while its report is still writing.
+        # This bound is test synchronization only, never a source retry or a
+        # change to the application's rate/timeout policy.
+        finished = threading.Event()
+        task_done = self.guided._queue.task_done
+        def signal_done():
+            task_done()
+            finished.set()
+        with patch.object(self.guided._queue, 'task_done', side_effect=signal_done):
+            r = self.bridge.handoff_start(self.request())
+            self.assertTrue(finished.wait(30), 'handoff worker did not finish')
         child = self.guided._load(r['id'])
         self.assertEqual(child['status'], 'completed', child)
         self.assertEqual(DetailBackend.opens, [A]); self.assertTrue(child['report_id'])
@@ -240,6 +272,34 @@ class HandoffTests(unittest.TestCase):
         before = list(DetailBackend.opens)
         self.assertTrue(self.bridge.handoff_start(self.request())['reused'])
         self.assertEqual(before, DetailBackend.opens)
+
+    def test_saved_detail_is_not_worker_completion_until_report_finishes(self):
+        entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+        report, task_done = self.guided._finalize_report, self.guided._queue.task_done
+        def held_report(*args, **kwargs):
+            entered.set()
+            if not release.wait(30):
+                raise RuntimeError('test report gate did not release')
+            return report(*args, **kwargs)
+        def signal_done():
+            task_done()
+            finished.set()
+        with patch.object(self.guided, '_finalize_report', side_effect=held_report), \
+                patch.object(self.guided._queue, 'task_done', side_effect=signal_done):
+            result = self.bridge.handoff_start(self.request())
+            try:
+                self.assertTrue(entered.wait(30), 'worker did not reach report')
+                child = self.guided._load(result['id'])
+                self.assertEqual(child['cards'][0]['status'], 'ok')
+                self.assertEqual(child['status'], 'running')
+                self.assertFalse(child['report_id'])
+                self.assertFalse(finished.is_set())
+            finally:
+                release.set()
+            self.assertTrue(finished.wait(30), 'worker did not finish its real report')
+        child = self.guided._load(result['id'])
+        self.assertEqual(child['status'], 'completed', child)
+        self.assertTrue(child['report_id'])
 
 
 class HandoffHTTPTests(unittest.TestCase):

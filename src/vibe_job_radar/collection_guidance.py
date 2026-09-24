@@ -9,6 +9,7 @@ from urllib.parse import parse_qsl, urlsplit
 from .config import platform_for_url
 from .discovery import build_plan
 from .workspace import InputError
+from .public_category import MODE as CATEGORY_MODE, get_category, MAX_DETAILS
 
 LABELS = {
     "mode": "采集路线", "roles": "目标岗位", "platforms": "来源平台",
@@ -18,7 +19,7 @@ LABELS = {
     "search_storage_rights": "搜索结果保存权限", "permit_platforms": "正文访问许可",
     "search_budget": "搜索请求预算", "pages": "每个检索任务最多页数",
     "detail_budget": "正文获取尝试预算", "feed_budget": "数据源最大页数",
-    "fresh_hours": "复用正文时间窗口",
+    "fresh_hours": "复用正文时间窗口", "category_id": "公开分类",
 }
 PLACEHOLDER = re.compile(r"REPLACE_WITH|YOUR_(?:API|KEY|TOKEN)|【|<[^>]+>", re.I)
 
@@ -58,9 +59,9 @@ def preview(workspace, data: dict) -> dict:
         errors.append({"field": field, "label": LABELS.get(field, field), "message": message})
 
     mode = data.get("mode", "search")
-    if not isinstance(mode, str) or mode not in {"search", "urls", "feed"}:
+    if not isinstance(mode, str) or mode not in {"search", "urls", "feed", CATEGORY_MODE}:
         mode = "invalid"
-        fail("mode", "请选择职位 URL、搜索 API 或授权数据源中的一种。")
+        fail("mode", "请选择职位 URL、搜索 API、猎聘公开分类或授权数据源中的一种。")
     selected = {}
     for field, defaults in (("roles", list(workspace.config["roles"])),
                             ("platforms", list(workspace.config["platforms"]))):
@@ -73,9 +74,11 @@ def preview(workspace, data: dict) -> dict:
     limits = {"search_budget": (24, 1, 300), "pages": (1, 1, 10),
               "detail_budget": (20, 0, 300), "feed_budget": (5, 1, 20),
               "fresh_hours": (24, 1, 720)}
+    if mode == CATEGORY_MODE:
+        limits['detail_budget'] = (MAX_DETAILS, 1, MAX_DETAILS)
     relevant = {"urls": {"detail_budget", "fresh_hours"},
                 "search": {"search_budget", "pages", "detail_budget", "fresh_hours"},
-                "feed": {"feed_budget"}}.get(mode, set())
+                "feed": {"feed_budget"}, CATEGORY_MODE: {'detail_budget', 'fresh_hours'}}.get(mode, set())
     budgets = {}
     for field in relevant:
         default, low, high = limits[field]
@@ -98,9 +101,27 @@ def preview(workspace, data: dict) -> dict:
         permits = []
 
     rows, detected, queries = [], [], []
-    query_count, valid_urls = 0, 0
+    query_count, valid_urls, normalized_urls = 0, 0, 0
     credential_configured = False
-    if mode == "urls":
+    category = None
+    if mode == CATEGORY_MODE:
+        try:
+            category = get_category(data.get('category_id', 'architect'))
+        except InputError as exc:
+            fail('category_id', str(exc))
+        if category and set(selected['roles']) != set(category.roles):
+            fail('roles', '目标岗位与所选分类不一致，请重新选择分类预设。')
+        if selected['platforms'] != ['liepin']:
+            fail('platforms', '公开分类目前仅支持猎聘，请只选择“猎聘”。')
+        if 'liepin' not in permits:
+            fail('permit_platforms', '请确认本次猎聘公开分类页和正文的访问许可。')
+        if category:
+            warnings.append(f'读取猎聘“{category.name}”公开分类第一页，按原页面顺序最多选前5个不同职位；失败不会用后续岗位补齐，不翻页。')
+            if category.key == 'algorithm':
+                warnings.append('算法工程师是宽分类；报告仍按垂直领域与时间序列原规则筛选，不匹配的正文不算目标研究成果。')
+        warnings.append('分类不包含自定义关键词或地区筛选；无需登录或搜索Key，网站仍可能拒绝访问。')
+    elif mode == "urls":
+        from .public_job_links import prepare_public_job_link, public_detail_parser
         raw = data.get("urls", "")
         if not isinstance(raw, str) or not raw.strip() or len(raw) > 100000:
             fail("urls", "先在招聘网站打开一个具体职位，复制地址栏中的完整 HTTPS 地址粘贴到这里；每行一个。")
@@ -112,7 +133,7 @@ def preview(workspace, data: dict) -> dict:
                 if not value.strip():
                     continue
                 try:
-                    url = url_hint(value, detail=True)
+                    url, normalization = prepare_public_job_link(url_hint(value, detail=True))
                 except InputError as exc:
                     fail("urls", f"第 {line} 行：{exc}")
                     continue
@@ -125,6 +146,12 @@ def preview(workspace, data: dict) -> dict:
                 duplicate = url in seen
                 rows.append({"line": line, "platform": platform,
                              "label": workspace.config["platforms"][platform]["label"], "duplicate": duplicate})
+                parser = public_detail_parser(url)
+                if parser:
+                    rows[-1]['detail_parser'] = parser
+                if normalization:
+                    normalized_urls += 1
+                    rows[-1]['link_normalization'] = normalization
                 seen.add(url)
                 if not duplicate:
                     valid_urls += 1
@@ -137,6 +164,8 @@ def preview(workspace, data: dict) -> dict:
             fail("detail_budget", "URL 路线需要至少 1 次正文预算；0 表示完全不取正文。")
         if valid_urls > budgets.get("detail_budget", 0):
             warnings.append("链接数多于正文尝试预算；未复用的超额链接会跳过，不会保证全部获取。")
+        if normalized_urls:
+            warnings.append(f"已识别 {normalized_urls} 条猎聘分享链接；将去除分享跟踪参数，按同一职位编号的公开地址采集。")
         warnings.append("识别出平台不等于已取得授权或已验证链接有效；登录页、动态页面、robots 拒绝仍可能无法取得正文。")
     elif mode == "search":
         key = data.get("api_key", "")
@@ -178,6 +207,8 @@ def preview(workspace, data: dict) -> dict:
     return {"ready": not errors, "mode": mode, "errors": errors, "warnings": warnings,
             "budgets": budgets, "detected_platforms": detected, "url_rows": rows,
             "unique_url_count": valid_urls, "query_count": query_count, "query_preview": queries,
+            "normalized_url_count": normalized_urls,
+            "category_url": category.url if category else '',
             "credential_configured": credential_configured, "credential_verified": False,
             "external_network_requests": 0, "task_created": False,
             "message": "填写检查通过，可核对后点击创建执行；未验证实站、凭据或授权。" if not errors else "尚有字段需要处理；下方按字段说明怎么补，不会发起采集。"}

@@ -13,6 +13,7 @@ authors = [{name = "WEIYU AI Studio"}]
 dependencies = []
 
 [project.optional-dependencies]
+acceptance = ["tzdata"]
 browser = ["playwright>=1.48,<2", "packaging>=24.2"]
 tls = ["truststore>=0.10.4,<0.11; sys_platform == 'win32'"]
 
@@ -28,4 +29,4 @@ version = {attr = "vibe_job_radar._version.__version__"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-vibe_job_radar = ["defaults.json", "workbench.html", "workbench.js", "advanced.html", "advanced.js", "collection_help.js", "guided.html", "guided.js", "network_settings.js"]
+vibe_job_radar = ["defaults.json", "workbench.html", "workbench.js", "advanced.html", "advanced.js", "collection_help.js", "guided.html", "guided.js", "network_settings.js", "public_schedule.js", "public_queue.js", "windows_startup.js"]

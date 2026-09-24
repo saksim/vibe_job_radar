@@ -177,11 +177,22 @@ class RateLedger:
     def cool(self, site: str, seconds: float = 300) -> None:
         if not math.isfinite(seconds):
             seconds = 86400
-        until = self._now() + max(300, seconds)
+        self.defer(site, max(300, seconds))
+
+    def defer(self, site: str, seconds: float) -> float:
+        """Persist a read backoff in the shared cooldown, without lowering it."""
+        if type(seconds) not in (int, float) or not math.isfinite(seconds) or seconds < 0:
+            raise CrawlError('read_retry_state_invalid')
+        until = self._now() + seconds
+        if not math.isfinite(until):
+            raise CrawlError('clock_rollback')
         with self._connection() as conn:
+            conn.execute('BEGIN IMMEDIATE')
             conn.execute('INSERT INTO cooldown VALUES (?,?) ON CONFLICT(site) '
                          'DO UPDATE SET until=MAX(until,excluded.until)', (site, until))
+            until = conn.execute('SELECT until FROM cooldown WHERE site=?', (site,)).fetchone()[0]
             conn.commit()
+        return until
 
     def summary(self, site: str) -> dict:
         now = self._now()
