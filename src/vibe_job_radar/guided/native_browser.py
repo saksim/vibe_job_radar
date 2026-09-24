@@ -136,6 +136,7 @@ class NativeBackend(PlaywrightBackend):
         original headers, TLS, cookies, method and body. Site operations and
         redirects still require the independent native controller's approval.
         """
+        page = None
         try:
             frame = route.request.frame
             page = frame.page
@@ -149,7 +150,19 @@ class NativeBackend(PlaywrightBackend):
             if not owned:
                 self.cancelled.set()
                 self._fatal('native_surface_unsupported')
-            route.abort('blockedbyclient')
+            try:
+                route.abort('blockedbyclient')
+            except Exception:
+                # Deferred rejection can close the target while abort yields
+                # to Playwright. A confirmed closed page cannot send this
+                # request; retain the original refusal/cancellation. Never
+                # hide an abort failure on a live or unobservable page.
+                try:
+                    closed = page is not None and page.is_closed() is True
+                except Exception:
+                    closed = False
+                if not closed:
+                    raise
             return
         # No parameter overrides, fetch, response reconstruction or retries.
         route.continue_()
