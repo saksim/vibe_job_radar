@@ -15,6 +15,7 @@ import math
 import secrets
 import time
 from datetime import datetime, timezone
+from urllib.parse import urlsplit
 
 from .catalog_changes import compare_catalogs, validate_change
 from .collection import writer_lock
@@ -47,6 +48,9 @@ def revision(jobs):
 
 def parse_board(payload, now, board=ANTHROPIC):
     """Read only listed full job descriptions; never infer a missing field."""
+    if board.format == 'ashby':
+        from .public_ashby import parse_ashby_board
+        return parse_ashby_board(payload, timestamp(now), board)
     if (not isinstance(payload, dict) or not isinstance(payload.get('jobs'), list)
             or len(payload['jobs']) > 10000 or not isinstance(payload.get('meta'), dict)
             or type(payload['meta'].get('total')) is not int
@@ -98,10 +102,11 @@ class LocalPublicDataClient:
         self.key_path = self.root / 'cursor.key'
         self.failure_guard = CacheFailureGuard(self.root, API_URL)
         self._default_transport = transport is None
-        self.client = transport or SafeHTTP({HOST}, timeout=15, max_bytes=MAX_BYTES, interval=2)
+        self.client = transport or SafeHTTP({urlsplit(board.api_url).hostname for board in BOARDS.values()},
+                                           timeout=15, max_bytes=MAX_BYTES, interval=2)
         self.ledger = None
         self.secret = None
-        self._rate_blocked = False
+        self._rate_blocked = set()
 
     def _prepare(self):
         # Initialization is local and lazy: a damaged optional cache must not
@@ -164,7 +169,7 @@ class LocalPublicDataClient:
             for job in checked['jobs']:
                 board.accepts_job(job['url'], job['id'])
                 if (job['id'] in seen or job['source'] != board.source.key or job['company'] != board.company
-                        or not job['id'].isdigit() or job['final_url'] != job['url']
+                        or not board.valid_id(job['id']) or job['final_url'] != job['url']
                         or job['collected_at'] != stamp_text):
                     raise ContractError('public_cache_invalid')
                 seen.add(job['id'])
@@ -268,10 +273,11 @@ class LocalPublicDataClient:
                 if cached and exc.code != 'clock_rollback':
                     return self._select(query, cached, now, cached=True, error=exc.code)
                 raise
-            if self._rate_blocked:
+            host = urlsplit(board.api_url).hostname
+            if host in self._rate_blocked:
                 if isinstance(self.client, SafeHTTP):
-                    self.client.blocked_hosts.discard(HOST)
-                self._rate_blocked = False
+                    self.client.blocked_hosts.discard(host)
+                self._rate_blocked.discard(host)
             try:
                 if self._default_transport:
                     # A new confirmed query may adopt changed preferences. The
@@ -299,7 +305,7 @@ class LocalPublicDataClient:
                 payload=response.payload
             except FetchError as exc:
                 if exc.code == 'http_429':
-                    self._rate_blocked = True
+                    self._rate_blocked.add(host)
                     self.ledger.cool(SCOPE, max(300, exc.retry_after or 0))
                 recoverable = {'dns_error', 'network_error', 'http_429', 'http_500', 'http_502',
                                'http_503', 'http_504', 'local_proxy_connection_failed',

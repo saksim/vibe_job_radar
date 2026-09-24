@@ -1,6 +1,6 @@
 # Vibe Job Radar｜招聘要求与个人证据工作台
 
-本分支基于#113的[25项改进统一候选](docs/CURRENT_DELIVERY_CANDIDATE.md)，另补齐#115的[独立公开计划进程](docs/PUBLIC_WORKER.md)，供运行和审查，尚未合入main或正式发布。源码使用本分支，Windows候选使用同一提交的CI产物；当前验证与未完成目标分别记录，不需自行拼接后续功能分支。
+本分支基于#113的[25项改进统一候选](docs/CURRENT_DELIVERY_CANDIDATE.md)，另补齐#115的[独立公开计划进程](docs/PUBLIC_WORKER.md)和#118的[Cursor公开目录](docs/PUBLIC_SOURCES.md)，供运行和审查，尚未合入main或正式发布。源码使用本分支，Windows候选使用同一提交的CI产物；当前验证与未完成目标分别记录，不需自行拼接后续功能分支。
 
 ## 先完成一次目标岗位研究
 
@@ -18,7 +18,7 @@ BOSS、猎聘、51job 的浏览器采集仍需逐站现场验收，不能因入�
 
 当前主干基线与待合并实现分别列在[能力矩阵](docs/ACQUISITION_CAPABILITIES.md)。同一能力快照进入采集页、适配注册表和新报告；受控测试、正常账号实测与默认启用分别记录。升级/回退须核对[已验证的工作区范围](docs/WORKSPACE_COMPATIBILITY.md)。
 
-首页另有已接入的 **Anthropic Greenhouse** 公开目录与固定真实案例，本分支按#95增加 **Cloudflare Greenhouse** 目录，免 Key、无需产品服务器。每次只获取用户所选公司，关键词、地区在本机筛选；缓存和变化记录隔离，请求额度仍共用。它可用于“真实来源→分析→证据”流程，但不是全市场搜索，不能替代中国招聘平台或时间序列/电力算法岗位研究。范围与实际观察见[固定公开来源](docs/PUBLIC_SOURCES.md)。
+首页可选择 **Anthropic Greenhouse**、**Cloudflare Greenhouse** 和本分支按#118新增的 **Cursor Ashby** 公开目录，免 Key、无需产品服务器。每次只获取用户所选公司，关键词、地区在本机筛选；缓存和变化记录隔离，请求额度仍共用。Cursor仅纳入公开列出的岗位，保留二级地区和来源remote标志。它可用于“真实来源→分析→证据”流程，但不是全市场搜索，不能替代中国招聘平台或时间序列/电力算法岗位研究。范围与实际观察见[固定公开来源](docs/PUBLIC_SOURCES.md)。
 
 本分支增加默认关闭的[公开查询24小时计划](docs/PUBLIC_DAILY_SCHEDULE.md)：首页明确确认固定查询后首次24小时执行，工作台或[独立后台进程](docs/PUBLIC_WORKER.md)需保持运行；关闭网页仍执行，重启最多补一次到期查询，异常会暂停。独立入口沿用原同意和配额，不启动网页服务器或采集浏览器。结果进入原报告；不自动翻页、不代表三站连续采集或全天服务。
 
