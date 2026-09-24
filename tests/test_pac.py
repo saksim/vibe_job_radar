@@ -132,11 +132,17 @@ class PacTests(unittest.TestCase):
         for revoke in (False,True):
             context=MagicMock();receiver=MagicMock();sender=MagicMock();process=context.Process.return_value
             process.pid=42;process.is_alive.return_value=True
-            receiver.poll.side_effect=lambda wait: time.sleep(min(wait,.01)) or False
+            # Drive the deadline independently of runner scheduling. A real
+            # 40 ms sleep budget can expire before the revocation is observed.
+            elapsed=[0.];clock=MagicMock()
+            clock.monotonic.side_effect=lambda:elapsed[0]
+            def poll(wait):elapsed[0]+=min(wait,.01);return False
+            receiver.poll.side_effect=poll
             context.Pipe.return_value=(receiver,sender)
             calls=[0]
             def permission():calls[0]+=1;return not revoke or calls[0]<3
             with patch.object(pac_native,'available',return_value=True),patch.object(pac_native,'DEADLINE',.04), \
+                    patch.object(pac_native,'time',clock), \
                     patch.object(pac_native.multiprocessing,'get_context',return_value=context):
                 with self.assertRaisesRegex(LocalProxyError,'pac_revoked' if revoke else 'pac_timeout'):
                     pac_native.evaluate(SCRIPT,'https://example.com/',permission)
