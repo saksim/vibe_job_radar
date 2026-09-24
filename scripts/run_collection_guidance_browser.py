@@ -295,6 +295,8 @@ def main():
                     assert page_state['category_outcomes'][0]['page_snapshot']['page']==1
                     assert page_state['category_outcomes'][0]['candidates'][0]['status']=='previous_page_duplicate'
                     assert page_state['detail_attempts']==2 and page_state['category_attempts']==1 and page_state['report_id']
+                    expect(page.locator('#collect-progress')).to_contain_text('第 2 页')
+                    expect(page.locator('#collect-result')).not_to_contain_text('第一页')
                     assert server.collector._path(next_state['id']).read_bytes()==parent_bytes
                     expect(page.locator('#collect-result')).to_contain_text('前页已出现 1 项，未重复请求')
                     result['checks'].append('explicit adjacent-page preview is offline; confirmation reads the observed second page, skips a previous-page duplicate and saves only the two new complete bodies in an independent report')

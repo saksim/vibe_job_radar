@@ -70,15 +70,16 @@ def explain(state: dict) -> dict:
                    REASONS.get(original['status'], ('分类状态：' + original['status'], ''))[0])
         category_outcomes.append({**original, 'status_message': message})
     if state['mode'] == 'liepin_category':
-        from .public_category import get_category
+        from .public_category import get_category, page_for_state
         category = get_category(state.get('category_id', 'architect'))
-        text += f' 分类读取尝试 {state.get("category_attempts", 0)} 次；仅{category.name}分类第一页，不含关键词或地区筛选。'
+        page = page_for_state(state) + 1
+        text += f' 分类读取尝试 {state.get("category_attempts", 0)} 次；范围为{category.name}分类第 {page} 页，不含关键词或地区筛选。'
         if category_outcomes:
             text += ' ' + category_outcomes[0]['status_message'] + '。'
     return {'details': details, 'user_summary': text,
             'category_outcomes': category_outcomes,
             'route_label': {'urls': '公开HTTP（无浏览器登录会话）', 'search': '搜索API＋公开HTTP',
-                            'liepin_category': f'{category.label}（第一页，最多5个职位）' if state['mode'] == 'liepin_category' else '',
+                            'liepin_category': f'{category.label}（第 {page} 页，最多5个职位）' if state['mode'] == 'liepin_category' else '',
                             'feed': '用户配置的授权JSON源'}.get(state['mode'], state['mode']),
             'saved_detail_count': saved, 'budget_skipped_count': skipped}
 
