@@ -26,13 +26,29 @@ class DiscardBoundsTests(unittest.TestCase):
         self.assertEqual(handler.rfile.read(), b'NEXT')
         handler.connection.settimeout.assert_called_with(15)
 
-    def test_ambiguous_transfer_or_large_frame_is_not_consumed(self):
+    def test_ambiguous_transfer_or_nonpositive_frame_is_not_consumed(self):
         for lengths, transfer in [((),None), (('8','8'),None), (('8','9'),None),
-                (('-1',),None), (('eight',),None), ((str(MAX_BODY+1),),None), (('8',),'chunked')]:
+                (('0',),None), (('-1',),None), (('eight',),None), (('8',),'chunked')]:
             handler = self.handler(lengths, transfer)
             handler._discard_rejected_body()
             self.assertEqual(handler.rfile.tell(), 0)
             handler.connection.settimeout.assert_not_called()
+
+    def test_oversized_declared_body_discards_available_prefix_with_original_byte_cap(self):
+        for body in (b'{}', b'x'*(MAX_BODY+20)):
+            with self.subTest(body_length=len(body)):
+                handler=self.handler((str(MAX_BODY+1),),body=body)
+                handler._discard_rejected_body()
+                self.assertEqual(handler.rfile.tell(),min(len(body),MAX_BODY))
+                handler.connection.settimeout.assert_called_with(15)
+
+    def test_oversized_trickle_keeps_original_absolute_deadline(self):
+        handler=self.handler((str(MAX_BODY+1),));handler.rfile=Mock()
+        handler.rfile.read1.return_value=b'x'
+        with patch('vibe_job_radar.workbench.time.monotonic',side_effect=[0,.01,.11,.21]):
+            handler._discard_rejected_body()
+        self.assertEqual(handler.rfile.read1.call_count,2)
+        handler.connection.settimeout.assert_called_with(15)
 
     def test_already_read_invalid_json_is_not_read_twice(self):
         handler = self.handler(); handler._body_consumed = True
@@ -89,3 +105,17 @@ class RefusalHTTPTests(unittest.TestCase):
             self.assertEqual(response.status, 200)
             self.assertEqual(json.loads(response.read())['revision'], 1)
         finally: conn.close()
+
+    def test_repeated_oversized_declarations_receive_413_without_dispatch(self):
+        with patch.object(self.workspace,'add_job',side_effect=AssertionError('must not dispatch')) as dispatch:
+            for _ in range(40):
+                conn=http.client.HTTPConnection(*self.server.server_address,timeout=3)
+                try:
+                    conn.request('POST','/api/job',b'{}',{'Content-Type':'application/json',
+                        'X-Radar-Token':self.server.token,'Content-Length':str(MAX_BODY+1)})
+                    response=conn.getresponse()
+                    self.assertEqual(response.status,413)
+                    self.assertEqual(response.getheader('Connection'),'close')
+                    self.assertIn('error',json.loads(response.read()))
+                finally:conn.close()
+            dispatch.assert_not_called()
