@@ -122,7 +122,9 @@ function showCollection(s){
   const root=$("collect-result");root.replaceChildren();
   root.append(text("p",s.user_summary||"请核对每条实际结果。"));
   for(const row of s.category_outcomes||[]){
-    root.append(text("p",`${row.status_message||row.status}；主列表卡片 ${row.card_count??"尚未确认"} 条，已选 ${(row.selected_positions||[]).length} 条。`));
+    const pageLabel=Number.isInteger(row.page_snapshot?.page)?`第 ${row.page_snapshot.page+1} 页`:'已保存分类名单';
+    const duplicates=(row.candidates||[]).filter(item=>item.status==='previous_page_duplicate').length;
+    root.append(text("p",`${pageLabel} · ${row.status_message||row.status}；主列表卡片 ${row.card_count??"尚未确认"} 条，已选 ${(row.selected_positions||[]).length} 条。${duplicates?` 前页已出现 ${duplicates} 项，未重复请求。`:''}`));
   }
   if(s.mode==="liepin_category"&&["completed","needs_attention","empty"].includes(s.status)){
     const next=text("div","");next.className="guide-box";root.append(next);
@@ -152,6 +154,30 @@ function showCollection(s){
         if(created)await continueCollection();
       };
       next.append(launch);
+    }));
+    const pageBox=text("div","");pageBox.className="guide-box";root.append(pageBox);
+    pageBox.append(button("查看平台下一页（不联网）",async()=>{
+      const plan=await api("/api/collection/category_page_preview",{id:s.id});
+      pageBox.replaceChildren(text("p",plan.notice));
+      if(!plan.can_start)return;
+      pageBox.append(text("p",`第 ${plan.current_page} 页 → 第 ${plan.next_page} 页：${plan.next_url}`));
+      if(plan.existing_task_id){
+        pageBox.append(button("打开已保存的下一页任务",async()=>{
+          const saved=await api("/api/collection/status",{id:plan.existing_task_id});
+          collectionGuide.selectMode(saved.mode);showCollection(saved);await refreshCollections();
+        }));return;
+      }
+      pageBox.append(text("p","沿用原用途与许可范围："+plan.rights_note));
+      const launch=text("button",`确认读取第 ${plan.next_page} 页并采集最多 ${plan.selection_limit} 条`);launch.type="button";
+      launch.onclick=async()=>{
+        let created=false;
+        await act(async()=>{
+          const result=await api("/api/collection/category_page_start",{id:plan.id,fingerprint:plan.fingerprint,consent:true});
+          collectionGuide.selectMode(result.task.mode);showCollection(result.task);await refreshCollections();created=result.created;
+        });
+        if(created)await continueCollection();
+      };
+      pageBox.append(launch);
     }));
   }
   for(const row of s.details){

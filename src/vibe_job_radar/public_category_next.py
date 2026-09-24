@@ -34,6 +34,9 @@ def _snapshot(collector, ident):
             or state.get('status') not in {'completed', 'needs_attention', 'empty'}):
         raise InputError('请先让公开分类的当前批次结束；其他来源或仍在运行的任务不能续取名单。')
     category = category_for_state(state)
+    if 'category_page_context' in state:
+        from .public_category_page import validate_parent
+        validate_parent(collector, state)
     if (state.get('permit_platforms') != ['liepin'] or not state.get('rights_note')):
         raise InputError('原分类任务的岗位、来源或许可范围不完整，不能自动扩大范围。')
     details = state.get('details')
@@ -53,6 +56,7 @@ def _snapshot(collector, ident):
     if not isinstance(candidates, list) or not 1 <= len(candidates) <= 100:
         raise InputError('已保存分类名单不完整。')
     unique, seen = [], {}
+    previous_urls = set(state.get('category_page_context', {}).get('seen_urls', []))
     for position, row in enumerate(candidates, 1):
         if not isinstance(row, dict) or type(row.get('position')) is not int or row['position'] != position:
             raise InputError('分类名单顺序不一致。')
@@ -69,6 +73,13 @@ def _snapshot(collector, ident):
             if status != 'duplicate' or row.get('duplicate_of') != seen[url]:
                 raise InputError('分类名单的重复项记录不一致。')
             continue
+        if status == 'previous_page_duplicate':
+            if url not in previous_urls:
+                raise InputError('跨页重复项不在此前已验证的岗位集合中。')
+            seen[url] = position
+            continue
+        if url in previous_urls:
+            raise InputError('前页已出现的岗位没有标记为跨页重复。')
         if status not in {'available', 'category_unsupported_detail'}:
             raise InputError('分类名单含未知卡片状态。')
         seen[url] = position
@@ -101,7 +112,7 @@ def _snapshot(collector, ident):
         if (relation.get('parent_id') != state['id'] or relation.get('parent_fingerprint') != fingerprint
                 or existing.get('mode') != MODE):
             raise InputError('既有下一批与原预览不一致，不会覆盖已保存任务。')
-    plan = dict(id=state['id'], fingerprint=fingerprint, source_url=category.url,
+    plan = dict(id=state['id'], fingerprint=fingerprint, source_url=source['url'],
                 category_id=category.key, category_label=category.label,
                 source_collection_id=source.get('source_collection_id', state['id']),
                 snapshot_sha256=source['raw_sha256'], snapshot_observed_at=source.get('capture_finished_at'),

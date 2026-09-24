@@ -209,6 +209,13 @@ def main():
                         f'<div class="job-title-box"><div class="ellipsis-1" title="软件架构师人工样本{i}">软件架构师人工样本{i}</div></div></a></div>' for i in (201, 202, 203))
                     category_html = ('<html><head><title>【架构师招聘_招聘架构师人才】-猎聘</title></head><body><div id="main-container">'
                         '<div class="left-job-box"><div class="job-list-box"><div class="left-list-box">'+cards+'</div></div></div></div></body></html>')
+                    def category_pager(active):
+                        return '<ul class="ant-pagination">'+''.join(
+                            f'<li class="ant-pagination-item{" ant-pagination-item-active" if n==active else ""}" title="{n+1}">'
+                            f'<a href="{category_url}pn{n}/" data-currentpage="{n}" data-selector="pagintion-item-selector">{n+1}</a></li>'
+                            for n in range(3))+'</ul>'
+                    category_html=category_html.replace('</title>','</title><link rel="canonical" href="'+category_url+'">')
+                    category_html=category_html.replace('</div></body>',category_pager(0)+'</div></body>')
                     def category_response(url):
                         ident = url.rsplit('/', 1)[-1].split('.')[0]
                         content = category_html if url == category_url else (
@@ -233,6 +240,10 @@ def main():
                     assert manifest['stats']['full_text_job_groups'] == 2
                     expect(page.locator('#collect-result')).to_contain_text('主列表卡片 3 条，已选 2 条')
                     result['checks'].append('category UI selects the first requested cards and generates a batch-only report through the existing API and Store')
+                    with patch('vibe_job_radar.collection.SiteFetcher') as source:
+                        page.get_by_role('button',name='查看平台下一页（不联网）').click()
+                        expect(page.locator('#collect-result')).to_contain_text('本页还有1项未选择，原名单保留')
+                        source.assert_not_called()
                     before_next = len(server.collector.list()['runs'])
                     page.get_by_role('button', name='预览这份名单的下一批（不联网）').click()
                     expect(page.locator('#collect-result')).to_contain_text('名单第 3 项')
@@ -260,6 +271,45 @@ def main():
                     expect(page.locator('#collect-json')).to_contain_text(next_state['id'])
                     assert len(server.collector.list()['runs']) == before_next + 1
                     result['checks'].append('exhaustion is limited to the saved list and reopening an existing continuation never creates or executes another task')
+                    parent_bytes=server.collector._path(next_state['id']).read_bytes()
+                    before_page=len(server.collector.list()['runs'])
+                    with patch('vibe_job_radar.collection.SiteFetcher') as source:
+                        page.get_by_role('button',name='查看平台下一页（不联网）').click()
+                        expect(page.locator('#collect-result')).to_contain_text('第 1 页 → 第 2 页')
+                        expect(page.get_by_role('button',name='确认读取第 2 页并采集最多 2 条')).to_be_visible()
+                        assert len(server.collector.list()['runs'])==before_page
+                        source.assert_not_called()
+                    second_cards=cards.replace('202','204').replace('203','205')
+                    second_html=category_html.replace(cards,second_cards).replace('-猎聘</title>','-猎聘-第2页</title>').replace(category_pager(0),category_pager(1))
+                    def second_page_response(url):
+                        if url==category_url+'pn1/':return Response(200,{'content-type':'text/html'},second_html.encode(),url)
+                        return category_response(url)
+                    with patch('vibe_job_radar.collection.SiteFetcher') as source:
+                        source.return_value.fetch.side_effect=second_page_response
+                        page.get_by_role('button',name='确认读取第 2 页并采集最多 2 条').click()
+                        expect(page.locator('#collect-progress')).to_contain_text('completed',timeout=30000)
+                        expect(page.locator('#collect-start')).to_be_enabled()
+                        assert [c.args[0] for c in source.return_value.fetch.call_args_list]==[
+                            category_url+'pn1/','https://www.liepin.com/job/204.shtml','https://www.liepin.com/job/205.shtml']
+                    page_state=json.loads(page.locator('#collect-json').text_content())
+                    assert page_state['category_outcomes'][0]['page_snapshot']['page']==1
+                    assert page_state['category_outcomes'][0]['candidates'][0]['status']=='previous_page_duplicate'
+                    assert page_state['detail_attempts']==2 and page_state['category_attempts']==1 and page_state['report_id']
+                    expect(page.locator('#collect-progress')).to_contain_text('第 2 页')
+                    expect(page.locator('#collect-result')).not_to_contain_text('第一页')
+                    assert server.collector._path(next_state['id']).read_bytes()==parent_bytes
+                    expect(page.locator('#collect-result')).to_contain_text('前页已出现 1 项，未重复请求')
+                    result['checks'].append('explicit adjacent-page preview is offline; confirmation reads the observed second page, skips a previous-page duplicate and saves only the two new complete bodies in an independent report')
+                    with patch('vibe_job_radar.collection.SiteFetcher') as source:
+                        page.reload()
+                        page.locator('#collect-history').select_option(next_state['id']);page.locator('#collect-load').click()
+                        expect(page.locator('#collect-json')).to_contain_text(next_state['id'])
+                        page.get_by_role('button',name='查看平台下一页（不联网）').click()
+                        page.get_by_role('button',name='打开已保存的下一页任务').click()
+                        expect(page.locator('#collect-json')).to_contain_text(page_state['id'])
+                        assert len(server.collector.list()['runs'])==before_page+1
+                        source.assert_not_called()
+                    result['checks'].append('reloading and opening the existing adjacent-page child preserves its parent, page identity and report without another source request or task')
                     before_algorithm = len(server.collector.list()['runs'])
                     with patch('vibe_job_radar.collection.SiteFetcher') as source:
                         page.goto(server.origin + '/')
@@ -282,7 +332,7 @@ def main():
                         source.assert_not_called()
                     result['checks'].append('algorithm home link and reload select explicit scope; switching categories clears consent and permission without requests')
                     algorithm_url = 'https://www.liepin.com/career/suanfakaifa/'
-                    algorithm_html = category_html.replace('架构师招聘_招聘架构师人才', '算法工程师招聘_招聘算法工程师人才').replace('软件架构师人工样本', '算法工程师人工样本')
+                    algorithm_html = category_html.replace('架构师招聘_招聘架构师人才', '算法工程师招聘_招聘算法工程师人才').replace('软件架构师人工样本', '算法工程师人工样本').replace(category_url,algorithm_url)
                     for old, new in (('201','301'), ('202','302'), ('203','303')):
                         algorithm_html = algorithm_html.replace(old, new)
                     def algorithm_response(url):
