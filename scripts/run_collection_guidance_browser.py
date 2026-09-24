@@ -260,6 +260,65 @@ def main():
                     expect(page.locator('#collect-json')).to_contain_text(next_state['id'])
                     assert len(server.collector.list()['runs']) == before_next + 1
                     result['checks'].append('exhaustion is limited to the saved list and reopening an existing continuation never creates or executes another task')
+                    before_algorithm = len(server.collector.list()['runs'])
+                    with patch('vibe_job_radar.collection.SiteFetcher') as source:
+                        page.goto(server.origin + '/')
+                        page.get_by_role('link', name='进入猎聘算法工程师公开分类采集').click()
+                        expect(f.locator('[name=category_id]')).to_have_value('algorithm')
+                        page.reload()
+                        expect(f.locator('[name=category_id]')).to_have_value('algorithm')
+                        expect(page.locator('#collect-roles input[value=time_series]')).to_be_checked()
+                        expect(page.locator('#collect-roles input[value=domain_algorithm]')).to_be_checked()
+                        expect(page.locator('#collect-roles input[value=architect]')).not_to_be_checked()
+                        page.locator('#collect-permits input[value=liepin]').check()
+                        f.locator('[name=consent]').check()
+                        f.locator('[name=category_id]').select_option('architect')
+                        expect(f.locator('[name=consent]')).not_to_be_checked()
+                        expect(page.locator('#collect-permits input[value=liepin]')).not_to_be_checked()
+                        expect(page.locator('#collect-roles input[value=architect]')).to_be_checked()
+                        f.locator('[name=category_id]').select_option('algorithm')
+                        expect(page.locator('#guide-liepin_category')).to_contain_text('宽分类')
+                        assert len(server.collector.list()['runs']) == before_algorithm
+                        source.assert_not_called()
+                    result['checks'].append('algorithm home link and reload select explicit scope; switching categories clears consent and permission without requests')
+                    algorithm_url = 'https://www.liepin.com/career/suanfakaifa/'
+                    algorithm_html = category_html.replace('架构师招聘_招聘架构师人才', '算法工程师招聘_招聘算法工程师人才').replace('软件架构师人工样本', '算法工程师人工样本')
+                    for old, new in (('201','301'), ('202','302'), ('203','303')):
+                        algorithm_html = algorithm_html.replace(old, new)
+                    def algorithm_response(url):
+                        ident = url.rsplit('/', 1)[-1].split('.')[0]
+                        body = ('岗位职责：研究图像算法。岗位要求：熟悉计算机视觉，编写图像识别实验与自动测试。人工回归材料。' if ident == '302' else
+                                '岗位职责：负责电力负荷预测与时间序列建模。岗位要求：熟悉能源业务，使用Cursor辅助编程并审查生成代码。人工回归材料。')
+                        content = algorithm_html if url == algorithm_url else f'<h1>算法工程师人工样本{ident}</h1><dl><dt>职位介绍</dt><dd>{body}</dd></dl>'
+                        return Response(200, {'content-type': 'text/html'}, content.encode(), url)
+                    f.locator('[name=detail_budget]').fill('2')
+                    f.locator('[name=rights_note]').fill('人工算法分类回归，未访问真实招聘站点。')
+                    page.locator('#collect-permits input[value=liepin]').check()
+                    f.locator('[name=consent]').check()
+                    with patch('vibe_job_radar.collection.SiteFetcher') as source:
+                        source.return_value.fetch.side_effect = algorithm_response
+                        page.locator('#collect-start').click()
+                        expect(page.locator('#collect-progress')).to_contain_text('completed', timeout=30000)
+                        expect(page.locator('#collect-start')).to_be_enabled()
+                        assert [c.args[0] for c in source.return_value.fetch.call_args_list] == [algorithm_url,
+                            'https://www.liepin.com/a/301.shtml', 'https://www.liepin.com/job/302.shtml']
+                    algorithm_state = json.loads(page.locator('#collect-json').text_content())
+                    assert algorithm_state['category_id'] == 'algorithm' and algorithm_state['saved_detail_count'] == 2
+                    manifest = json.loads((workspace.root/'reports'/algorithm_state['report_id']/'run_manifest.json').read_text(encoding='utf-8'))
+                    assert manifest['stats']['full_text_job_groups'] == 1
+                    result['checks'].append('algorithm category saves strict full bodies but original role rules exclude an unmatched image-processing job from target statistics')
+                    page.get_by_role('button', name='预览这份名单的下一批（不联网）').click()
+                    expect(page.locator('#collect-result')).to_contain_text('名单第 3 项')
+                    with patch('vibe_job_radar.collection.SiteFetcher') as source:
+                        source.return_value.fetch.side_effect = algorithm_response
+                        page.get_by_role('button', name='确认采集这批职位').click()
+                        expect(page.locator('#collect-progress')).to_contain_text('completed', timeout=30000)
+                        expect(page.locator('#collect-json')).to_contain_text('"snapshot_reused": true', timeout=30000)
+                        expect(page.locator('#collect-start')).to_be_enabled()
+                        source.return_value.fetch.assert_called_once_with('https://www.liepin.com/job/303.shtml')
+                    continued = json.loads(page.locator('#collect-json').text_content())
+                    assert continued['category_id'] == 'algorithm' and continued['category_attempts'] == 0
+                    result['checks'].append('algorithm continuation preserves its category and consumes only the remaining saved-list detail')
                     page.set_viewport_size({'width': 390, 'height': 844})
                     page.locator('section').first.screenshot(path=str(output / 'mobile-case.png'))
                     assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')

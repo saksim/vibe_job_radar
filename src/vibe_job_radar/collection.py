@@ -188,8 +188,10 @@ class Collector:
         if mode == "search" and data.get("search_storage_rights") is not True:
             raise InputError("请确认搜索 API 套餐允许保存搜索结果。")
         if mode == CATEGORY_MODE:
-            if set(roles) != {'architect'} or set(platforms) != {'liepin'}:
-                raise InputError("公开分类目前仅支持猎聘架构师；请只选择该岗位和平台。")
+            from .public_category import get_category
+            category = get_category(data.get('category_id', 'architect'))
+            if set(roles) != set(category.roles) or set(platforms) != {'liepin'}:
+                raise InputError("所选公开分类与目标岗位或来源不一致，请重新选择分类预设。")
             if 'liepin' not in permits:
                 raise InputError("请先确认本次猎聘分类页和正文访问许可。")
         tasks = [dict(asdict(t), offset=0, attempts=0) for t in build_plan(self.workspace.config, platforms, roles)] if mode == "search" else []
@@ -204,7 +206,8 @@ class Collector:
             "feed_outcomes": [], "report_id": "", "complete_market_coverage": False, "created_at": utc_now()}
         if mode == CATEGORY_MODE:
             from .public_category import MAX_DETAILS, new_outcome
-            state.update(phase='category', category_attempts=0, category_outcomes=[new_outcome()],
+            state.update(phase='category', category_id=category.key, category_attempts=0,
+                         category_outcomes=[new_outcome(category.key)],
                          detail_budget=integer(data, 'detail_budget', MAX_DETAILS, 1, MAX_DETAILS))
         if mode == "urls":
             from .public_job_links import prepare_public_job_link, public_detail_parser
@@ -386,8 +389,9 @@ class Collector:
             state.pop("in_flight", None)
 
     def _category(self, state):
-        from .public_category import URL, parse_category
+        from .public_category import category_for_state, parse_category
         from .public_job_links import public_detail_parser
+        category = category_for_state(state)
         row = state['category_outcomes'][0]
         if row['status'] != 'pending':
             state['phase'] = 'detail'
@@ -399,13 +403,13 @@ class Collector:
         self._save(state)
         client = self._client((state['id'], 'liepin'), lambda: SiteFetcher({'liepin.com'}), site=True)
         try:
-            response = client.fetch(URL)
-            candidates = parse_category(response.url or URL, response.text())
+            response = client.fetch(category.url)
+            candidates = parse_category(response.url or category.url, response.text(), category.key)
             selected = [c for c in candidates if c['status'] != 'duplicate'][:state['detail_budget']]
             row.update(status='ok', candidates=candidates, card_count=len(candidates),
                        selected_positions=[c['position'] for c in selected],
                        raw_sha256=hashlib.sha256(response.body).hexdigest(),
-                       final_url=URL, selection_rule='first_unique_cards_in_publisher_order')
+                       final_url=category.url, selection_rule='first_unique_cards_in_publisher_order')
             for candidate in selected:
                 detail = dict(url=candidate['url'], platform='liepin', record_id='',
                               category_position=candidate['position'], category_title=candidate['title'],
