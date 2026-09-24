@@ -152,6 +152,7 @@ class PinnedHTTPSConnection(http.client.HTTPSConnection):
             self.connection_attempts.append(record)
             sock = None
             try:
+                self.network_policy.ensure_active()
                 if self._local_proxy:
                     sock = self._local_proxy.open_tunnel(ip, attempt_budget, self.source_address)
                 else:

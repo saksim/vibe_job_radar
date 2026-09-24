@@ -39,6 +39,7 @@ jobs:
           python scripts/run_network_settings_browser.py
           python scripts/run_workspace_proxy_browser.py
           python scripts/run_workspace_proxy_browser.py --vm
+          python scripts/run_pac_browser.py
           python scripts/run_public_schedule_browser.py
           python scripts/run_public_sources_browser.py
           python scripts/run_public_revalidation_browser.py

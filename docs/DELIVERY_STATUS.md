@@ -11,7 +11,7 @@
 | N3 工作区策略 | #23/#64/#81 | PR66高级 collection.py / CLI接线待合并；本分支增加三页面共享的匿名本机代理保存/回显、工作区隔离、修订冲突及v2回退保护，详见[工作区代理](WORKSPACE_PROXY_SETTINGS.md)；实站/VM/PAC等矩阵仍未完成 |
 | N4 SOCKS5 | #25/26 | 有限匿名数字公网 CONNECT 已由 PR32 纳入主干并完成组合 CI；旧 PR26 不应重复合并 |
 | N5 认证/代理DNS | #23/#75 | 本分支新增显式本机HTTP Basic/SOCKS5用户名密码，原生与桥接共用；代理DNS、其他认证、凭据持久化和现场验证未完成，详见[认证边界](LOCAL_PROXY_AUTH.md) |
-| N6 PAC | #23 | 未完成 |
+| N6 PAC | #23/#109 | 本分支新增明确导入的[Windows域名PAC](WINDOWS_DOMAIN_PAC.md)、原始返回保留、匿名本机HTTP/SOCKS5及显式撤销；系统PAC自动消费、其他系统、路径分流和真实现场仍未完成，当前head验收以PR为准 |
 | N7 VM宿主机 | #23/#83 | 本分支新增明确确认的匿名RFC1918 IPv4 HTTP/SOCKS5入口，保留目标公网/TLS校验；[受控路径与回退](VM_HOST_PROXY.md)见说明，具体hypervisor/Windows/macOS现场仍未认证 |
 | N8 现场网络 | #23 | 未完成；受控代理与模拟 Fake-IP 的外网验证不是 VPN/TUN 产品现场认证 |
 | A1 网页真实案例 | #3 | PR31 已合并固定公开案例及本机公开目录入口、查询/分页/独立报告 |

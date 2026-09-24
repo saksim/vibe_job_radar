@@ -77,6 +77,7 @@ class NativeTunnel:
                     raise TimeoutError()
                 try:
                     # Target IP was validated before dialing and never re-resolved.
+                    self.policy.ensure_active()
                     return self._open_proxy(proxy, ip, budget) if proxy else socket.create_connection((ip,443), budget)
                 except LocalProxyError as exc:
                     raise FetchError(exc.code) from exc

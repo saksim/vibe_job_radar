@@ -143,6 +143,21 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
                     raise AssertionError('packaged task ownership state is absent')
                 if app.json('/api/public/schedule/state')['status']!='disabled':
                     raise AssertionError('packaged daily plan did not default to off')
+                result['stage']='native_pac_worker'
+                network=app.json('/api/network/state')
+                if network['proxy_mode']!='auto' or not network['pac_available']:
+                    raise AssertionError('portable PAC unavailable or enabled by default')
+                scripted='function FindProxyForURL(url,host){return "SOCKS5 127.0.0.1:1080; DIRECT";}'
+                imported=app.json('/api/network/pac',dict(name='artificial.pac',script=scripted,
+                    revision=network['revision'],consent=True))
+                checked=app.json('/api/network/pac/check',{'revision':imported['revision']})
+                if not checked['passed'] or checked['transport']!='loopback_socks5_proxy' or checked['target_requested']:
+                    raise AssertionError('frozen WinHTTP PAC worker failed or normalized SOCKS5')
+                rollback=app.json('/api/network/proxy',dict(mode='auto',endpoint='',consent=False,revision=imported['revision']))
+                if rollback['schema_version']!=2 or rollback['proxy_mode']!='auto':
+                    raise AssertionError('portable PAC rollback failed')
+                result['pac_worker_verified']=True
+                result['checks'].append('frozen exe spawns native WinHTTP PAC worker with Python PATH removed, preserves SOCKS5 return, checks only fixed domain and rolls back without any proxy or target connection')
                 for mode in ('ensure','reinstall','upgrade','tls'):
                     if app.call('/api/guided/install',{'consent':True,'mode':mode})[0]!=400:
                         raise AssertionError('portable component mutation was not refused')

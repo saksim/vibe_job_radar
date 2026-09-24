@@ -28,6 +28,8 @@ RESOURCES = frozenset({'document', 'stylesheet', 'script', 'image', 'media', 'fo
     'xhr', 'fetch', 'websocket', 'other', 'unknown'})
 CODES = frozenset('''operation_error network_error dns_error non_public_address
     workspace_proxy_environment_conflict
+    pac_unavailable pac_invalid_script pac_invalid_result pac_timeout pac_busy
+    pac_revoked pac_failed pac_cache_limit pac_file_invalid
     read_transient_failure read_retry_wait read_retry_exhausted read_retry_unavailable
     read_retry_state_invalid read_retry_after_invalid
     tls_verification_failed tls_handshake_failed http_401 http_403 http_429
