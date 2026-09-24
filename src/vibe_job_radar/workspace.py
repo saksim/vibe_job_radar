@@ -109,6 +109,10 @@ class Workspace:
         from .network_settings import check_pac
         return check_pac(self, data)
 
+    def network_system_pac_preferences(self, data):
+        from .network_settings import save_system_pac
+        return save_system_pac(self, data)
+
     def doctor(self) -> dict:
         # Probe the actual directory and SQLite, not just os.access(). Never contacts a provider.
         with tempfile.TemporaryDirectory(prefix=".doctor-", dir=self.root) as tmp:

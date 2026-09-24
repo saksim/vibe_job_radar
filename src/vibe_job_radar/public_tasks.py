@@ -279,6 +279,14 @@ class PublicTasks:
             else:
                 query=PublicQuery.from_dict(value)
                 check_cancelled(self._cancel)
+                # Resumed queries select their current workspace policy lazily;
+                # only the new PAC source needs its owned download tied to stop.
+                if network_policy is None:
+                    candidate = self.workspace.network_policy()
+                    if getattr(candidate.pac, 'bind_cancellation', None) is not None:
+                        network_policy = candidate
+                if network_policy is not None:
+                    network_policy.bind_cancellation(self._cancel)
                 options={} if network_policy is None else {'network_policy':network_policy}
                 response=self.hybrid.search(query,consent=True,**options)
                 self._begin_commit()

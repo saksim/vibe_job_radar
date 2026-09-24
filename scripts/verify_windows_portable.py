@@ -113,7 +113,7 @@ def verify_idle_worker(app,exe,workspace,cwd,env,*,registered_command=None):
         raise AssertionError('stopped worker changed the disabled plan')
 
 
-def verify_queued_worker(exe,root,cwd,env,*,command_prefix=None):
+def verify_queued_worker(exe,root,cwd,env,*,command_prefix=None,system_pac_config_id=None):
     """Original cached pipeline in a fresh workspace; no HTTP server required.
 
     The source harness authors one catalog and explicit queue consent. The
@@ -128,6 +128,8 @@ def verify_queued_worker(exe,root,cwd,env,*,command_prefix=None):
     from vibe_job_radar.public_tasks import PublicTasks
     from vibe_job_radar.workspace import Workspace
     workspace=Workspace(root/'queued-workspace')
+    if system_pac_config_id is not None:
+        workspace.network_system_pac_preferences(dict(config_id=system_pac_config_id,revision=0,consent=True))
     class AuthoredWire:
         def json(self,url):
             assert url==API_URL
@@ -238,9 +240,11 @@ def verify_english_report(app,previous_id,previous_csv):
     return english
 
 
-def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=False):
+def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=False,verify_system_pac=False):
     if verify_login_startup and os.environ.get('GITHUB_ACTIONS')!='true':
         raise ValueError('startup registration acceptance is restricted to ephemeral CI')
+    if verify_system_pac and os.environ.get('GITHUB_ACTIONS')!='true':
+        raise ValueError('system PAC acceptance is restricted to ephemeral CI')
     if browser_choice not in ('bundled','msedge'):raise ValueError('unsupported verification browser')
     if sys.platform!='win32':raise ValueError('portable executable verification requires Windows')
     if bundle.is_symlink():raise ValueError('portable bundle is a symlink')
@@ -248,7 +252,7 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
     if not exe.is_file():raise ValueError('portable executable absent')
     before=inventory(bundle)
     result={'success':False,'stage':'doctor','checks':[],'page_errors':[],'external_browser_requests':[],
-        'verified_browser':browser_choice,'startup_registration_verified':False,'startup_worker_verified':False,
+        'verified_browser':browser_choice,'startup_registration_verified':False,'startup_worker_verified':False,'system_pac_verified':False,
         'scope':'Built Windows executable with Python PATH/environment removed, artificial manual JD, original report, explicitly selected browser blank-page check. Only bundled-browser verification can qualify a build. No live recruiting certification.'}
     env={k:v for k,v in os.environ.items() if k not in {'PYTHONPATH','PYTHONHOME','VIRTUAL_ENV','CONDA_PREFIX','PLAYWRIGHT_BROWSERS_PATH'} and not k.startswith('VIBE_RADAR_')}
     env['PATH']=str(Path(os.environ['SystemRoot'])/'System32')
@@ -309,6 +313,16 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
                     raise AssertionError('portable PAC rollback failed')
                 result['pac_worker_verified']=True
                 result['checks'].append('frozen exe spawns native WinHTTP PAC worker with Python PATH removed, preserves SOCKS5 return, checks only fixed domain and rolls back without any proxy or target connection')
+                if verify_system_pac:
+                    from system_pac_acceptance import configured_source,verify_app
+                    result['stage']='configured_system_pac'
+                    with configured_source() as fixture:
+                        verify_app(app,fixture)
+                        result['system_pac_cached_worker']=verify_queued_worker(exe,root/'system-pac-worker',cwd,env,
+                            system_pac_config_id=fixture.source.config_id)
+                        if len(fixture.requests)!=1:raise AssertionError('cached worker implicitly downloaded PAC')
+                    result['system_pac_verified']=True
+                    result['checks'].append('actual frozen exe reads ephemeral CI current-user PAC URL via WinHTTP, saves v4 offline, downloads once in its own frozen child, evaluates SOCKS5 without target connection and rolls back; independent frozen worker consumes a cached query under the same policy with no extra PAC download; original CI registry value restored')
                 for mode in ('ensure','reinstall','upgrade','tls'):
                     if app.call('/api/guided/install',{'consent':True,'mode':mode})[0]!=400:
                         raise AssertionError('portable component mutation was not refused')
@@ -418,8 +432,9 @@ if __name__=='__main__':
         help='Explicit local verification choice; Edge results cannot qualify a portable build.')
     parser.add_argument('--verify-login-startup',action='store_true',
         help='Explicit ephemeral-CI-only startup register/read/remove acceptance; default is read-only.')
+    parser.add_argument('--verify-system-pac',action='store_true',help='Explicit ephemeral-CI-only configured PAC registry fixture; restores its value.')
     args=parser.parse_args()
-    try:result=verify(args.bundle,args.report,browser_choice=args.browser,verify_login_startup=args.verify_login_startup)
+    try:result=verify(args.bundle,args.report,browser_choice=args.browser,verify_login_startup=args.verify_login_startup,verify_system_pac=args.verify_system_pac)
     except Exception as exc:
         # Playwright exception text may include the private loopback token URL.
         # Keep detailed stages in the structured report, never raw tracebacks.

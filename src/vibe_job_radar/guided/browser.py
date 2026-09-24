@@ -389,6 +389,8 @@ class PlaywrightBackend:
         return bool(self.browser and self.browser.is_connected() and self.page and not self.page.is_closed())
 
     def close(self):
+        policy = getattr(getattr(self, 'wire', None), 'network_policy', None)
+        if policy is not None: policy.close()
         if self.browser:
             try:
                 self.browser.close()

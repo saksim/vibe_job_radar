@@ -77,6 +77,17 @@ class PortablePackagingTests(unittest.TestCase):
                 self.builder.build(self.root/'out',self.root/'source.json',verify_login_startup=True)
             build.assert_not_called()
 
+    def test_system_pac_evidence_is_required_when_explicitly_requested(self):
+        proof={'success':True,'verified_browser':'bundled','files':self.builder.inventory(self.bundle)}
+        with self.assertRaises(ValueError):
+            self.builder.validate_runtime_evidence(self.bundle,proof,require_system_pac=True)
+        proof['system_pac_verified']=True
+        self.builder.validate_runtime_evidence(self.bundle,proof,require_system_pac=True)
+        with patch.dict(self.builder.os.environ,{'GITHUB_ACTIONS':'false'}),patch.object(self.builder,'build_candidate') as build:
+            with self.assertRaises(ValueError):
+                self.builder.build(self.root/'out',self.root/'source.json',verify_system_pac=True)
+            build.assert_not_called()
+
     def test_archive_must_retain_exact_verified_file_names_and_bytes(self):
         expected=self.builder.inventory(self.bundle);path=self.root/'payload.zip'
         with zipfile.ZipFile(path,'w') as archive:

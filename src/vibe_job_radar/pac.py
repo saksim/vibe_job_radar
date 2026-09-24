@@ -88,6 +88,9 @@ class PacSnapshot:
     def __post_init__(self):
         object.__setattr__(self, 'sha256', hashlib.sha256(validate_script(self.source)).hexdigest())
 
+    @property
+    def binding(self): return self.sha256
+
     def permitted(self):
         try: return self.permission() is True
         except Exception: return False

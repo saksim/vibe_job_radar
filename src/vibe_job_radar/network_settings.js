@@ -19,7 +19,7 @@
   proxy.innerHTML = `<legend>本工作区的代理</legend>
     <p>自动模式沿用应用或系统配置。固定入口支持匿名本机代理，或已授权给此来宾的宿主机代理；更换后请停止并重开已有采集会话。</p>
     <label for="workspace-proxy-mode">连接方式</label>
-    <select id="workspace-proxy-mode"><option value="auto">自动发现</option><option value="http">固定本机 HTTP</option><option value="socks5">固定本机 SOCKS5</option><option value="vm_http">宿主机 HTTP</option><option value="vm_socks5">宿主机 SOCKS5</option><option value="pac" disabled>已导入的 PAC</option></select>
+    <select id="workspace-proxy-mode"><option value="auto">自动发现</option><option value="http">固定本机 HTTP</option><option value="socks5">固定本机 SOCKS5</option><option value="vm_http">宿主机 HTTP</option><option value="vm_socks5">宿主机 SOCKS5</option><option value="pac" disabled>已导入的 PAC</option><option value="system_pac" disabled>已许可的系统 PAC</option></select>
     <label for="workspace-proxy-endpoint">已配置的代理地址和端口</label>
     <input id="workspace-proxy-endpoint" type="text" autocomplete="off" spellcheck="false" style="max-width:100%;box-sizing:border-box" placeholder="填写你的本机代理入口，不含账号密码" disabled>
     <p id="workspace-proxy-scope"></p>
@@ -40,6 +40,22 @@
     <p>检查仅对内置域名执行脚本，不连接代理或招聘网站。撤销时在上方选择“自动发现”并保存；已有连接不会被强行中断。</p>
     <p id="workspace-pac-status" role="status" aria-live="polite" style="overflow-wrap:anywhere">尚未读取 PAC 状态。</p>`;
   controls.append(pac);
+  const systemPac = document.createElement('fieldset');
+  systemPac.style.cssText = 'min-width:0;max-width:100%;overflow-wrap:anywhere';
+  systemPac.innerHTML = `<legend>使用 Windows 已配置的 PAC</legend>
+    <p id="system-pac-disclosure"></p><p id="system-pac-origin"></p>
+    <button id="refresh-system-pac" type="button">重新读取系统配置</button>
+    <label><input id="system-pac-consent" type="checkbox">我信任上述来源现在和后续提供的脚本，并同意执行与DNS说明</label>
+    <button id="save-system-pac" type="button" disabled>确认并使用系统 PAC</button>
+    <button id="check-system-pac" type="button" disabled>读取并检查系统脚本</button>
+    <p>检查会下载当前来源脚本并对内置域名求值，不连接岗位网站。新会话会重新读取该来源；来源地址变化须再次确认。撤销时在上方选择“自动发现”并保存。</p>
+    <p id="system-pac-status" role="status" aria-live="polite"></p>`;
+  controls.append(systemPac);
+  const systemConsent = systemPac.querySelector('#system-pac-consent');
+  const systemButton = systemPac.querySelector('#save-system-pac');
+  const systemCheck = systemPac.querySelector('#check-system-pac');
+  const systemMessage = systemPac.querySelector('#system-pac-status');
+  let systemConfigId = '';
   const pacFile = pac.querySelector('#workspace-pac-file');
   const pacConsent = pac.querySelector('#workspace-pac-consent');
   const pacButton = pac.querySelector('#save-workspace-pac');
@@ -53,8 +69,8 @@
   const proxyMessage = proxy.querySelector('#workspace-proxy-status');
   let revision = null, busy = false;
   function selection() {
-    endpoint.disabled = consent.disabled = ['auto', 'pac'].includes(mode.value);
-    proxyButton.disabled = mode.value === 'pac';
+    endpoint.disabled = consent.disabled = ['auto', 'pac', 'system_pac'].includes(mode.value);
+    proxyButton.disabled = ['pac', 'system_pac'].includes(mode.value);
     consent.checked = false;
     const vm = mode.value.startsWith('vm_');
     endpoint.placeholder = vm ? '填写宿主机已授权监听的 RFC1918 IPv4 和端口' : '填写你的本机代理入口，不含账号密码';
@@ -86,6 +102,7 @@
       ? '工作区代理与应用专用环境配置冲突，联网已停止。请清除冲突或改用自动模式。'
       : (mode.value === 'auto' ? '采用自动发现；尚未进行网络测试。'
         : mode.value === 'pac' ? '按已导入PAC选择域名路线；尚未进行网络测试。'
+        : mode.value === 'system_pac' ? '按已许可系统PAC选择域名路线；尚未进行网络测试。'
         : '已保存 '+endpoint.value+'，仅对本工作区生效；尚未进行网络测试。');
     pac.querySelector('#workspace-pac-disclosure').textContent = value.pac_disclosure || '';
     pacFile.disabled = pacConsent.disabled = pacButton.disabled = value.pac_available !== true;
@@ -96,6 +113,19 @@
         + (value.policy?.code === 'pac_file_invalid' ? ' 副本缺失或校验失败，联网已停止；可选择自动模式撤销。' : '')
       : '未启用PAC；选择文件不会执行脚本。';
     if (!value.pac_available) pacMessage.textContent += ' 当前系统不支持此Windows功能。';
+    systemPac.querySelector('#system-pac-disclosure').textContent = value.system_pac_disclosure || '';
+    const source = value.system_pac || {};
+    systemConfigId = source.config_id || '';
+    systemPac.querySelector('#system-pac-origin').textContent = source.configured
+      ? '当前系统来源站点：'+source.origin+'（路径和参数隐藏）' : (source.message || '无法读取系统PAC配置');
+    systemConsent.checked = false;
+    systemConsent.disabled = systemButton.disabled = !value.pac_available || source.configured !== true;
+    systemCheck.disabled = !value.pac_available || mode.value !== 'system_pac'
+      || source.config_id !== value.system_pac_config_id;
+    systemMessage.textContent = mode.value === 'system_pac'
+      ? (source.config_id === value.system_pac_config_id ? '已许可此来源；本次状态读取没有下载或执行。'
+        : '来源已改变或不可用，联网停止。请核对当前来源后重新确认，或选择自动发现撤销。')
+      : '未启用系统PAC；读取配置不会下载脚本。';
   }
   async function save(path, data, output) {
     if (revision === null || busy) return;
@@ -129,6 +159,26 @@
     pacMessage.textContent = '正在执行内置域名的脚本检查…';
     try { const value = await call('/api/network/pac/check', {revision}); pacMessage.textContent = value.message; }
     catch (error) { pacMessage.textContent = error.message; }
+    finally { busy = false; controls.disabled = false; }
+  });
+  systemPac.querySelector('#refresh-system-pac').addEventListener('click', async () => {
+    if (busy) return;
+    busy = true; controls.disabled = true; systemConsent.checked = false;
+    try { render(await call('/api/network/state')); }
+    catch (error) { systemConfigId = ''; systemButton.disabled = systemCheck.disabled = true; systemMessage.textContent = error.message; }
+    finally { busy = false; controls.disabled = false; }
+  });
+  systemButton.addEventListener('click', () => {
+    if (!systemConsent.checked || !systemConfigId) { systemMessage.textContent = '请核对来源并勾选信任说明。'; return; }
+    save('/api/network/system-pac', {config_id:systemConfigId, consent:true}, systemMessage);
+    systemConsent.checked = false;
+  });
+  systemCheck.addEventListener('click', async () => {
+    if (busy || revision === null) return;
+    busy = true; controls.disabled = true;
+    systemMessage.textContent = '正在读取已许可来源，并执行内置域名检查…';
+    try { const value = await call('/api/network/pac/check', {revision}); systemMessage.textContent = value.message; }
+    catch (error) { systemMessage.textContent = error.message; }
     finally { busy = false; controls.disabled = false; }
   });
   call('/api/network/state').then(value => {

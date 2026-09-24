@@ -82,6 +82,8 @@ class PublicExample:
 
     def _run(self):
         check_cancelled(self.cancelled)
+        if self.cancelled is not None and isinstance(self.client, SafeHTTP):
+            self.client.network_policy.bind_cancellation(self.cancelled)
         last = self.root/'latest.json'
         if last.is_symlink():
             raise InputError('案例记录不能是符号链接。')

@@ -76,6 +76,7 @@ class PinnedTransport:
         if self.network_policy is not None and self.network_policy is not policy:
             raise ValueError('browser session network policy is already bound')
         self.network_policy = policy
+        policy.bind_cancellation(self.cancelled)
 
     def reserve(self, kind: str, *, origin=None) -> None:
         deadline = time.monotonic() + self.max_inline_wait
@@ -113,7 +114,7 @@ class PinnedTransport:
         # not send a partial HTTP request and then be retried.
         hdr = browser_headers(headers)
         if self.network_policy is None:
-            self.network_policy = current_policy()
+            self.bind_policy(current_policy())
         try:
             if not self.network_policy.encrypted_dns:
                 host, ip, target = validate_public_url(url, self.domains, all_addresses=True,
@@ -127,7 +128,7 @@ class PinnedTransport:
             raise CrawlError(exc.code) from exc
         try:
             if self.network_policy is None:
-                self.network_policy = current_policy()
+                self.bind_policy(current_policy())
             with use_policy(self.network_policy):
                 conn = PinnedHTTPSConnection(host, ip, 20)
         except FetchError as exc:
