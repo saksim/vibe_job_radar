@@ -51,6 +51,7 @@ from .read_retry import (TransientReadFailure, budget as retry_budget, retry_del
                          retry_after_seconds, action_for as retry_action_for)
 from .transport import diagnose_host
 from .diagnostic_trace import DiagnosticTrace, traced, observe, notify
+from . import attempt_history
 from .browser_health import (BrowserStartupError, HEALTH_MESSAGES, environment_report,
                              failed_report, probe_browser, safe_text, package_version)
 from .browser_install import install_commands, run_command
@@ -59,6 +60,8 @@ from .ownership import Ownership, owned_action, checkpoint_lock, MESSAGE as OWNE
 from .. import tls_context
 
 MESSAGES = {
+    'attempt_history_invalid': '逐次采集记录损坏或不兼容，已停止；请恢复工作区备份，不会清空失败历史后重试。',
+    'attempt_history_limit': '本任务的逐次采集记录已达到上限，已停止新采集；已有结果与历史保留。',
     'search_scope_changed': '当前列表的关键词、筛选条件或页码与本批不一致，已保留原进度；请回到原查询，或为新条件另建任务。',
     'checkpoint_incompatible': '任务的查询条件、适配器或访问契约与创建时不一致；已有选择和结果保留，请用兼容版本继续或另建任务。',
     'checkpoint_records_missing': '任务中已保存的正文记录缺失或不一致，已停止；请恢复工作区备份，不会把缺失正文算成成功或自动重复抓取。',
@@ -254,8 +257,11 @@ class GuidedService:
             if code:
                 state['code'] = code
             state.update(changes)
+            attempt_history.note_selection(state)
             state['message'] = MESSAGES.get(state.get('code'), '请查看当前状态或回基础工作台处理数据。')
             state['updated_at'] = utc_now()
+            if attempt_history.KEY in state:
+                state[attempt_history.KEY]['checkpoint_at'] = state['updated_at']
             with writer_lock(self.workspace.root):
                 atomic_json(self._path(state['id']), state)
 
@@ -384,6 +390,7 @@ class GuidedService:
             except CrawlError:
                 raise InputError('列表地址必须是同一关键词的猎聘搜索页，且筛选参数不能重复；修改条件请另建任务。') from None
             state.update(query_scope_version=1, cursors_seen=[])
+        state[attempt_history.KEY] = attempt_history.new_history(checkpoint_at=state['updated_at'])
         state['execution_binding'] = checkpoint_binding(state, adapter)
         with self._lock:
             if self._busy:
@@ -872,11 +879,13 @@ class GuidedService:
                     continue
                 if self._cancel.is_set():
                     raise CrawlError('paused')
+                from_current = returned_detail is not None and row['id'] == returned_detail[0]
+                attempt = attempt_history.begin(state, row['id'], returned=from_current)
                 row['status'] = 'opening'
                 self._save(state)
+                started = attempt_history.monotonic()
                 try:
                     trace = self._trace_for(state)
-                    from_current = returned_detail is not None and row['id'] == returned_detail[0]
                     with observe(trace, 'detail_navigation', url=row['url'], entity=row['id']):
                         if from_current:
                             # The owner-worker just revalidated this immutable
@@ -914,9 +923,17 @@ class GuidedService:
                         row['platform_job_id'] = identity(final_url)
                 except CrawlError as exc:
                     row['status'] = exc.code
+                    attempt_history.finish(attempt, started, error=exc)
                     self._save(state)
                     if exc.code not in {'structure_changed','not_job_url','invalid_job_data','job_identity_mismatch','jd_incomplete'}:
                         raise
+                except Exception as exc:
+                    row['status'] = 'operation_error'
+                    attempt_history.finish(attempt, started, error=exc)
+                    self._save(state)
+                    raise
+                else:
+                    attempt_history.finish(attempt, started, record_id=record.record_id)
                 self._save(state)
         finally:
             # Keep a usable batch report even if a later selected job blocks.
@@ -1014,6 +1031,7 @@ class GuidedService:
                      'adapter': {'key': adapter.key, 'version': getattr(adapter, 'version', 'custom')},
                      'backend': state.get('backend', 'bridge'),
                      'identity_strategy': state.get('identity_strategy', 'observed_url_v1'),
+                     'detail_attempt_history': attempt_history.snapshot(state),
                      'outcome': outcome, 'items': audit_items(state, analysis)}
             audit_path = report_root/'guided_acquisition.json'
             atomic_json(audit_path, audit)

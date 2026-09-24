@@ -72,6 +72,56 @@ def browser_health_summary(health):
     return {key:health[key] for key in fields if key in health}
 
 
+def verify_detail_history(app, workspace):
+    """Author metadata only; the actual exe must preserve it through stop/restart.
+
+    This is not an acquisition run. No browser is opened or site requested.
+    Source Python prepares a fixture, but only the frozen worker updates it.
+    """
+    import uuid
+    from vibe_job_radar.utils import atomic_json, utc_now
+    ident = uuid.uuid4().hex
+    now = utc_now()
+    ids = ['1'*24, '2'*24]
+    attempts = [dict(sequence=i+1, selection=1, item_id=key, started_at=now, mode='navigation',
+                     finished_at=now if i == 0 else None, elapsed_ms=2.5 if i == 0 else None,
+                     outcome='jd_incomplete' if i == 0 else 'unfinished', record_id='')
+                for i,key in enumerate(ids)]
+    history = dict(version=1, origin='task_creation', checkpoint_at=now,
+                   selections=[dict(sequence=1, selected_at=now, items=ids)], attempts=attempts)
+    state = dict(id=ident, schema_version=1, platform='liepin', keyword='ARTIFICIAL FIXTURE',
+                 search_url='https://www.liepin.com/zhaopin/?key=ARTIFICIAL+FIXTURE',
+                 roles=['time_series'], max_pages=1, max_jobs=2, backend='bridge',
+                 created_at=now, updated_at=now, status='paused', phase='collect', code='paused',
+                 report_id='', pages_seen=[], selection=ids, detail_attempt_history=history,
+                 cards=[dict(id=key, title='ARTIFICIAL METADATA ONLY', source_url='',
+                     url=f'https://www.liepin.com/job/{i+1}.shtml', resolved_url='', record_id='',
+                     status='jd_incomplete' if i == 0 else 'opening') for i,key in enumerate(ids)])
+    path=workspace/'guided'/f'{ident}.json'
+    atomic_json(path,state)
+    for expected_origin in ('task_creation','legacy_partial'):
+        app.json('/api/guided/action',{'id':ident,'action':'stop'})
+        deadline=time.monotonic()+15
+        while time.monotonic()<deadline:
+            snapshot=app.json('/api/guided/state')
+            row=next((r for r in snapshot['jobs'] if r['id']==ident),None)
+            if not snapshot['busy'] and row and row['status']=='stopped':break
+            time.sleep(.05)
+        else:raise AssertionError('frozen worker did not stop artificial history task')
+        saved=json.loads(path.read_text(encoding='utf-8'))
+        actual=saved['detail_attempt_history']
+        if actual['attempts']!=attempts or actual['origin']!=expected_origin:
+            raise AssertionError('frozen worker altered earlier attempts or lost the legacy gap')
+        if actual['checkpoint_at']!=saved['updated_at'] or row['browser_open']:
+            raise AssertionError('frozen history checkpoint incomplete or browser unexpectedly open')
+        if expected_origin=='task_creation':
+            # Simulate an old checkpoint writer, which retains unknown fields
+            # but cannot synchronize the newer history marker.
+            saved.update(updated_at=utc_now(),status='paused',code='paused')
+            atomic_json(path,saved)
+    return ident, actual
+
+
 def verify_idle_worker(app,exe,workspace,cwd,env,*,registered_command=None):
     """Start the actual independent executable; never enable a daily plan."""
     if app.json('/api/public/schedule/state')['status']!='disabled':
@@ -285,6 +335,10 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
                     raise AssertionError('packaged public source registry is incomplete')
                 if public['task'].get('owned_elsewhere') is not False or state.get('owned_elsewhere') is not False:
                     raise AssertionError('packaged task ownership state is absent')
+                result['stage']='detail_history_checkpoint'
+                history_id,history_saved=verify_detail_history(app,workspace)
+                result['detail_history_checkpoint_verified']=True
+                result['checks'].append('actual frozen worker preserves authored failed/unfinished detail history, never opens a browser and marks an unsynchronized old-writer checkpoint as partial; no acquisition or measured latency is claimed by this fixture')
                 if app.json('/api/public/schedule/state')['status']!='disabled':
                     raise AssertionError('packaged daily plan did not default to off')
                 queue_default=app.json('/api/public/queue/state')
@@ -412,6 +466,11 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
                     raise AssertionError('portable restart changed an existing report file')
                 if restarted.json('/api/public/schedule/state')['status']!='disabled':raise AssertionError('portable restart implicitly scheduled work')
                 if restarted.json('/api/guided/state')['browser_health']['ready']:raise AssertionError('portable restart trusted old browser readiness')
+                histories=restarted.json('/api/guided/state')['jobs']
+                history_row=next(row for row in histories if row['id']==history_id)
+                if history_row['detail_attempt_history']!=history_saved or history_row['browser_open']:
+                    raise AssertionError('fresh frozen process changed saved detail history')
+                result['detail_history_restart_verified']=True
             finally:restarted.close()
             result['checks'].append('fresh exe process preserves original report, leaves daily plan off and requires a fresh browser check')
         if inventory(bundle)!=before:raise AssertionError('portable application modified its bundled components')
