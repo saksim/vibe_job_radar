@@ -34,7 +34,16 @@ REASONS = {
     'robots_denied': ('来源robots规则拒绝此自动访问路径', '停止自动获取；使用允许的接口或有权处理的手工正文。'),
     'robots_unavailable': ('无法确认来源的robots规则', '未继续自动请求正文；不是缺少搜索Key。'),
     'permission_required': ('没有本次正文访问许可', '确认实际许可后再创建任务，不由软件自动勾选。'),
-    'host_stopped': ('同一站点已因先前拒绝而停止', '先处理前面条目的原因，不换任务反复请求。'),
+    'host_stopped': ('同一站点已因前项拒绝或限额而停止', '先处理前面条目的原因，不换任务反复请求。'),
+    'rate_wait': ('共享访问间隔尚未结束', '本批保留结果；间隔结束后核对剩余范围再新建小批任务，不自动重放。'),
+    'publisher_wait': ('发布方要求的共享等待尚未结束', '本批保留结果；等待发布方时间窗口允许后再核对剩余链接，新任务仍使用同一账本。'),
+    'hourly_limit': ('工作区该平台的小时限额已用完', '等待窗口恢复后再新建小批任务；更换任务、入口或重启不会增加额度。'),
+    'daily_limit': ('工作区该平台的每日限额已用完', '等待窗口恢复后再新建小批任务；不删除账本或退还已预留的尝试。'),
+    'cooldown': ('该平台仍处于工作区共享冷却', '先核对触发原因；冷却结束后可新建已确认的小批任务。未自动重试。'),
+    'clock_rollback': ('账本检测到时钟回退', '保留任务并核对系统时间；不清空账本重置配额。'),
+    'rate_storage_error': ('无法可靠读取或写入共享限额账本', '本批已保留，停止访问；先检查原工作区文件，不能改用无计量请求。'),
+    'publisher_policy_invalid': ('发布方节奏无法可靠保存', '本批已停止并保留原因；不按更宽松的规则继续。'),
+    'unsafe_workspace': ('共享限额工作区路径无法确认', '保留原文件，核对工作区路径后再执行。'),
     'non_public_address': ('DNS返回非公网地址', '先做网络检查；这不是账号或浏览器安装错误。'),
     'parse_error': ('取得页面但不能确认独立职位正文', '可能是动态页面或结构变化，可转浏览器或手工录入。'),
     'job_identity_mismatch': ('返回的岗位与所选分享链接不一致', '未保存这份正文；请核对具体职位链接。'),
@@ -58,6 +67,9 @@ def explain(state: dict) -> dict:
     for original in state['details']:
         code = original['status']
         message, action = REASONS.get(code, ('本条状态：'+code, '展开采集诊断查看原因，不要只增加预算。'))
+        delay = original.get('retry_after_seconds')
+        if type(delay) in (int, float) and delay > 0:
+            action += f' 本次受阻时需至少等待{delay:.0f}秒；这是当次记录，不是实时倒计时，之后仍需重新检查共享额度。'
         details.append({**original, 'status_message': message, 'next_action': action})
     saved = sum(d['status'] in {'ok', 'fresh_reused'} for d in details)
     skipped = sum(d['status'] == 'budget_skipped' for d in details)
@@ -68,7 +80,8 @@ def explain(state: dict) -> dict:
     for original in state.get('category_outcomes', []):
         message = (('使用已保存的公开分类名单' if original.get('snapshot_reused') else '已读取公开分类主列表') if original['status'] == 'ok' else
                    REASONS.get(original['status'], ('分类状态：' + original['status'], ''))[0])
-        category_outcomes.append({**original, 'status_message': message})
+        action = REASONS.get(original['status'], ('', ''))[1]
+        category_outcomes.append({**original, 'status_message': message, 'next_action': action})
     if state['mode'] == 'liepin_category':
         from .public_category import get_category, page_for_state
         category = get_category(state.get('category_id', 'architect'))
@@ -76,6 +89,7 @@ def explain(state: dict) -> dict:
         text += f' 分类读取尝试 {state.get("category_attempts", 0)} 次；范围为{category.name}分类第 {page} 页，不含关键词或地区筛选。'
         if category_outcomes:
             text += ' ' + category_outcomes[0]['status_message'] + '。'
+            text += ' ' + category_outcomes[0]['next_action']
     return {'details': details, 'user_summary': text,
             'category_outcomes': category_outcomes,
             'route_label': {'urls': '公开HTTP（无浏览器登录会话）', 'search': '搜索API＋公开HTTP',
