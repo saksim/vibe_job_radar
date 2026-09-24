@@ -22,6 +22,7 @@ from vibe_job_radar.guided.rate import Limits, RateLedger
 from vibe_job_radar.guided.service import GuidedService, MESSAGES
 from vibe_job_radar.store import Store
 from vibe_job_radar.workspace import InputError, Workspace
+from worker_fsync_probe import WorkerFsyncProbe
 
 ADAPTER = builtins().get('liepin')
 SEARCH = ADAPTER.search_url('时间序列算法工程师')
@@ -231,6 +232,10 @@ class DetailReturnServiceTests(unittest.TestCase):
         self.tmp=tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.workspace=Workspace(Path(self.tmp.name))
+        self.write_probe=WorkerFsyncProbe(lambda:self.service._thread)
+        # LIFO: the worker closes before the observer is removed, then the
+        # temporary workspace is deleted, including when setUp fails.
+        self.addCleanup(self.write_probe.stop)
         class Backend:
             """Synthetic returned DOM; never creates or fetches an external page."""
             def __init__(self,adapter,ledger,cancelled,progress):
@@ -259,6 +264,7 @@ class DetailReturnServiceTests(unittest.TestCase):
         self.service=GuidedService(self.workspace,registry=Registry([ADAPTER]),backend_factory=Backend,
             ledger=RateLedger(self.workspace.root/'guided'/'rates.sqlite',Limits(login_interval=0)))
         self.addCleanup(self.service.close)
+        self.write_probe.start()
         self.ident=self.service.create({'platform':'liepin','keyword':'时间序列算法工程师','roles':['time_series'],
             'consent':True,'rights_note':'合成页面测试，非猎聘实站验收','max_pages':1,'max_jobs':2})['id']
         self.wait_idle()
@@ -271,13 +277,18 @@ class DetailReturnServiceTests(unittest.TestCase):
         self.backend=self.service._backends[self.ident]
         self.service._login_return.interval=.01
     def wait_idle(self):
+        probe=getattr(self,'write_probe',None)
+        before=probe.snapshot() if probe is not None else None
         end=time.monotonic()+5
         while True:
             view=self.service.state()
             if not view['busy']:return
             if time.monotonic()>=end:break
             time.sleep(.01)
-        self.fail('guided action remained busy after 5s: '+json.dumps(wait_diagnostic(self.service,view)))
+        diagnostic=wait_diagnostic(self.service,view)
+        if probe is not None:
+            diagnostic['worker_fsync']={'before_wait':before,'at_timeout':probe.snapshot()}
+        self.fail('guided action remained busy after 5s: '+json.dumps(diagnostic))
     def await_state(self,key,value):
         end=time.monotonic()+5
         while time.monotonic()<end:
@@ -381,6 +392,8 @@ class DetailReturnServiceTests(unittest.TestCase):
 
 class DetailReturnFixtureTests(unittest.TestCase):
     def test_setup_failure_closes_live_worker_and_releases_ownership_before_removing_workspace(self):
+        import os
+        original_fsync=os.fsync
         case=DetailReturnServiceTests('test_dead_owner_does_not_create_or_restore_replacement_browser')
         original_wait=case.wait_idle;entered=threading.Event();calls=0
         def wait():
@@ -405,6 +418,7 @@ class DetailReturnFixtureTests(unittest.TestCase):
             self.assertIsNone(case.service._thread)
             self.assertIsNone(case.service._ownership.lease)
             self.assertFalse(case.workspace.root.exists())
+            self.assertIs(os.fsync,original_fsync)
         finally:
             if hasattr(case,'service'):case.service.close()
             if hasattr(case,'tmp'):case.tmp.cleanup()
@@ -432,6 +446,35 @@ class DetailReturnFixtureTests(unittest.TestCase):
             for frame in evidence['worker_stack']:
                 self.assertNotIn('/',frame['file']);self.assertNotIn('\\',frame['file'])
         finally:release.set();worker.join(5)
+
+    def test_five_second_timeout_keeps_pending_fsync_and_prior_completed_totals(self):
+        import os
+        entered=threading.Event();release=threading.Event();clock=[0.0]
+        def held(_descriptor):
+            entered.set()
+            if not release.wait(5):raise AssertionError('test release missing')
+        worker=threading.Thread(target=lambda:os.fsync(123))
+        with patch.object(os,'fsync',held):
+            probe=WorkerFsyncProbe(lambda:worker,clock=lambda:clock[0]);probe.start()
+            try:
+                worker.start();self.assertTrue(entered.wait(5))
+                case=DetailReturnServiceTests();case.write_probe=probe
+                case.service=SimpleNamespace(_thread=worker,state=Mock(return_value={
+                    'busy':True,'active':'task','jobs':[{'id':'task','status':'running',
+                    'phase':'collect','code':'collecting'}]}))
+                ticks=iter([0,5])
+                def tick():clock[0]=next(ticks);return clock[0]
+                with patch('test_login_detail_return.time.monotonic',side_effect=tick),self.assertRaises(AssertionError) as caught:
+                    case.wait_idle()
+                evidence=json.loads(str(caught.exception).split(': ',1)[1])['worker_fsync']
+                self.assertEqual(evidence['before_wait']['current_call_ms'],0)
+                self.assertEqual(evidence['at_timeout']['current_call_ms'],5000)
+                self.assertEqual(evidence['at_timeout']['calls_started'],1)
+                self.assertEqual(evidence['at_timeout']['calls_completed'],0)
+                self.assertEqual(evidence['at_timeout']['completed_total_ms'],0)
+                self.assertIn('after 5s',str(caught.exception))
+            finally:
+                release.set();worker.join(5);probe.stop()
 
 
 if __name__=='__main__':unittest.main()
