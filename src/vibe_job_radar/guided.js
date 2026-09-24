@@ -8,8 +8,9 @@ if (location.hash) history.replaceState(null,'',location.pathname+location.searc
 let requestedTask=new URLSearchParams(location.search).get('task')||'';
 let state=null, current=null, selecting=new Set(), loadedId='', requesting=false, sticky='';
 const installationNames={restart_required:'组件更新后需重启工作台再检查',not_started:'本次会话未执行安装（不表示缺少组件）',installing:'正在安装',installed:'安装并启动验证成功',installed_not_ready:'安装命令成功，但启动检查失败',dependency_install_failed:'安装失败',dependency_install_timeout:'安装超时'};
-const cardStatus={job_identity_mismatch:'详情身份不一致，未保存',jd_incomplete:'正文尚未完整展开，未保存',discovered:'待选择',opening:'读取中',ok:'正文已保存',structure_changed:'无法确认独立完整正文',invalid_job_data:'岗位字段无效或正文超出限制',not_job_url:'不是已识别的详情地址',manual_required:'需要正常登录或验证',http_401:'需要核对登录或权限',http_403:'站点拒绝访问',http_429:'来源要求等待',paused:'已暂停',network_error:'网络未完成'};
+const cardStatus={job_unavailable:'岗位已暂停招聘或下线',job_identity_mismatch:'详情身份不一致，未保存',jd_incomplete:'正文尚未完整展开，未保存',discovered:'待选择',opening:'读取中',ok:'正文已保存',structure_changed:'无法确认独立完整正文',invalid_job_data:'岗位字段无效或正文超出限制',not_job_url:'不是已识别的详情地址',manual_required:'需要正常登录或验证',http_401:'需要核对登录或权限',http_403:'站点拒绝访问',http_429:'来源要求等待',paused:'已暂停',network_error:'网络未完成'};
 const statusNames={queued:'准备中',running:'执行中',ready:'可以选择岗位',waiting_rate:'按来源要求等待',waiting_manual:'需要你处理',paused:'已暂停',completed:'批次结束',stopped:'已停止',interrupted:'上次服务已退出'};
+Object.assign(cardStatus,{read_transient_failure:'来源暂时不可用，等待有限重试',read_retry_exhausted:'两次自动重试已用完',read_retry_after_invalid:'来源重试时间需核对',read_retry_unavailable:'无法确认自动重试条件'});
 async function api(path,data){const response=await fetch(path,{method:data===undefined?'GET':'POST',headers:{'X-Radar-Token':token,...(data===undefined?{}:{'Content-Type':'application/json'})},body:data===undefined?undefined:JSON.stringify(data),cache:'no-store'});const result=await response.json();if(!response.ok)throw Error(result.error||'操作失败');return result;}
 function note(text){$('busy').textContent=text;}
 async function act(fn){if(requesting)return;requesting=true;sticky='';try{await fn();await refresh();}catch(e){sticky=e.message;note(sticky);}finally{requesting=false;}}
@@ -17,10 +18,16 @@ function options(element,values){const value=element.value;element.replaceChildr
 function active(){if(!current)throw Error('先在第2步创建任务。');return current.id;}
 function render(){
  if(!state)return;
- $('environment').textContent=`当前 Python：${state.python}。Playwright：${state.browser_package||'尚未安装'}。本次组件操作：${installationNames[state.installation]||state.installation}。`;
+ const foreign=state.owned_elsewhere===true;
+ $('guided-startup').disabled=false;$('guided-startup').setAttribute('aria-busy','false');$('guided-initializing').hidden=true;
+ const portable=state.runtime?.kind==='portable';
+ $('environment').textContent=portable ? `便携运行包 · Playwright：${state.browser_package||'组件缺失'}。` : `当前 Python：${state.python}。Playwright：${state.browser_package||'尚未安装'}。本次组件操作：${installationNames[state.installation]||state.installation}。`;
+ if(!$('portable-runtime-note')){const p=document.createElement('p');p.id='portable-runtime-note';p.className='notice';$('environment').after(p);}
+ $('portable-runtime-note').hidden=!portable;$('portable-runtime-note').textContent=state.runtime?.guidance||'';
+ for(const id of ['install','repair-browser','upgrade-browser','source-runtime-help','source-browser-instructions'])$(id).hidden=portable;
  const tls=state.tls_environment;
  if(tls){
-  $('tls-repair').hidden=!tls.windows;
+  $('tls-repair').hidden=!tls.windows||portable;
   $('tls-environment').textContent='TLS 验证引擎：'+tls.engine+' · '+tls.reason+(tls.restart_required?' · 组件操作后需重新启动工作台再检查':'');
  }
  const choice=state.browser_choice;
@@ -36,6 +43,14 @@ function render(){
  if(health){$('browser-summary').textContent=(health.browser_channel ? '本次检查：'+(choice?.options[health.browser_channel]||health.browser_channel)+'。' : '')+health.message;
  $('browser-diagnostic').textContent=JSON.stringify({browser:health,installation:state.setup,choice},null,2);}
  if(!$('site').options.length)options($('site'),state.sites.map(s=>[s.key,s.label+'（实站未验证）']));
+ $('capability-status').replaceChildren();
+ for(const site of state.sites){
+  for(const capability of site.acquisition?.backends || []){
+   const line=document.createElement('p');
+   line.textContent=`${site.label} · ${capability.backend==='bridge'?'默认浏览器桥':'原生实验'}：${capability.message}`;
+   $('capability-status').append(line);
+  }
+ }
  if(!$('role').options.length){options($('role'),Object.entries(state.roles));$('role').value='time_series';}
  if(!intakeApplied){
   intakeApplied=true;
@@ -52,34 +67,49 @@ function render(){
  options($('task'),state.jobs.map(j=>[j.id,`${j.platform} · ${j.keyword} · ${statusNames[j.status]||j.status}`]));
  if(requestedTask&&state.jobs.some(j=>j.id===requestedTask)){$('task').value=requestedTask;requestedTask='';}
  current=state.jobs.find(j=>j.id===$('task').value)||null;
+ $('password-login').hidden=!current || current.platform!=='liepin';
  if(current&&loadedId!==current.id){selecting=new Set(current.selection||[]);loadedId=current.id;}
- $('login-return-status').textContent=current?({watching:'等待平台返回本任务原检索页；列表连续可读后自动继续，最长10分钟。不会自动填密或绕过验证。',resumed:'已识别本任务可读列表，已自动接回任务；不等于账号认证证明。',timed_out:'自动接续等待已结束；会话未删除，可按原按钮继续。',needs_attention:'当前页面或网络需要处理，自动接续已停止。',cancelled:'自动接续已取消。'}[current.login_continuation]||''):'';
- $('saved-session-status').textContent=current?({empty:'本机尚无保存会话；按平台正常流程登录后，读取到列表或正文时保存。',restored_unverified:'已恢复本站 Cookie；仍须由正常页面确认是否有效，未自动填写密码。',saved_unverified:'本站 Cookie 已保存到本机，供下次启动尝试恢复；不等于登录已认证。',expired:'本机快照已过 7 天，未恢复；请按平台正常流程重新登录。',cleared:'此平台保存会话已清除，旧任务不会自动重新启用保存。',save_failed:'本批结果已保留，但会话保存失败：'+(current.saved_session_error||'未知错误')}[current.saved_session_status]||''):'';
+ $('login-return-status').textContent=current?({watching:'等待平台返回本任务原检索页或所选完整岗位详情；连续可读后自动继续，最长10分钟。不重复提交登录或绕过验证。',checking_detail:'已观察到所选完整详情，正在重新核对身份和正文；不重复请求该岗位。',resumed_detail:'已从登录返回的所选详情接回原采集和报告；不等于账号认证证明。',resumed:'已识别本任务可读列表，已自动接回任务；不等于账号认证证明。',timed_out:'自动接续等待已结束；会话未删除，可按原按钮继续。',needs_attention:'当前页面或网络需要处理，自动接续已停止。',cancelled:'自动接续已取消。'}[current.login_continuation]||''):'';
+ $('saved-session-status').textContent=current?({empty:'本机尚无可用的保存会话；公开可读页面可直接采集，平台要求时再正常登录。',restored_unverified:'已恢复本站 Cookie；仍须由正常页面确认是否有效，未自动填写密码。',saved_unverified:'本站 Cookie 已保存到本机，供下次启动尝试恢复；不等于登录已认证。',expired:'本机快照已过 7 天，未恢复；请按平台正常流程重新登录。',cleared:'此平台保存会话已清除，旧任务不会自动重新启用保存。',save_failed:'本批结果已保留，但会话保存失败：'+(current.saved_session_error||'未知错误')}[current.saved_session_status]||''):'';
  $('session-reuse-status').textContent=current?.session_reused?'已复用当前采集浏览器会话；是否仍然登录以平台正常响应为准。停止或退出会关闭浏览器；仅明确启用的本站 Cookie 快照可供下次恢复。':'';
  if(current){$('resume').textContent=current.authentication==='manual_pending'?'登录完成，继续原任务':'继续原任务';$('task-status').textContent=`${current.backend==='native'?'原生网络实验':'原有HTTP桥'} · ${statusNames[current.status]||current.status}：${current.message}`;
  if(current.code==='non_public_address'||current.code==='dns_error'||current.code?.startsWith('encrypted_dns_')){
  $('task-status').textContent+='\n此页面请求由本程序在网络校验阶段中止；采集浏览器可能显示 ERR_BLOCKED_BY_CLIENT。它不等于平台封禁或 Edge 自身拒绝。请检查同一平台的当前网络策略；旧任务错误与新诊断不是同一次请求。';
  }
+ if(current.read_retry){$('task-status').textContent+=`\n本任务已安排 ${current.read_retry.used}/2 次自动读页重试，重新启动或继续不会补回额度。`;}
  if(current.status==='waiting_rate'&&current.next_allowed_at){const remaining=Math.max(0,Math.ceil(current.next_allowed_at-Date.now()/1000));$('task-status').textContent+=`\n下次允许时间：${new Date(current.next_allowed_at*1000).toLocaleString()}（约 ${remaining} 秒）。${current.automatic_resume_available?'保留会话，到时自动继续。':'会话已退出或此动作需确认，届时点击继续；不必重填条件。'}`;}
  $('audit').textContent=JSON.stringify(current,null,2);renderCards();
  $('result').replaceChildren(document.createTextNode(`本批已保存 ${current.cards.filter(c=>c.status==='ok').length} 个岗位；发现 ${current.cards.length} 个候选链接。`));
  if(current.outcome){
    const o=current.outcome,summary=document.createElement('p'),counts=document.createElement('p');
    summary.id='acquisition-outcome';summary.className='warning';summary.textContent=o.message;
-   counts.id='acquisition-counts';counts.textContent=`所选 ${o.selected} · 正文保存 ${o.saved} · 失败 ${o.failed} · 待处理 ${o.pending} · 纳入目标岗位 ${o.target_jobs} · 有AI编程证据 ${o.ai_jobs}`;
+   counts.id='acquisition-counts';counts.textContent=`发现 ${o.discovered??current.cards.length} · 所选 ${o.selected} · 完整正文 ${o.full_jd??o.saved} · 目标岗位 ${o.target_relevant??o.target_jobs} · 有明确AI要求的岗位 ${o.jobs_with_explicit_ai_requirements??o.ai_jobs} · 失败 ${o.failed} · 待处理 ${o.pending}`;
+   if(o.requirement_rows!==undefined){const rows=document.createElement('p');rows.textContent=`提取要求 ${o.requirement_rows} 条 · 已接收正向要求 ${o.accepted_positive_requirement_rows} 条 · 待复核 ${o.review_pending_rows} 条。要求条数与岗位数分别计算。`;$('result').append(rows);}
    $('result').append(summary,counts);
  }
  if(current.report_id){for(const [file,label] of [['requirements_zh.csv','下载岗位要求 CSV'],['descriptions.md','下载描述模板'],...(current.outcome ? [['guided_acquisition.json','下载本批采集结果']] : [])]){const b=document.createElement('button');b.className='secondary';b.textContent=label;const id=current.report_id;b.onclick=()=>act(()=>downloadReport(id,file));$('result').append(b);}const view=document.createElement('a');view.href='/#report='+current.report_id;view.textContent=' 查看本批研究结论';const a=document.createElement('a');a.href='/advanced#report='+current.report_id;a.textContent=' 用本批要求进入个人证据中心';$('result').append(view);if(!current.outcome||current.outcome.target_jobs>0)$('result').append(a);}
  }
- for(const button of document.querySelectorAll('button'))button.disabled=state.busy && !['pause','stop'].includes(button.id);
- if(tls) $('repair-tls').disabled=state.busy||tls.restart_required||!tls.repair_available;
- note(sticky || (state.busy?(!state.active?state.setup?.message:current?.message)||'正在运行后端操作；可以暂停或停止。':''));
+ for(const button of document.querySelectorAll('button'))button.disabled=foreign ? !['copy-browser-diagnostic','export'].includes(button.id) : state.busy && !['pause','stop'].includes(button.id);
+ if(tls) $('repair-tls').disabled=foreign||state.busy||tls.restart_required||!tls.repair_available;
+ for(const input of document.querySelectorAll('#password-login-form input'))input.disabled=foreign;
+ note([state.ownership_message, state.closure_uncertain?'无法确认上次采集浏览器已关闭，请退出原工作台进程并核对浏览器后重开。':'', sticky || (state.busy?(!state.active?state.setup?.message:current?.message)||'正在运行后端操作；可以暂停或停止。':''), ...(state.checkpoint_warnings||[])].filter(Boolean).join('\n'));
 }
-function renderCards(){const root=$('cards');root.replaceChildren();if(!current.cards.length){root.textContent='还没有岗位清单。完成搜索或人工登录后，点击“读取当前列表”。';return;}
+function renderCards(){const root=$('cards');root.replaceChildren();if(!current.cards.length){root.textContent=current.code==='no_matching_jobs'?current.message:'尚未取得可用岗位清单。请查看上方任务状态；仅在平台明确要求时处理登录，不必先提供密码。';return;}
  current.cards.forEach(c=>{const box=document.createElement('div');box.className='card';const label=document.createElement('label');const input=document.createElement('input');input.type='checkbox';input.checked=selecting.has(c.id);input.addEventListener('change',()=>{if(input.checked)selecting.add(c.id);else selecting.delete(c.id);});label.append(input,document.createTextNode(' '+c.title));const source=document.createElement('small');source.textContent='列表观察到的链接：'+c.url;const outcome=document.createElement('small');outcome.textContent='结果：'+(cardStatus[c.status]||c.status)+(c.resolved_url?' · 详情真实地址：'+c.resolved_url:'');box.append(label,source,outcome);root.append(box);});}
 async function refresh(){state=await api('/api/guided/state');render();}
-$('search-form').addEventListener('submit',e=>{e.preventDefault();const f=e.currentTarget;act(async()=>{const data=Object.fromEntries(new FormData(f));data.roles=[data.role];delete data.role;data.max_pages=Number(data.max_pages);data.max_jobs=Number(data.max_jobs);data.consent=f.elements.consent.checked;data.diagnostics=f.elements.diagnostics.checked;data.reuse_current_session=f.elements.reuse_current_session.checked;data.persist_session=f.elements.persist_session.checked;data.native_consent=f.elements.native_consent.checked;const r=await api('/api/guided/create',data);loadedId='';await refresh();$('task').value=r.id;render();});});
+$('search-form').addEventListener('submit',e=>{e.preventDefault();const f=e.currentTarget;act(async()=>{const data=Object.fromEntries(new FormData(f));data.roles=[data.role];delete data.role;data.max_pages=Number(data.max_pages);data.max_jobs=Number(data.max_jobs);data.consent=f.elements.consent.checked;data.diagnostics=f.elements.diagnostics.checked;data.reuse_current_session=f.elements.reuse_current_session.checked;data.persist_session=f.elements.persist_session.checked;data.auto_collect=f.elements.auto_collect.checked;data.native_consent=f.elements.native_consent.checked;const r=await api('/api/guided/create',data);loadedId='';await refresh();$('task').value=r.id;render();});});
 $('task').addEventListener('change',()=>{loadedId='';render();});
+$('password-login-form').addEventListener('submit', e=>{
+ e.preventDefault();
+ if(requesting || state?.busy)return;
+ const form=e.currentTarget;
+ const data={id:active(),action:'login_password',username:form.elements.username.value,
+  password:form.elements.password.value,credential_consent:form.elements.credential_consent.checked};
+ // Clear the local controls immediately, including on a failed request. Never
+ // put these values in state, storage, URLs, notes, console output or downloads.
+ form.reset();
+ act(async()=>{try{await api('/api/guided/action',data);}finally{data.username='';data.password='';}});
+});
 for(const [button,action] of Object.entries({'login':'login','capture':'capture','search-again':'search','pause':'pause','resume':'resume','stop':'stop'}))$(button).addEventListener('click',()=>act(()=>api('/api/guided/action',{id:active(),action,...(action==='login'?{auto_continue:$('auto-login-return').checked}:{})})));
 $('collect').addEventListener('click',()=>act(()=>api('/api/guided/action',{id:active(),action:'collect',selected:[...selecting]})));
 $('select-all').addEventListener('click',()=>{if(!current)return;selecting=new Set(current.cards.slice(0,current.max_jobs).map(c=>c.id));renderCards();});

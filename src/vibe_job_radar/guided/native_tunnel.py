@@ -27,6 +27,9 @@ class NativeTunnel:
         self.username, self.password = 'radar', secrets.token_urlsafe(32)
         self._authorization = 'Basic ' + base64.b64encode((self.username + ':' + self.password).encode()).decode()
         self._lock, self._stop = threading.RLock(), threading.Event()
+        self.policy.bind_cancellation(self.cancelled).bind_cancellation(self._stop)
+        self._proxy_auth_lock = threading.Lock()
+        self._proxy_auth_error = None
         self._sockets = set()
         self._closed = False
         self._slots = threading.BoundedSemaphore(16)
@@ -75,7 +78,8 @@ class NativeTunnel:
                     raise TimeoutError()
                 try:
                     # Target IP was validated before dialing and never re-resolved.
-                    return proxy.open_tunnel(ip, budget) if proxy else socket.create_connection((ip,443), budget)
+                    self.policy.ensure_active()
+                    return self._open_proxy(proxy, ip, budget) if proxy else socket.create_connection((ip,443), budget)
                 except LocalProxyError as exc:
                     raise FetchError(exc.code) from exc
                 except OSError as exc:
@@ -84,6 +88,33 @@ class NativeTunnel:
             raise TimeoutError()
         except LocalProxyError as exc:
             raise FetchError(exc.code) from exc
+
+    def _open_proxy(self, proxy, ip, budget):
+        if proxy.credentials is None:
+            return proxy.open_tunnel(ip, budget)
+        # Chromium may open several CONNECTs concurrently. Serialize an
+        # authenticated handshake so a refused credential is never replayed by
+        # another pending connection from the same owned browser session.
+        deadline = time.monotonic() + budget
+        if not self._proxy_auth_lock.acquire(timeout=budget):
+            raise TimeoutError('proxy authentication deadline')
+        try:
+            if self._proxy_auth_error:
+                raise LocalProxyError(self._proxy_auth_error)
+            remaining = deadline - time.monotonic()
+            if self._stop.is_set() or self.cancelled.is_set():
+                raise FetchError('paused')
+            if remaining <= 0:
+                raise TimeoutError()
+            try:
+                return proxy.open_tunnel(ip, remaining)
+            except LocalProxyError as exc:
+                # A truncated/invalid reply can mean credentials were sent but
+                # their result is unknown. Do not replay that handshake either.
+                self._proxy_auth_error = exc.code
+                raise
+        finally:
+            self._proxy_auth_lock.release()
 
     @staticmethod
     def _reply(sock, status):

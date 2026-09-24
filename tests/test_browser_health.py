@@ -151,6 +151,63 @@ class StartupTests(unittest.TestCase):
         wire = factory.call_args.kwargs['transport_factory']()
         self.assertFalse(wire.allowed_resource('https://www.zhipin.com/'))
 
+    def test_blank_page_failure_preserves_exact_step_without_retry_or_timeout_change(self):
+        for step in ('set_content', 'read_title', 'verify_title'):
+            with self.subTest(step=step):
+                backend=MagicMock();backend.startup_report={'ready':True,'launch_tested':True}
+                backend.page.title.return_value='Vibe Radar browser check'
+                backend.page.is_closed.return_value=False
+                backend.browser.is_connected.return_value=True
+                if step=='set_content':backend.page.set_content.side_effect=TimeoutError('auth_token=private')
+                elif step=='read_title':backend.page.title.side_effect=TimeoutError('auth_token=private')
+                else:backend.page.title.return_value='private unexpected title'
+                with patch('vibe_job_radar.guided.browser.PlaywrightBackend',return_value=backend):
+                    result=probe_browser()
+                self.assertFalse(result['ready']);self.assertEqual(result['stage'],'blank_page')
+                self.assertEqual(result['blank_page_check']['step'],step)
+                self.assertEqual(result['blank_page_check']['page_closed'],False)
+                self.assertEqual(result['blank_page_check']['browser_connected'],True)
+                self.assertIn('set_content',result['blank_page_check']['elapsed_ms'])
+                self.assertNotIn('private',json.dumps(result))
+                backend.page.set_content.assert_called_once()
+                self.assertEqual(backend.page.set_content.call_args.kwargs,{})
+                self.assertEqual(backend.page.title.call_count,0 if step=='set_content' else 1)
+                backend.page.set_default_timeout.assert_not_called()
+                backend.page.goto.assert_not_called();backend.close.assert_called_once()
+
+    def test_blank_page_lifecycle_observations_exclude_our_cleanup(self):
+        backend=MagicMock();backend.startup_report={'ready':True,'launch_tested':True}
+        backend.page.title.return_value='Vibe Radar browser check'
+        backend.page.is_closed.return_value=False;backend.browser.is_connected.return_value=True
+        page_events={};browser_events={}
+        backend.page.on.side_effect=lambda name,callback:page_events.update({name:callback})
+        backend.browser.on.side_effect=lambda name,callback:browser_events.update({name:callback})
+        backend.page.set_content.side_effect=lambda *a: [page_events[name]('private ignored event') for name in ('domcontentloaded','load')]
+        backend.close.side_effect=lambda: [page_events['close'](),browser_events['disconnected']()]
+        with patch('vibe_job_radar.guided.browser.PlaywrightBackend',return_value=backend):
+            result=probe_browser()
+        self.assertTrue(result['ready']);detail=result['blank_page_check']
+        self.assertEqual(detail['step'],'verified')
+        self.assertEqual(detail['events_before_cleanup'],
+            {'domcontentloaded':1,'load':1,'crash':0,'close':0,'disconnected':0})
+        self.assertEqual(set(detail['elapsed_ms']),{'set_content','read_title'})
+        self.assertTrue(all(type(value) is int and value>=0 for value in detail['elapsed_ms'].values()))
+        self.assertNotIn('private',json.dumps(detail));backend.close.assert_called_once()
+
+    def test_blank_page_close_observation_cannot_replace_original_failure(self):
+        backend=MagicMock();backend.startup_report={'ready':True,'launch_tested':True}
+        def page_closed(*args):
+            backend.page=None;backend.browser=None
+            raise TimeoutError('artificial page closed during set_content')
+        backend.page.set_content.side_effect=page_closed
+        with patch('vibe_job_radar.guided.browser.PlaywrightBackend',return_value=backend):
+            result=probe_browser()
+        self.assertFalse(result['ready']);self.assertEqual(result['error_type'],'TimeoutError')
+        self.assertEqual(result['blank_page_check']['step'],'set_content')
+        self.assertTrue(result['blank_page_check']['page_closed'])
+        self.assertFalse(result['blank_page_check']['browser_connected'])
+        backend.close.assert_called_once()
+
 
 class InstallerTests(unittest.TestCase):
     def test_nonzero_exit_keeps_bounded_redacted_output(self):

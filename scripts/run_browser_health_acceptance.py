@@ -65,6 +65,11 @@ def main():
                 expect(page.locator('#browser-summary')).to_contain_text('已通过空白页启动检查',timeout=45000)
                 second=server.guided.state()['browser_health']
                 assert second['ready'] and second['mode']=='headed' and second['launch_tested']
+                detail=second['blank_page_check']
+                assert detail['step']=='verified' and set(detail['elapsed_ms'])=={'set_content','read_title'}
+                assert detail['page_closed'] is False and detail['browser_connected'] is True
+                assert not any(detail['events_before_cleanup'][name] for name in ('crash','close','disconnected'))
+                result['blank_page_check']=detail
                 result['checks'].append('same-process recheck starts actual headed collection backend and clears stale not-ready state')
                 result['playwright_version']=second['playwright_version']
                 result['python_version']=second['python_version']

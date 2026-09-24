@@ -96,14 +96,18 @@ class RealProxyTests(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.requests=[];self.connects=[];self.sni=[]
         self.http_status=200;self.proxy_status=200;self.symbol=IP4;owner=self
+        self.expected_proxy_auth=None;self.proxy_reason='refused';self.proxy_peers=[]
         class Handler(http.server.BaseHTTPRequestHandler):
             def log_message(self,*a):pass
             def answer(self):
                 body=self.rfile.read(int(self.headers.get('Content-Length','0')))
                 owner.requests.append({'method':self.command,'body':body,'host':self.headers.get('Host'),'headers':dict(self.headers)})
-                payload=b'{"ok":true,"source":"real-controlled-tls"}'
+                payload=getattr(owner,'payload',b'{"ok":true,"source":"real-controlled-tls"}')
+                content_type=getattr(owner,'content_type','application/json')
+                if getattr(owner,'browser_fixture',False) and self.path=='/robots.txt':
+                    payload=getattr(owner,'robots_payload',b'User-agent: *\nAllow: /\n');content_type='text/plain'
                 self.send_response(owner.http_status);self.send_header('Content-Length',str(len(payload)))
-                self.send_header('Content-Type','application/json');self.end_headers();self.wfile.write(payload)
+                self.send_header('Content-Type',content_type);self.end_headers();self.wfile.write(payload)
             do_GET=do_POST=answer
         self.target=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler)
         self.target.daemon_threads=True
@@ -115,18 +119,22 @@ class RealProxyTests(unittest.TestCase):
         self.real_gai=socket.getaddrinfo;self.real_dial=socket.create_connection
         class Tunnel(socketserver.StreamRequestHandler):
             def handle(self):
+                owner.proxy_peers.append(self.client_address[0])
                 first=self.rfile.readline(4096).decode('ascii').strip();headers={}
                 for _ in range(30):
                     line=self.rfile.readline(4096)
                     if line in (b'\r\n',b'\n',b''):break
                     k,v=line.decode('ascii').split(':',1);headers[k.lower()]=v.strip()
                 owner.connects.append((first,headers))
-                if owner.proxy_status!=200:
-                    self.wfile.write(f'HTTP/1.1 {owner.proxy_status} refused\r\nContent-Length: 0\r\n\r\n'.encode());self.wfile.flush();return
+                status=owner.proxy_status
+                if owner.expected_proxy_auth is not None and headers.get('proxy-authorization')!=owner.expected_proxy_auth:
+                    status=407
+                if status!=200:
+                    self.wfile.write(f'HTTP/1.1 {status} {owner.proxy_reason}\r\nContent-Length: 0\r\n\r\n'.encode());self.wfile.flush();return
                 expected=(f'[{owner.symbol}]' if ':' in owner.symbol else owner.symbol)+':443'
                 if first.split()[:2]!=['CONNECT',expected]:return
                 # Deliberate test-only mapping in the controlled proxy server.
-                upstream=owner.real_dial(owner.target.server_address,2)
+                upstream=owner.real_dial(getattr(owner,'upstream_address',owner.target.server_address),2)
                 try:
                     self.wfile.write(b'HTTP/1.1 200 Connection established\r\n\r\n');self.wfile.flush()
                     peers={self.connection:upstream,upstream:self.connection}
@@ -142,7 +150,7 @@ class RealProxyTests(unittest.TestCase):
         class Server(socketserver.ThreadingTCPServer):
             allow_reuse_address=True;daemon_threads=True
             def handle_error(self,*a):pass
-        self.proxy=Server(('127.0.0.1',0),Tunnel)
+        self.proxy=Server((getattr(self,'proxy_bind','127.0.0.1'),0),Tunnel)
         self.threads=[]
         for server in (self.target,self.proxy):
             t=threading.Thread(target=server.serve_forever,kwargs={'poll_interval':.01},daemon=True);t.start();self.threads.append(t)
