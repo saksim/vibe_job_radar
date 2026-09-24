@@ -290,6 +290,13 @@ def main():
                         body = ('岗位职责：研究图像算法。岗位要求：熟悉计算机视觉，编写图像识别实验与自动测试。人工回归材料。' if ident == '302' else
                                 '岗位职责：负责电力负荷预测与时间序列建模。岗位要求：熟悉能源业务，使用Cursor辅助编程并审查生成代码。人工回归材料。')
                         content = algorithm_html if url == algorithm_url else f'<h1>算法工程师人工样本{ident}</h1><dl><dt>职位介绍</dt><dd>{body}</dd></dl>'
+                        if ident == '303':
+                            body = ('1.本科及以上，计算机相关专业，能够编写接口和自动测试。\n'
+                                    '2.掌握时间序列建模，熟练使用Python和数据库。\n'
+                                    '3.了解能源业务，具备模型评估和误差分析经验。')
+                            content = ('<dl><dt>职位介绍</dt><dd data-selector="job-intro-content">'+body+'</dd></dl>'
+                                '<script type="application/ld+json">'+json.dumps(dict(**{'@type':'JobPosting'},
+                                    title='算法工程师人工样本303', description=body, url=url))+'</script>')
                         return Response(200, {'content-type': 'text/html'}, content.encode(), url)
                     f.locator('[name=detail_budget]').fill('2')
                     f.locator('[name=rights_note]').fill('人工算法分类回归，未访问真实招聘站点。')
@@ -318,7 +325,7 @@ def main():
                         source.return_value.fetch.assert_called_once_with('https://www.liepin.com/job/303.shtml')
                     continued = json.loads(page.locator('#collect-json').text_content())
                     assert continued['category_id'] == 'algorithm' and continued['category_attempts'] == 0
-                    result['checks'].append('algorithm continuation preserves its category and consumes only the remaining saved-list detail')
+                    result['checks'].append('algorithm continuation preserves its category and consumes only the remaining saved-list detail with fully corroborated unheaded numbered qualifications')
                     page.set_viewport_size({'width': 390, 'height': 844})
                     page.locator('section').first.screenshot(path=str(output / 'mobile-case.png'))
                     assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')
