@@ -67,7 +67,7 @@ def parser() -> argparse.ArgumentParser:
     s.add_argument("--as-of", help="带时区ISO时间；用于可复现验收")
     s.add_argument("--llm-model", help="可选OpenAI结构化抽取模型；用户选择可用模型，不默认调用")
     s.add_argument("--consent-send-jd", action="store_true")
-    s = sub.add_parser('public-worker',help='独立执行工作区已确认的公开查询计划；无网页服务器/浏览器')
+    s = sub.add_parser('public-worker',help='独立执行工作区已确认的公开查询计划和待办；无网页服务器/浏览器')
     s.add_argument('--workspace',type=Path,required=True)
     return p
 

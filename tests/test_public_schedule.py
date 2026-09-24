@@ -293,7 +293,8 @@ with patch('urllib.request.getproxies',return_value={}):
 
     def test_duplicate_keys_bad_schema_and_unsafe_time_fail_closed(self):
         self.configure();good=json.dumps(self.schedule._read())
-        for raw in ('{"schema_version":1,"schema_version":1}',good.replace('"schema_version": 1','"schema_version": 99'),good.replace('"last_seen":','"unknown":')):
+        for raw in ('{"schema_version":1,"schema_version":1}',good.replace('"schema_version": 1','"schema_version": 99'),
+                    good.replace('"last_seen":','"unknown":'),json.dumps({**json.loads(good),'last_seen':10**400})):
             with closing(sqlite3.connect(self.schedule.path)) as db:
                 db.execute('UPDATE schedule SET payload=?',(raw,));db.commit()
             with self.subTest(raw=raw[:60]),self.assertRaises(InputError):self.schedule.tick()

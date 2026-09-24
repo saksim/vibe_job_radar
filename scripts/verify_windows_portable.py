@@ -76,6 +76,8 @@ def verify_idle_worker(app,exe,workspace,cwd,env,*,registered_command=None):
     """Start the actual independent executable; never enable a daily plan."""
     if app.json('/api/public/schedule/state')['status']!='disabled':
         raise AssertionError('idle worker acceptance requires a disabled plan')
+    if app.json('/api/public/queue/state')['items']:
+        raise AssertionError('idle worker acceptance requires an empty queue')
     # During ephemeral startup acceptance, execute the exact fixed registered
     # string with CreateProcess (shell=False), not a reconstructed argv list.
     command=registered_command if registered_command is not None else [str(exe),'--workspace',str(workspace),'--public-worker']
@@ -97,6 +99,8 @@ def verify_idle_worker(app,exe,workspace,cwd,env,*,registered_command=None):
             raise AssertionError('frozen independent worker did not start')
         if state.get('event')!='worker_state' or state.get('plan_status')!='disabled' or state.get('retained_runs')!=0:
             raise AssertionError('frozen worker implicitly enabled a plan')
+        if state.get('queue_status')!='idle' or state.get('queued_queries')!=0:
+            raise AssertionError('frozen worker implicitly enqueued a query')
         if app.json('/api/public/state')['task']['status']!='idle':
             raise AssertionError('frozen idle worker created a public task')
     finally:
@@ -107,6 +111,72 @@ def verify_idle_worker(app,exe,workspace,cwd,env,*,registered_command=None):
         reader.join(5);child.stdout.close()
     if app.json('/api/public/schedule/state')['status']!='disabled':
         raise AssertionError('stopped worker changed the disabled plan')
+
+
+def verify_queued_worker(exe,root,cwd,env,*,command_prefix=None):
+    """Original cached pipeline in a fresh workspace; no HTTP server required.
+
+    The source harness authors one catalog and explicit queue consent. The
+    separate executable must consume the unchanged cache, run its own packaged
+    queue/task/report code, and leave the original rate ledger untouched.
+    command_prefix is used only for the source preflight test.
+    """
+    from unittest.mock import patch
+    from vibe_job_radar.local_public import API_URL,SOURCE,LocalPublicDataClient
+    from vibe_job_radar.public_contract import PublicQuery
+    from vibe_job_radar.public_queue import PublicQueue
+    from vibe_job_radar.public_tasks import PublicTasks
+    from vibe_job_radar.workspace import Workspace
+    workspace=Workspace(root/'queued-workspace')
+    class AuthoredWire:
+        def json(self,url):
+            assert url==API_URL
+            return {'jobs':[{'id':81000,'absolute_url':'https://job-boards.greenhouse.io/anthropic/jobs/81000',
+                'title':'Technical Architect ARTIFICIAL PORTABLE FIXTURE','location':{'name':'London'},
+                'content':'<p>Independently authored test catalog, not real market data.</p>'
+                          '<p>Qualifications: You must use Cursor for software architecture and code review.</p>'}],
+                'meta':{'total':1}}
+    with patch('urllib.request.getproxies',return_value={}):
+        client=LocalPublicDataClient(workspace,transport=AuthoredWire())
+        request=PublicQuery(query='Architect',source_scope=(SOURCE.key,),limit=20)
+        client.search(request,consent=True)
+        tasks=PublicTasks(workspace,hybrid_client=client);queue_state=PublicQueue(workspace,tasks)
+        try:queue_state.enqueue({'revision':0,'consent':True,'query':request.payload()})
+        finally:tasks.close()
+    rate=client.ledger.path.read_bytes();cache=client.path.read_bytes()
+    command=(command_prefix if command_prefix is not None else [str(exe)])+['--workspace',str(workspace.root),'--public-worker']
+    child=subprocess.Popen(command,cwd=cwd,env=env,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+    try:
+        deadline=time.monotonic()+30
+        while time.monotonic()<deadline:
+            if child.poll() is not None:raise AssertionError('queued worker exited before report')
+            state=queue_state.state()
+            if state['history']:break
+            time.sleep(.05)
+        else:raise AssertionError('queued worker did not produce its original report')
+        row=state['history'][0]
+        if state['status']!='idle' or len(state['history'])!=1 or row['status']!='completed' or row['stale']:
+            raise AssertionError('queued worker did not complete exactly once')
+        observer=PublicTasks(workspace,hybrid_client=client)
+        try:task=observer.snapshot()
+        finally:observer.close()
+        if task.get('id')!=row['task_id'] or task.get('network_requests_this_click')!=0 or task.get('cache_reused') is not True:
+            raise AssertionError('queued worker did not reuse the original cache')
+        report=workspace.report(row['report_id'])
+        if report['manifest']['stats']['full_text_job_groups']!=1 or report['manifest']['stats']['selected_source_records']!=1:
+            raise AssertionError('queued worker did not use the original complete-JD report pipeline')
+        if client.ledger.path.read_bytes()!=rate or client.path.read_bytes()!=cache:
+            raise AssertionError('cached queued query changed the original budget or catalog')
+        if (workspace.root/'public_schedule').exists():raise AssertionError('queue enabled a daily plan')
+        return {'completed_queries':1,'network_requests':0,'full_text_job_groups':1,'daily_plan_enabled':False}
+    finally:
+        # The one-shot query is already terminal on success. This verifies the
+        # actual entry point, not normal signal cleanup or 24-hour operation.
+        if child.poll() is None:
+            child.terminate()
+            try:child.wait(5)
+            except subprocess.TimeoutExpired:child.kill();child.wait(5)
 
 
 def verify_startup_registration(app,exe,workspace,cwd,env):
@@ -200,7 +270,7 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
             app=RunningApp(exe,workspace,cwd,env)
             try:
                 result['stage']='resources_and_runtime'
-                for path in ('/','/app.js','/guided','/guided.js','/advanced','/advanced.js','/network-settings.js','/public-schedule.js','/windows-startup.js'):
+                for path in ('/','/app.js','/guided','/guided.js','/advanced','/advanced.js','/network-settings.js','/public-schedule.js','/public-queue.js','/windows-startup.js'):
                     if app.call(path)[0]!=200:raise AssertionError('packaged static resource absent')
                 status=app.json('/api/status')
                 if status['counts']['records']!=0:raise AssertionError('packaged application did not use empty test workspace')
@@ -213,10 +283,17 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
                     raise AssertionError('packaged task ownership state is absent')
                 if app.json('/api/public/schedule/state')['status']!='disabled':
                     raise AssertionError('packaged daily plan did not default to off')
+                queue_default=app.json('/api/public/queue/state')
+                if queue_default['status']!='idle' or queue_default['items'] or (workspace/'public_queue').exists():
+                    raise AssertionError('packaged queue did not default to empty without a record')
                 result['stage']='independent_idle_worker'
                 verify_idle_worker(app,exe,workspace,cwd,env)
                 result['public_worker_idle_verified']=True
                 result['checks'].append('separate frozen exe starts the independent worker without Python PATH, keeps the plan disabled and creates no task; only the owned idle test process is terminated')
+                result['stage']='independent_queued_worker'
+                result['public_queue_cached_worker']=verify_queued_worker(exe,root,cwd,env)
+                result['public_queue_cached_worker_verified']=True
+                result['checks'].append('separate frozen worker consumes one explicitly queued query from an authored fresh cache, creates the original full-JD report with zero network requests, leaves the cache and rate ledger unchanged and enables no daily plan')
                 result['stage']='native_pac_worker'
                 network=app.json('/api/network/state')
                 if network['proxy_mode']!='auto' or not network['pac_available']:

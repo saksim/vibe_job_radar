@@ -17,6 +17,7 @@ sys.path.insert(0,str(ROOT/'src'))
 from test_local_public import payload,query
 from vibe_job_radar.local_public import API_URL,LocalPublicDataClient
 from vibe_job_radar.public_schedule import DAY,PublicSchedule
+from vibe_job_radar.public_queue import PublicQueue
 from vibe_job_radar.public_tasks import PublicTasks
 from vibe_job_radar.public_worker import PublicWorker
 from vibe_job_radar import public_worker
@@ -81,7 +82,7 @@ def signal_child(root):
             assert public_worker.run_cli(root,emit=emit)==0
         assert events[-1]=={'event':'worker_stopped'}
         assert all(signal.getsignal(n)==handler for n,handler in original.items())
-        assert not worker.schedule.is_running() and not worker.tasks.is_running()
+        assert not worker.schedule.is_running() and not worker.queue.is_running() and not worker.tasks.is_running()
     print(json.dumps({'success':True,'signals_checked':len(numbers)}))
     return 0
 
@@ -115,8 +116,10 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(self.results,[0]);self.wire.json.assert_not_called()
         self.assertEqual(self.worker.schedule.state()['status'],'disabled')
         self.assertFalse(self.worker.schedule.path.exists())
+        self.assertEqual(self.worker.queue.state()['status'],'idle');self.assertFalse(self.worker.queue.root.exists())
         self.assertFalse((self.workspace.root/'jobs.sqlite').exists())
         self.assertFalse(self.worker.schedule.is_running());self.assertFalse(self.worker.tasks.is_running())
+        self.assertFalse(self.worker.queue.is_running())
         self.assertEqual(self.events[0],{'event':'worker_started','http_server':False,'browser':False})
 
     def test_due_confirmed_query_reuses_original_report_and_logs_no_query(self):
@@ -158,6 +161,33 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(self.worker.run(emit=stop_only_scheduler),2)
         self.assertIn({'event':'worker_failed','code':'scheduler_unavailable'},self.events)
         self.wire.json.assert_not_called()
+
+    def test_queue_exit_without_worker_stop_is_reported_and_closes_all_workers(self):
+        def stop_only_queue(value):
+            self.events.append(value)
+            if value['event']=='worker_state':self.worker.queue.close()
+        self.assertEqual(self.worker.run(emit=stop_only_queue),2)
+        self.assertIn({'event':'worker_failed','code':'queue_unavailable'},self.events)
+        self.assertFalse(self.worker.schedule.is_running());self.assertFalse(self.worker.tasks.is_running())
+        self.wire.json.assert_not_called()
+
+    def test_confirmed_queue_runs_without_plan_or_http_and_logs_only_fixed_fields(self):
+        self.worker.queue.enqueue({'revision':0,'consent':True,'query':query().payload()})
+        with patch.object(socket.socket,'bind',side_effect=AssertionError('must not bind')):
+            self.start();wait_for(lambda:len(self.worker.queue.state()['history'])==1);self.stop()
+        self.assertEqual(self.results,[0]);self.wire.json.assert_called_once_with(API_URL)
+        state=self.worker.queue.state();self.assertEqual(state['status'],'idle')
+        self.assertTrue(self.workspace.report(state['history'][0]['report_id']))
+        self.assertFalse(self.worker.schedule.path.exists())
+        for private in ('Architect','https://',str(self.workspace.root),'source_scope'):
+            self.assertNotIn(private,json.dumps(self.events))
+
+    def test_corrupt_queue_is_preserved_and_prevents_due_plan_from_starting(self):
+        seed(self.workspace);self.worker.queue.root.mkdir();self.worker.queue.path.write_bytes(b'PRIVATE QUEUE RECORD')
+        self.assertEqual(self.worker.run(emit=self.events.append),2)
+        self.assertEqual(self.worker.queue.path.read_bytes(),b'PRIVATE QUEUE RECORD')
+        self.assertFalse(self.worker.schedule.is_running());self.wire.json.assert_not_called()
+        self.assertNotIn('PRIVATE',json.dumps(self.events))
 
     def test_shutdown_during_read_preserves_checkpoint_without_replaying(self):
         seed(self.workspace);entered=threading.Event();release=threading.Event()
@@ -263,6 +293,59 @@ class ProcessWorkerTests(unittest.TestCase):
         self.assertEqual(run.returncode,0,run.stderr)
         self.assertTrue(json.loads(run.stdout)['success'])
         self.assertGreaterEqual(json.loads(run.stdout)['signals_checked'],2)
+
+
+class ProcessQueueWorkerTests(unittest.TestCase):
+    launch=ProcessWorkerTests.launch
+    cleanup=ProcessWorkerTests.cleanup
+    request_count=ProcessWorkerTests.request_count
+
+    def setUp(self):
+        tmp=tempfile.TemporaryDirectory();self.addCleanup(tmp.cleanup)
+        self.root=Path(tmp.name);self.workspace=Workspace(self.root);self.processes=[];self.outcomes={}
+        self.addCleanup(self.cleanup)
+        env=patch.dict(os.environ,{k:v for k,v in os.environ.items() if not k.startswith('VIBE_RADAR_')},clear=True)
+        env.start();self.addCleanup(env.stop)
+        with patch('urllib.request.getproxies',return_value={}):
+            worker=PublicWorker(self.workspace)
+            try:worker.queue.enqueue({'revision':0,'consent':True,'query':query().payload()})
+            finally:worker.tasks.close()
+
+    def queue_state(self):
+        tasks=PublicTasks(self.workspace,hybrid_client=LocalPublicDataClient(self.workspace))
+        try:return PublicQueue(self.workspace,tasks).state()
+        finally:tasks.close()
+
+    def test_two_real_workers_only_dispatch_once_and_observer_can_pause_owner(self):
+        first=self.launch('queue-first','hold');wait_for(lambda:self.request_count()==1)
+        second=self.launch('queue-second')
+        wait_for(lambda:json.loads((self.root/'state-queue-second.json').read_text(encoding='utf-8'))['queue_code']=='owner_busy')
+        observer=PublicWorker(self.workspace)
+        try:observer.queue.pause({'revision':observer.queue.state()['revision']})
+        finally:observer.tasks.close()
+        def cancelled():
+            tasks=PublicTasks(self.workspace,hybrid_client=LocalPublicDataClient(self.workspace))
+            try:return tasks.snapshot()['status']=='cancelling'
+            finally:tasks.close()
+        wait_for(cancelled);self.assertEqual(self.request_count(),1)
+        (self.root/'release-fixture').write_text('release',encoding='utf-8')
+        state=wait_for(lambda:(s if (s:=self.queue_state())['history'] else None))
+        self.assertEqual(state['status'],'paused');self.assertEqual(state['history'][0]['status'],'cancelled')
+        self.cleanup();self.assertEqual(first.returncode,0,self.outcomes['queue-first']);self.assertEqual(second.returncode,0,self.outcomes['queue-second'])
+        self.assertFalse((self.root/'public_schedule').exists());self.assertEqual(self.request_count(),1)
+
+    def test_killed_queue_owner_never_replays_and_keeps_unstarted_entry_paused(self):
+        with patch('urllib.request.getproxies',return_value={}):
+            seed_worker=PublicWorker(self.workspace)
+            try:seed_worker.queue.enqueue({'revision':seed_worker.queue.state()['revision'],'consent':True,'query':query(query='Engineer').payload()})
+            finally:seed_worker.tasks.close()
+        first=self.launch('queue-first','hold');wait_for(lambda:self.request_count()==1)
+        rate=self.root/'public_examples/rates.sqlite';first.kill();first.communicate(timeout=5);original=rate.read_bytes()
+        second=self.launch('queue-second');wait_for(lambda:self.queue_state()['status']=='paused')
+        state=self.queue_state();self.assertEqual(state['history'][0]['status'],'interrupted')
+        self.assertEqual(len(state['items']),1);self.assertEqual(state['items'][0]['phase'],'pending')
+        self.assertEqual(self.request_count(),1);self.assertEqual(rate.read_bytes(),original)
+        self.cleanup();self.assertEqual(second.returncode,0,self.outcomes['queue-second'])
 
 
 if __name__=='__main__':
