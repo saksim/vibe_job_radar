@@ -118,12 +118,22 @@ class Locator:
         return result['value']
 
     def click(self, *, timeout=None):
+        self.page.bring_to_front()
         def point():
-            result = self._read('(()=>{if(!(' + VISIBLE + ')(e)||e.matches(":disabled"))return null;'
+            coordinates = ('(()=>{if(!(' + VISIBLE + ')(e)||e.matches(":disabled"))return null;'
                 'e.scrollIntoView({block:"center",inline:"center"});const r=e.getBoundingClientRect();'
                 'const x=r.x+r.width/2,y=r.y+r.height/2;const hit=document.elementFromPoint(x,y);'
                 'return hit&&(hit===e||e.contains(hit))?{x,y}:null;})()')
-            return result.get('value') if result['found'] else None
+            before = self._read(coordinates)
+            if not before['found'] or before.get('value') is None:
+                return None
+            # DOM geometry can precede the first compositor frame. A click at
+            # that point can silently miss an otherwise visible form button.
+            # Wait for paint opportunities, then recheck hit target/geometry;
+            # no fixed sleep, synthetic DOM click or repeated form submission.
+            self.page.evaluate('() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))')
+            after = self._read(coordinates)
+            return after.get('value') if after == before else None
         position = self._wait(point, timeout=timeout)
         for kind in ('mousePressed', 'mouseReleased'):
             self.page.client.send('Input.dispatchMouseEvent', {

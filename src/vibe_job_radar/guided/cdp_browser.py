@@ -114,9 +114,10 @@ class CDPBrowser:
                 '--proxy-server=' + proxy['server']]
             if headless:
                 browser_args.append('--headless=new')
-            # Match the existing Playwright launch policy in isolated root CI.
-            # Normal user browsers keep their browser sandbox enabled.
-            if sys.platform.startswith('linux') and os.geteuid() == 0:
+            # Preserve the existing Playwright Linux launch policy. Its default
+            # chromiumSandbox=False applies to unprivileged CI runners too;
+            # limiting this flag to uid 0 prevents those browsers from starting.
+            if sys.platform.startswith('linux'):
                 browser_args.append('--no-sandbox')
             browser_args.append('--no-startup-window')
             bridge = Path(__file__).with_name('cdp_bridge.js')
