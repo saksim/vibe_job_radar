@@ -762,7 +762,14 @@ class GuidedService:
             for old in list(self._backends):
                 self._close_backend(old)
             def progress(code, seconds):
-                self._save(state, code, wait_seconds=seconds)
+                # A browser outlives the action that created it. Later pacing
+                # callbacks must not restore that action's old checkpoint.
+                with self._records():
+                    current = self._load(ident)
+                    if (current['status'] != 'running' or self._cancel.is_set()
+                            or self._shutdown.is_set()):
+                        return
+                    self._save(current, code, wait_seconds=seconds)
             factory = self.native_factory if native else self.factory
             options = {'channel': self._selected_browser} if self._selected_browser != 'bundled' else {}
             lease = None

@@ -52,6 +52,7 @@ class SearchFixture:
         self.deny_query_documents = True
         self.pacing_burst = 0
         self.closed_detail = False
+        self.login_late_pacing = False
         owner = self
         class Handler(http.server.BaseHTTPRequestHandler):
             protocol_version = 'HTTP/1.1'
@@ -178,8 +179,13 @@ Promise.all([Promise.all(optionalRequests), fetch('https://""" + REGION_HOST + R
                 elif path.startswith('/fe-www-pc/v6/css/pacing-') and path.endswith('.css'):
                     self.send('body { color: #123; }', 'text/css')
                 elif path == '/fixture-login':
+                    late = ('<script>setTimeout(() => {for (let i=0;i<3;i++) {'
+                            'const link=document.createElement("link");link.rel="stylesheet";'
+                            'link.href="https://' + CDN_HOST + '/fe-www-pc/v6/css/pacing-"+i+".css";'
+                            'document.head.appendChild(link);}},250);</script>'
+                            if owner.login_late_pacing else '')
                     self.send('<h1>人工登录</h1><form method="post" action="/fixture-login">'
-                              '<button>人工确认</button></form>')
+                              '<button>人工确认</button></form>' + late)
                 elif path == '/job/123.shtml':
                     self.send('<h1>人工已停止职位</h1><p>该职位已暂停招聘</p>'
                               '<aside><a href="/job/456.shtml">其他推荐岗位</a></aside>'
@@ -646,6 +652,47 @@ def main():
                         server.pacing_burst = 0
                         paced.close()
                     result['checks'].append('20 permitted stylesheet requests retain the default 0.5s durable spacing while the visible keyword form, full JD and original report complete automatically without blocking CDP replies')
+                    # The same native browser outlives search, manual collection
+                    # and the explicit login action. Delayed stylesheet reads
+                    # exercise real progress callbacks after login has returned.
+                    manual_workspace = Workspace(root/'manual-progress-workspace')
+                    manual_adapter = replace(login_adapter, login_url=URL+'/fixture-login')
+                    manual = GuidedService(manual_workspace, registry=Registry([manual_adapter]),
+                        ledger=RateLedger(root/'manual-progress-rate.sqlite', Limits(page_interval=0)),
+                        native_backend_factory=factory)
+                    services.append(manual)
+                    try:
+                        manual.create({**query, 'max_pages':1})
+                        manual_task = wait(manual)
+                        assert manual_task['status']=='ready', manual_task.get('code')
+                        selected = [manual_task['cards'][0]['id']]
+                        manual.action({'id':manual_task['id'],'action':'collect','selected':selected})
+                        manual_task = wait(manual)
+                        assert manual_task['status']=='completed' and manual_task['outcome']['saved']==1
+                        manual_report = manual_task['report_id']
+                        before_login = len(server.requests)
+                        server.login_late_pacing = True
+                        manual.action({'id':manual_task['id'],'action':'login','auto_continue':False})
+                        pending = wait(manual)
+                        deadline = time.monotonic()+5
+                        while sum('/css/pacing-' in r['path'] for r in server.requests[before_login:])<3 and time.monotonic()<deadline:
+                            time.sleep(.05)
+                        assert sum('/css/pacing-' in r['path'] for r in server.requests[before_login:])==3
+                        pending = manual.state()['jobs'][0]
+                        assert pending['status']=='waiting_manual', pending.get('code')
+                        assert pending['code']=='manual_browser_open'
+                        assert pending['authentication']=='manual_pending'
+                        assert pending['selection']==selected and pending['report_id']==manual_report
+                        assert len(pending['detail_attempt_history']['attempts'])==1
+                        assert manual_workspace.report(manual_report)['manifest']['stats']['full_text_job_groups']==1
+                        with Store(manual_workspace.db) as store:
+                            assert len(store.records())==1 and store.records()[0].text==RECORDED_BODY
+                        assert not any(r['method']=='POST' and r['path']=='/fixture-login' for r in server.requests[before_login:])
+                        result['manual_login_pending_state'] = {k:pending[k] for k in ('status','code','authentication')}
+                    finally:
+                        server.login_late_pacing = False
+                        manual.close()
+                    result['checks'].append('default-paced search, separate selected JD/report and later login retain selection, attempt history, report and manual_pending after three late stylesheet requests; no password or login POST')
                     b = factory(local, RateLedger(root/'blank.sqlite', Limits(page_interval=0,request_interval=0)), threading.Event(), lambda *_: None)
                     try:
                         b.open(local.search_url('时间序列'))
