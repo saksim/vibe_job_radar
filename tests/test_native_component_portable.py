@@ -48,3 +48,30 @@ class NativeComponentPortableTests(unittest.TestCase):
         self.assertEqual(evidence['returncode'],2);self.assertEqual(evidence['stage'],'launch')
         self.assertEqual(evidence['code'],'browser_executable_missing')
         self.assertNotIn('SECRET',json.dumps(evidence));self.assertEqual(run.call_count,1)
+
+    def test_cleanup_failure_retains_only_typed_completion_facts_without_retry(self):
+        cleanup=dict(attempted=True,close_returned=True,profile_removed=False,
+            profile_cleanup_failed=True,bridge_exited=True,tunnel_closed=True,
+            tunnel_thread_stopped=None,close_error_type='',private_path='SECRET')
+        row={**self.row(),'success':False,'stage':'cleanup','cleanup_verified':False,
+             'cleanup':cleanup}
+        reply=SimpleNamespace(returncode=2,stdout=json.dumps(row).encode(),stderr=b'SECRET')
+        evidence={}
+        with patch('verify_windows_portable.subprocess.run',return_value=reply) as run, \
+                patch('verify_windows_portable.subprocess.CREATE_NO_WINDOW',0,create=True),self.assertRaises(AssertionError):
+            verify_native_component(Path('candidate.exe'),Path('separate'),{},evidence)
+        self.assertEqual(evidence['cleanup'], {k:v for k,v in cleanup.items() if k!='private_path'})
+        self.assertNotIn('SECRET',json.dumps(evidence));self.assertEqual(run.call_count,1)
+
+    def test_cleanup_diagnostic_rejects_unexpected_values_and_raw_error_text(self):
+        row={**self.row(),'success':False,'cleanup_verified':False,
+             'cleanup':dict(attempted='SECRET',close_returned=1,close_error_type='SECRET path')}
+        reply=SimpleNamespace(returncode=2,stdout=json.dumps(row).encode(),stderr=b'')
+        evidence={}
+        with patch('verify_windows_portable.subprocess.run',return_value=reply), \
+                patch('verify_windows_portable.subprocess.CREATE_NO_WINDOW',0,create=True),self.assertRaises(AssertionError):
+            verify_native_component(Path('candidate.exe'),Path('separate'),{},evidence)
+        self.assertIsNone(evidence['cleanup']['attempted'])
+        self.assertIsNone(evidence['cleanup']['close_returned'])
+        self.assertEqual(evidence['cleanup']['close_error_type'],'unrecognized')
+        self.assertNotIn('SECRET',json.dumps(evidence))

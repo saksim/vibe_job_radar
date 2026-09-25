@@ -91,6 +91,14 @@ def verify_native_component(exe,cwd,env,evidence):
     evidence['browser_version']=version if isinstance(version,str) and re.fullmatch(r'[0-9]+(?:\.[0-9]+){1,4}',version) else ''
     count=row.get('external_connections')
     evidence['external_connections']=count if type(count) is int and 0<=count<=1000000 else None
+    cleanup=row.get('cleanup')
+    if isinstance(cleanup,dict):
+        evidence['cleanup']={key:cleanup.get(key) if type(cleanup.get(key)) is bool else None
+            for key in ('attempted','close_returned','profile_removed','profile_cleanup_failed',
+                        'bridge_exited','tunnel_closed','tunnel_thread_stopped')}
+        error=cleanup.get('close_error_type')
+        evidence['cleanup']['close_error_type']=(error if isinstance(error,str) and error in
+            {'','PermissionError','TimeoutExpired','OSError','RuntimeError','other'} else 'unrecognized')
     if not native_component_valid(evidence):
         raise AssertionError('portable native component evidence incomplete')
     return evidence

@@ -4,6 +4,7 @@ import io
 import json
 from pathlib import Path
 import tempfile
+import subprocess
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
@@ -83,6 +84,62 @@ class NativeComponentCheckTests(unittest.TestCase):
         self.assertFalse(row['cleanup_verified']);self.assertTrue(self.backend.browser.profile.exists())
         self.backend.close.assert_called_once()
 
+    def test_cleanup_preserves_each_failed_completion_fact(self):
+        cases = ('profile_removed', 'profile_cleanup_failed', 'bridge_exited',
+                 'tunnel_closed', 'tunnel_thread_stopped')
+        original = self.backend.close.side_effect
+        for field in cases:
+            with self.subTest(field=field):
+                profile = self.backend.browser.profile
+                if not profile.exists():
+                    profile.mkdir()
+                self.backend.browser.cleanup_failed = False
+                def close():
+                    original()
+                    if field == 'profile_removed':
+                        profile.mkdir()
+                    elif field == 'profile_cleanup_failed':
+                        self.backend.browser.cleanup_failed = True
+                    elif field == 'bridge_exited':
+                        self.backend.browser.process.poll.return_value = None
+                    elif field == 'tunnel_closed':
+                        self.backend.tunnel._closed = False
+                    else:
+                        self.backend.tunnel.thread.is_alive.return_value = True
+                self.backend.close.side_effect = close
+                row = self.run_check()
+                self.assertFalse(row['success']); self.assertFalse(row['cleanup_verified'])
+                self.assertEqual(row['stage'], 'cleanup')
+                expected = dict(attempted=True,close_returned=True,close_error_type='',
+                    profile_removed=True,profile_cleanup_failed=False,bridge_exited=True,
+                    tunnel_closed=True,tunnel_thread_stopped=True)
+                expected[field] = not expected[field]
+                self.assertEqual(row['cleanup'], expected)
+        self.assertEqual(self.backend.close.call_count, len(cases))
+
+    def test_close_exception_keeps_fixed_facts_and_never_qualifies(self):
+        original = self.backend.close.side_effect
+        def close():
+            original()
+            raise subprocess.TimeoutExpired('SECRET command and path', 10)
+        self.backend.close.side_effect = close
+        row = self.run_check()
+        self.assertFalse(row['success']); self.assertFalse(row['cleanup_verified'])
+        self.assertEqual(row['cleanup']['close_error_type'], 'TimeoutExpired')
+        self.assertFalse(row['cleanup']['close_returned'])
+        self.assertTrue(row['cleanup']['profile_removed'])
+        self.assertTrue(row['cleanup']['bridge_exited'])
+        self.assertNotIn('SECRET', json.dumps(row))
+        self.backend.close.assert_called_once()
+
+    def test_unavailable_cleanup_observation_is_unknown_not_success_or_exception_text(self):
+        self.backend.browser.process.poll.side_effect = OSError('SECRET path')
+        row = self.run_check()
+        self.assertFalse(row['success']); self.assertFalse(row['cleanup_verified'])
+        self.assertIsNone(row['cleanup']['bridge_exited'])
+        self.assertTrue(row['cleanup']['profile_removed'])
+        self.assertNotIn('SECRET', json.dumps(row))
+
     def test_startup_failure_keeps_only_known_error_code(self):
         error=BrowserStartupError({'code':'browser_executable_missing','message':'SECRET ACCOUNT /private/path'})
         with patch.object(native_check,'NativeBackend',side_effect=error):
@@ -90,6 +147,8 @@ class NativeComponentCheckTests(unittest.TestCase):
         self.assertFalse(row['success']);self.assertEqual(row['code'],'browser_executable_missing')
         self.assertNotIn('SECRET',json.dumps(row));self.assertNotIn('/private',json.dumps(row))
         self.assertIsNone(row['external_connections'])
+        self.assertFalse(row['cleanup']['attempted'])
+        self.assertIsNone(row['cleanup']['profile_removed'])
 
     def test_cli_returns_failure_without_opening_server_or_workspace(self):
         with patch.object(native_check,'check_native_browser',return_value={'success':False}), \
