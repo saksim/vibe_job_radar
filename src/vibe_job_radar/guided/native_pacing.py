@@ -74,8 +74,8 @@ class NativeRequestPacer:
         if (len(occupied) >= self.MAX_REQUESTS and item.key not in occupied
                 or any(i.key == item.key for i in self.queue)):
             raise CrawlError('native_observation_limit')
+        b._admit_request(item)
         if not self.queue and self._reserve(item):
-            b._admit_request(item)
             b._continue_request(item)
             return
         item.size = len(json.dumps([item.session, item.request_id, item.key,
@@ -85,7 +85,6 @@ class NativeRequestPacer:
         if self.connection is None:
             self.connection = b.browser.connection
             self.connection.add_pump_callback(self.pump)
-        b._admit_request(item)
         self.queue.append(item)
         self.bytes += item.size
 

@@ -276,3 +276,12 @@ class NativeRequestPacingTests(unittest.TestCase):
         self.connection.pump(0)
         self.assertEqual(self.b._requests[('session', 'query-2')]['context']['sequence'], 2)
         self.assertEqual(self.b.native_counts['business'], 2)
+
+    def test_business_sequence_is_included_in_queued_metadata_byte_accounting(self):
+        self.b._paused('session', self.request(0))
+        self.b._paused('session', self.fixture.req())
+        item = self.b._request_pacer.queue[0]
+        actual = len(json.dumps([item.session, item.request_id, item.key,
+            item.origin, item.record], ensure_ascii=False).encode('utf-8'))
+        self.assertEqual(item.record['context']['sequence'], 1)
+        self.assertEqual(self.b._request_pacer.bytes, actual)
