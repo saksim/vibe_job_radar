@@ -15,7 +15,7 @@ sys.path[:0]=[str(ROOT/'src'),str(ROOT/'tests')]
 from vibe_job_radar.workbench import LocalServer
 from vibe_job_radar.workspace import Workspace
 from vibe_job_radar.guided.rate import Limits, RateLedger
-from vibe_job_radar.network import SafeHTTP
+from vibe_job_radar.network import SafeHTTP, FetchError
 from test_public_category import Wire, listing, card, job_url
 
 
@@ -171,6 +171,46 @@ def main():
                 result['ledger']=ledger.summary('liepin')
                 assert result['ledger']['page']['day']==6 and result['ledger']['request']['day']==8
                 result['checks'].append('both original batches use the same persistent ledger: six page reservations, eight actual HTTP reservations, no added list or login')
+                result['phase']='explicit_same_page_retry'
+                wire=Wire(listing(card(61)+card(62)))
+                def failed_page(url,**kwargs):
+                    if url=='https://www.liepin.com/career/360321/':
+                        wire.calls.append(url);raise FetchError('network_error','Authored browser acceptance failure')
+                    return wire.public_get(url)
+                with patch.object(SafeHTTP,'public_get',side_effect=failed_page):
+                    page.get_by_role('button',name='自动读取猎聘架构师公开分类').click()
+                    form=page.locator('#collect-form');form.locator('[name=detail_budget]').fill('2')
+                    form.locator('[name=rights_note]').fill('同页显式重试人工验收；无真实网站请求。')
+                    page.locator('#collect-permits input[value=liepin]').check();form.locator('[name=consent]').check()
+                    page.locator('#collect-start').click()
+                    expect(page.locator('#collect-progress')).to_contain_text('needs_attention',timeout=10000)
+                failed=json.loads(page.locator('#collect-json').text_content())
+                parent=server.collector._path(failed['id']);parent_bytes=parent.read_bytes()
+                assert failed['category_attempts']==1 and failed['details']==[]
+                before=ledger.summary('liepin');requests=list(wire.calls)
+                page.get_by_role('button',name='预览失败分类页的同页重试（不联网）').click()
+                expect(page.locator('#collect-result')).to_contain_text('第 1/3 次显式重试，最多 2 条正文')
+                page.get_by_role('button',name='确认保存同页重试（暂不联网）').click()
+                expect(page.locator('#collect-progress')).to_contain_text('paused')
+                child=json.loads(page.locator('#collect-json').text_content())
+                assert wire.calls==requests and ledger.summary('liepin')==before and parent.read_bytes()==parent_bytes
+                page.reload()
+                page.locator('#collect-history').select_option(child['id']);page.locator('#collect-load').click()
+                expect(page.locator('#collect-progress')).to_contain_text('paused')
+                assert parent.read_bytes()==parent_bytes and ledger.summary('liepin')==before
+                with patch.object(SafeHTTP,'public_get',side_effect=wire.public_get):
+                    page.locator('#collect-resume').click()
+                    expect(page.locator('#collect-progress')).to_contain_text('completed',timeout=10000)
+                done=json.loads(page.locator('#collect-json').text_content())
+                assert done['id']==child['id'] and done['saved_detail_count']==2 and done['category_attempts']==1
+                assert wire.calls[len(requests):]==['https://www.liepin.com/robots.txt',
+                    'https://www.liepin.com/career/360321/',job_url(61),job_url(62)]
+                assert parent.read_bytes()==parent_bytes and report_hashes=={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in report.iterdir() if p.is_file()}
+                result['same_page_retry']=dict(original_status=failed['status'],saved_status=child['status'],
+                    completed_status=done['status'],full_bodies=2,preview_save_extra_requests=0,
+                    original_failure_unchanged=True,ledger=ledger.summary('liepin'))
+                assert not result['page_errors'] and not result['external_browser_requests']
+                result['checks'].append('network-failed category page is explicitly previewed and saved offline; actual reload preserves pause, resume reads only that page and two authored bodies, original failure/report and quota remain')
                 result['success']=True;result['phase']='completed';browser.close()
         finally:
             if not result['success']:

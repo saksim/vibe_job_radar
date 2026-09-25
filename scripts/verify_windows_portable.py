@@ -217,6 +217,33 @@ def verify_category_page_checkpoint(app, workspace, category_key='architect'):
     return child['id'],context,child['category_outcomes'],parent,before
 
 
+def verify_category_page_retry(app, workspace):
+    """Real exe saves an authored transport failure as one paused same-page child."""
+    from vibe_job_radar.utils import atomic_json
+    created=app.json('/api/collection/start',dict(mode='liepin_category',category_id='algorithm',
+        roles=['domain_algorithm','time_series'],platforms=['liepin'],permit_platforms=['liepin'],consent=True,
+        detail_budget=2,rights_note='Artificial same-page network failure; no site request.'))
+    parent=workspace/'collections'/f'{created["id"]}.json'
+    state=json.loads(parent.read_text(encoding='utf-8'))
+    state.update(status='needs_attention',phase='report',category_attempts=1)
+    state['category_outcomes'][0]['status']='network_error'
+    atomic_json(parent,state);before=parent.read_bytes()
+    plan=app.json('/api/collection/category_page_retry_preview',{'id':state['id']})
+    if (plan['page']!=1 or plan['url']!=state['category_outcomes'][0]['url'] or plan['selection_limit']!=2
+            or plan['generation']!=1 or plan['external_network_requests']!=0 or plan['task_created']):
+        raise AssertionError('frozen same-page preview changed its original failure or scope')
+    args=dict(id=state['id'],fingerprint=plan['fingerprint'],consent=True)
+    saved=app.json('/api/collection/category_page_retry_start',args)
+    repeated=app.json('/api/collection/category_page_retry_start',args);child=saved['task']
+    if (not saved['created'] or repeated['created'] or repeated['task']['id']!=child['id']
+            or child['status']!='paused' or child['phase']!='category' or child['category_id']!='algorithm'
+            or child['category_attempts']!=0 or child['detail_attempts']!=0 or child['details'] or child['report_id']
+            or child['detail_budget']!=2 or child['category_outcomes'][0]['status']!='pending'
+            or child['category_outcomes'][0]['url']!=plan['url'] or parent.read_bytes()!=before):
+        raise AssertionError('frozen same-page save executed, duplicated or rewrote its original failure')
+    return child['id'],child['category_page_retry'],child['category_outcomes'],parent,before
+
+
 def verify_category_rate_recovery(app, workspace):
     """Authored partial-result metadata; actual exe preview/save only, no site GET."""
     from vibe_job_radar.models import JobRecord
@@ -665,6 +692,10 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
                 category_pages=[verify_category_page_checkpoint(app,workspace,key) for key in ('architect','algorithm')]
                 result['public_category_page_checkpoint_verified']=True
                 result['public_algorithm_category_page_checkpoint_verified']=True
+                result['stage']='category_page_retry_checkpoint'
+                page_retry_id,page_retry_context,page_retry_outcomes,page_retry_parent,page_retry_parent_bytes=verify_category_page_retry(app,workspace)
+                result['category_page_retry_checkpoint_verified']=True
+                result['checks'].append('actual frozen API saves exactly one paused same-page retry of an authored algorithm-category network failure; no request or original-failure mutation')
                 result['stage']='category_rate_recovery_checkpoint'
                 recovery_id,recovery_context,recovery_details,recovery_parent,recovery_parent_bytes=verify_category_rate_recovery(app,workspace)
                 result['category_rate_recovery_checkpoint_verified']=True
@@ -876,6 +907,17 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
                         raise AssertionError('fresh frozen process duplicated the saved adjacent-page task')
                 result['public_category_page_restart_verified']=True
                 result['public_algorithm_category_page_restart_verified']=True
+                saved=restarted.json('/api/collection/status',{'id':page_retry_id})
+                if (saved['category_page_retry']!=page_retry_context or saved['category_outcomes']!=page_retry_outcomes
+                        or saved['status']!='paused' or saved['phase']!='category' or saved['category_attempts']!=0
+                        or saved['detail_attempts']!=0 or saved['details'] or saved['report_id']
+                        or page_retry_parent.read_bytes()!=page_retry_parent_bytes):
+                    raise AssertionError('fresh frozen process changed or executed the same-page retry')
+                repeated=restarted.json('/api/collection/category_page_retry_start',dict(id=page_retry_context['parent_id'],
+                    fingerprint=page_retry_context['parent_fingerprint'],consent=True))
+                if repeated['created'] or repeated['task']['id']!=page_retry_id:
+                    raise AssertionError('fresh frozen process duplicated the same-page retry')
+                result['category_page_retry_restart_verified']=True
                 saved=restarted.json('/api/collection/status',{'id':recovery_id})
                 if (saved['status']!='paused' or saved['details']!=recovery_details
                         or saved['category_rate_recovery']!=recovery_context or saved['detail_attempts']!=0

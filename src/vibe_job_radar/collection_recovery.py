@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 REASONS = {
+    'network_error': ('网络请求未完成', '保留原失败并核对网络；尚未取得名单的分类页可预览同页重试，原配额继续有效。'),
     'ok': ('已取得完整正文', '可以下载本批报告并核对原文。'),
     'fresh_reused': ('复用了已保存的新鲜正文', '没有为这条记录重复访问网站。'),
     'budget_skipped': ('未执行：本批正文尝试预算已用完', '不是抓取失败；先确认已尝试条目的问题，再为剩余链接新建小批次。'),
@@ -74,6 +75,8 @@ def explain(state: dict) -> dict:
     saved = sum(d['status'] in {'ok', 'fresh_reused'} for d in details)
     skipped = sum(d['status'] == 'budget_skipped' for d in details)
     text = f'本批 {len(details)} 条链接，已尝试 {state["detail_attempts"]} 条，取得或复用 {saved} 条正文，预算未执行 {skipped} 条。'
+    if state.get('category_page_retry'):
+        text += f' 这是第{state["category_page_retry"]["generation"]}次显式同页重试，原失败与配额保留。'
     if state.get('category_rate_recovery'):
         inherited = state['category_rate_recovery']['inherited_success_count']
         text += f' 这是原批次的恢复任务；其中{inherited}条正文继承原成功结果，本次只执行预览确认的未完成项，旧任务和预算保留。'
