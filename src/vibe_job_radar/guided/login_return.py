@@ -15,23 +15,48 @@ from urllib.parse import parse_qsl, urlsplit
 from .contracts import CrawlError, PageSnapshotChanged
 
 
-def matching_list_signature(adapter, expected_url, page):
+def matching_list_signature(adapter, expected_url, page, *, scope=None):
     """Reject unrelated queries, detail/recommendation pages and empty lists."""
     expected = urlsplit(adapter.accept_url(expected_url))
     actual = urlsplit(adapter.accept_url(page.url))
     if (expected.scheme, expected.netloc, expected.path.rstrip('/')) != (
             actual.scheme, actual.netloc, actual.path.rstrip('/')):
         return None
-    # accept_url removes only the adapter's known tracking parameters. All
-    # remaining filters, including repeated keys, must match. Never log values.
-    wanted = parse_qsl(expected.query, keep_blank_values=True)
-    present = parse_qsl(actual.query, keep_blank_values=True)
-    if sorted(wanted) != sorted(present):
-        return None
+    native_scope = None
+    if (adapter.key == 'liepin' and page.business_required is True
+            and scope is not None and scope.get('query_scope_version') == 1
+            and scope.get('search_url') == expected_url):
+        from .search_scope import check_scope, conditions
+        # Use collection's observed defaults and frozen filters. This passive
+        # watcher must not freeze or change persisted scope before capture.
+        observed = dict(scope)
+        try:
+            cursor = check_scope(observed, adapter, page.url)
+            _, expected_cursor = conditions(adapter, expected_url, scope['keyword'])
+        except CrawlError as exc:
+            if exc.code == 'search_scope_changed':
+                return None
+            raise
+        if (cursor or '0') != (expected_cursor or '0'):
+            return None
+        native_scope = (observed['effective_search'], cursor or '0')
+    else:
+        # Legacy DOM returns keep their exact query gate. Native observations
+        # additionally bind each response to the complete current URL below.
+        wanted = parse_qsl(expected.query, keep_blank_values=True)
+        present = parse_qsl(actual.query, keep_blank_values=True)
+        if sorted(wanted) != sorted(present):
+            return None
     cards = adapter.cards(page)
     if not cards:
         return None
-    return hashlib.sha256('\n'.join(card.id for card in cards).encode()).hexdigest()
+    ids = [card.id for card in cards]
+    if native_scope is not None:
+        # A filter change with identical cards still needs two fresh reads.
+        value = json.dumps((native_scope, ids), sort_keys=True, ensure_ascii=False)
+    else:
+        value = '\n'.join(ids)
+    return hashlib.sha256(value.encode('utf-8')).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -173,7 +198,7 @@ class LoginReturnManager:
                 page = watch.backend.snapshot()
                 adapter = service.registry.get(state['platform'])
                 try:
-                    signature = matching_list_signature(adapter, watch.expected_url, page)
+                    signature = matching_list_signature(adapter, watch.expected_url, page, scope=state)
                 except CrawlError as exc:
                     # HTTP-to-browser handoffs use the selected detail as their
                     # search_url. That surface is correctly not a list, but can

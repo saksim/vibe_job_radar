@@ -17,6 +17,7 @@ import ssl
 import tempfile
 import threading
 import time
+from types import SimpleNamespace
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
 
@@ -25,6 +26,7 @@ from run_native_browser_acceptance import (ROOT, HOST, URL, NativeBackend, RateL
     trust_fixture, RECORDED_BODY, RECORDED_TITLE, recorded_markup, recorded_posting)
 from vibe_job_radar.guided.adapters import builtins
 from vibe_job_radar.guided.contracts import CrawlError
+from vibe_job_radar.guided.login_return import LoginReturnManager
 from vibe_job_radar.guided.native_policy import contract_for, NativeRule
 
 API_HOST = 'api.' + HOST
@@ -445,8 +447,33 @@ def main():
                         assert b.adapter.cards(b.snapshot())
                         assert any(r['path']=='/zhaopin/' and not r['anonymous'] for r in server.requests)
                         assert not any(r['path']=='/apply' for r in server.requests)
+                        # Exercise the passive return gate on this real native
+                        # page. The synthetic login above is not an account
+                        # verifier; this only enqueues the original capture.
+                        now = [0.0]; queued = []
+                        state = dict(id='local-return', platform='liepin',
+                            search_url=local.search_url('时间序列'), keyword='时间序列',
+                            query_scope_version=1, status='waiting_manual',
+                            authentication='manual_pending', phase='search',
+                            auto_continue_after_login=True)
+                        watcher = LoginReturnManager(clock=lambda:now[0])
+                        owner = SimpleNamespace(_lock=threading.RLock(), _busy=False,
+                            _shutdown=threading.Event(), _cancel=threading.Event(),
+                            _backends={state['id']:b}, registry=Registry([login_adapter]),
+                            _load=lambda _:state, _save=lambda value,**kw:value.update(kw),
+                            _submit=lambda *args:queued.append(args))
+                        before_return = len(server.requests)
+                        watcher.arm(state,b); watcher.tick(owner)
+                        assert not queued
+                        now[0] = 1; watcher.tick(owner)
+                        now[0] = 2; watcher.tick(owner)
+                        assert queued == [('capture','local-return')]
+                        assert len(server.requests) == before_return
+                        assert state['authentication']=='manual_pending'
+                        assert 'effective_search' not in state
                     finally: b.close()
                     result['checks'].append('sandboxed gzip documents preserve normal same-tab form POST, HttpOnly Cookie and subsequent API-only search; artificial login only')
+                    result['checks'].append('two passive native reads accept publisher-expanded original query scope after the artificial form, enqueue exactly one capture and send no new request; account authentication remains unverified')
                     # A real publisher rejection must prevent the POST rather
                     # than getting replaced by a driver-generated success.
                     before = sum(r['method']=='POST' for r in server.requests)
