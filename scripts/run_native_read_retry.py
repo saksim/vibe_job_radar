@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import socket
+import sys
 import tempfile
 import time
 from unittest.mock import patch
@@ -13,6 +14,23 @@ from unittest.mock import patch
 from run_native_browser_acceptance import (ROOT, Fixture, trust_fixture, HOST,
     adapter, NativeBackend, GuidedService, Registry, Workspace, RateLedger, Limits,
     NetworkPolicy, use_policy)
+
+
+def worker_locations(thread):
+    """Bounded code positions at the first timeout; never inspect frame locals."""
+    try:
+        frame = sys._current_frames().get(thread.ident) if thread else None
+    except Exception:
+        return []  # A diagnostic failure cannot replace the first assertion.
+    rows = []
+    try:
+        while frame is not None and len(rows) < 32:
+            rows.append(dict(file=Path(frame.f_code.co_filename).name,
+                function=frame.f_code.co_name, line=frame.f_lineno))
+            frame = frame.f_back
+    finally:
+        del frame
+    return rows
 
 
 def main():
@@ -65,6 +83,10 @@ def main():
                         state=service._load(ident)
                         if not service.state()['busy'] and predicate(state):return state
                         time.sleep(.03)
+                    # Preserve the first failure before service.close or Windows
+                    # temporary-directory cleanup can produce a second error.
+                    result['wait_failure'] = dict(code=state['code'], status=state['status'],
+                        worker_locations=worker_locations(service._thread))
                     raise AssertionError('native fixture state: '+state['code'])
                 def create():
                     ident=service.create({'platform':'fixture','keyword':'时间序列算法工程师','roles':['time_series'],

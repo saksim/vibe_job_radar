@@ -327,10 +327,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-browser", action="store_true")
     modes=parser.add_mutually_exclusive_group()
     modes.add_argument("--doctor", action="store_true", help="离线检查 Python、SQLite 和目录写入能力")
+    modes.add_argument('--native-browser-check',action='store_true',help='用新临时浏览器检查原生组件及本地请求拒绝；不连接招聘网站、不读取账号')
     modes.add_argument('--public-worker',action='store_true',help='仅运行已确认的公开查询计划和待办，不启动网页服务器或浏览器')
     args = parser.parse_args(argv)
     if not 0 <= args.port <= 65535:
         parser.error("port 必须为 0～65535")
+    if args.native_browser_check:
+        if args.port:parser.error('原生组件检查不启动网页服务器，请移除--port')
+        from .guided.native_check import run_cli
+        return run_cli()
     if args.public_worker:
         if args.port:parser.error('独立worker不监听端口，请移除--port')
         from .public_worker import run_cli

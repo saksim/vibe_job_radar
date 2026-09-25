@@ -1,9 +1,8 @@
 """Opt-in Chromium native HTTP/TLS with a public-target opaque CONNECT guard.
 
-CDP Fetch observes/authorizes each owned-page hop. A context route rejects
-unowned pages before their initial request (a page event can arrive too late).
-Owned requests use native networking without HTTP request replay. CORS contexts
-deliver native-fetched document bytes with one extra restrictive CSP; original
+CDP Fetch observes/authorizes each owned-page hop. Application-created blank
+pages receive controls before navigation. Native documents add a restrictive
+CSP before scripts can create unsupported surfaces; original
 publisher security policies remain enforced.
 Cross-origin requests require an exact, code-owned CORS operation contract.
 Only application-owned browser targets are used. Worker/OOPIF targets are stopped
@@ -19,7 +18,7 @@ import time
 from urllib.parse import urljoin, urlsplit
 
 from .browser import PlaywrightBackend
-from .contracts import CrawlError
+from .contracts import CrawlError, PageSnapshotChanged
 from .diagnostic_trace import notify, observe, observe_robots, traced
 from .native_policy import NativeRobots, contract_for
 from .native_tunnel import NativeTunnel
@@ -48,6 +47,11 @@ class NativeControl(PinnedTransport):
 
     def fetch(self, *args, **kwargs):
         raise RuntimeError('native backend cannot replay HTTP')
+
+    def reserve_request_nowait(self, *, origin):
+        if self.cancelled.is_set():
+            raise CrawlError('paused')
+        self.ledger.reserve(self.adapter.key, 'request', origin=origin)
 
     def ensure_robots(self, url):
         p = urlsplit(url); origin = 'https://' + p.netloc
@@ -100,17 +104,27 @@ class NativeBackend(PlaywrightBackend):
         return {**options, 'proxy': {'server': self.tunnel.endpoint},
                 'args': [*options['args'], '--proxy-bypass-list=<-loopback>', '--block-new-web-contents']}
 
+    def _launch_browser(self, options):
+        from .cdp_browser import CDPBrowser, edge_executable
+        options = dict(options)
+        channel = options.pop('channel', None)
+        options['executable_path'] = (edge_executable() if channel == 'msedge'
+            else options.get('executable_path') or self.runtime.chromium.executable_path)
+        return CDPBrowser(**options)
+
     def _configure_context(self):
         # Install before any page is created. Target debugger pause does not
         # alone prevent the browser's initial popup network request.
         self._native_cors = any(rule.cors_origin for rule in self.contract.rules)
+        self._direct_cdp = getattr(self.browser, 'minimal_events', False) is True
         # Playwright's route layer auto-fulfills CORS OPTIONS. For reviewed
         # CORS contracts use direct CDP controls, so the publisher really
         # receives and decides preflight. Unsupported targets get an abort-only
         # Fetch guard before their deferred close, never collection controls.
-        if not self._native_cors:
+        if not self._native_cors and not self._direct_cdp:
             self.context.route('**/*', self._ownership_route)
-        self.context.route_web_socket('**/*', lambda ws: ws.close())
+        if not self._direct_cdp:
+            self.context.route_web_socket('**/*', lambda ws: ws.close())
         self.context.on('page', self._page_created)
         self._cdp = self.browser.new_browser_cdp_session()
         contexts = self._cdp.send('Target.getBrowserContexts')['browserContextIds']
@@ -124,8 +138,9 @@ class NativeBackend(PlaywrightBackend):
         self._cdp.on('Target.attachedToTarget', self._attached)
         self._cdp.on('Target.receivedMessageFromTarget', self._received)
         self._cdp.on('Target.detachedFromTarget', self._detached)
-        # Non-flattened sessions use only documented Target.sendMessageToTarget;
-        # no Playwright private internals or remote-debugging TCP port.
+        # Non-flattened sessions use documented Target.sendMessageToTarget.
+        # The controller's pipes reach only its newly launched browser; it does
+        # not attach to a daily browser or use Playwright private internals.
         self._cdp.send('Target.setAutoAttach', {'autoAttach':True,
             'waitForDebuggerOnStart':True, 'flatten':True})
 
@@ -262,7 +277,7 @@ class NativeBackend(PlaywrightBackend):
             self._fatal('native_surface_unsupported')
             return
         # Retire the temporary target-creation attachment BEFORE configuring
-        # Fetch on the public Playwright page session. Edge does not deliver
+        # Fetch on the owned page session. Edge does not deliver
         # interception events through the old non-flattened relay reliably.
         # Removing the old attachment first preserves page-level interception.
         for old, known in tuple(self._sessions.items()):
@@ -414,6 +429,8 @@ class NativeBackend(PlaywrightBackend):
 
     def _detached(self, event):
         session = event['sessionId']
+        if pacer := self.__dict__.get('_request_pacer'):
+            pacer.retire(session)
         self._sessions.pop(session, None)
         self._page_sessions.pop(session, None)
         for page, bound in tuple(self._bound_pages.items()):
@@ -489,6 +506,8 @@ class NativeBackend(PlaywrightBackend):
             elif method == 'Network.loadingFinished':
                 self._finished(session, data)
             elif method == 'Network.loadingFailed':
+                if pacer := self.__dict__.get('_request_pacer'):
+                    pacer.retire(session, data['requestId'])
                 key=(session,data['requestId']); record=self._requests.pop(key,None)
                 self._hops.pop(key,None)
                 if record and record['role'] != 'asset' and not self.cancelled.is_set() and not self.error:
@@ -586,25 +605,35 @@ class NativeBackend(PlaywrightBackend):
                 self._pagination_page=None
             else:
                 self.wire.reserve('page')
-        self.wire.reserve('request', origin='https://'+p.netloc)
-        if self.cancelled.is_set():
-            raise CrawlError('paused')
         key=(session,event.get('networkId',event['requestId']))
-        if len(self._requests) >= 128 and key not in self._requests:
-            raise CrawlError('native_observation_limit')
         context = {}
         bind = getattr(self.adapter, 'native_request_context', None)
         if role == 'business' and r['method'] != 'OPTIONS' and callable(bind):
             context = bind(operation, r, self.page.url)
-        if role == 'business' and r['method'] != 'OPTIONS':
+        from .native_pacing import NativeRequestPacer, PausedRequest
+        if '_request_pacer' not in self.__dict__:
+            self._request_pacer = NativeRequestPacer(self)
+        record = {'context': context, 'epoch':self._epoch,'operation':operation,'role':role,'size':0,
+                  'url':url,'status':None, 'json':False}
+        self._request_pacer.submit(PausedRequest(session, event['requestId'], key, 'https://'+p.netloc,
+            record, role == 'business' and r['method'] != 'OPTIONS', not robots and rule.authentication))
+
+    def _admit_request(self, item):
+        record = item.record
+        context, operation = record['context'], record['operation']
+        if item.business:
+            # The browser has requested newer data even while pacing holds it.
+            # Never expose an older response during that new asynchronous wait.
             self._business_sequence = getattr(self, '_business_sequence', 0) + 1
             context['sequence'] = self._business_sequence
             self.__dict__.setdefault('_latest_business', {})[operation] = self._business_sequence
             self._observations = deque((o for o in self._observations if o.operation != operation), maxlen=20)
-        self._requests[key]={'context': context, 'epoch':self._epoch,'operation':operation,'role':role,'size':0,
-                             'url':url,'status':None, 'json':False}
-        self.native_counts[role] += 1
-        self._send(session,'Fetch.continueRequest',{'requestId':event['requestId']})
+
+    def _continue_request(self, item):
+        record = item.record
+        self._requests[item.key] = record
+        self.native_counts[record['role']] += 1
+        self._send(item.session,'Fetch.continueRequest',{'requestId':item.request_id})
 
     def _response_paused(self, session, event):
         url=event['request']['url']; status=event.get('responseStatusCode',0)
@@ -692,7 +721,8 @@ class NativeBackend(PlaywrightBackend):
 
     def snapshot(self):
         self._check_error()
-        return replace(super().snapshot(), business=self.observations())
+        return replace(super().snapshot(), business=self.observations(),
+                       business_required=self.adapter.key == 'liepin')
 
     def observations(self):
         """Private local payloads for a reviewed site adapter, never diagnostic API."""
@@ -756,42 +786,95 @@ class NativeBackend(PlaywrightBackend):
         except Exception as exc:
             raise self.wait_error or CrawlError(self.error or native_transport_failure(exc, self.tunnel.last_error) or 'page_not_ready') from exc
 
-    def _settle(self):
+    def _settle(self, *, search=False):
         deadline=time.monotonic()+15
         while time.monotonic()<deadline:
             self._check_error()
             # Readiness is site content/response/challenge, not network-idle or a
             # fixed sleep. The existing parser still determines usable job data.
-            body = self.page.locator('body')
-            if not body.count():
-                # A navigation can replace the document after DOMContentLoaded.
-                # Stay within the existing overall deadline instead of failing
-                # the entire login after a one-second locator timeout.
-                self.page.wait_for_timeout(100)
-                continue
-            text=body.inner_text(timeout=1000)
-            if self.adapter.challenged(text,self.page.url):
-                raise CrawlError('manual_required')
-            if self.auth_mode and text.strip():
-                return
-            ready = getattr(self.adapter, 'native_ready', None)
-            if callable(ready) and ready(self.observations()):
-                return
-            snap=self.snapshot()
             try:
-                if self.adapter.cards(snap):
+                body = self.page.locator('body')
+                if not body.count():
+                    # A navigation can replace the document after DOMContentLoaded.
+                    self.page.wait_for_timeout(100)
+                    continue
+                text=body.inner_text(timeout=1000)
+                if self.adapter.challenged(text,self.page.url):
+                    raise CrawlError('manual_required')
+                if self.auth_mode and text.strip() and not search:
                     return
-            except CrawlError:
+                ready = getattr(self.adapter, 'native_ready', None)
+                if callable(ready) and ready(self.observations()):
+                    return
+                snap=self.snapshot()
                 try:
-                    self.adapter.detail(snap); return
+                    if self.adapter.cards(snap):
+                        return
                 except CrawlError:
-                    pass
+                    try:
+                        self.adapter.detail(snap); return
+                    except CrawlError as exc:
+                        if exc.code == 'job_unavailable':
+                            raise  # A closed job is final; its recommendations are not its JD.
+                        pass
+            except PageSnapshotChanged:
+                # Discard this read if a normal navigation/history update ran
+                # while CDP was answering it. Reobserve inside the same deadline;
+                # never navigate, resubmit input, or turn another error into a retry.
+                pass
             self.page.wait_for_timeout(100)
+        # Pumping browser callbacks can consume the remaining deadline. Preserve
+        # a native refusal delivered there instead of replacing it with timeout.
+        self._check_error()
         raise CrawlError('page_not_ready')
+
+    def search_entry_url(self, url, *, keyword):
+        # Only the default keyword-only request has an implemented form route.
+        # An explicit seed with extra conditions keeps its checked navigation;
+        # those conditions must never disappear when switching to the form.
+        if (self.adapter.key != 'liepin'
+                or self.adapter.accept_url(url) != self.adapter.search_url(keyword)):
+            return url
+        return self.adapter.search_base
+
+    def open_search(self, url, *, keyword, authentication=False):
+        entry = self.search_entry_url(url, keyword=keyword)
+        if entry == url:
+            return self.open(url, authentication=authentication)
+        opened = self.open(entry, authentication=authentication)
+        if authentication:
+            # Login controls must remain reachable even if a login overlay
+            # obscures the search field. The user's later resume searches with
+            # that same session; a login action does not submit a keyword first.
+            return opened
+        from .liepin_form import submit_search
+        return submit_search(self, keyword)
 
     def next_page(self):
         self._check_error()
         return super().next_page()
+
+    def ensure_page_access(self, url):
+        self._check_error()
+        if not self.page or self.page.is_closed():
+            raise CrawlError('browser_closed')
+        if self.page.url != url:
+            raise PageSnapshotChanged()
+        accepted = self.adapter.accept_url(url)
+        document = getattr(self.page, 'document_url', None)
+        base = self.adapter.search_base
+        # Only the observed query-free Liepin document can update its search
+        # address in place. The committed document URL comes from the browser's
+        # frame navigation event, never from the task or publisher HTML. Actual
+        # document/API requests still pass _request_paused and their own robots.
+        if (self.adapter.key == 'liepin' and isinstance(document, str) and document == base
+                and self.page in self._bound_pages):
+            current, entry = urlsplit(accepted), urlsplit(base)
+            if ((current.scheme, current.netloc, current.path) ==
+                    (entry.scheme, entry.netloc, entry.path) and not entry.query):
+                self.wire.ensure_robots(document)
+                return
+        self.wire.ensure_robots(url)
 
     def _before_pagination_click(self):
         # Looking for a next button is not a navigation. Retain the current
@@ -822,6 +905,8 @@ class NativeBackend(PlaywrightBackend):
 
     def close(self):
         self._closing=True
+        if pacer := self.__dict__.get('_request_pacer'):
+            pacer.close()
         super().close()
         if self.tunnel:
             self.tunnel.close(); self.tunnel=None

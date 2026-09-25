@@ -10,12 +10,10 @@ import copy
 from contextlib import contextmanager
 import hashlib
 import json
-import tempfile
 import threading
 import time
 import uuid
 from dataclasses import asdict
-from pathlib import Path
 
 from .catalog_changes import compact_change
 from .collection import writer_lock
@@ -347,11 +345,11 @@ class PublicTasks:
                 config['platforms'][key]={'label':source.label,'domains':list(source.domains)}
             report_id=uuid.uuid4().hex
             folder=self.workspace.root/'reports'/report_id
-            with tempfile.TemporaryDirectory(prefix='.public-batch-',dir=self.root) as tmp:
-                db=Path(tmp)/'batch.sqlite'
-                with Store(db) as batch:
-                    for record in records: batch.add(record)
-                manifest=analyze(db,folder,config=config,platform_filter=list(query.source_scope))
+            # Original records above are durable; this copy only isolates the
+            # current batch from the workspace's other saved records.
+            with Store(':memory:') as batch:
+                for record in records: batch.add(record)
+                manifest=analyze(batch,folder,config=config,platform_filter=list(query.source_scope))
             audit={**summary,'report_id':report_id,'generated_at':result['response']['generated_at'],
                    'observed_at':result['observed_at'],'next_cursor':result['response']['next_cursor'],
                    'jobs':[dict(j, text_sha256=hashlib.sha256(j['text'].encode()).hexdigest())

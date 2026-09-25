@@ -94,7 +94,7 @@ class PlaywrightBackend:
             if channel:
                 options['channel'] = channel
             self.startup_report.update(stage='launch', launch_tested=True)
-            self.browser = self.runtime.chromium.launch(**self._launch_options(options))
+            self.browser = self._launch_browser(self._launch_options(options))
             self.startup_report.update(stage='context', executable_exists=True)
             if channel:
                 self.startup_report['browser_version'] = self.browser.version
@@ -117,6 +117,9 @@ class PlaywrightBackend:
 
     def _launch_options(self, options):
         return options
+
+    def _launch_browser(self, options):
+        return self.runtime.chromium.launch(**options)
 
     def _configure_context(self):
         self.context.route('**/*', self._route)
@@ -345,6 +348,9 @@ class PlaywrightBackend:
     def _before_pagination_click(self) -> None:
         """Backend state transition after permission/quota checks, before clicking."""
 
+    def ensure_page_access(self, url: str) -> None:
+        self.wire.ensure_robots(url)
+
     @traced('pagination', 'browser')
     def next_page(self) -> bool:
         self.auth_mode, self.error, self.redirects = False, None, 0
@@ -352,7 +358,7 @@ class PlaywrightBackend:
         button = self._visible(self.adapter.next_selectors)
         if not button or button.get_attribute('aria-disabled') == 'true' or 'disabled' in (button.get_attribute('class') or '').split():
             return False
-        self.wire.ensure_robots(self.page.url)
+        self.ensure_page_access(self.page.url)
         self.wire.reserve('page')  # Reserve once, before either a document or SPA action.
         self._pagination_page = self.page
         try:

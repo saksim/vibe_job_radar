@@ -16,12 +16,10 @@ import re
 import sqlite3
 import subprocess
 import sys
-import tempfile
 import threading
 import uuid
 from dataclasses import asdict
 from contextlib import closing, contextmanager
-from pathlib import Path
 from urllib.parse import urlsplit
 
 from ..collection import writer_lock
@@ -40,7 +38,7 @@ from .batch_identity import batch_cards, page_signature, strategy as identity_st
 from .checkpoint import decode as decode_checkpoint, binding as checkpoint_binding, ensure_compatible
 from .acquisition_results import analysis_by_record, audit_items
 from .search_scope import conditions as search_conditions, check_scope
-from .login_return import (LoginReturnManager, ReturnedDetail,
+from .login_return import (LoginReturnManager, ReturnedDetail, ReturnedSearch,
                            matching_detail_signature, pending_detail_target)
 from .session_reuse import reuse_current_session
 from .saved_session import SavedSession
@@ -63,6 +61,7 @@ MESSAGES = {
     'attempt_history_invalid': '逐次采集记录损坏或不兼容，已停止；请恢复工作区备份，不会清空失败历史后重试。',
     'attempt_history_limit': '本任务的逐次采集记录已达到上限，已停止新采集；已有结果与历史保留。',
     'search_scope_changed': '当前列表的关键词、筛选条件或页码与本批不一致，已保留原进度；请回到原查询，或为新条件另建任务。',
+    'search_form_changed': '未能确认猎聘页面的可用搜索框，已停止自动输入并保留任务。请查看采集页面的加载或登录提示。',
     'checkpoint_incompatible': '任务的查询条件、适配器或访问契约与创建时不一致；已有选择和结果保留，请用兼容版本继续或另建任务。',
     'checkpoint_records_missing': '任务中已保存的正文记录缺失或不一致，已停止；请恢复工作区备份，不会把缺失正文算成成功或自动重复抓取。',
     'batch_identity_unsupported': '当前版本无法恢复该批次的岗位标识规则；原选择与记录已保留，请使用兼容版本继续。',
@@ -86,7 +85,7 @@ MESSAGES = {
     'saved_session_cleared': '该平台保存的会话已清除，当前会话已关闭。岗位、报告、个人证据与配额保留。',
     'session_reuse_unavailable': '当前采集会话不是可复用的空闲会话。请先完成原任务的登录/等待，或停止该会话；不会自动另开浏览器重试。',
     'session_reuse_incompatible': '当前会话的平台、后端、浏览器或网络设置不匹配。请保留原任务，或明确停止旧会话后再开始；不会串用身份。',
-    'login_return_changed': '登录返回的详情或任务已变化，未保存、未重复请求该岗位。请核对当前页面后明确继续。',
+    'login_return_changed': '登录返回的页面或任务已变化，已保留原进度并停止自动接续。请核对当前页面后明确继续。',
     'manual_detail_open': '已打开所选岗位的正常平台页面。请完成平台要求的登录或验证；原岗位完整正文可读后自动接回采集，不必回列表。',
     'login_rate_limited': '打开登录的频次已达到限制：至少间隔5分钟，滚动24小时最多3次。请使用已经打开的登录窗口或等待，不要反复新建任务。',
     'list_page_limit': '本任务列表页数已达到上限。本任务仍受站点共享配额限制。',
@@ -763,7 +762,14 @@ class GuidedService:
             for old in list(self._backends):
                 self._close_backend(old)
             def progress(code, seconds):
-                self._save(state, code, wait_seconds=seconds)
+                # A browser outlives the action that created it. Later pacing
+                # callbacks must not restore that action's old checkpoint.
+                with self._records():
+                    current = self._load(ident)
+                    if (current['status'] != 'running' or self._cancel.is_set()
+                            or self._shutdown.is_set()):
+                        return
+                    self._save(current, code, wait_seconds=seconds)
             factory = self.native_factory if native else self.factory
             options = {'channel': self._selected_browser} if self._selected_browser != 'bundled' else {}
             lease = None
@@ -804,7 +810,10 @@ class GuidedService:
     @traced('listing', 'service', state_index=0)
     def _gather(self, state, backend, adapter, *, navigate=False, more=False):
         if navigate:
-            backend.open(state['search_url'])
+            if callable(getattr(backend, 'open_search', None)):
+                backend.open_search(state['search_url'], keyword=state['keyword'])
+            else:
+                backend.open(state['search_url'])
         if hasattr(backend, 'collection_mode'):
             backend.collection_mode()
         if more and len(state['pages_seen']) >= state['max_pages']:
@@ -820,7 +829,9 @@ class GuidedService:
             if self._cancel.is_set():
                 raise CrawlError('paused')
             page = backend.snapshot()
-            if hasattr(backend, 'wire'):
+            if callable(getattr(backend, 'ensure_page_access', None)):
+                backend.ensure_page_access(page.url)
+            elif hasattr(backend, 'wire'):
                 backend.wire.ensure_robots(page.url)
             with observe(self._trace_for(state), 'list_parse', url=page.url):
                 cards = batch_cards(state, adapter, adapter.cards(page))
@@ -1015,15 +1026,15 @@ class GuidedService:
             report_id = uuid.uuid4().hex
             report_root = self.workspace.root/'reports'/report_id
             records = self._selected_records(state)
-            with tempfile.TemporaryDirectory(prefix='.batch-',dir=self.root) as tmp:
-                batch_db = Path(tmp)/'batch.sqlite'
-                with Store(batch_db) as batch:
-                    for record in records:
-                        batch.add(record)
+            # The selected records are already durable in workspace.db. Only
+            # their exact report scope is temporary; keep that copy in memory.
+            with Store(':memory:') as batch:
+                for record in records:
+                    batch.add(record)
                 config = copy.deepcopy(self.workspace.config)
                 config['platforms'].setdefault(adapter.key,
                     {'label': adapter.label, 'domains': list(adapter.domains)})
-                manifest = analyze(batch_db, report_root, config=config,
+                manifest = analyze(batch, report_root, config=config,
                     role_filter=state['roles'], platform_filter=[adapter.key])
             outcome = self._outcome(state, manifest)
             analysis = analysis_by_record(report_root)
@@ -1068,13 +1079,18 @@ class GuidedService:
             except RateLimit as exc:
                 self._save(state, wait_seconds=round(exc.wait, 1))
                 raise CrawlError('login_rate_limited') from exc
-        if action == 'resume_returned_detail':
+        if action in {'resume_returned_detail', 'resume_returned_search'}:
             # This internal action cannot be submitted by the HTTP/UI API. A
             # replaced browser must never inherit or replay another page's handoff.
-            if (not isinstance(secret, ReturnedDetail)
+            valid_target = (isinstance(secret, ReturnedDetail)
+                and action == 'resume_returned_detail' and pending_detail_target(state) == secret.target)
+            valid_search = (isinstance(secret, ReturnedSearch)
+                and action == 'resume_returned_search' and state.get('search_url') == secret.expected_url
+                and state.get('keyword') == secret.keyword
+                and isinstance(secret.signature, str) and bool(secret.signature))
+            if (not (valid_target or valid_search)
                     or self._backends.get(state['id']) is not secret.backend
-                    or state.get('authentication') != 'manual_pending'
-                    or pending_detail_target(state) != secret.target):
+                    or state.get('authentication') != 'manual_pending'):
                 raise CrawlError('login_return_changed')
             backend = secret.backend
             # A returned snapshot can only be consumed by its living owner.
@@ -1102,7 +1118,10 @@ class GuidedService:
                             and adapter.login_url == 'https://www.liepin.com/')
             url = target.expected_url if target else (state['search_url'] if inline_login else adapter.login_url)
             try:
-                backend.open(url, authentication=True)
+                if inline_login and not target and callable(getattr(backend, 'open_search', None)):
+                    backend.open_search(url, keyword=state['keyword'], authentication=True)
+                else:
+                    backend.open(url, authentication=True)
             except CrawlError as exc:
                 if action != 'login_password' or exc.code != 'manual_required':
                     raise
@@ -1112,6 +1131,19 @@ class GuidedService:
                 backend.password_login(secret)
             self._save(state, 'login_password_submitted' if action == 'login_password' else 'manual_detail_open' if target else 'manual_browser_open',
                        status='waiting_manual', authentication='manual_pending')
+        elif action == 'resume_returned_search':
+            from .liepin_form import matching_search_entry_signature, submit_search
+            if self._cancel.is_set():
+                raise CrawlError('paused')
+            # Third fresh read on the original owner. A changed UI/session or
+            # query never falls back to navigation or a replacement browser.
+            if matching_search_entry_signature(backend, state, backend.snapshot()) != secret.signature:
+                raise CrawlError('login_return_changed')
+            if hasattr(backend, 'collection_mode'):
+                backend.collection_mode()
+            submit_search(backend, secret.keyword)
+            self._gather(state, backend, adapter)
+            self._save(state, login_continuation='resumed_search')
         elif action == 'resume_returned_detail':
             if self._cancel.is_set():
                 raise CrawlError('paused')
@@ -1122,7 +1154,9 @@ class GuidedService:
             # Third, fresh read: reject navigation/body/identity changes between
             # observation and execution, with no automatic refetch fallback.
             page = backend.snapshot()
-            if hasattr(backend, 'wire'):
+            if callable(getattr(backend, 'ensure_page_access', None)):
+                backend.ensure_page_access(page.url)
+            elif hasattr(backend, 'wire'):
                 backend.wire.ensure_robots(page.url)
             if (pending_detail_target(state) != secret.target
                     or matching_detail_signature(adapter, secret.target.expected_url, page) != secret.signature):
@@ -1136,9 +1170,9 @@ class GuidedService:
                 self._collect(state,backend,adapter)
             else:
                 self._gather(state,backend,adapter,navigate=action=='resume')
-        if action in {'search', 'capture', 'resume'}:
+        if action in {'search', 'capture', 'resume', 'resume_returned_search'}:
             self._auto_collect_ready(state, backend, adapter)
-        if (pending_login and action in {'capture', 'search', 'resume', 'collect', 'resume_returned_detail'}
+        if (pending_login and action in {'capture', 'search', 'resume', 'collect', 'resume_returned_detail', 'resume_returned_search'}
                 and state['status'] in {'ready', 'completed'}):
             # This is task progress after a user action, not login certification.
             self._save(state, authentication='user_resumed')
@@ -1166,7 +1200,9 @@ class GuidedService:
                 or getattr(backend, 'wait_error', None) is not failure
                 or not can_resume(backend)):
             raise CrawlError('read_retry_unavailable')
-        retry = retry_action_for(state, failure)
+        entry = getattr(backend, 'search_entry_url', None)
+        search_entry = entry(state['search_url'], keyword=state['keyword']) if callable(entry) else None
+        retry = retry_action_for(state, failure, search_entry=search_entry)
         saved = retry_budget(state)
         publisher_wait = retry_after_seconds(failure.retry_after, self.ledger.clock())
         if publisher_wait:
@@ -1295,7 +1331,7 @@ class GuidedService:
                 else:
                     try:
                         current = self._load(ident)
-                        if action == 'resume_returned_detail':
+                        if action in {'resume_returned_detail', 'resume_returned_search'}:
                             state['login_continuation'] = 'needs_attention'
                         stopping = self._stop_ident == ident
                         if stopping:

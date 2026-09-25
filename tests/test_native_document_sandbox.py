@@ -53,6 +53,21 @@ class DocumentPolicyTests(unittest.TestCase):
     def test_non_cors_backend_unchanged(self):
         self.assertEqual(document_response_params(event(), enabled=False), {'requestId': 'r'})
 
+    def test_minimal_event_backend_blocks_workers_and_websockets_without_changing_original_policy(self):
+        headers = [{'name': 'Content-Security-Policy', 'value': "script-src 'self'"}]
+        result = document_response_params(event(responseHeaders=headers), enabled=False, minimal_events=True)
+        self.assertEqual(result['responseHeaders'][:-1], headers)
+        restriction = result['responseHeaders'][-1]['value']
+        self.assertIn("worker-src 'none'", restriction)
+        self.assertIn('connect-src https: http:', restriction)
+        self.assertNotIn('wss:', restriction)
+        self.assertNotIn('allow-popups', restriction)
+        self.assertIn('allow-forms', restriction)
+
+    def test_robots_stay_inert_with_minimal_event_backend(self):
+        result = document_response_params(event(), enabled=False, robots=True, minimal_events=True)
+        self.assertEqual(result['responseHeaders'][-1]['value'], ROBOTS_SANDBOX)
+
     def test_redirects_not_reconstructed(self):
         for status in (301, 302, 303, 307, 308):
             with self.subTest(status=status):

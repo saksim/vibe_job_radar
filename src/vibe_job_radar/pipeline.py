@@ -5,7 +5,10 @@ import os
 import shutil
 import tempfile
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import nullcontext
 from pathlib import Path
+import threading
 from . import config as cfg
 from ._version import __version__
 from .acquisition_status import snapshot as acquisition_snapshot
@@ -26,10 +29,11 @@ COVERAGE_FIELDS = ["job_group_id", "title", "url", "eligible_weight", "user_atte
 HARD_FIELDS = ["constraint_id", "job_group_id", "record_id", "roles", "category", "quote", "start", "end", "strength", "url", "evidence_level", "is_synthetic", "note"]
 
 
-def analyze(db: str | Path, output: str | Path, *, config: dict | None = None,
+def analyze(db: str | Path | Store, output: str | Path, *, config: dict | None = None,
             role_filter: list[str] | None = None, platform_filter: list[str] | None = None,
             candidate_path: str | Path | None = None, reviews_path: str | Path | None = None,
             demo_mode: bool = False, max_age_days: int = 90, as_of: str | None = None, llm=None) -> dict:
+    """Analyze a database path or borrow an open Store without closing it."""
     conf = config or cfg.load_config()
     if max_age_days < 1:
         raise ValueError("max_age_days must be positive")
@@ -37,7 +41,7 @@ def analyze(db: str | Path, output: str | Path, *, config: dict | None = None,
         raise ValueError("unknown role filter")
     if platform_filter and set(platform_filter) - set(conf["platforms"]):
         raise ValueError("unknown platform filter")
-    if not Path(db).is_file():
+    if not isinstance(db, Store) and not Path(db).is_file():
         raise ValueError("database does not exist; ingest/discover first")
     output = Path(output)
     if output.exists() and (not output.is_dir() or any(output.iterdir())):
@@ -47,7 +51,7 @@ def analyze(db: str | Path, output: str | Path, *, config: dict | None = None,
     reviews = load_json(reviews_path) if reviews_path else {}
     if not isinstance(reviews, dict):
         raise ValueError("reviews must be an object keyed by requirement_id")
-    with Store(db) as store:
+    with (nullcontext(db) if isinstance(db, Store) else Store(db)) as store:
         current = store.records()
         historical = store.records(latest_only=False)
         events = store.events()
@@ -167,45 +171,60 @@ def analyze(db: str | Path, output: str | Path, *, config: dict | None = None,
     output.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix="." + output.name + "-", dir=output.parent))
     try:
-        atomic_text(staging / "jobs.jsonl", "".join(json.dumps(j.to_dict(), ensure_ascii=False) + "\n" for j in current))
-        atomic_text(staging / "requirements.jsonl", "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in req_dicts))
-        write_csv(staging / "requirements.csv", req_dicts, REQ_FIELDS)
-        write_requirements_zh(staging / "requirements_zh.csv", req_dicts, conf)
-        write_csv(staging / "capability_summary.csv", summary, SUMMARY_FIELDS)
-        write_csv(staging / "requirement_evidence_matrix.csv", matrix, MATRIX_FIELDS)
-        write_csv(staging / "job_coverage.csv", coverage, COVERAGE_FIELDS)
-        write_csv(staging / "hard_constraints.csv", constraints, HARD_FIELDS)
-        write_csv(staging / "review_queue.csv", [r.to_dict() for r in pending], REQ_FIELDS)
-        write_csv(staging / "negative_constraints.csv", [r.to_dict() for r in requirements if not r.positive], REQ_FIELDS)
-        write_csv(staging / "input_audit.csv", audit, ["record_id", "title", "platform", "url", "roles", "status", "evidence_level", "is_synthetic", "collected_at", "published_at", "collection_age_days", "note"])
-        write_csv(staging / "duplicate_groups.csv", duplicates, ["job_group_id", "representative_record_id", "source_record_ids", "source_urls", "method"])
-        write_csv(staging / "analysis_errors.csv", errors, ["record_id", "stage", "error_type", "error"])
-        write_csv(staging / "audit_events.csv", events, ["event_id", "created_at", "action", "status", "details"])
-        write_csv(staging / "metrics_catalog.csv", catalog_rows(), ["metric_id", "label", "unit", "kind", "formula", "measurement_contract"])
-        tool_rows = []
-        for tool in conf["tools"]:
-            matches = [r for r in accepted if tool in r.tools]
-            if matches:
-                tool_rows.append({"tool": tool, "job_count": len({r.job_group_id for r in matches}),
-                                  "requirement_ids": sorted({r.requirement_id for r in matches}),
-                                  "note": "ATS vocabulary only; listing tools does not prove competence"})
-        write_csv(staging / "ats_keywords.csv", tool_rows, ["tool", "job_count", "requirement_ids", "note"])
-        atomic_json(staging / "reviews.template.json", {r.requirement_id: {"decision": "pending", "reviewer": "", "reason": ""} for r in pending})
-        atomic_json(staging / "candidate.template.json", {"name": "待填写", "evidence": []})
-        atomic_json(staging / "candidate.effective.json", candidate)
-        atomic_json(staging / "reviews.effective.json", reviews)
-        atomic_json(staging / "effective_config.json", conf)
-        atomic_json(staging / "llm_audit.json", llm.audit if llm else [])
-        atomic_json(staging / "research_brief.json", manifest["research_brief"])
-        atomic_text(staging / "research_brief.md", brief_markdown(manifest["research_brief"]))
-        atomic_text(staging / "descriptions.md", claims)
-        atomic_text(staging / "role_descriptions.md", role_claims)
-        atomic_text(staging / "evidence_gaps.md", gaps)
-        atomic_text(staging / "README_OUTPUT.md", "# 输出说明\n\n" + "\n\n".join(warnings) +
-                    "\n\n先打开 dashboard.html，再读 requirements_zh.csv、review_queue.csv 与 hard_constraints.csv。\n"
-                    "\n同一原文可能对应多项能力；精确原文见 requirements.jsonl，CSV 为防公式注入可能增加前导单引号。\n"
-                    "\n输入快照与生成文件SHA256见 run_manifest.json。当前目录为一次运行的不可覆盖产物。\n")
-        dashboard(staging / "dashboard.html", manifest, summary, req_dicts, claims, conf)
+        # Independent files retain their original atomic write and fsync. A
+        # small fixed pool overlaps filesystem waits, not analysis or network.
+        # The manifest/public directory remain unavailable until every writer
+        # has completed; executor shutdown also precedes failure cleanup.
+        with ThreadPoolExecutor(max_workers=4, thread_name_prefix=f'radar-report-{threading.get_ident()}') as writer:
+            writes = []
+            def write(function, *args):
+                writes.append(writer.submit(function, *args))
+            write(atomic_text, staging / "jobs.jsonl", "".join(json.dumps(j.to_dict(), ensure_ascii=False) + "\n" for j in current))
+            write(atomic_text, staging / "requirements.jsonl", "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in req_dicts))
+            write(write_csv, staging / "requirements.csv", req_dicts, REQ_FIELDS)
+            write(write_requirements_zh, staging / "requirements_zh.csv", req_dicts, conf)
+            write(write_csv, staging / "capability_summary.csv", summary, SUMMARY_FIELDS)
+            write(write_csv, staging / "requirement_evidence_matrix.csv", matrix, MATRIX_FIELDS)
+            write(write_csv, staging / "job_coverage.csv", coverage, COVERAGE_FIELDS)
+            write(write_csv, staging / "hard_constraints.csv", constraints, HARD_FIELDS)
+            write(write_csv, staging / "review_queue.csv", [r.to_dict() for r in pending], REQ_FIELDS)
+            write(write_csv, staging / "negative_constraints.csv", [r.to_dict() for r in requirements if not r.positive], REQ_FIELDS)
+            write(write_csv, staging / "input_audit.csv", audit, ["record_id", "title", "platform", "url", "roles", "status", "evidence_level", "is_synthetic", "collected_at", "published_at", "collection_age_days", "note"])
+            write(write_csv, staging / "duplicate_groups.csv", duplicates, ["job_group_id", "representative_record_id", "source_record_ids", "source_urls", "method"])
+            write(write_csv, staging / "analysis_errors.csv", errors, ["record_id", "stage", "error_type", "error"])
+            write(write_csv, staging / "audit_events.csv", events, ["event_id", "created_at", "action", "status", "details"])
+            write(write_csv, staging / "metrics_catalog.csv", catalog_rows(), ["metric_id", "label", "unit", "kind", "formula", "measurement_contract"])
+            tool_rows = []
+            for tool in conf["tools"]:
+                matches = [r for r in accepted if tool in r.tools]
+                if matches:
+                    tool_rows.append({"tool": tool, "job_count": len({r.job_group_id for r in matches}),
+                                      "requirement_ids": sorted({r.requirement_id for r in matches}),
+                                      "note": "ATS vocabulary only; listing tools does not prove competence"})
+            write(write_csv, staging / "ats_keywords.csv", tool_rows, ["tool", "job_count", "requirement_ids", "note"])
+            write(atomic_json, staging / "reviews.template.json", {r.requirement_id: {"decision": "pending", "reviewer": "", "reason": ""} for r in pending})
+            write(atomic_json, staging / "candidate.template.json", {"name": "待填写", "evidence": []})
+            write(atomic_json, staging / "candidate.effective.json", candidate)
+            write(atomic_json, staging / "reviews.effective.json", reviews)
+            write(atomic_json, staging / "effective_config.json", conf)
+            write(atomic_json, staging / "llm_audit.json", llm.audit if llm else [])
+            write(atomic_json, staging / "research_brief.json", manifest["research_brief"])
+            write(atomic_text, staging / "research_brief.md", brief_markdown(manifest["research_brief"]))
+            write(atomic_text, staging / "descriptions.md", claims)
+            write(atomic_text, staging / "role_descriptions.md", role_claims)
+            write(atomic_text, staging / "evidence_gaps.md", gaps)
+            write(atomic_text, staging / "README_OUTPUT.md", "# 输出说明\n\n" + "\n\n".join(warnings) +
+                        "\n\n先打开 dashboard.html，再读 requirements_zh.csv、review_queue.csv 与 hard_constraints.csv。\n"
+                        "\n同一原文可能对应多项能力；精确原文见 requirements.jsonl，CSV 为防公式注入可能增加前导单引号。\n"
+                        "\n输入快照与生成文件SHA256见 run_manifest.json。当前目录为一次运行的不可覆盖产物。\n")
+            write(dashboard, staging / "dashboard.html", manifest, summary, req_dicts, claims, conf)
+            try:
+                for future in as_completed(writes):
+                    future.result()
+            except Exception:
+                for future in writes:
+                    future.cancel()
+                raise
         manifest["output_files_sha256"] = {p.name: __import__('hashlib').sha256(p.read_bytes()).hexdigest()
                                            for p in sorted(staging.iterdir()) if p.is_file()}
         atomic_json(staging / "run_manifest.json", manifest)

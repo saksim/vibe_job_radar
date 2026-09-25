@@ -312,7 +312,12 @@ class LiepinAdapter(DOMAdapter):
 
     def confirmed_empty(self, page):
         from .liepin_search import observed_cards
-        return observed_cards(self, page) == []
+        try:
+            return observed_cards(self, page) == []
+        except CrawlError as exc:
+            if exc.code == 'not_job_list':
+                return False  # Default entry recommendations are not a query.
+            raise
 
     def validate_detail_identity(self, expected_url: str, page: PageSnapshot) -> None:
         expected = self.job_identity(expected_url)

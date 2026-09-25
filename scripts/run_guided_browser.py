@@ -199,6 +199,7 @@ def main():
                 page.locator('#auto-login-return').check()
                 page.locator('#login').click()
                 expect(page.locator('#login-return-status')).to_contain_text('原检索页',timeout=30000)
+                expect(page.locator('#login-return-status')).not_to_contain_text('账号区域')
                 login_posts=CALLS.count(('POST','/login'))
                 MANUAL_LOGIN.set()
                 # No Capture/Resume click: two matching local DOM observations
@@ -212,9 +213,14 @@ def main():
                 result['checks'].append('opt-in matching login return automatically reads the original list without Capture/Resume; selected detail enters the same report pipeline')
                 # A separate query explicitly reuses this still-open, now idle
                 # browser. Login count must not change and prior reports survive.
+                # A saved JD is visible before report finalization finishes.
+                # Await the actual report link before freezing its identity;
+                # otherwise this preservation check can compare an empty ID.
+                expect(page.locator('#result a[href^="/#report="]')).to_have_count(1,timeout=30000)
                 previous_id=page.locator('#task').input_value()
                 previous_backend=server.guided._backends[previous_id]
                 previous_report=server.guided._load(previous_id)['report_id']
+                assert previous_report
                 login_posts=CALLS.count(('POST','/login'))
                 expect(form.locator('[name=reuse_current_session]')).not_to_be_checked()
                 form.locator('[name=reuse_current_session]').check()
@@ -232,6 +238,7 @@ def main():
                 page.locator('#cards input[type=checkbox]').first.check()
                 page.locator('#collect').click()
                 expect(page.locator('#result')).to_contain_text('已保存 1 个岗位',timeout=30000)
+                expect(page.locator('#result a[href^="/#report="]')).to_have_count(1,timeout=30000)
                 assert server.guided._load(current_id)['report_id']!=previous_report
                 assert CALLS.count(('POST','/login'))==login_posts
                 result['checks'].append('new opted-in query reuses the same authenticated browser with no additional login; selected detail creates a separate report and prior report survives')
@@ -262,6 +269,7 @@ def main():
                 assert CALLS.count(('POST','/login'))==login_posts
                 page.locator('#cards input[type=checkbox]').first.check();page.locator('#collect').click()
                 expect(page.locator('#result')).to_contain_text('已保存 1 个岗位',timeout=30000)
+                expect(page.locator('#result a[href^="/#report="]')).to_have_count(1,timeout=30000)
                 assert server.guided._load(previous_id)['report_id']==previous_report
                 assert 'fixture_login' not in json.dumps(server.guided.state())
                 result['checks'].append('opt-in cookies restore into a new service and new collection browser; no additional login POST, full selected JD reaches report, old reports remain')

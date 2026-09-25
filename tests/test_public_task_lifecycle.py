@@ -1,6 +1,8 @@
 """Actual worker/cache/report lifecycle; artificial upstream, never market data."""
 import copy
 from contextlib import closing
+import json
+from pathlib import Path
 import sqlite3
 import tempfile
 import threading
@@ -10,6 +12,7 @@ from dataclasses import replace
 from unittest.mock import Mock, patch
 
 from test_local_public import payload, query
+from test_core import job
 from test_redirect_recovery import fixture_payload
 import test_workbench as http_fixtures
 from vibe_job_radar.local_public import API_URL, SOURCE, LocalPublicDataClient
@@ -79,6 +82,27 @@ class PublicLifecycleTests(unittest.TestCase):
         # Identical artificial postings remain two stored source rows; the
         # original analysis intentionally groups their identical text once.
         self.assertEqual(self.workspace.report(complete['report_id'])['manifest']['stats']['full_text_job_groups'], 1)
+
+    def test_report_needs_no_temporary_disk_database_and_keeps_exact_batch(self):
+        previous = job(text='另一任务已保存的原始正文，不属于当前公开来源批次。')
+        with Store(self.workspace.db) as stored:
+            stored.add(previous)
+        def without_staging_disk(path):
+            if str(path) != ':memory:' and Path(path) != self.workspace.db:
+                raise OSError('fixture temporary database storage unavailable')
+            return Store(path)
+        with patch('vibe_job_radar.public_tasks.Store', side_effect=without_staging_disk):
+            self.tasks.search({'consent': True, 'query': query().payload()})
+            complete = self.wait()
+        self.assertEqual(complete['status'], 'completed')
+        folder = self.workspace.root / 'reports' / complete['report_id']
+        jobs = [json.loads(line) for line in (folder / 'jobs.jsonl').read_text(encoding='utf-8').splitlines()]
+        self.assertEqual(len(jobs), 2)
+        self.assertNotIn(previous.record_id, {r['record_id'] for r in jobs})
+        with Store(self.workspace.db) as stored:
+            self.assertEqual(len(stored.records()), 3)
+            self.assertIn(previous, stored.records())
+        self.transport.json.assert_called_once_with(API_URL)
 
     def test_restart_is_offline_and_requires_confirmation_of_saved_query(self):
         ident = self.cancelled_search()

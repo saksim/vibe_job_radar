@@ -11,6 +11,7 @@ from functools import wraps
 import os
 import sys
 import threading
+import time
 from unittest.mock import patch
 
 import run_native_read_retry as acceptance
@@ -25,6 +26,7 @@ class Stages:
         self.pending = {}
         self.history = deque(maxlen=128)
         self.next_id = 0
+        self.started = time.monotonic()
         self.result = {'success':False, 'scope':'Ephemeral CI artificial native retry fixture; passive method names/counters and stacks without local values. Original waits and traffic decisions unchanged.'}
 
     def backend(self):
@@ -40,7 +42,8 @@ class Stages:
                 self.pending[ident].append(name)
             elif self.pending[ident] and self.pending[ident][-1] == name:
                 self.pending[ident].pop()
-            self.history.append({'backend':ident, 'method':name, 'phase':phase})
+            self.history.append({'backend':ident, 'method':name, 'phase':phase,
+                'elapsed_seconds':round(time.monotonic()-self.started, 3)})
             self.save()
 
     def save(self):

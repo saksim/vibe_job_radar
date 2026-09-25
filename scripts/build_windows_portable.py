@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -180,9 +181,22 @@ def build_candidate(out,evidence_path,*,verify_login_startup=False,verify_system
         return dest
 
 
+def native_component_valid(row):
+    return (isinstance(row,dict) and row.get('success') is True
+        and row.get('runtime')=='portable' and row.get('browser_channel')=='bundled'
+        and row.get('code')=='native_component_ready' and row.get('stage')=='passed'
+        and type(row.get('returncode')) is int and row['returncode']==0
+        and isinstance(row.get('browser_version'),str)
+        and bool(re.fullmatch(r'[0-9]+(?:\.[0-9]+){1,4}',row['browser_version']))
+        and all(row.get(k) is True for k in ('minimal_controller','blank_page_check','request_guard_check','cleanup_verified'))
+        and type(row.get('external_connections')) is int and row['external_connections']==0
+        and row.get('live_sites_certified') is False)
+
+
 def validate_runtime_evidence(bundle,report,*,require_login_startup=False,require_system_pac=False):
     if (not isinstance(report,dict) or report.get('success') is not True
             or report.get('verified_browser')!='bundled'
+            or not native_component_valid(report.get('native_component'))
             or (require_login_startup and (report.get('startup_registration_verified') is not True
                                           or report.get('startup_worker_verified') is not True))
             or (require_system_pac and report.get('system_pac_verified') is not True)

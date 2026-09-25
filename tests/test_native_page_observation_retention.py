@@ -6,7 +6,7 @@ from collections import deque
 from types import SimpleNamespace
 import threading
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from vibe_job_radar.guided.contracts import CrawlError, PageSnapshot
 from vibe_job_radar.guided.native_browser import NativeBackend
@@ -18,7 +18,7 @@ def backend_with_data(*, empty=False):
     b = NativeBackend.__new__(NativeBackend)
     observed = snapshot(payload([]) if empty else None)
     b.adapter = ADAPTER
-    b.page = SimpleNamespace(url=SEARCH)
+    b.page = SimpleNamespace(url=SEARCH, document_url=SEARCH, is_closed=lambda: False)
     b._epoch = 1
     b._observations = deque(observed.business, maxlen=20)
     b._latest_business = {'liepin_search': 1}
@@ -40,6 +40,16 @@ def current_cards(b):
 
 
 class ObservationRetentionTests(unittest.TestCase):
+    def test_snapshot_requires_current_native_response_even_when_old_dom_has_links(self):
+        b = backend_with_data()
+        old_dom = PageSnapshot(SEARCH, '<a href="https://www.liepin.com/job/999.shtml">旧结果</a>')
+        with patch('vibe_job_radar.guided.browser.PlaywrightBackend.snapshot', return_value=old_dom):
+            self.assertTrue(b.snapshot().business_required)
+            self.assertEqual(len(ADAPTER.cards(b.snapshot())), 1)
+            b._observations.clear()
+            with self.assertRaisesRegex(CrawlError, 'page_not_ready'):
+                ADAPTER.cards(b.snapshot())
+
     def test_absent_next_does_not_erase_returned_candidates(self):
         b = backend_with_data()
         old = b.observations()
@@ -136,12 +146,13 @@ class ObservationRetentionTests(unittest.TestCase):
         button = Mock()
         button.get_attribute.return_value = None
         b._visible.return_value = button
-        b._check_error.side_effect = [None, CrawlError('paused')]
+        b._check_error.side_effect = [None, None, CrawlError('paused')]
         with self.assertRaisesRegex(CrawlError, 'paused'):
             b.next_page()
         self.assertEqual(len(current_cards(b)), 1)
         button.click.assert_not_called()
         self.assertIsNone(b._pagination_page)
+        b.wire.reserve.assert_called_once_with('page')
 
     def test_refused_action_does_not_fetch_old_or_new_responses(self):
         b = backend_with_data()
