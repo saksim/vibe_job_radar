@@ -92,9 +92,10 @@ class BatchOutcomeTests(unittest.TestCase):
         self.s=GuidedService(self.ws,registry=Registry([self.a]),backend_factory=FakeBackend)
         self.addCleanup(self.s.close)
     def run_batch(self, pages):
-        state={'id':'d'*32,'platform':self.a.key,'roles':['time_series'],'selection':['a','b'],
+        state={'id':'d'*32,'schema_version':1,'platform':self.a.key,'roles':['time_series'],'selection':['a','b'],
+               'keyword':'时间序列','search_url':self.a.search_url('时间序列'), 'max_pages':1,'max_jobs':2,'pages_seen':[],
                'rights_note':'人工测试，不是真实授权','code':'new','phase':'collect','status':'ready','report_id':'',
-               'cards':[{'id':k,'title':'待取得','url':'https://jobs.fixture.test/job/'+k,'status':'discovered','record_id':'','resolved_url':''} for k in ('a','b')]}
+               'cards':[{'id':k,'title':'待取得','url':'https://jobs.fixture.test/job/'+k,'source_url':self.a.search_url('时间序列'),'status':'discovered','record_id':'','resolved_url':''} for k in ('a','b')]}
         class Backend:
             def open(_,url):
                 p=pages[url.rsplit('/',1)[-1]]

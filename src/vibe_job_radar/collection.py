@@ -7,6 +7,7 @@ import json
 import os
 import re
 import tempfile
+import threading
 import uuid
 from dataclasses import asdict
 from contextlib import contextmanager
@@ -19,10 +20,12 @@ from .discovery import BRAVE_ENDPOINT, build_plan
 from .html_parser import parse_job_html, plain_text
 from .models import JobRecord
 from .network import FetchError, SafeHTTP, SiteFetcher
+from .network_policy import current_policy, use_policy
 from .store import Store
 from .utils import atomic_json, canonical_url, domain_matches, parse_time, utc_now
 from .workspace import InputError, Workspace, text_field
 from .url_safety import credential_query_key
+from .public_category import MODE as CATEGORY_MODE
 
 ID = re.compile(r"[a-f0-9]{32}")
 TERMINAL = {"completed", "needs_attention", "empty"}
@@ -81,7 +84,15 @@ def writer_lock(root):
 def serialized(method):
     @wraps(method)
     def wrapped(self, *args, **kwargs):
-        with writer_lock(self.root):
+        from .collection_runtime import operation, fingerprint, validate_scope
+        with operation(self), writer_lock(self.root):
+            expected = getattr(self._execution, 'expected', None)
+            if expected is not None:
+                data = args[0] if args else kwargs.get('data', {})
+                if (method.__name__ != 'step' or data.get('id') != expected[0]
+                        or fingerprint(self._load(expected[0])) != expected[1]):
+                    raise InputError('后台批次的任务条件已变化，未继续访问。')
+                validate_scope(self, self._load(expected[0]))
             return method(self, *args, **kwargs)
     return wrapped
 
@@ -99,7 +110,34 @@ class Collector:
         if self.platform_config.exists():
             workspace.config = load_config(self.platform_config)
         self.clients = {}
-        self._recover()
+        self._execution = threading.local()
+        self._records = self.root/'records-lock'
+        if self._records.is_symlink():
+            raise InputError('采集状态锁不能使用符号链接。')
+        self._records.mkdir(exist_ok=True, mode=0o700)
+        from .collection_runtime import CollectionBusy
+        try:
+            self._recover()
+        except CollectionBusy:
+            pass  # An active owner, not this observing instance, owns recovery.
+
+    def _client(self, key, factory, *, site=False):
+        if key not in self.clients:
+            self.clients[key] = factory()
+        client = self.clients[key]
+        # A new explicit step uses the current workspace preference, while the
+        # same transport retains publisher pacing and prior host refusals.
+        transport = client.transport if site else client
+        policy = current_policy()
+        transport.network_policy = policy
+        transport.resolver = policy.resolver
+        return client
+
+    def _site_client(self, domains, platform):
+        from .collection_rate import SharedSiteRate
+        client = SiteFetcher(domains)
+        client.rate_gate = SharedSiteRate(self.workspace.root, platform)
+        return client
 
     @serialized
     def _recover(self):
@@ -107,7 +145,7 @@ class Collector:
         # Its reserved budget is not refunded and it is never retried automatically.
         for path in self.root.glob("*.json"):
             if ID.fullmatch(path.stem) and not path.is_symlink():
-                state = json.loads(path.read_text(encoding="utf-8"))
+                state = self._load(path.stem)
                 if state.get("in_flight"):
                     flight = state.pop("in_flight")
                     state[flight["queue"]][flight["index"]]["status"] = "interrupted_uncertain"
@@ -126,14 +164,21 @@ class Collector:
         return path
 
     def _load(self, ident):
-        path = self._path(ident)
-        if not path.is_file():
-            raise InputError("采集任务不存在。")
-        return json.loads(path.read_text(encoding="utf-8"))
+        from .record_lock import record_lock
+        with record_lock(self._records):
+            path = self._path(ident)
+            if not path.is_file():
+                raise InputError("采集任务不存在。")
+            return json.loads(path.read_text(encoding="utf-8"))
 
     def _save(self, state):
+        from .record_lock import record_lock
+        from .collection_runtime import fingerprint
         state["updated_at"] = utc_now()
-        atomic_json(self._path(state["id"]), state)
+        with record_lock(self._records):
+            atomic_json(self._path(state["id"]), state)
+        if getattr(self._execution, 'owned', False):
+            self._execution.expected = (state['id'], fingerprint(state))
 
     def _view(self, state):
         summary = {}
@@ -163,7 +208,7 @@ class Collector:
     def start(self, data):
         roles, platforms = self.workspace.filters({**data, "platforms": data.get("platforms", list(self.workspace.config["platforms"]))})
         mode = data.get("mode", "search")
-        if mode not in {"search", "urls", "feed"}:
+        if mode not in {"search", "urls", "feed", CATEGORY_MODE}:
             raise InputError("未知采集模式。")
         rights = text_field(data, "rights_note", required=True)
         permits = data.get("permit_platforms", [])
@@ -173,6 +218,13 @@ class Collector:
             raise InputError("请确认本次采集、保存范围及请求预算。")
         if mode == "search" and data.get("search_storage_rights") is not True:
             raise InputError("请确认搜索 API 套餐允许保存搜索结果。")
+        if mode == CATEGORY_MODE:
+            from .public_category import get_category
+            category = get_category(data.get('category_id', 'architect'))
+            if set(roles) != set(category.roles) or set(platforms) != {'liepin'}:
+                raise InputError("所选公开分类与目标岗位或来源不一致，请重新选择分类预设。")
+            if 'liepin' not in permits:
+                raise InputError("请先确认本次猎聘分类页和正文访问许可。")
         tasks = [dict(asdict(t), offset=0, attempts=0) for t in build_plan(self.workspace.config, platforms, roles)] if mode == "search" else []
         state = {"id": uuid.uuid4().hex, "schema_version": 1, "mode": mode, "status": "paused", "roles": roles,
             "platforms": platforms, "permit_platforms": permits, "rights_note": rights, "tasks": tasks, "details": [],
@@ -183,13 +235,32 @@ class Collector:
             "phase": "search" if mode == "search" else ("feed" if mode == "feed" else "detail"),
             "feed_done": False, "feed_cursor": "", "seen_cursors": [], "blocked_hosts": [], "warnings": [],
             "feed_outcomes": [], "report_id": "", "complete_market_coverage": False, "created_at": utc_now()}
+        if mode == CATEGORY_MODE:
+            from .public_category import MAX_DETAILS, new_outcome
+            state.update(phase='category', category_id=category.key, category_attempts=0,
+                         category_outcomes=[new_outcome(category.key)],
+                         detail_budget=integer(data, 'detail_budget', MAX_DETAILS, 1, MAX_DETAILS))
         if mode == "urls":
+            from .public_job_links import prepare_public_job_link, public_detail_parser
             urls = text_field(data, "urls", required=True, limit=100000).splitlines()
             if len(urls) > 300:
                 raise InputError("每批最多 300 个链接。")
             for url in urls:
                 if url.strip():
-                    self._enqueue(state, safe_url(url.strip()))
+                    prepared, normalization = prepare_public_job_link(url.strip())
+                    self._enqueue(state, prepared)
+                    row = next((r for r in state['details'] if r['url'] == prepared), None)
+                    if row is not None:
+                        parser = public_detail_parser(prepared)
+                        if parser:
+                            row['detail_parser'] = parser
+                        if normalization:
+                            # Keep all removed field names regardless of paste
+                            # order, without another request. Parser selection
+                            # applies equally to a clean link entered alone.
+                            prior = row.get('link_normalization', {}).get('removed_parameters', [])
+                            row['link_normalization'] = {**normalization,
+                                'removed_parameters': sorted(set(prior) | set(normalization['removed_parameters']))}
             if not state["details"]:
                 raise InputError("没有与所选平台匹配的职位链接。")
         if mode == "feed":
@@ -254,7 +325,7 @@ class Collector:
         task["attempts"] += 1
         state["in_flight"] = {"queue": "tasks", "index": index}
         self._save(state)
-        client = self.clients.setdefault("search:" + state["id"], SafeHTTP({"api.search.brave.com"}, interval=1.1))
+        client = self._client("search:" + state["id"], lambda: SafeHTTP({"api.search.brave.com"}, interval=1.1))
         try:
             payload = client.json(BRAVE_ENDPOINT + "?" + urlencode({"q": task["query"], "count": 20,
                 "offset": task["offset"], "search_lang": "zh-hans", "country": "cn"}), headers={"X-Subscription-Token": key})
@@ -304,8 +375,11 @@ class Collector:
             row["status"] = "host_stopped"
             return
         now = parse_time(utc_now())
+        from .public_job_links import public_detail_cache_matches
         with Store(self.workspace.db) as store:
             prior = next((r for r in store.records() if r.url == row["url"] and r.evidence_level == "full_text" and not r.is_synthetic
+                and public_detail_cache_matches(row, r)
+                and (not row.get('category_title') or ' '.join(r.title.split()) == row['category_title'])
                 and 0 <= (now - parse_time(r.collected_at)).total_seconds() <= state["fresh_hours"] * 3600
                 and (not r.expires_at or parse_time(r.expires_at) > now)), None)
         if prior:
@@ -318,12 +392,18 @@ class Collector:
         state["in_flight"] = {"queue": "details", "index": state["details"].index(row)}
         self._save(state)
         domains = set(self.workspace.config["platforms"][row["platform"]]["domains"])
-        client = self.clients.setdefault((state["id"], row["platform"]), SiteFetcher(domains))
+        client = self._client((state["id"], row["platform"]), lambda: self._site_client(domains, row['platform']), site=True)
         try:
             response = client.fetch(row["url"])
             markup = response.text()
             final_url = safe_url(response.url or row["url"])
-            parsed = parse_job_html(markup, source_url=final_url)
+            if row.get('detail_parser') or row.get('link_normalization'):
+                from .public_job_links import parse_prepared_job
+                parsed = parse_prepared_job(row, final_url, markup)
+            else:
+                parsed = parse_job_html(markup, source_url=final_url)
+            if row.get('category_title') and ' '.join(parsed['title'].split()) != row['category_title']:
+                raise FetchError('category_job_title_changed')
             record = JobRecord(**parsed, url=final_url, platform=row["platform"], source_mode="public_fetch",
                 rights_note=state["rights_note"], source_ref=f'collection:{state["id"]}', raw_sha256=hashlib.sha256(markup.encode()).hexdigest())
             with Store(self.workspace.db) as store:
@@ -331,13 +411,94 @@ class Collector:
             row.update(status="ok", record_id=record.record_id, final_url=record.url)
         except (FetchError, ValueError, TypeError) as exc:
             row["status"] = exc.code if isinstance(exc, FetchError) else "parse_error"
-            if row["status"] in {"http_401", "http_403", "http_429", "login_or_challenge", "host_circuit_open", "redirect_login_required", "redirect_verification_required"}:
+            if isinstance(exc, FetchError) and exc.retry_after is not None:
+                row['retry_after_seconds'] = exc.retry_after
+            if row["status"] in {"http_401", "http_403", "http_429", "login_or_challenge", "host_circuit_open", "redirect_login_required", "redirect_verification_required", "manual_required",
+                    'rate_wait', 'publisher_wait', 'hourly_limit', 'daily_limit', 'cooldown', 'clock_rollback',
+                    'rate_storage_error', 'publisher_policy_invalid', 'unsafe_workspace'}:
                 state["blocked_hosts"].append(host)
         finally:
             diagnostic = getattr(client, "last_diagnostic", None)
             if isinstance(diagnostic, dict):
                 row["fetch_diagnostic"] = diagnostic
             state.pop("in_flight", None)
+
+    def _category(self, state):
+        from .public_category import category_for_state, page_for_state, parse_category_page
+        from .public_job_links import public_detail_parser
+        category = category_for_state(state)
+        row = state['category_outcomes'][0]
+        if row['status'] != 'pending':
+            state['phase'] = 'detail'
+            return
+        state['category_attempts'] += 1
+        row['status'] = 'requesting'
+        row['capture_started_at'] = utc_now()
+        state['in_flight'] = {'queue': 'category_outcomes', 'index': 0}
+        self._save(state)
+        client = self._client((state['id'], 'liepin'), lambda: self._site_client({'liepin.com'}, 'liepin'), site=True)
+        try:
+            response = client.fetch(row['url'])
+            row.update(raw_sha256=hashlib.sha256(response.body).hexdigest(), final_url=response.url or row['url'])
+            candidates, paging = parse_category_page(response.url or row['url'], response.text(), category.key,
+                                                     page=page_for_state(state))
+            seen = set(state.get('category_page_context', {}).get('seen_urls', []))
+            for candidate in candidates:
+                if candidate['status'] != 'duplicate' and candidate['url'] in seen:
+                    candidate['status'] = 'previous_page_duplicate'
+            row.update(candidates=candidates, card_count=len(candidates), page_snapshot=paging)
+            selected = [c for c in candidates if c['status'] not in {'duplicate', 'previous_page_duplicate'}][:state['detail_budget']]
+            if not selected:
+                raise FetchError('category_repeated_page')
+            row.update(status='ok', candidates=candidates, card_count=len(candidates),
+                       selected_positions=[c['position'] for c in selected],
+                       raw_sha256=hashlib.sha256(response.body).hexdigest(),
+                       selection_rule='first_unique_cards_in_publisher_order')
+            for candidate in selected:
+                detail = dict(url=candidate['url'], platform='liepin', record_id='',
+                              category_position=candidate['position'], category_title=candidate['title'],
+                              status='pending' if candidate['status'] == 'available' else candidate['status'])
+                if detail['status'] == 'pending':
+                    detail['detail_parser'] = public_detail_parser(detail['url'])
+                state['details'].append(detail)
+        except (FetchError, ValueError, TypeError) as exc:
+            row['status'] = exc.code if isinstance(exc, FetchError) else 'category_structure_changed'
+            if isinstance(exc, FetchError) and exc.retry_after is not None:
+                row['retry_after_seconds'] = exc.retry_after
+        finally:
+            diagnostic = getattr(client, 'last_diagnostic', None)
+            if isinstance(diagnostic, dict):
+                row['fetch_diagnostic'] = diagnostic
+            state.pop('in_flight', None)
+            row['capture_finished_at'] = utc_now()
+            state['phase'] = 'detail'
+
+    def category_recovery_preview(self, data):
+        from .public_category_recovery import preview
+        return preview(self, data)
+
+    @serialized
+    def category_recovery_start(self, data):
+        from .public_category_recovery import start
+        return start(self, data)
+
+    def category_next_preview(self, data):
+        from .public_category_next import preview
+        return preview(self, data)
+
+    @serialized
+    def category_next_start(self, data):
+        from .public_category_next import start
+        return start(self, data)
+
+    def category_page_preview(self, data):
+        from .public_category_page import preview
+        return preview(self, data)
+
+    @serialized
+    def category_page_start(self, data):
+        from .public_category_page import start
+        return start(self, data)
 
     def _feed(self, state, key):
         # Explicit publisher contract: GET endpoint?cursor=opaque -> {jobs:[JobRecord], next_cursor:str|null}.
@@ -356,7 +517,7 @@ class Collector:
         p = urlsplit(state["endpoint"])
         params = parse_qsl(p.query) + ([("cursor", state["feed_cursor"])] if state["feed_cursor"] else [])
         url = urlunsplit((p.scheme, p.netloc, p.path, urlencode(params), ""))
-        client = self.clients.setdefault("feed:" + state["id"], SafeHTTP({p.hostname}, interval=1.1))
+        client = self._client("feed:" + state["id"], lambda: SafeHTTP({p.hostname}, interval=1.1))
         try:
             payload = client.json(url, headers={"Authorization": "Bearer " + key} if key else {})
             rows = payload.get("jobs")
@@ -404,21 +565,41 @@ class Collector:
             return self._view(state)
         if state.get("in_flight"):
             raise InputError("此任务有未结束的请求，请勿并发执行。")
+        if 'category_rate_recovery' in state:
+            from .public_category_recovery import validate_parent
+            validate_parent(self, state)
+        if state['mode'] == CATEGORY_MODE and 'category_page_context' in state:
+            from .public_category import category_for_state
+            from .public_category_page import validate_parent
+            # Recheck before every step, including detail work after a pause.
+            # Loading a page once cannot authorize a changed ancestry later.
+            category_for_state(state)
+            validate_parent(self, state)
         key = text_field(data, "api_key", limit=1000).strip()
         if state["mode"] == "search":
             key = key or os.environ.get("BRAVE_SEARCH_API_KEY", "")
-        state["status"] = "running"
-        if state["phase"] == "search":
-            self._search(state, key)
-        elif state["phase"] == "detail":
-            self._detail(state)
-        elif state["phase"] == "feed":
-            self._feed(state, key)
+        if state["phase"] in {"search", "detail", "feed", "category"}:
+            # Read/validate consent before reserving any attempt or saving an
+            # in-flight marker. This also covers the CLI, outside HTTP handlers.
+            policy = self.workspace.network_policy()
+            expected_policy = getattr(self._execution, 'policy_id', None)
+            if expected_policy is not None and policy.fingerprint != expected_policy:
+                raise InputError('后台采集期间网络设置已变化，未继续访问。')
+            with use_policy(policy):
+                state["status"] = "running"
+                if state["phase"] == "search":
+                    self._search(state, key)
+                elif state["phase"] == "detail":
+                    self._detail(state)
+                elif state["phase"] == "category":
+                    self._category(state)
+                else:
+                    self._feed(state, key)
         else:
             if self.workspace.db.is_file():
                 from .pipeline import analyze
                 ident = uuid.uuid4().hex
-                if state["mode"] == "urls":
+                if state["mode"] in {"urls", CATEGORY_MODE}:
                     ids = {d["record_id"] for d in state["details"] if d["status"] in {"ok", "fresh_reused"}}
                     # Empty Store creation must not generate a misleading report;
                     # unrelated historical jobs are not results of this URL batch.
@@ -439,7 +620,8 @@ class Collector:
                     state["report_id"] = ident
             problems = any(d["status"] not in {"ok", "fresh_reused"} for d in state["details"]) or any(
                 t["status"] in {"error", "provider_stopped", "budget_skipped", "interrupted_uncertain"} for t in state["tasks"]) or any(
-                f["status"] != "ok" for f in state["feed_outcomes"]) or bool(state["warnings"])
+                f["status"] != "ok" for f in state["feed_outcomes"]) or any(
+                c['status'] != 'ok' for c in state.get('category_outcomes', [])) or bool(state["warnings"])
             obtained = any(d["status"] in {"ok", "fresh_reused"} for d in state["details"]) or any(f.get("records", 0) for f in state["feed_outcomes"])
             state["status"] = "needs_attention" if problems else ("completed" if obtained else "empty")
             if state["report_id"]:

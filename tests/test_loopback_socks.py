@@ -84,14 +84,19 @@ class RealSocksTests(unittest.TestCase):
         self.tmp=tempfile.TemporaryDirectory(); self.requests=[];self.connects=[];self.dials=[];self.sni=[]
         self.reply=0;self.method=0;self.version=5;self.bound_type=1;self.reserved=0;self.truncate=False
         self.symbol=IP4;self.http_status=200;self.fragment=False;self.pause_handshake=False;owner=self
+        self.expected_credentials=None;self.authentication=[];self.greetings=[];self.proxy_peers=[]
+        self.auth_status=0;self.auth_version=1
         class Origin(http.server.BaseHTTPRequestHandler):
             def log_message(self,*a):pass
             def answer(self):
                 value=self.rfile.read(int(self.headers.get('Content-Length','0')))
                 owner.requests.append((self.command,value,dict(self.headers)))
-                data=b'{"ok":true,"fixture":"socks-through-tls"}'
+                data=getattr(owner,'payload',b'{"ok":true,"fixture":"socks-through-tls"}')
+                content_type=getattr(owner,'content_type','application/json')
+                if getattr(owner,'browser_fixture',False) and self.path=='/robots.txt':
+                    data=b'User-agent: *\nAllow: /\n';content_type='text/plain'
                 self.send_response(owner.http_status);self.send_header('Content-Length',str(len(data)))
-                self.send_header('Content-Type','application/json');self.end_headers();self.wfile.write(data)
+                self.send_header('Content-Type',content_type);self.end_headers();self.wfile.write(data)
             do_GET=do_POST=answer
         self.origin=http.server.ThreadingHTTPServer(('127.0.0.1',0),Origin);self.origin.daemon_threads=True
         pem=Path(__file__).with_name('fixtures')/'connection_test_only.pem'
@@ -106,13 +111,28 @@ class RealSocksTests(unittest.TestCase):
                     self.wfile.write(item);self.wfile.flush()
                     if owner.fragment:time.sleep(.001)
             def handle(self):
+                owner.proxy_peers.append(self.client_address[0])
                 self.connection.settimeout(2)
                 hello=self.rfile.read(3)
-                if hello!=b'\x05\x01\x00':return
+                owner.greetings.append(hello)
+                if hello not in (b'\x05\x01\x00',b'\x05\x01\x02'):return
                 if owner.pause_handshake:time.sleep(.3);return
                 if owner.truncate:self.emit(b'\x05');return
                 self.emit(bytes((owner.version,owner.method)))
-                if owner.method!=0 or owner.version!=5:return
+                if owner.version!=5:return
+                if owner.method==2:
+                    if hello!=b'\x05\x01\x02':return
+                    version=self.rfile.read(1);length=self.rfile.read(1)
+                    if version!=b'\x01' or not length:return
+                    username=self.rfile.read(length[0]);length=self.rfile.read(1)
+                    if not length:return
+                    password=self.rfile.read(length[0]);owner.authentication.append((username,password))
+                    status=owner.auth_status
+                    if owner.expected_credentials is not None and (username,password)!=owner.expected_credentials:
+                        status=1
+                    self.emit(bytes((owner.auth_version,status)))
+                    if status or owner.auth_version!=1:return
+                elif owner.method!=0:return
                 header=self.rfile.read(4)
                 if len(header)!=4:return
                 n={1:4,4:16}.get(header[3]);
@@ -124,7 +144,7 @@ class RealSocksTests(unittest.TestCase):
                 self.emit(bytes((5,owner.reply,owner.reserved,owner.bound_type))+bound+b'\x01\xbb')
                 if owner.reply or owner.reserved or owner.bound_type==9:return
                 # Only this artificial proxy maps the public symbol to loopback.
-                upstream=owner.real_dial(owner.origin.server_address,2)
+                upstream=owner.real_dial(getattr(owner,'upstream_address',owner.origin.server_address),2)
                 try:
                     peers={self.connection:upstream,upstream:self.connection}
                     while True:
@@ -139,7 +159,7 @@ class RealSocksTests(unittest.TestCase):
         class Server(socketserver.ThreadingTCPServer):
             allow_reuse_address=True;daemon_threads=True
             def handle_error(self,*a):pass
-        self.proxy=Server(('127.0.0.1',0),Socks)
+        self.proxy=Server((getattr(self,'proxy_bind','127.0.0.1'),0),Socks)
         self.threads=[]
         for server in (self.origin,self.proxy):
             thread=threading.Thread(target=server.serve_forever,kwargs={'poll_interval':.01},daemon=True)

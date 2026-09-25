@@ -17,6 +17,8 @@ class Card:
 class PageSnapshot:
     url: str
     html: str = field(repr=False)
+    business: tuple = field(default=(), repr=False)  # Private observations, never task/diagnostic output.
+    visible_text: str | None = field(default=None, repr=False)
 
 
 class CrawlError(RuntimeError):
@@ -24,6 +26,12 @@ class CrawlError(RuntimeError):
     def __init__(self, code: str):
         self.code = code
         super().__init__(code)
+
+
+class PageSnapshotChanged(CrawlError):
+    """The observed URL changed during a local DOM read; no snapshot is usable."""
+    def __init__(self):
+        super().__init__('page_not_ready')
 
 
 class SiteAdapter(Protocol):

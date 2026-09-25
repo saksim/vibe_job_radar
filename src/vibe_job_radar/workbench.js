@@ -82,7 +82,13 @@ async function refresh() {
       $("job-platform").append(option);
     });
   }
-  table($("sources"), ["平台", "授权文本导入", "自动登录", "实站验收"], Object.values(state.platforms).map((p) => [p.label, "可用", "未实现", "未验证"]));
+  table($("sources"), ["平台", "授权文本导入", "登录方式", "采集验证状态"], Object.entries(state.platforms).map(([key, platform]) => {
+    const site = state.acquisition_sites?.find(item => item.key === key);
+    const capability = site?.acquisition?.backends.find(item => item.default);
+    const login = !site ? '仅导入材料' : site.password_login === 'controlled_test_only'
+      ? '采集浏览器人工登录；可选单次密码提交（受控验证）' : '在采集浏览器人工登录';
+    return [platform.label, '可用', login, capability?.message || '暂无已记录的浏览器采集验证'];
+  }));
   table($("records"), ["职位", "平台", "证据", "匹配岗位", "来源链接"], state.records.map((j) => [j.title, state.platforms[j.platform]?.label || j.platform,
     j.evidence_level === "full_text" ? "完整正文" : "摘要线索", j.roles.map((r) => state.roles[r]).join("、") || "未匹配", j.url]));
   $("runs").replaceChildren();
@@ -214,10 +220,15 @@ else refresh().then(async () => {
 
 
 // Public tasks poll LOCAL state only. Loading this page never queries a source.
-let publicPolling = false, publicReport = '', publicNextQuery = null;
+let publicPolling = false, publicReport = '', publicNextQuery = null, publicTaskId = '';
 async function publicState() {
   const result = await request('/api/public/state');
   const task = result.task;
+  publicTaskId = task.id || '';
+  $('public-cancel').hidden = !task.can_cancel;
+  $('public-resume').hidden = !task.can_resume;
+  const sourceLabels = (task.query?.source_scope || []).map(key => result.sources.find(source => source.id === key)?.label || '原来源当前不可用').join('、');
+  $('public-saved-query').textContent = task.query?.query ? `已保存查询：${sourceLabels} · ${task.query.query} · 地区：${task.query.region||'不限'}。继续和下一页采用这些条件，修改表单不会改动当前结果。` : '';
   $('public-status').textContent = task.message || '';
   const changeMessage = task.catalog_change?.message || '';
   $('public-changes').textContent = changeMessage;
@@ -230,14 +241,14 @@ async function publicState() {
   $('public-consent-text').textContent = result.privacy;
   $('public-search-button').textContent = local ? '获取并在本机筛选' : '查询所选公开来源';
   $('public-network').textContent = JSON.stringify(result.network_policy, null, 2);
-  const busy = ['queued', 'running'].includes(task.status);
+  const busy = task.owned_elsewhere || ['queued', 'running', 'cancelling'].includes(task.status);
   $('public-example').disabled = busy;
   $('public-search-button').disabled = busy || !result.query_available;
   publicNextQuery = task.status === 'completed' && task.next_cursor
     ? {...task.query, cursor: task.next_cursor} : null;
   $('public-next').hidden = !publicNextQuery;
   $('public-next').disabled = busy;
-  $('public-next').textContent = local ? '读取下一页（本地缓存）' : '确认获取下一页';
+  $('public-next').textContent = local ? `读取下一页（${sourceLabels} · 本地缓存）` : '确认获取下一页';
   if (!$('public-source').options.length) for (const source of result.sources) {
     const option = document.createElement('option'); option.value = source.id; option.textContent = source.label;
     $('public-source').append(option);
@@ -250,7 +261,7 @@ async function watchPublic() {
   try {
     for (let i = 0; i < 120; i++) {
       const task = await publicState();
-      if (!['queued', 'running'].includes(task.status)) {
+      if (!task.owned_elsewhere && !['queued', 'running', 'cancelling'].includes(task.status)) {
         if (!reportPinned && task.status === 'completed' && task.report_id && task.report_id !== publicReport) {
           publicReport = task.report_id;
           await refresh(); showReport(await request('/api/report/' + task.report_id));
@@ -281,6 +292,14 @@ $('public-next').addEventListener('click', async () => {
   if (!publicNextQuery) return;
   const query = {...publicNextQuery};
   await operation(async () => { await request('/api/public/search', {consent: true, query}); reportPinned = false; });
+  await watchPublic();
+});
+$('public-cancel').addEventListener('click', async () => {
+  await operation(async () => { await request('/api/public/cancel', {id:publicTaskId}); await publicState(); });
+  await watchPublic();
+});
+$('public-resume').addEventListener('click', async () => {
+  await operation(async () => { await request('/api/public/resume', {id:publicTaskId,consent:true}); reportPinned=false; });
   await watchPublic();
 });
 if (token) watchPublic();
