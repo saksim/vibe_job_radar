@@ -52,6 +52,8 @@ class CDPConnection:
         self.owner = threading.get_ident()
         self.sequence = 0
         self.responses, self.pending = {}, set()
+        self._received_sequence = 0
+        self._response_order = {}
         self._events = deque()
         self._event_bytes = 0
         self._dispatching = False
@@ -99,9 +101,12 @@ class CDPConnection:
             deadline = time.monotonic() + max(.01, min(timeout, 90))
             # A callback may need a command acknowledgment to finish. Events
             # received during that wait must not recursively enter callbacks.
-            # Before the outer command returns, drain deferred events so its
-            # caller sees navigation/retirement that preceded the response.
-            while ident not in self.responses or (not self._dispatching and self._events):
+            # Drain events that PRECEDED this reply. A nested acknowledgment
+            # can also receive later events; those belong to subsequent pumping,
+            # not an ever-growing completion condition for an answered command.
+            # Navigation/retirement before the reply still reaches its caller.
+            while (ident not in self.responses or (not self._dispatching and self._events
+                    and self._events[0][2] < self._response_order[ident])):
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise CrawlError('native_protocol_error')
@@ -119,11 +124,12 @@ class CDPConnection:
         finally:
             self.pending.discard(ident)
             self.responses.pop(ident, None)
+            self._response_order.pop(ident, None)
 
     def pump(self, timeout=.05):
         self._owner()
         if self._events and not self._dispatching:
-            message, size = self._events.popleft()
+            message, size, _ = self._events.popleft()
             self._event_bytes -= size
             self._dispatch(message)
             return True
@@ -145,10 +151,12 @@ class CDPConnection:
             raise CrawlError('native_protocol_error') from None
         if not isinstance(message, dict):
             raise CrawlError('native_protocol_error')
+        self._received_sequence += 1
         if 'id' in message:
             if message['id'] not in self.pending:
                 raise CrawlError('native_protocol_error')
             self.responses[message['id']] = message
+            self._response_order[message['id']] = self._received_sequence
             return True
         session = self.sessions.get(message.get('sessionId'))
         if session is None or session.detached or not session.callbacks.get(message.get('method')):
@@ -157,7 +165,7 @@ class CDPConnection:
             if (len(self._events) >= self.MAX_DEFERRED_EVENTS
                     or self._event_bytes + size > self.MAX_DEFERRED_BYTES):
                 raise CrawlError('native_observation_limit')
-            self._events.append((message, size))
+            self._events.append((message, size, self._received_sequence))
             self._event_bytes += size
         else:
             self._dispatch(message)
@@ -189,6 +197,7 @@ class CDPConnection:
                 session.callbacks.clear()
             self.sessions.clear()
             self.responses.clear()
+            self._response_order.clear()
             self.pending.clear()
             self._events.clear()
             self._event_bytes = 0
