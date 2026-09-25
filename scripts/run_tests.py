@@ -1,6 +1,7 @@
 """Run all tests without installing the package; optionally save machine-readable evidence."""
 from __future__ import annotations
 import argparse
+import builtins
 from contextlib import ExitStack
 import faulthandler
 from functools import partial
@@ -44,17 +45,51 @@ class ProgressResult(unittest.TextTestResult):
     def _observe_deferred_outcome(self, test):
         try:
             errors = getattr(getattr(test, '_outcome', None), 'errors', ())
-            if any(err is not None for _, err in errors):
-                self._failure_stack('PENDING_FAILURE', test)
+            for _, err in errors:
+                if err is not None:
+                    self._failure_stack('PENDING_FAILURE', test, err)
+                    break
         except Exception:
             pass
 
-    def _failure_stack(self, kind, test):
+    def _failure_location(self, err):
+        # Only static source paths/line numbers and canonical built-in types.
+        # Exception messages, source lines, locals and subtest inputs stay out.
+        name = getattr(err[0], '__name__', '')
+        exception = name if getattr(builtins, name, None) is err[0] else 'Exception'
+        frames, external, count = [], 0, 0
+        current = err[2]
+        root = ROOT.resolve()
+        while current is not None and count < 256:
+            count += 1
+            try:
+                path = Path(current.tb_frame.f_code.co_filename).resolve().relative_to(root)
+                if path.parts[0] not in {'src', 'scripts', 'tests'} or path.suffix != '.py':
+                    raise ValueError('not a project source frame')
+                frames.append({'file': path.as_posix(), 'line': current.tb_lineno})
+            except (ValueError, OSError):
+                external += 1
+            current = current.tb_next
+        row = dict(exception=exception, frames=frames[-24:], external_frames=external,
+                   omitted_source_frames=max(0, len(frames)-24), traceback_truncated=current is not None)
+        self.progress.write('FAILURE_LOCATION '+json.dumps(row, ensure_ascii=True)+'\n')
+        self.progress.flush()
+
+    def _failure_stack(self, kind, test, err):
         # The result or legacy outcome is already recorded. Before cleanup can
         # release a still-working thread; repeated subtest failures stay bounded.
         if self.failure_dumped:
             return
         self.failure_dumped = True
+        try:
+            self._failure_location(err)
+        except Exception:
+            # A missing location must not suppress the independent live stack.
+            try:
+                self.progress.write('FAILURE_LOCATION_UNAVAILABLE\n')
+                self.progress.flush()
+            except Exception:
+                pass
         try:
             self.progress.write(f'{kind} {test.id()}\n')
             self.progress.flush()
@@ -69,17 +104,17 @@ class ProgressResult(unittest.TextTestResult):
 
     def addFailure(self, test, err):
         super().addFailure(test, err)
-        self._failure_stack('FAILURE', test)
+        self._failure_stack('FAILURE', test, err)
 
     def addError(self, test, err):
         super().addError(test, err)
-        self._failure_stack('ERROR', test)
+        self._failure_stack('ERROR', test, err)
 
     def addSubTest(self, test, subtest, err):
         super().addSubTest(test, subtest, err)
         if err is not None:
             # A subtest ID can contain parameter values; use only its parent ID.
-            self._failure_stack('SUBTEST_FAILURE', test)
+            self._failure_stack('SUBTEST_FAILURE', test, err)
 
     def stopTest(self,test):
         try:
@@ -93,7 +128,7 @@ class ProgressResult(unittest.TextTestResult):
 def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--report", type=Path)
-    p.add_argument("--progress",action='store_true',help='Retain test IDs/timings and thread stacks at the first failure/error or after 120s; requires --report')
+    p.add_argument("--progress",action='store_true',help='Retain test IDs/timings, failure code locations and live thread stacks at the first failure/error or after 120s; requires --report')
     args = p.parse_args()
     if args.progress and args.report is None:p.error('--progress requires --report')
     stream = io.StringIO()
