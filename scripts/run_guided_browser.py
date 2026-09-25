@@ -199,6 +199,7 @@ def main():
                 page.locator('#auto-login-return').check()
                 page.locator('#login').click()
                 expect(page.locator('#login-return-status')).to_contain_text('原检索页',timeout=30000)
+                expect(page.locator('#login-return-status')).not_to_contain_text('账号区域')
                 login_posts=CALLS.count(('POST','/login'))
                 MANUAL_LOGIN.set()
                 # No Capture/Resume click: two matching local DOM observations
