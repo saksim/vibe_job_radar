@@ -24,6 +24,7 @@ from run_native_browser_acceptance import (ROOT, HOST, URL, NativeBackend, RateL
     Limits, GuidedService, Registry, Store, NetworkPolicy, use_policy, Workspace,
     trust_fixture, RECORDED_BODY, RECORDED_TITLE, recorded_markup, recorded_posting)
 from vibe_job_radar.guided.adapters import builtins
+from vibe_job_radar.guided.contracts import CrawlError
 from vibe_job_radar.guided.native_policy import contract_for, NativeRule
 
 API_HOST = 'api.' + HOST
@@ -93,11 +94,17 @@ for (const path of ['/api/com.liepin.cbp.baizhong.op.v2-show-4pc',
  fetch('https://""" + OPTIONAL_HOST + """' + path, {method:'POST',
  headers:{'Content-Type':'application/json'},body:'{}'}).catch(() => window.optionalBlocked++);
 }
-const key = new URL(location.href).searchParams.get('key');
+const key = new URL(location.href).searchParams.get('key') || '';
 fetch('https://""" + API_HOST + PATH + """', {
  method:'POST', headers:{'Content-Type':'application/json','X-Client-Type':'web'},
  body: JSON.stringify({data:{mainSearchPcConditionForm:{key,currentPage:0,pageSize:40}}})
-}).then(r => r.json()).then(j => {document.querySelector('#loaded').textContent='response received';});""", 'application/javascript')
+}).then(r => r.json()).then(j => {
+ document.querySelector('#loaded').textContent='response received';
+ if (!key) {
+  const a=document.createElement('a');a.href=j.data.data.jobCardList[0].job.link;
+  a.textContent='默认推荐';a.setAttribute('data-fixture-recommendation','true');document.body.append(a);
+ }
+});""", 'application/javascript')
                 elif path == '/fixture-login':
                     self.send('<h1>人工登录</h1><form method="post" action="/fixture-login">'
                               '<button>人工确认</button></form>')
@@ -185,6 +192,19 @@ def main():
                         time.sleep(.05)
                     return service.state()['jobs'][0]
                 with patch('socket.getaddrinfo', side_effect=dns), patch('socket.create_connection', side_effect=dial), patch.object(NetworkPolicy,'capture',return_value=NetworkPolicy()):
+                    entry = factory(local, RateLedger(root/'entry.sqlite', Limits(page_interval=0,request_interval=0)), threading.Event(), lambda *_: None)
+                    try:
+                        entry.open(local.search_base)
+                        entry.page.locator('a[data-fixture-recommendation]').wait_for(state='visible',timeout=5000)
+                        page = entry.snapshot()
+                        assert not entry.auth_mode and not entry.error and not entry._halted
+                        assert any(o.context.get('entry_bootstrap') for o in page.business)
+                        try: local.cards(page)
+                        except CrawlError as exc: assert exc.code=='not_job_list', exc.code
+                        else: raise AssertionError('default recommendations accepted as a keyword list')
+                        assert not local.confirmed_empty(page)
+                    finally: entry.close()
+                    result['checks'].append('query-free initialization reaches the publisher UI but its API and DOM recommendations are neither keyword results nor confirmed empty search; no login')
                     workspace = Workspace(root/'workspace')
                     service = GuidedService(workspace,registry=Registry([local]),
                         ledger=RateLedger(root/'rate.sqlite', Limits(page_interval=0,request_interval=0)), native_backend_factory=factory)

@@ -47,6 +47,14 @@ def request_context(adapter, operation, request, page_url):
             raise ValueError()
         keyword = form.get('key')
         query = dict(params)
+        # The observed query-free entry asks for default recommendations before
+        # rendering the search form. This is page initialization, never evidence
+        # for a user's keyword. Only the exact initial page/size is recognized.
+        if (page_url == url == adapter.search_base and not params and keyword == ''
+                and type(form.get('currentPage')) is int and form['currentPage'] == 0
+                and type(form.get('pageSize')) is int and form['pageSize'] == 40):
+            return {'query': hashlib.sha256(url.encode()).hexdigest(), 'page': 0,
+                    'size': 40, 'entry_bootstrap': True}
         if not isinstance(keyword, str) or keyword != query.get(adapter.keyword_param) or not keyword.strip():
             raise ValueError()
         for name, value in params:
@@ -107,4 +115,9 @@ def observed_cards(adapter, page):
     # Observations are delivery ordered. Any successful latest response must
     # still pair to this query/page; no guessing from a cached earlier response.
     current = max(matching, key=lambda o: o.context.get('sequence', 0))
+    if current.context.get('entry_bootstrap'):
+        # Do not fall back to the recommendation anchors in the same DOM. The
+        # entry response can make the UI ready, but is not a search result or a
+        # confirmed empty result for the task.
+        raise CrawlError('not_job_list')
     return _records(adapter, current.payload, current.context, source)

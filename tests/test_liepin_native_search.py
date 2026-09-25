@@ -45,6 +45,25 @@ def snapshot(data=None, context=None, html='<h1>无链接人工搜索页</h1>'):
 
 
 class SearchObservationTests(unittest.TestCase):
+    def test_default_entry_response_and_dom_never_become_query_cards_or_empty_results(self):
+        context = request_context(ADAPTER, 'liepin_search', request(key=''), ADAPTER.search_base)
+        for data in (payload(), payload([])):
+            with self.subTest(empty=not data['data']['data']['jobCardList']):
+                page = PageSnapshot(ADAPTER.search_base, '<a href="'+JOB+'">默认推荐</a>',
+                    (BusinessObservation(1, 'liepin_search', 1, data, context),))
+                self.assertTrue(ADAPTER.native_ready(page.business))
+                with self.assertRaisesRegex(CrawlError, 'not_job_list'):
+                    ADAPTER.cards(page)
+                self.assertFalse(ADAPTER.confirmed_empty(page))
+
+    def test_entry_response_cannot_replace_a_later_matching_keyword_response(self):
+        context = request_context(ADAPTER, 'liepin_search', request(key=''), ADAPTER.search_base)
+        entry = BusinessObservation(1, 'liepin_search', 9, payload(), {**context, 'sequence':9})
+        page = snapshot(payload([]))
+        page = replace(page, business=(*page.business, entry))
+        self.assertEqual(ADAPTER.cards(page), [])
+        self.assertTrue(ADAPTER.confirmed_empty(page))
+
     def test_reads_api_when_dom_has_no_links(self):
         cards = ADAPTER.cards(snapshot())
         self.assertEqual(len(cards), 1)
@@ -122,6 +141,25 @@ class SearchObservationTests(unittest.TestCase):
 
 
 class SearchBindingTests(unittest.TestCase):
+    def test_exact_query_free_entry_is_tagged_without_becoming_a_user_query(self):
+        context = request_context(ADAPTER, 'liepin_search', request(key=''), ADAPTER.search_base)
+        self.assertEqual(context, {'query': hashlib.sha256(ADAPTER.search_base.encode()).hexdigest(),
+                                  'page':0, 'size':40, 'entry_bootstrap':True})
+        self.assertNotIn('entry_bootstrap', request_context(ADAPTER, 'liepin_search', request(), SEARCH))
+
+    def test_entry_exception_cannot_hide_keyword_filter_or_pagination_mismatches(self):
+        attempts = [(request(), ADAPTER.search_base), (request(key=''), SEARCH),
+                    (request(key=''), ADAPTER.search_base+'?key='),
+                    (request(key=''), ADAPTER.search_base+'?city=010'),
+                    (request(key=''), ADAPTER.search_base+'?init=1'),
+                    (request(key=''), ADAPTER.search_base+'?utm_source=entry')]
+        attempts += [(request(key='', **fields), ADAPTER.search_base) for fields in (
+            {'currentPage':1}, {'currentPage':True}, {'pageSize':20}, {'pageSize':True})]
+        attempts.append((request(key=' '), ADAPTER.search_base))
+        for req, url in attempts:
+            with self.subTest(request=req, url=url), self.assertRaisesRegex(CrawlError, 'liepin_search_query_mismatch'):
+                request_context(ADAPTER, 'liepin_search', req, url)
+
     def test_expected_query_binds_without_retaining_raw_data(self):
         context = request_context(ADAPTER, 'liepin_search', request(), SEARCH)
         self.assertNotIn('时间序列', json.dumps(context, ensure_ascii=False))
