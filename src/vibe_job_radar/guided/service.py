@@ -63,6 +63,7 @@ MESSAGES = {
     'attempt_history_invalid': '逐次采集记录损坏或不兼容，已停止；请恢复工作区备份，不会清空失败历史后重试。',
     'attempt_history_limit': '本任务的逐次采集记录已达到上限，已停止新采集；已有结果与历史保留。',
     'search_scope_changed': '当前列表的关键词、筛选条件或页码与本批不一致，已保留原进度；请回到原查询，或为新条件另建任务。',
+    'search_form_changed': '未能确认猎聘页面的可用搜索框，已停止自动输入并保留任务。请查看采集页面的加载或登录提示。',
     'checkpoint_incompatible': '任务的查询条件、适配器或访问契约与创建时不一致；已有选择和结果保留，请用兼容版本继续或另建任务。',
     'checkpoint_records_missing': '任务中已保存的正文记录缺失或不一致，已停止；请恢复工作区备份，不会把缺失正文算成成功或自动重复抓取。',
     'batch_identity_unsupported': '当前版本无法恢复该批次的岗位标识规则；原选择与记录已保留，请使用兼容版本继续。',
@@ -804,7 +805,10 @@ class GuidedService:
     @traced('listing', 'service', state_index=0)
     def _gather(self, state, backend, adapter, *, navigate=False, more=False):
         if navigate:
-            backend.open(state['search_url'])
+            if callable(getattr(backend, 'open_search', None)):
+                backend.open_search(state['search_url'], keyword=state['keyword'])
+            else:
+                backend.open(state['search_url'])
         if hasattr(backend, 'collection_mode'):
             backend.collection_mode()
         if more and len(state['pages_seen']) >= state['max_pages']:
@@ -820,7 +824,9 @@ class GuidedService:
             if self._cancel.is_set():
                 raise CrawlError('paused')
             page = backend.snapshot()
-            if hasattr(backend, 'wire'):
+            if callable(getattr(backend, 'ensure_page_access', None)):
+                backend.ensure_page_access(page.url)
+            elif hasattr(backend, 'wire'):
                 backend.wire.ensure_robots(page.url)
             with observe(self._trace_for(state), 'list_parse', url=page.url):
                 cards = batch_cards(state, adapter, adapter.cards(page))
@@ -1102,7 +1108,10 @@ class GuidedService:
                             and adapter.login_url == 'https://www.liepin.com/')
             url = target.expected_url if target else (state['search_url'] if inline_login else adapter.login_url)
             try:
-                backend.open(url, authentication=True)
+                if inline_login and not target and callable(getattr(backend, 'open_search', None)):
+                    backend.open_search(url, keyword=state['keyword'], authentication=True)
+                else:
+                    backend.open(url, authentication=True)
             except CrawlError as exc:
                 if action != 'login_password' or exc.code != 'manual_required':
                     raise
@@ -1122,7 +1131,9 @@ class GuidedService:
             # Third, fresh read: reject navigation/body/identity changes between
             # observation and execution, with no automatic refetch fallback.
             page = backend.snapshot()
-            if hasattr(backend, 'wire'):
+            if callable(getattr(backend, 'ensure_page_access', None)):
+                backend.ensure_page_access(page.url)
+            elif hasattr(backend, 'wire'):
                 backend.wire.ensure_robots(page.url)
             if (pending_detail_target(state) != secret.target
                     or matching_detail_signature(adapter, secret.target.expected_url, page) != secret.signature):
@@ -1166,7 +1177,9 @@ class GuidedService:
                 or getattr(backend, 'wait_error', None) is not failure
                 or not can_resume(backend)):
             raise CrawlError('read_retry_unavailable')
-        retry = retry_action_for(state, failure)
+        entry = getattr(backend, 'search_entry_url', None)
+        search_entry = entry(state['search_url'], keyword=state['keyword']) if callable(entry) else None
+        retry = retry_action_for(state, failure, search_entry=search_entry)
         saved = retry_budget(state)
         publisher_wait = retry_after_seconds(failure.retry_after, self.ledger.clock())
         if publisher_wait:

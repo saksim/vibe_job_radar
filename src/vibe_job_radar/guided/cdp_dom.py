@@ -154,6 +154,21 @@ class Locator:
         if not actual['found'] or actual['value'] is not True:
             raise PageOperationError('page_not_ready')
 
+    def press(self, key, *, timeout=None):
+        if key != 'Enter':
+            raise PageOperationError('page_not_ready')
+        self.wait_for(state='visible', timeout=timeout)
+        target = self._read('(()=>{if(document.activeElement!==e||e.disabled||e.readOnly)return false;'
+            'const r=e.getBoundingClientRect(),hit=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);'
+            'return hit===e;})()')
+        if not target['found'] or target['value'] is not True:
+            raise PageOperationError('page_not_ready')
+        with self.page.input_action(timeout=timeout):
+            for kind in ('keyDown', 'keyUp'):
+                self.page.client.send('Input.dispatchKeyEvent', {'type':kind,'key':'Enter','code':'Enter',
+                    'windowsVirtualKeyCode':13,'nativeVirtualKeyCode':13,
+                    **({'text':'\r'} if kind=='keyDown' else {})})
+
 
 def text_locator(page, text, *, exact=False, role=None):
     if role not in (None, 'button'):

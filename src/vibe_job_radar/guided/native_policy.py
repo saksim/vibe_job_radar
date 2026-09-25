@@ -25,6 +25,7 @@ class NativeRule:
     authentication: bool = False
     cors_origin: str = ''
     cors_headers: tuple[str, ...] = ()
+    cors_method: str = 'POST'
 
     def __post_init__(self):
         if not re.fullmatch(r'[a-z][a-z0-9_]{1,39}', self.key):
@@ -33,6 +34,8 @@ class NativeRule:
             raise ValueError('invalid native operation role')
         if not self.methods or any(m not in {'GET', 'HEAD', 'POST', 'OPTIONS'} for m in self.methods):
             raise ValueError('invalid native operation method')
+        if self.cors_method not in {'GET', 'POST'}:
+            raise ValueError('invalid native CORS method')
         if not re.fullmatch(r'[a-z0-9.-]{1,253}', self.host) or len(self.path) > 512:
             raise ValueError('invalid native operation target')
         re.compile(self.path)
@@ -51,7 +54,7 @@ class NativeRule:
             raise CrawlError('native_operation_unreviewed')
         if method == 'OPTIONS':
             requested = {h.strip().lower() for h in values.get('access-control-request-headers', '').split(',') if h.strip()}
-            if (values.get('access-control-request-method') != 'POST'
+            if (values.get('access-control-request-method') != self.cors_method
                     or not requested or not requested <= set(self.cors_headers)):
                 raise CrawlError('native_operation_unreviewed')
 
@@ -131,7 +134,9 @@ def liepin_bootstrap():
     passport = 'api-passport.liepin.com'
     login = r'/api/com\.liepin\.passport\.account\.(?:account-pwd-login|check-login|v2\.check-login|get-category)'
     manifest = 'feim.liepin.com'
-    return NativeContract('liepin_search_login_v2', (host, api, cdn, image, passport, manifest), (
+    region = 'api-dok.liepin.com'
+    region_path = r'/api/com\.liepin\.bd\.p\.v4\.get-all-dq'
+    return NativeContract('liepin_search_login_v3', (host, api, cdn, image, passport, manifest, region), (
         NativeRule('liepin_navigation', host, r'(?:/|/zhaopin/|/job/[^/]+\.(?:shtml|html)|/a/[0-9]+\.shtml|/lptjob/[0-9]+)',
                    resources=('Document',), role='document'),
         NativeRule('liepin_same_host_assets', host, r'.+\.(?:js|css|png|jpg|jpeg|gif|webp|svg|ico|woff2?|ttf)',
@@ -153,6 +158,18 @@ def liepin_bootstrap():
         NativeRule('liepin_search_filters', api, search + '-cond-init', methods=('POST',), **cors),
         NativeRule('liepin_filters_preflight', api, search + '-cond-init', methods=('OPTIONS',),
                    resources=('Preflight', 'Other', 'Fetch', 'XHR'), role='business', **cors),
+        # The published search input's onChange callback reads suggestions;
+        # these never supply the selected keyword or the task's job results.
+        NativeRule('liepin_search_suggest', api, r'/api/com\.liepin\.searchfront4c\.pc-search-suggest-list',
+                   cors_method='GET', **cors),
+        NativeRule('liepin_suggest_preflight', api, r'/api/com\.liepin\.searchfront4c\.pc-search-suggest-list',
+                   methods=('OPTIONS',), resources=('Preflight', 'Other', 'Fetch', 'XHR'), cors_method='GET', **cors),
+        # The current public city component reads its region catalogue with
+        # GET. No region suggestion, batch lookup, account or write API follows
+        # from this one observed dependency (see LIEPIN_REGION_DEPENDENCY.md).
+        NativeRule('liepin_regions', region, region_path, cors_method='GET', **cors),
+        NativeRule('liepin_regions_preflight', region, region_path, methods=('OPTIONS',),
+                   resources=('Preflight', 'Other', 'Fetch', 'XHR'), cors_method='GET', **cors),
         NativeRule('liepin_password_login', passport, login, methods=('POST',),
                    role='login', authentication=True, **cors),
         NativeRule('liepin_login_preflight', passport, login, methods=('OPTIONS',),

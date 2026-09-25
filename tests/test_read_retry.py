@@ -228,6 +228,20 @@ class ReadRetryWorkerTests(unittest.TestCase):
                 self.service._defer_read_retry(state,action,failure)
         self.assertNotIn('read_retry',self.service._load(self.ident))
 
+    def test_backend_entry_alias_uses_the_same_worker_budget_and_cooldown(self):
+        self.create();self.wait('ready');state=self.service._load(self.ident);backend=self.instances[0]
+        entry='https://jobs.fixture.test/search'
+        backend.search_entry_url=Mock(return_value=entry)
+        failure=TransientReadFailure(entry,503,'30');backend.error=failure.code;backend.wait_error=failure
+        self.service._defer_read_retry(state,'search',failure)
+        saved=self.service._load(self.ident)
+        self.assertEqual((saved['code'],saved['retry_action'],saved['read_retry']['used']),
+                         ('read_retry_wait','search',1))
+        self.assertEqual(saved['next_allowed_at'],1030)
+        backend.search_entry_url.assert_called_once_with(state['search_url'],keyword=state['keyword'])
+        self.assertEqual(len(backend.opens),1)
+        with self.assertRaises(RateLimit):self.ledger.reserve('fixture','request')
+
     def test_exhausted_detail_is_failed_not_pending(self):
         self.create();ready=self.wait('ready')
         state=self.service._load(self.ident)

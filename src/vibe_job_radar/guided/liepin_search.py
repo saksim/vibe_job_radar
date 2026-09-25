@@ -111,6 +111,10 @@ def observed_cards(adapter, page):
         if item.operation == 'liepin_search' and item.context.get('query') == query:
             matching.append(item)
     if not matching:
+        if page.business_required:
+            # A live native search must wait for its own response. During a
+            # history update the DOM can still contain the previous results.
+            raise CrawlError('page_not_ready')
         return None  # Older backends and plain DOM snapshots keep their path.
     # Observations are delivery ordered. Any successful latest response must
     # still pair to this query/page; no guessing from a cached earlier response.

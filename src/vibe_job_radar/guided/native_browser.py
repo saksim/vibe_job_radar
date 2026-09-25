@@ -18,7 +18,7 @@ import time
 from urllib.parse import urljoin, urlsplit
 
 from .browser import PlaywrightBackend
-from .contracts import CrawlError
+from .contracts import CrawlError, PageSnapshotChanged
 from .diagnostic_trace import notify, observe, observe_robots, traced
 from .native_policy import NativeRobots, contract_for
 from .native_tunnel import NativeTunnel
@@ -702,7 +702,8 @@ class NativeBackend(PlaywrightBackend):
 
     def snapshot(self):
         self._check_error()
-        return replace(super().snapshot(), business=self.observations())
+        return replace(super().snapshot(), business=self.observations(),
+                       business_required=self.adapter.key == 'liepin')
 
     def observations(self):
         """Private local payloads for a reviewed site adapter, never diagnostic API."""
@@ -766,7 +767,7 @@ class NativeBackend(PlaywrightBackend):
         except Exception as exc:
             raise self.wait_error or CrawlError(self.error or native_transport_failure(exc, self.tunnel.last_error) or 'page_not_ready') from exc
 
-    def _settle(self):
+    def _settle(self, *, search=False):
         deadline=time.monotonic()+15
         while time.monotonic()<deadline:
             self._check_error()
@@ -782,7 +783,7 @@ class NativeBackend(PlaywrightBackend):
             text=body.inner_text(timeout=1000)
             if self.adapter.challenged(text,self.page.url):
                 raise CrawlError('manual_required')
-            if self.auth_mode and text.strip():
+            if self.auth_mode and text.strip() and not search:
                 return
             ready = getattr(self.adapter, 'native_ready', None)
             if callable(ready) and ready(self.observations()):
@@ -797,11 +798,58 @@ class NativeBackend(PlaywrightBackend):
                 except CrawlError:
                     pass
             self.page.wait_for_timeout(100)
+        # Pumping browser callbacks can consume the remaining deadline. Preserve
+        # a native refusal delivered there instead of replacing it with timeout.
+        self._check_error()
         raise CrawlError('page_not_ready')
+
+    def search_entry_url(self, url, *, keyword):
+        # Only the default keyword-only request has an implemented form route.
+        # An explicit seed with extra conditions keeps its checked navigation;
+        # those conditions must never disappear when switching to the form.
+        if (self.adapter.key != 'liepin'
+                or self.adapter.accept_url(url) != self.adapter.search_url(keyword)):
+            return url
+        return self.adapter.search_base
+
+    def open_search(self, url, *, keyword, authentication=False):
+        entry = self.search_entry_url(url, keyword=keyword)
+        if entry == url:
+            return self.open(url, authentication=authentication)
+        opened = self.open(entry, authentication=authentication)
+        if authentication:
+            # Login controls must remain reachable even if a login overlay
+            # obscures the search field. The user's later resume searches with
+            # that same session; a login action does not submit a keyword first.
+            return opened
+        from .liepin_form import submit_search
+        return submit_search(self, keyword)
 
     def next_page(self):
         self._check_error()
         return super().next_page()
+
+    def ensure_page_access(self, url):
+        self._check_error()
+        if not self.page or self.page.is_closed():
+            raise CrawlError('browser_closed')
+        if self.page.url != url:
+            raise PageSnapshotChanged()
+        accepted = self.adapter.accept_url(url)
+        document = getattr(self.page, 'document_url', None)
+        base = self.adapter.search_base
+        # Only the observed query-free Liepin document can update its search
+        # address in place. The committed document URL comes from the browser's
+        # frame navigation event, never from the task or publisher HTML. Actual
+        # document/API requests still pass _request_paused and their own robots.
+        if (self.adapter.key == 'liepin' and isinstance(document, str) and document == base
+                and self.page in self._bound_pages):
+            current, entry = urlsplit(accepted), urlsplit(base)
+            if ((current.scheme, current.netloc, current.path) ==
+                    (entry.scheme, entry.netloc, entry.path) and not entry.query):
+                self.wire.ensure_robots(document)
+                return
+        self.wire.ensure_robots(url)
 
     def _before_pagination_click(self):
         # Looking for a next button is not a navigation. Retain the current

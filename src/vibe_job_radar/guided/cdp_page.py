@@ -54,6 +54,7 @@ class CDPPage:
         self.timeout = 6000
         self.callbacks = defaultdict(list)
         self.main_frame = Frame(self, ident)
+        self.document_url = 'about:blank'
         self.closed = False
         self.navigation = 0
         self.navigation_requests = 0
@@ -86,6 +87,7 @@ class CDPPage:
             return
         self.main_frame.ident = frame['id']
         self.main_frame.url = frame['url']
+        self.document_url = frame['url']
         self.loader = frame.get('loaderId', '')
         self.navigation += 1
         self._emit('framenavigated', self.main_frame)

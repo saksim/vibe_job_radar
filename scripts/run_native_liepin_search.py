@@ -1,6 +1,6 @@
 """Explicit, local-only CORS search -> actual Liepin adapter -> report test.
 
-Four artificial HTTPS hosts use a fresh isolated test CA and the existing
+Five artificial HTTPS hosts use a fresh isolated test CA and the existing
 native tunnel. No real platform traffic, credentials or request replay.
 """
 from __future__ import annotations
@@ -30,15 +30,20 @@ from vibe_job_radar.guided.native_policy import contract_for, NativeRule
 API_HOST = 'api.' + HOST
 CDN_HOST = 'static.' + HOST
 LOGIN_HOST = 'login.' + HOST
+REGION_HOST = 'regions.' + HOST
 OPTIONAL_HOST = 'optional.' + HOST
 PATH = '/api/com.liepin.searchfront4c.pc-search-job'
 ASSET = '/fe-www-pc/v6/js/search-fixture.js'
+REGION_PATH = '/api/com.liepin.bd.p.v4.get-all-dq'
+SUGGEST_PATH = '/api/com.liepin.searchfront4c.pc-search-suggest-list'
 
 
 class SearchFixture:
     def __init__(self, root):
         self.requests = []
         self.deny_cors = False
+        self.deny_regions = False
+        self.deny_query_documents = True
         owner = self
         class Handler(http.server.BaseHTTPRequestHandler):
             protocol_version = 'HTTP/1.1'
@@ -58,7 +63,8 @@ class SearchFixture:
                     self.send_header('Content-Security-Policy',
                         "object-src 'none'; sandbox allow-scripts allow-same-origin allow-forms allow-popups")
                 self.send_header('Access-Control-Allow-Origin', URL)
-                self.send_header('Access-Control-Allow-Methods', 'POST')
+                self.send_header('Access-Control-Allow-Methods', 'GET, POST')
+                self.send_header('Access-Control-Allow-Credentials', 'true')
                 self.send_header('Access-Control-Allow-Headers', 'content-type,x-client-type')
                 self.end_headers()
                 try: self.wfile.write(raw)
@@ -66,18 +72,19 @@ class SearchFixture:
             def record(self):
                 owner.requests.append({'method': self.command, 'host': self.headers.get('Host'),
                     'path': urlsplit(self.path).path, 'anonymous': not self.headers.get('Cookie'),
+                    'query_keys': sorted(parse_qs(urlsplit(self.path).query, keep_blank_values=True)),
                     'no_credentials': not self.headers.get('Authorization') and not self.headers.get('Proxy-Authorization'),
                     'identified': 'VibeJobRadar/0.1' in self.headers.get('User-Agent', '')})
             def do_GET(self):
                 self.record(); path = urlsplit(self.path).path
                 if path == '/robots.txt':
-                    if self.headers.get('Host') in (API_HOST, LOGIN_HOST):
+                    if self.headers.get('Host') in (API_HOST, LOGIN_HOST, REGION_HOST):
                         # Match the observed missing API robots file. HTML error
                         # content must remain inert while its status is read.
                         self.send('<script>fetch("/robots-error-must-not-run")</script>'
                                   '<img src="/robots-error-must-not-run">Not Found', status=404)
                     else:
-                        self.send('User-agent: *\nAllow: /\n', 'text/plain')
+                        self.send('User-agent: *\n'+('Disallow: /*?*\n' if owner.deny_query_documents else 'Allow: /\n'), 'text/plain')
                 elif path == '/zhaopin/':
                     # Intentionally no anchors: only the browser response can
                     # produce the candidate; a DOM-only implementation fails.
@@ -87,6 +94,10 @@ class SearchFixture:
                     self.send('<!doctype html><meta charset="utf-8">' + early + '<h1>合成搜索页</h1>'
                               '<iframe id="common-footer" src="https://' + CDN_HOST + '/footer"></iframe>'
                               '<div id="loaded"></div><script src="https://' + CDN_HOST + ASSET + '"></script>')
+                elif path == REGION_PATH and self.headers.get('Host') == REGION_HOST:
+                    self.send(json.dumps({'flag':1,'data':{'syntheticRegion':True}}), 'application/json')
+                elif path == SUGGEST_PATH and self.headers.get('Host') == API_HOST:
+                    self.send(json.dumps({'flag':1,'data':{'suggestList':[{'word':'不能替换输入的其他词'}]}}), 'application/json')
                 elif path == ASSET:
                     self.send("""window.optionalBlocked = 0;
 for (const path of ['/api/com.liepin.cbp.baizhong.op.v2-show-4pc',
@@ -95,15 +106,38 @@ for (const path of ['/api/com.liepin.cbp.baizhong.op.v2-show-4pc',
  headers:{'Content-Type':'application/json'},body:'{}'}).catch(() => window.optionalBlocked++);
 }
 const key = new URL(location.href).searchParams.get('key') || '';
-fetch('https://""" + API_HOST + PATH + """', {
- method:'POST', headers:{'Content-Type':'application/json','X-Client-Type':'web'},
- body: JSON.stringify({data:{mainSearchPcConditionForm:{key,currentPage:0,pageSize:40}}})
-}).then(r => r.json()).then(j => {
- document.querySelector('#loaded').textContent='response received';
- if (!key) {
-  const a=document.createElement('a');a.href=j.data.data.jobCardList[0].job.link;
-  a.textContent='默认推荐';a.setAttribute('data-fixture-recommendation','true');document.body.append(a);
- }
+window.searchSubmissions=0;window.initializationResponses=0;
+function search(keyword) {
+ return fetch('https://""" + API_HOST + PATH + """', {
+  method:'POST', headers:{'Content-Type':'application/json','X-Client-Type':'web'},
+  body: JSON.stringify({data:{mainSearchPcConditionForm:{key:keyword,currentPage:0,pageSize:40}}})
+ }).then(r => r.json()).then(j => {
+  document.querySelector('#loaded').textContent='response received';
+  document.querySelectorAll('[data-fixture-recommendation]').forEach(a => a.remove());
+  if (!keyword) {
+   window.initializationResponses++;
+   const a=document.createElement('a');a.href=j.data.data.jobCardList[0].job.link;
+   a.textContent='默认推荐';a.setAttribute('data-fixture-recommendation','true');document.body.append(a);
+  }
+ });
+}
+fetch('https://""" + REGION_HOST + REGION_PATH + """?from=component', {
+ method:'GET', credentials:'include', headers:{'X-Client-Type':'web'}
+}).then(r => r.json()).then(regions => {
+ const field=document.createElement('input');field.type='text';field.placeholder='搜索职位、公司';
+ document.body.append(field);
+ field.addEventListener('input', () => {
+  fetch('https://""" + API_HOST + SUGGEST_PATH + """?keyword='+encodeURIComponent(field.value),
+   {headers:{'X-Client-Type':'web'}}).then(r => r.json()).then(() => {window.suggestionsArrived=true;});
+ });
+ field.addEventListener('keydown',event => {
+  if(event.key==='Enter') {
+   event.preventDefault();window.searchSubmissions++;
+   history.replaceState({},'',location.pathname+'?key='+encodeURIComponent(field.value));
+   search(field.value);
+  }
+ });
+ return search(key);
 });""", 'application/javascript')
                 elif path == '/fixture-login':
                     self.send('<h1>人工登录</h1><form method="post" action="/fixture-login">'
@@ -113,7 +147,9 @@ fetch('https://""" + API_HOST + PATH + """', {
                 else: self.send('unknown', status=404)
             def do_OPTIONS(self):
                 self.record()
-                if urlsplit(self.path).path != PATH: self.send('unknown', status=405)
+                if urlsplit(self.path).path == REGION_PATH and self.headers.get('Host') == REGION_HOST:
+                    self.send('', status=403 if owner.deny_regions else 204)
+                elif urlsplit(self.path).path not in (PATH,SUGGEST_PATH): self.send('unknown', status=405)
                 else: self.send('', status=403 if owner.deny_cors else 204)
             def do_POST(self):
                 self.record()
@@ -154,22 +190,23 @@ def main():
     if not args.controlled:
         print('No requests; use --controlled for the local artificial-source test.'); return
     out = ROOT / 'browser-acceptance/native'; out.mkdir(parents=True, exist_ok=True)
-    result = {'success':False,'scope':'Four artificial TLS hosts, actual native backend and Liepin adapter; not live certification.', 'checks':[]}
+    result = {'success':False,'scope':'Five artificial TLS hosts, actual native backend and Liepin adapter; not live certification.', 'checks':[]}
     services = []; server = None
     try:
         with tempfile.TemporaryDirectory(prefix='radar-search-fixture-') as tmp, ExitStack() as cleanup:
             root = Path(tmp)
             cleanup.callback(lambda: [s.close() for s in services])
-            with trust_fixture(root, (API_HOST, CDN_HOST, LOGIN_HOST)):
+            with trust_fixture(root, (API_HOST, CDN_HOST, LOGIN_HOST, REGION_HOST)):
                 server = SearchFixture(root)
                 cleanup.callback(server.close)
                 template = builtins().get('liepin')
                 contract = contract_for(template)
                 mapping = {'www.liepin.com':HOST, 'api-c.liepin.com':API_HOST,
                            'concat.lietou-static.com':CDN_HOST, 'image0.lietou-static.com':CDN_HOST,
-                           'api-passport.liepin.com':LOGIN_HOST, 'feim.liepin.com':CDN_HOST}
+                           'api-passport.liepin.com':LOGIN_HOST, 'feim.liepin.com':CDN_HOST,
+                           'api-dok.liepin.com':REGION_HOST}
                 rules = tuple(replace(r, host=mapping[r.host], cors_origin=URL if r.cors_origin else '') for r in contract.rules)
-                local_contract = replace(contract, hosts=(HOST,API_HOST,CDN_HOST,LOGIN_HOST), rules=rules,
+                local_contract = replace(contract, hosts=(HOST,API_HOST,CDN_HOST,LOGIN_HOST,REGION_HOST), rules=rules,
                     ignored_rules=tuple(replace(r,host=OPTIONAL_HOST) for r in contract.ignored_rules))
                 local = replace(template, domains=(HOST,), resource_domains=(HOST,),
                     search_base=URL+'/zhaopin/', login_url=URL+'/', native_contract=local_contract)
@@ -211,6 +248,7 @@ def main():
                     services.append(service)
                     query={'platform':'liepin','keyword':'时间序列','roles':['time_series'],'max_pages':2,'max_jobs':1,
                            'consent':True,'rights_note':'仅合成测试','backend':'native','native_consent':True,'diagnostics':True}
+                    first_request = len(server.requests)
                     service.create(query); task=wait(service)
                     result['first_task_code'] = task['code']
                     if task['status'] != 'ready':
@@ -220,8 +258,23 @@ def main():
                     assert any(r['method']=='POST' and r['host']==API_HOST for r in server.requests)
                     assert any(r['host']==CDN_HOST and r['path']==ASSET for r in server.requests)
                     native = service._backends[task['id']]
-                    assert native.native_counts['business']==2, 'POST and preflight must both be accounted'
+                    first_business = [r for r in server.requests[first_request:] if r['host'] in (API_HOST,REGION_HOST) and r['path'] in (PATH,REGION_PATH,SUGGEST_PATH)]
+                    assert native.native_counts['business']==len(first_business), 'every search/region request and actual preflight must be accounted'
+                    assert sum(r['method']=='POST' and r['path']==PATH for r in first_business)==2
+                    assert sum(r['method']=='GET' and r['path']==REGION_PATH for r in first_business)==1
+                    assert sum(r['method']=='GET' and r['path']==SUGGEST_PATH for r in first_business)==1
                     result['checks'].append('native CDN script and cross-origin preflight/search POST supply a candidate without DOM links or login')
+                    assert {r['method'] for r in server.requests if r['host']==REGION_HOST and r['path']==REGION_PATH}=={'OPTIONS','GET'}
+                    result['checks'].append('reviewed city catalogue GET and GET preflight use their own origin robots, native credential-aware CORS and request accounting; they cannot supply job cards')
+                    assert native.page.document_url == local.search_base
+                    assert native.page.evaluate('window.searchSubmissions') == 1
+                    assert native.page.evaluate('window.initializationResponses') == 1
+                    assert native.page.evaluate('window.suggestionsArrived') is True
+                    assert not any('key' in r['query_keys'] for r in server.requests[:])
+                    try: native.wire.ensure_robots(native.page.url)
+                    except CrawlError as exc: assert exc.code=='robots_denied',exc.code
+                    else: raise AssertionError('fixture must refuse an actual keyword document URL')
+                    result['checks'].append('default service task uses the visible field and one Enter, reads suggestions without changing the keyword, pairs its response after history update and never fetches the forbidden keyword document or collects initial recommendations')
                     # All outside DNS/dials above raise; ignored preflights must
                     # terminate locally while the real search/report succeeds.
                     assert not any(r['host']==OPTIONAL_HOST for r in server.requests)
@@ -282,6 +335,16 @@ def main():
                     assert not automatic_empty['selection'] and not automatic_empty['report_id']
                     result['checks'].append('automatic mode keeps confirmed empty results empty without selecting stale jobs or creating a report')
                     service.close(); services.clear()
+                    before = len(server.requests)
+                    b = factory(local, RateLedger(root/'query-document-denied.sqlite', Limits(page_interval=0,request_interval=0)), threading.Event(), lambda *_: None)
+                    try:
+                        try: b.open(local.search_url('时间序列'))
+                        except CrawlError as exc: assert exc.code=='robots_denied',exc.code
+                        else: raise AssertionError('query document request bypassed robots')
+                    finally: b.close()
+                    assert not any(r['path']=='/zhaopin/' for r in server.requests[before:])
+                    result['checks'].append('a real keyword document navigation remains refused before network even after the form route succeeds')
+                    server.deny_query_documents = False
                     # Independent owned thread and fresh native context: a
                     # browser-generated popup must not leak even its first HTTP.
                     b = factory(local, RateLedger(root/'popup.sqlite', Limits(page_interval=0,request_interval=0)), threading.Event(), lambda *_: None)
@@ -347,6 +410,20 @@ def main():
                     assert sum(r['method']=='POST' for r in server.requests)==before
                     result['checks'].append('publisher OPTIONS denial prevents search POST and is not fabricated as success')
                     server.deny_cors = False
+                    before_get = sum(r['method']=='GET' and r['path']==REGION_PATH for r in server.requests)
+                    before_post = sum(r['method']=='POST' for r in server.requests)
+                    server.deny_regions = True
+                    b = factory(local, RateLedger(root/'regions-denied.sqlite', Limits(page_interval=0,request_interval=0)), threading.Event(), lambda *_: None)
+                    try:
+                        try: b.open(local.search_url('时间序列'))
+                        except Exception as exc:
+                            assert getattr(exc, 'code', None)=='http_403', getattr(exc, 'code', None)
+                        else: raise AssertionError('publisher region preflight denial accepted')
+                    finally: b.close()
+                    assert sum(r['method']=='GET' and r['path']==REGION_PATH for r in server.requests)==before_get
+                    assert sum(r['method']=='POST' for r in server.requests)==before_post
+                    result['checks'].append('publisher region OPTIONS refusal prevents its GET and the dependent search without replacing either response')
+                    server.deny_regions = False
                     b = factory(local, RateLedger(root/'blank.sqlite', Limits(page_interval=0,request_interval=0)), threading.Event(), lambda *_: None)
                     try:
                         b.open(local.search_url('时间序列'))
