@@ -3,13 +3,15 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from vibe_job_radar.guided.acquisition_results import item_outcome
 from vibe_job_radar.guided.adapters import builtins, Registry
 from vibe_job_radar.guided.service import GuidedService
 from vibe_job_radar.guided.contracts import PageSnapshot, CrawlError
 from vibe_job_radar.workspace import Workspace
+from vibe_job_radar.store import Store
+from test_core import job
 from test_automatic_collection import MemoryBackend
 
 ADAPTER = builtins().get('liepin')
@@ -69,6 +71,25 @@ class AcquisitionResultsTests(unittest.TestCase):
             for ident in item['explicit_ai_requirement_ids']:
                 self.assertIn(item['record_id'], by_id[ident]['source_record_ids'])
         self.assertNotIn(AI_BODY, json.dumps(audit))
+
+    def test_report_needs_no_temporary_disk_database_and_keeps_exact_batch(self):
+        previous = job(text='另一任务已保存的原始正文，不属于当前批次。')
+        with Store(self.workspace.db) as stored:
+            stored.add(previous)
+        def without_staging_disk(path):
+            if str(path) != ':memory:' and Path(path) != self.workspace.db:
+                raise OSError('fixture temporary database storage unavailable')
+            return Store(path)
+        with patch('vibe_job_radar.guided.service.Store', side_effect=without_staging_disk):
+            state = self.run_batch()
+        folder = self.workspace.root / 'reports' / state['report_id']
+        jobs = [json.loads(line) for line in (folder / 'jobs.jsonl').read_text(encoding='utf-8').splitlines()]
+        self.assertEqual(len(jobs), 2)
+        self.assertNotIn(previous.record_id, {r['record_id'] for r in jobs})
+        with Store(self.workspace.db) as stored:
+            self.assertEqual(len(stored.records()), 3)
+            self.assertIn(previous, stored.records())
+        self.assertEqual(state['outcome']['full_jd'], 2)
 
     def test_full_jd_without_ai_and_excluded_jd_are_different(self):
         self.assertEqual(item_outcome({'status':'ok'}, {'analysis_status':'selected',

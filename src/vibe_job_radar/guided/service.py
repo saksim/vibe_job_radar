@@ -16,12 +16,10 @@ import re
 import sqlite3
 import subprocess
 import sys
-import tempfile
 import threading
 import uuid
 from dataclasses import asdict
 from contextlib import closing, contextmanager
-from pathlib import Path
 from urllib.parse import urlsplit
 
 from ..collection import writer_lock
@@ -1021,15 +1019,15 @@ class GuidedService:
             report_id = uuid.uuid4().hex
             report_root = self.workspace.root/'reports'/report_id
             records = self._selected_records(state)
-            with tempfile.TemporaryDirectory(prefix='.batch-',dir=self.root) as tmp:
-                batch_db = Path(tmp)/'batch.sqlite'
-                with Store(batch_db) as batch:
-                    for record in records:
-                        batch.add(record)
+            # The selected records are already durable in workspace.db. Only
+            # their exact report scope is temporary; keep that copy in memory.
+            with Store(':memory:') as batch:
+                for record in records:
+                    batch.add(record)
                 config = copy.deepcopy(self.workspace.config)
                 config['platforms'].setdefault(adapter.key,
                     {'label': adapter.label, 'domains': list(adapter.domains)})
-                manifest = analyze(batch_db, report_root, config=config,
+                manifest = analyze(batch, report_root, config=config,
                     role_filter=state['roles'], platform_filter=[adapter.key])
             outcome = self._outcome(state, manifest)
             analysis = analysis_by_record(report_root)
