@@ -100,11 +100,12 @@ class SearchFixture:
                     self.send(json.dumps({'flag':1,'data':{'suggestList':[{'word':'不能替换输入的其他词'}]}}), 'application/json')
                 elif path == ASSET:
                     self.send("""window.optionalBlocked = 0;
-for (const path of ['/api/com.liepin.cbp.baizhong.op.v2-show-4pc',
- '/statisticPlatform/standardFLog.json', '/statisticPlatform/standardTLog.json']) {
+const optionalPaths=['/api/com.liepin.cbp.baizhong.op.v2-show-4pc',
+ '/statisticPlatform/standardFLog.json', '/statisticPlatform/standardTLog.json',
+ ...Array.from({length:80}, (_,i) => '/api/com.liepin.cbp.baizhong.op.v2-show-4pc?fixtureBurst='+i)];
+const optionalRequests=optionalPaths.map(path =>
  fetch('https://""" + OPTIONAL_HOST + """' + path, {method:'POST',
- headers:{'Content-Type':'application/json'},body:'{}'}).catch(() => window.optionalBlocked++);
-}
+ headers:{'Content-Type':'application/json'},body:'{}'}).catch(() => window.optionalBlocked++));
 const key = new URL(location.href).searchParams.get('key') || '';
 window.searchSubmissions=0;window.initializationResponses=0;
 function search(keyword) {
@@ -121,9 +122,9 @@ function search(keyword) {
   }
  });
 }
-fetch('https://""" + REGION_HOST + REGION_PATH + """?from=component', {
+Promise.all([Promise.all(optionalRequests), fetch('https://""" + REGION_HOST + REGION_PATH + """?from=component', {
  method:'GET', credentials:'include', headers:{'X-Client-Type':'web'}
-}).then(r => r.json()).then(regions => {
+}).then(r => r.json())]).then(([,regions]) => {
  const field=document.createElement('input');field.type='text';field.placeholder='搜索职位、公司';
  document.body.append(field);
  field.addEventListener('input', () => {
@@ -230,7 +231,8 @@ def main():
                                 url: location.href,
                                 submissions: window.searchSubmissions,
                                 initializations: window.initializationResponses,
-                                suggestions: window.suggestionsArrived === true
+                                suggestions: window.suggestionsArrived === true,
+                                optionalBlocked: window.optionalBlocked
                             })''')
                         return page
                 def factory(a,l,c,p,**saved):
@@ -297,6 +299,10 @@ def main():
                     assert any(e['code']=='native_optional_request_blocked' and e['impact']=='optional'
                                for e in service.diagnostics({'id':task['id']})['events'])
                     result['checks'].append('known marketing, standardFLog and standardTLog requests are aborted before network access without aborting search or report')
+                    assert observed_form['optionalBlocked'] == 83
+                    assert native.native_counts['blocked'] >= 83
+                    assert not native._halted
+                    result['checks'].append('80 additional simultaneous optional requests finish with native local refusals before the visible form is offered; no recursive command-budget exhaustion or optional upstream request')
                     assert not any(r['path']=='/robots-error-must-not-run' for r in server.requests)
                     result['checks'].append('API robots 404 is distinguished from refusal; its HTML error body cannot execute scripts or fetch resources')
                     assert not any(r['path']=='/footer' for r in server.requests)

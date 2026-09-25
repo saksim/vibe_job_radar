@@ -6,7 +6,7 @@ the browser's automation identity. HTTP permission remains in NativeBackend.
 """
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import defaultdict, deque
 import json
 import threading
 import time
@@ -40,6 +40,8 @@ class CDPSession:
 
 class CDPConnection:
     MAX_MESSAGE = 8_000_000
+    MAX_DEFERRED_EVENTS = 512
+    MAX_DEFERRED_BYTES = 8_000_000
     FORBIDDEN = frozenset({'Runtime.enable', 'Runtime.disable', 'Runtime.discardConsoleEntries',
                            'Page.setBypassCSP', 'Security.setIgnoreCertificateErrors'})
 
@@ -50,6 +52,9 @@ class CDPConnection:
         self.owner = threading.get_ident()
         self.sequence = 0
         self.responses, self.pending = {}, set()
+        self._events = deque()
+        self._event_bytes = 0
+        self._dispatching = False
         self.sessions = {}
         self.closed = False
         self.root = self.session(None)
@@ -92,7 +97,11 @@ class CDPConnection:
         try:
             self.socket.send(encoded)
             deadline = time.monotonic() + max(.01, min(timeout, 90))
-            while ident not in self.responses:
+            # A callback may need a command acknowledgment to finish. Events
+            # received during that wait must not recursively enter callbacks.
+            # Before the outer command returns, drain deferred events so its
+            # caller sees navigation/retirement that preceded the response.
+            while ident not in self.responses or (not self._dispatching and self._events):
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise CrawlError('native_protocol_error')
@@ -113,6 +122,11 @@ class CDPConnection:
 
     def pump(self, timeout=.05):
         self._owner()
+        if self._events and not self._dispatching:
+            message, size = self._events.popleft()
+            self._event_bytes -= size
+            self._dispatch(message)
+            return True
         try:
             raw = self.socket.recv(timeout=max(0, timeout))
         except TimeoutError:
@@ -120,7 +134,10 @@ class CDPConnection:
         except Exception:
             self.closed = True
             raise CrawlError('browser_closed') from None
-        if not isinstance(raw, str) or len(raw.encode('utf-8')) > self.MAX_MESSAGE:
+        if not isinstance(raw, str):
+            raise CrawlError('native_observation_limit')
+        size = len(raw.encode('utf-8'))
+        if size > self.MAX_MESSAGE:
             raise CrawlError('native_observation_limit')
         try:
             message = json.loads(raw)
@@ -134,10 +151,28 @@ class CDPConnection:
             self.responses[message['id']] = message
             return True
         session = self.sessions.get(message.get('sessionId'))
-        if session is not None and not session.detached:
+        if session is None or session.detached or not session.callbacks.get(message.get('method')):
+            return True
+        if self._dispatching:
+            if (len(self._events) >= self.MAX_DEFERRED_EVENTS
+                    or self._event_bytes + size > self.MAX_DEFERRED_BYTES):
+                raise CrawlError('native_observation_limit')
+            self._events.append((message, size))
+            self._event_bytes += size
+        else:
+            self._dispatch(message)
+        return True
+
+    def _dispatch(self, message):
+        session = self.sessions.get(message.get('sessionId'))
+        if session is None or session.detached:
+            return
+        self._dispatching = True
+        try:
             for callback in tuple(session.callbacks.get(message.get('method'), ())):
                 callback(message.get('params', {}))
-        return True
+        finally:
+            self._dispatching = False
 
     def wait(self, seconds):
         deadline = time.monotonic() + max(0, seconds)
@@ -155,3 +190,5 @@ class CDPConnection:
             self.sessions.clear()
             self.responses.clear()
             self.pending.clear()
+            self._events.clear()
+            self._event_bytes = 0
