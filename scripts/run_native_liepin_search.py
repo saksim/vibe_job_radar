@@ -6,7 +6,7 @@ native tunnel. No real platform traffic, credentials or request replay.
 from __future__ import annotations
 
 import argparse
-from contextlib import ExitStack
+from contextlib import ExitStack, closing
 from dataclasses import replace
 import http.server
 import gzip
@@ -604,7 +604,7 @@ def main():
                         assert sum('/css/pacing-' in r['path'] for r in requests)==20
                         assert paced_ledger.summary('liepin')['request']['day']==len(requests)
                         import sqlite3
-                        with sqlite3.connect(paced_ledger.path) as db:
+                        with closing(sqlite3.connect(paced_ledger.path)) as db:
                             stamps = [r[0] for r in db.execute(
                                 "SELECT ts FROM visits WHERE site='liepin' AND kind='request' ORDER BY ts")]
                         assert len(stamps)>20 and all(b-a>=.499 for a,b in zip(stamps, stamps[1:]))
