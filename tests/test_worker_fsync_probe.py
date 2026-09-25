@@ -4,12 +4,50 @@ import os
 import tempfile
 import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 
 from worker_fsync_probe import WorkerFsyncProbe
 
 
 class WorkerFsyncProbeTests(unittest.TestCase):
+    def test_owned_report_writers_are_counted_without_including_another_pool(self):
+        entered = threading.Barrier(3)
+        release = threading.Event()
+        clock = [1.0]
+        owner = threading.current_thread()
+        def held(_):
+            entered.wait(timeout=10)
+            if not release.wait(10):
+                raise AssertionError('fixture release missing')
+        with patch.object(os, 'fsync', held):
+            probe = WorkerFsyncProbe(lambda: owner, clock=lambda: clock[0])
+            probe.start()
+            try:
+                with ThreadPoolExecutor(max_workers=2, thread_name_prefix=f'radar-report-{owner.ident}') as pool:
+                    futures = [pool.submit(os.fsync, number) for number in (1, 2)]
+                    try:
+                        entered.wait(timeout=10)
+                        clock[0] = 3.0
+                        evidence = probe.snapshot()
+                        self.assertEqual(evidence['calls_started'], 2)
+                        self.assertEqual(evidence['calls_completed'], 0)
+                        self.assertEqual(evidence['current_call_ms'], 2000)
+                    finally:
+                        release.set()
+                    for future in futures:
+                        future.result()
+                self.assertEqual(probe.snapshot()['completed_total_ms'], 4000)
+                self.assertIsNone(probe.snapshot()['current_call_ms'])
+                with patch.object(probe, 'original', return_value=None) as original:
+                    with ThreadPoolExecutor(max_workers=1, thread_name_prefix='radar-report-other') as other:
+                        other.submit(os.fsync, 3).result()
+                    original.assert_called_once_with(3)
+                    self.assertEqual(probe.snapshot()['calls_started'], 2)
+            finally:
+                release.set()
+                probe.stop()
+
     def test_pending_and_completed_durations_are_distinct_without_descriptor_or_path(self):
         entered = threading.Event()
         release = threading.Event()

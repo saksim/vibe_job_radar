@@ -136,3 +136,5 @@ python scripts/run_guided_browser.py
 新建任务可显式选择原生实验并确认范围，旧HTTP桥仍默认。页面HTTP/TLS由浏览器完成，经过只透明转发加密字节的本机公网目标CONNECT守卫；不是Python重发页面。当前仅猎聘主站bootstrap契约，真实业务API/跨域依赖尚待逐站核实，BOSS/51job未启用native；不能把开关出现当成三站取数成功。详见[实现与限制](docs/NATIVE_BROWSER_D02.md)。
 
 当前#63候选针对已复现的控制台事件采集影响，改用[按需页面控制](docs/NATIVE_EVENT_COLLECTION.md)。保留浏览器自动化标识、原脚本、请求校验与空白失败处理，正常关键词和真实账号仍待验通。
+
+同一候选继续处理#126的[报告持久化等待](docs/DURABLE_REPORT_WRITES.md)：固定最多4个独立文件写入，保留逐文件fsync和完整报告的原子公布。合成报告字节对照与故障清理已验，完整候选资格以PR196当前提交为准。
