@@ -1,9 +1,8 @@
 """Opt-in Chromium native HTTP/TLS with a public-target opaque CONNECT guard.
 
-CDP Fetch observes/authorizes each owned-page hop. A context route rejects
-unowned pages before their initial request (a page event can arrive too late).
-Owned requests use native networking without HTTP request replay. CORS contexts
-deliver native-fetched document bytes with one extra restrictive CSP; original
+CDP Fetch observes/authorizes each owned-page hop. Application-created blank
+pages receive controls before navigation. Native documents add a restrictive
+CSP before scripts can create unsupported surfaces; original
 publisher security policies remain enforced.
 Cross-origin requests require an exact, code-owned CORS operation contract.
 Only application-owned browser targets are used. Worker/OOPIF targets are stopped
@@ -100,17 +99,27 @@ class NativeBackend(PlaywrightBackend):
         return {**options, 'proxy': {'server': self.tunnel.endpoint},
                 'args': [*options['args'], '--proxy-bypass-list=<-loopback>', '--block-new-web-contents']}
 
+    def _launch_browser(self, options):
+        from .cdp_browser import CDPBrowser, edge_executable
+        options = dict(options)
+        channel = options.pop('channel', None)
+        options['executable_path'] = (edge_executable() if channel == 'msedge'
+            else options.get('executable_path') or self.runtime.chromium.executable_path)
+        return CDPBrowser(**options)
+
     def _configure_context(self):
         # Install before any page is created. Target debugger pause does not
         # alone prevent the browser's initial popup network request.
         self._native_cors = any(rule.cors_origin for rule in self.contract.rules)
+        self._direct_cdp = getattr(self.browser, 'minimal_events', False) is True
         # Playwright's route layer auto-fulfills CORS OPTIONS. For reviewed
         # CORS contracts use direct CDP controls, so the publisher really
         # receives and decides preflight. Unsupported targets get an abort-only
         # Fetch guard before their deferred close, never collection controls.
-        if not self._native_cors:
+        if not self._native_cors and not self._direct_cdp:
             self.context.route('**/*', self._ownership_route)
-        self.context.route_web_socket('**/*', lambda ws: ws.close())
+        if not self._direct_cdp:
+            self.context.route_web_socket('**/*', lambda ws: ws.close())
         self.context.on('page', self._page_created)
         self._cdp = self.browser.new_browser_cdp_session()
         contexts = self._cdp.send('Target.getBrowserContexts')['browserContextIds']
@@ -124,8 +133,9 @@ class NativeBackend(PlaywrightBackend):
         self._cdp.on('Target.attachedToTarget', self._attached)
         self._cdp.on('Target.receivedMessageFromTarget', self._received)
         self._cdp.on('Target.detachedFromTarget', self._detached)
-        # Non-flattened sessions use only documented Target.sendMessageToTarget;
-        # no Playwright private internals or remote-debugging TCP port.
+        # Non-flattened sessions use documented Target.sendMessageToTarget.
+        # The controller's pipes reach only its newly launched browser; it does
+        # not attach to a daily browser or use Playwright private internals.
         self._cdp.send('Target.setAutoAttach', {'autoAttach':True,
             'waitForDebuggerOnStart':True, 'flatten':True})
 
@@ -262,7 +272,7 @@ class NativeBackend(PlaywrightBackend):
             self._fatal('native_surface_unsupported')
             return
         # Retire the temporary target-creation attachment BEFORE configuring
-        # Fetch on the public Playwright page session. Edge does not deliver
+        # Fetch on the owned page session. Edge does not deliver
         # interception events through the old non-flattened relay reliably.
         # Removing the old attachment first preserves page-level interception.
         for old, known in tuple(self._sessions.items()):

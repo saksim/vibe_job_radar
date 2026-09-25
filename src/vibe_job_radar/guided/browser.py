@@ -94,7 +94,7 @@ class PlaywrightBackend:
             if channel:
                 options['channel'] = channel
             self.startup_report.update(stage='launch', launch_tested=True)
-            self.browser = self.runtime.chromium.launch(**self._launch_options(options))
+            self.browser = self._launch_browser(self._launch_options(options))
             self.startup_report.update(stage='context', executable_exists=True)
             if channel:
                 self.startup_report['browser_version'] = self.browser.version
@@ -117,6 +117,9 @@ class PlaywrightBackend:
 
     def _launch_options(self, options):
         return options
+
+    def _launch_browser(self, options):
+        return self.runtime.chromium.launch(**options)
 
     def _configure_context(self):
         self.context.route('**/*', self._route)

@@ -16,10 +16,11 @@ from .contracts import CrawlError
 # Preserve scripts, the original origin and same-tab normal forms. Do not grant
 # popups, popup escape, downloads, top navigation or other unsupported surfaces.
 DOCUMENT_SANDBOX = "sandbox allow-scripts allow-same-origin allow-forms; frame-src 'none'"
+MINIMAL_EVENTS_SANDBOX = DOCUMENT_SANDBOX + "; worker-src 'none'; connect-src https: http:"
 ROBOTS_SANDBOX = "sandbox; default-src 'none'; base-uri 'none'; form-action 'none'"
 
 
-def document_response_params(event: dict, *, enabled: bool, robots: bool = False) -> dict:
+def document_response_params(event: dict, *, enabled: bool, robots: bool = False, minimal_events: bool = False) -> dict:
     """Build continueResponse parameters, with one extra restriction if needed.
 
     Called only after the normal status, redirect, size and accounting checks.
@@ -28,14 +29,14 @@ def document_response_params(event: dict, *, enabled: bool, robots: bool = False
     """
     params = {'requestId': event['requestId']}
     status = event.get('responseStatusCode', 0)
-    if (not (enabled or robots) or event.get('resourceType') != 'Document'
+    if (not (enabled or robots or minimal_events) or event.get('resourceType') != 'Document'
             or 'responseErrorReason' in event or status < 200 or 300 <= status < 400):
         return params
     params.update(responseCode=status,
                   responsePhrase=event.get('responseStatusText', ''),
                   responseHeaders=[dict(h) for h in event.get('responseHeaders', [])] + [
                       {'name': 'Content-Security-Policy',
-                       'value': ROBOTS_SANDBOX if robots else DOCUMENT_SANDBOX}])
+                       'value': ROBOTS_SANDBOX if robots else MINIMAL_EVENTS_SANDBOX if minimal_events else DOCUMENT_SANDBOX}])
     return params
 
 
@@ -46,7 +47,8 @@ def continue_document_response(backend, session: str, event: dict, *, robots: bo
     Supplying the unchanged decoded body makes the browser parse all headers
     together. Other responses keep the normal native continuation.
     """
-    params = document_response_params(event, enabled=getattr(backend, '_native_cors', False), robots=robots)
+    params = document_response_params(event, enabled=getattr(backend, '_native_cors', False), robots=robots,
+                                     minimal_events=getattr(backend, '_direct_cdp', False))
     if 'responseHeaders' not in params or event['responseStatusCode'] in {204, 205}:
         backend._send(session, 'Fetch.continueResponse', {'requestId': event['requestId']})
         return
