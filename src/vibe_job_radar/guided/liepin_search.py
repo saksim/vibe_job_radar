@@ -13,10 +13,10 @@ from urllib.parse import parse_qsl, urlsplit
 from ..html_parser import _unique_object
 from .contracts import Card, CrawlError
 
-_FIELDS = {'key', 'city', 'dq', 'pubTime', 'workYearCode', 'compId', 'compName',
+_FIELDS = {'key', 'city', 'otherCity', 'dq', 'pubTime', 'workYearCode', 'compId', 'compName',
            'compTag', 'industry', 'salary', 'jobKind', 'compScale', 'compKind',
            'compStage', 'eduLevel', 'currentPage', 'pageSize', 'salaryCode', 'suggestTag'}
-_PASS_THROUGH = {'scene', 'skId', 'fkId', 'ckId', 'suggest'}
+_PASS_THROUGH = {'scene', 'skId', 'fkId', 'ckId', 'suggest', 'sfrom'}
 _QUERY_FIELDS = _FIELDS | _PASS_THROUGH | {'suggestId', 'init'}
 # These publisher pass-through fields identify the search interaction, not a
 # mainSearchPcConditionForm filter. Suggestion IDs remain search constraints.
@@ -57,7 +57,9 @@ def _bind_published_form(query, form, through):
         required = (name == 'salaryCode' and 'salaryCode' in query) or bounds is not None
         if (required and name not in form) or not _same_scalar(form.get(name, ''), value):
             raise ValueError()
-    for name in ('scene', 'skId', 'fkId'):
+    # A normal Enter submission also carries sfrom in passThroughForm, while
+    # otherCity is a direct main-form filter. Neither may be silently dropped.
+    for name in ('scene', 'skId', 'fkId', 'sfrom'):
         if not _same_scalar(through.get(name, ''), query.get(name, '')):
             raise ValueError()
     if 'ckId' in query or 'ckId' in through:

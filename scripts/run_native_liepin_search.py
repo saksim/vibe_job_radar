@@ -128,10 +128,10 @@ const hotWordRequests=[{}, {headers:{'X-Client-Type':'web'}}].map(options =>
 const key = new URL(location.href).searchParams.get('key') || '';
 window.searchSubmissions=0;window.initializationResponses=0;
 function search(keyword) {
- const main={city:'410',dq:'410',pubTime:'7',currentPage:0,pageSize:40,key:keyword,
+ const main={city:'410',otherCity:'',dq:'410',pubTime:'7',currentPage:0,pageSize:40,key:keyword,
   suggestTag:'fixture-tag',workYearCode:'',compId:'',compName:'',compTag:'',industry:'',
   salaryCode:'10$30',jobKind:'',compScale:'',compKind:'',compStage:'',eduLevel:''};
- const through={scene:'fixture-search',skId:'',fkId:'',ckId:'a'.repeat(32),suggest:null};
+ const through={scene:'fixture-search',sfrom:'fixture-search-field',skId:'',fkId:'',ckId:'a'.repeat(32),suggest:null};
  const form={...main,salaryCode:'',salaryLow:'10',salaryHigh:'30'};
  let passThroughForm=through;
  if(keyword) {
@@ -206,6 +206,8 @@ Promise.all([Promise.all(optionalRequests), fetch('https://""" + REGION_HOST + R
                 data = json.loads(raw)['data']
                 form = data['mainSearchPcConditionForm']
                 owner.search_shapes.append(dict(keyword_empty=form['key']=='',
+                    additional_city=form.get('otherCity')=='',
+                    search_source=data.get('passThroughForm',{}).get('sfrom')=='fixture-search-field',
                     date_alias='pubTime' not in form and form.get('hrActiveTimeCode')=='7',
                     salary_split=form.get('salaryCode')=='' and form.get('salaryLow')=='10' and form.get('salaryHigh')=='30',
                     rotated_id=data.get('passThroughForm',{}).get('ckId')=='b'*32))
@@ -358,6 +360,11 @@ def main():
                     assert published_url['ckId'] == ['a'*32] and published_url['suggest'] == ['null']
                     submitted_shapes = [s for s in server.search_shapes if not s['keyword_empty']]
                     assert len(submitted_shapes) == 1 and all(submitted_shapes[0][k] for k in ('date_alias','salary_split','rotated_id'))
+                    assert published_url['otherCity']==[''] and published_url['sfrom']==['fixture-search-field']
+                    assert all(submitted_shapes[0][k] for k in ('additional_city','search_source'))
+                    assert task['effective_search']['otherCity']==''
+                    assert task['effective_search']['sfrom']=='fixture-search-field'
+                    result['checks'].append('normal Enter search binds URL otherCity to the main form and sfrom to pass-through data, retaining both in the task scope without relaxing unknown fields')
                     assert not any('key' in r['query_keys'] for r in server.requests[:])
                     try: native.wire.ensure_robots(native.page.url)
                     except CrawlError as exc: assert exc.code=='robots_denied',exc.code

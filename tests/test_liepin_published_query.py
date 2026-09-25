@@ -41,6 +41,80 @@ def bind(query, body):
 
 
 class PublishedQueryBindingTests(unittest.TestCase):
+    def test_enter_submission_with_new_fields_and_no_suggestion_binds(self):
+        query, body = published_request(otherCity='')
+        query.pop('suggest')
+        through = body['data']['passThroughForm']
+        through.pop('suggest')
+        query['sfrom'] = through['sfrom'] = 'fixture-search-field'
+        context, url = bind(query, body)
+        self.assertEqual(context, {'query':hashlib.sha256(url.encode()).hexdigest(), 'page':0, 'size':40})
+        self.assertNotIn('fixture-search-field', repr(context))
+
+    def test_each_new_field_binds_its_own_empty_or_nonempty_value(self):
+        for field, section in (('otherCity','mainSearchPcConditionForm'), ('sfrom','passThroughForm')):
+            for value in ('', 'fixture-value'):
+                query, body = published_request()
+                query[field] = body['data'][section][field] = value
+                with self.subTest(field=field, value=value):
+                    self.assertEqual(bind(query, body)[0]['page'], 0)
+
+    def test_new_fields_reject_mismatches_omissions_and_non_scalar_values(self):
+        for field, section in (('otherCity','mainSearchPcConditionForm'), ('sfrom','passThroughForm')):
+            query, body = published_request()
+            query[field] = body['data'][section][field] = 'fixture-value'
+            for value in ('other-value', '', None, True, [], {}):
+                bad = copy.deepcopy(body)
+                bad['data'][section][field] = value
+                with self.subTest(field=field, value=value), self.assertRaisesRegex(CrawlError, 'liepin_search_query_mismatch'):
+                    bind(query, bad)
+            bad = copy.deepcopy(body)
+            bad['data'][section].pop(field)
+            with self.subTest(field=field, missing='payload'), self.assertRaisesRegex(CrawlError, 'liepin_search_query_mismatch'):
+                bind(query, bad)
+            omitted = dict(query)
+            omitted.pop(field)
+            with self.subTest(field=field, missing='url'), self.assertRaisesRegex(CrawlError, 'liepin_search_query_mismatch'):
+                bind(omitted, body)
+
+    def test_new_fields_cannot_be_moved_between_payload_sections(self):
+        for field, wrong_section in (('otherCity','passThroughForm'), ('sfrom','mainSearchPcConditionForm')):
+            query, body = published_request()
+            query[field] = body['data'][wrong_section][field] = 'fixture-value'
+            with self.subTest(field=field), self.assertRaisesRegex(CrawlError, 'liepin_search_query_mismatch'):
+                bind(query, body)
+
+    def test_new_fields_do_not_reuse_a_response_for_another_url(self):
+        for field, section in (('otherCity','mainSearchPcConditionForm'), ('sfrom','passThroughForm')):
+            query, body = published_request()
+            query[field] = body['data'][section][field] = 'fixture-first'
+            context, _ = bind(query, body)
+            query[field] = body['data'][section][field] = 'fixture-second'
+            current, url = bind(query, body)
+            self.assertNotEqual(context['query'], current['query'])
+            page = PageSnapshot(url, '<a href="https://www.liepin.com/job/123.shtml">旧岗位</a>',
+                (BusinessObservation(1, 'liepin_search', 1, {}, context),), business_required=True)
+            with self.subTest(field=field), self.assertRaisesRegex(CrawlError, 'page_not_ready'):
+                ADAPTER.cards(page)
+
+    def test_new_fields_remain_bound_in_pagination_and_explicit_scope(self):
+        query, body = published_request(otherCity='fixture-city')
+        query['sfrom'] = body['data']['passThroughForm']['sfrom'] = 'fixture-source'
+        _, first = bind(query, body)
+        state = dict(query_scope_version=1, search_url=ADAPTER.search_url(query['key']), keyword=query['key'])
+        self.assertEqual(check_scope(state, ADAPTER, first), '0')
+        next_query = {**query, 'currentPage':1}
+        self.assertEqual(check_scope(state, ADAPTER, ADAPTER.search_base+'?'+urlencode(next_query)), '1')
+        for field in ('otherCity', 'sfrom'):
+            self.assertEqual(state['effective_search'][field], query[field])
+            for changes in ({**next_query, field:'different'}, {k:v for k,v in next_query.items() if k!=field}):
+                with self.subTest(field=field, changes=changes), self.assertRaisesRegex(CrawlError, 'search_scope_changed'):
+                    check_scope(state, ADAPTER, ADAPTER.search_base+'?'+urlencode(changes))
+            explicit = dict(query_scope_version=1, keyword=query['key'],
+                search_url=ADAPTER.search_url(query['key'])+'&'+urlencode({field:'different'}))
+            with self.subTest(explicit=field), self.assertRaisesRegex(CrawlError, 'search_scope_changed'):
+                check_scope(explicit, ADAPTER, first)
+
     def test_full_visible_search_shape_binds_without_retaining_values(self):
         query, body = published_request()
         context, url = bind(query, body)
