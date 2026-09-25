@@ -544,6 +544,34 @@ def verify_numbered_wrap_report(app, previous):
     return report
 
 
+def verify_explicit_ai_application_report(app, previous):
+    """Exercise configured AI application semantics in the actual frozen program."""
+    quote = ('具备运用 AI 处理工程任务的能力：了解大语言模型的输入条件与响应特点，'
+             '能够在接口设计、代码生成及代码评审环节有效使用。')
+    text = '任职要求\n1、' + quote + '\n2、不要求' + quote
+    app.json('/api/job', {'title':'软件架构师', 'company':'ARTIFICIAL AI APPLICATION',
+        'platform':'manual', 'source_ref':'portable-acceptance:authored-ai-application', 'text':text,
+        'rights_note':'Independently authored application fixture, not a real job.',
+        'evidence_level':'full_text', 'full_text_confirmed':True})
+    report = app.json('/api/analyze', {'dataset':'real', 'roles':['architect']})
+    rows = [r for r in report['requirements'] if r['company']=='ARTIFICIAL AI APPLICATION']
+    positive = [r for r in rows if r['quote']==quote]
+    negative = [r for r in rows if r['quote']=='不要求'+quote]
+    if (report['id']==previous['id'] or len(rows)!=4
+            or {r['capability'] for r in positive}!={'ai_coding','testing_review'}
+            or len(negative)!=2 or any(r['strength']!='not_required' for r in negative)
+            or any(r['relation']!='direct' or r['review_status']!='rule_accepted' for r in rows)
+            or any(r['strength']!='required' for r in positive)
+            or any(r['tools'] or text[r['start']:r['end']]!=r['quote'] for r in rows)):
+        raise AssertionError('frozen explicit AI application semantics or original offsets are incorrect')
+    status,data=app.call(f"/api/download/{report['id']}/requirements_zh.csv")
+    if status!=200 or quote.encode('utf-8') not in data or '代码评审'.encode('utf-8') not in data:
+        raise AssertionError('frozen explicit AI application CSV is incomplete')
+    if app.json('/api/report/'+previous['id'])['requirements']!=previous['requirements']:
+        raise AssertionError('AI application analysis changed prior evidence')
+    return report
+
+
 def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=False,verify_system_pac=False):
     if verify_login_startup and os.environ.get('GITHUB_ACTIONS')!='true':
         raise ValueError('startup registration acceptance is restricted to ephemeral CI')
@@ -707,6 +735,10 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
                 wrapped=verify_numbered_wrap_report(app,english)
                 result['numbered_wrap_report_verified']=True
                 result['checks'].append('frozen numbered Chinese wrap retains full original quote and offsets in report/CSV; next prohibition and company/benefits stay separate')
+                result['stage']='explicit_ai_application_report'
+                application=verify_explicit_ai_application_report(app,wrapped)
+                result['explicit_ai_application_report_verified']=True
+                result['checks'].append('frozen explicit model application keeps exact code-review quotes, separates not-required clauses and does not invent named coding tools')
                 result['stage']='real_browser_ui'
                 from playwright.sync_api import sync_playwright,expect
                 with sync_playwright() as pw:
@@ -757,6 +789,9 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
                 if restarted.json('/api/report/'+wrapped['id'])['requirements']!=wrapped['requirements']:
                     raise AssertionError('portable restart changed numbered wrap evidence')
                 result['numbered_wrap_restart_verified']=True
+                if restarted.json('/api/report/'+application['id'])['requirements']!=application['requirements']:
+                    raise AssertionError('portable restart changed explicit AI application evidence')
+                result['explicit_ai_application_restart_verified']=True
                 if inventory(workspace/'reports'/ident)!=previous_files:
                     raise AssertionError('portable restart changed an existing report file')
                 if restarted.json('/api/public/schedule/state')['status']!='disabled':raise AssertionError('portable restart implicitly scheduled work')
