@@ -38,6 +38,7 @@ PATH = '/api/com.liepin.searchfront4c.pc-search-job'
 ASSET = '/fe-www-pc/v6/js/search-fixture.js'
 REGION_PATH = '/api/com.liepin.bd.p.v4.get-all-dq'
 SUGGEST_PATH = '/api/com.liepin.searchfront4c.pc-search-suggest-list'
+HOTWORD_PATH = '/api/com.liepin.searchfront4c.pc-hot-search-word-list'
 
 
 class SearchFixture:
@@ -114,6 +115,10 @@ const optionalPaths=['/api/com.liepin.cbp.baizhong.op.v2-show-4pc',
 const optionalRequests=optionalPaths.map(path =>
  fetch('https://""" + OPTIONAL_HOST + """' + path, {method:'POST',
  headers:{'Content-Type':'application/json'},body:'{}'}).catch(() => window.optionalBlocked++));
+window.hotWordBlocked=0;
+const hotWordRequests=[{}, {headers:{'X-Client-Type':'web'}}].map(options =>
+ fetch('https://""" + API_HOST + HOTWORD_PATH + """', options)
+ .catch(() => window.hotWordBlocked++));
 const key = new URL(location.href).searchParams.get('key') || '';
 window.searchSubmissions=0;window.initializationResponses=0;
 function search(keyword) {
@@ -144,7 +149,7 @@ function search(keyword) {
 }
 Promise.all([Promise.all(optionalRequests), fetch('https://""" + REGION_HOST + REGION_PATH + """?from=component', {
  method:'GET', credentials:'include', headers:{'X-Client-Type':'web'}
-}).then(r => r.json())]).then(([,regions]) => {
+}).then(r => r.json()), Promise.all(hotWordRequests)]).then(([,regions]) => {
  const field=document.createElement('input');field.type='text';field.placeholder='搜索职位、公司';
  document.body.append(field);
  field.addEventListener('input', () => {
@@ -232,7 +237,7 @@ def main():
                            'api-dok.liepin.com':REGION_HOST}
                 rules = tuple(replace(r, host=mapping[r.host], cors_origin=URL if r.cors_origin else '') for r in contract.rules)
                 local_contract = replace(contract, hosts=(HOST,API_HOST,CDN_HOST,LOGIN_HOST,REGION_HOST), rules=rules,
-                    ignored_rules=tuple(replace(r,host=OPTIONAL_HOST) for r in contract.ignored_rules))
+                    ignored_rules=tuple(replace(r,host=mapping.get(r.host,OPTIONAL_HOST)) for r in contract.ignored_rules))
                 local = replace(template, domains=(HOST,), resource_domains=(HOST,),
                     search_base=URL+'/zhaopin/', login_url=URL+'/', native_contract=local_contract)
                 real_dns, real_dial = socket.getaddrinfo, socket.create_connection
@@ -256,7 +261,8 @@ def main():
                                 submissions: window.searchSubmissions,
                                 initializations: window.initializationResponses,
                                 suggestions: window.suggestionsArrived === true,
-                                optionalBlocked: window.optionalBlocked
+                                optionalBlocked: window.optionalBlocked,
+                                hotWordBlocked: window.hotWordBlocked
                             })''')
                         return page
                 def factory(a,l,c,p,**saved):
@@ -312,6 +318,16 @@ def main():
                     assert observed_form['submissions'] == 1
                     assert observed_form['initializations'] == 1
                     assert observed_form['suggestions'] is True
+                    assert observed_form['hotWordBlocked'] == 2
+                    assert not any(r['path']==HOTWORD_PATH for r in server.requests)
+                    optional_events = service.diagnostics({'id':task['id']})['events']
+                    assert any(e['code']=='native_optional_request_blocked'
+                               and e['host']==API_HOST and e['method']=='GET'
+                               and e['local_block'] and e['impact']=='optional' for e in optional_events)
+                    assert any(e['code']=='native_optional_request_blocked'
+                               and e['host']==API_HOST and e['method']=='OPTIONS'
+                               and e['local_block'] and e['impact']=='optional' for e in optional_events)
+                    result['checks'].append('optional hotword GET and real preflight are aborted locally without reaching the server, failing the task, consuming business quota or replacing its single explicit keyword submission')
                     published_url = parse_qs(urlsplit(native.page.url).query, keep_blank_values=True)
                     assert published_url['pubTime'] == ['7'] and published_url['salaryCode'] == ['10$30']
                     assert published_url['ckId'] == ['a'*32] and published_url['suggest'] == ['null']

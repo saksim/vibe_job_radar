@@ -184,6 +184,13 @@ def liepin_bootstrap():
         NativeRule('liepin_telemetry', 'statistic.liepin.com',
                    r'/statisticPlatform/standard[FT]Log\.json', methods=('POST', 'OPTIONS'),
                    resources=('Fetch', 'XHR', 'Preflight', 'Other'), role='asset'),
+        # The published input loads up to eight optional hotwords and ignores
+        # a failed load. They must not stop or replace the user's own query.
+        # Abort only; this is not API egress permission (LIEPIN_HOTWORDS.md).
+        NativeRule('liepin_hotwords', api,
+                   r'/api/com\.liepin\.searchfront4c\.pc-hot-search-word-list',
+                   methods=('GET', 'OPTIONS'),
+                   resources=('Fetch', 'XHR', 'Preflight', 'Other'), role='asset'),
     ))
 
 

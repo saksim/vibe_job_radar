@@ -13,11 +13,87 @@ from vibe_job_radar.guided.native_policy import NativeRule, contract_for
 URL='https://api-wanda.liepin.com/api/com.liepin.cbp.baizhong.op.v2-show-4pc'
 TELEMETRY=tuple('https://statistic.liepin.com/statisticPlatform/standard'+kind+'Log.json'
                 for kind in ('F','T'))
+HOTWORDS='https://api-c.liepin.com/api/com.liepin.searchfront4c.pc-hot-search-word-list'
 
 
 class OptionalRequestTests(unittest.TestCase):
     setUp=fixtures.NativeControllerTests.setUp
     req=fixtures.NativeControllerTests.req
+
+    def test_hotwords_abort_locally_without_stopping_search_or_reserving_quota(self):
+        self.b.contract=contract_for(builtins().get('liepin'))
+        for method,kind in [('GET','Fetch'),('GET','XHR'),('OPTIONS','XHR'),
+                            ('OPTIONS','Preflight'),('OPTIONS','Other')]:
+            with self.subTest(method=method,kind=kind):
+                event=self.req(method=method,kind=kind)
+                event['request']['url']=HOTWORDS
+                with patch.object(self.b.wire,'reserve') as reserve:
+                    self.b._paused('session',event)
+                reserve.assert_not_called()
+                self.b._send.assert_called_with('session','Fetch.failRequest',
+                    {'requestId':'fetch-1','errorReason':'BlockedByClient'})
+                self.assertIsNone(self.b.error)
+                self.assertFalse(self.b._halted)
+                self.assertFalse(self.b._requests)
+                self.assertFalse(self.b._observations)
+                self.assertEqual(self.b.native_counts['business'],0)
+        trace=self.b._diagnostics.snapshot()
+        self.assertIsNone(trace['first_content_candidate'])
+        blocked=[e for e in trace['events'] if e['code']=='native_optional_request_blocked']
+        self.assertEqual(len(blocked),5)
+        self.assertTrue(all(e['local_block'] and e['impact']=='optional' for e in blocked))
+
+    def test_hotword_abort_does_not_grant_egress_or_expand_other_routes(self):
+        contract=contract_for(builtins().get('liepin'))
+        for method in ('GET','OPTIONS'):
+            with self.assertRaisesRegex(CrawlError,'native_operation_unreviewed'):
+                contract.match(HOTWORDS,method,'XHR',authentication=True)
+        for url,method,kind in [(HOTWORDS,'POST','XHR'),(HOTWORDS,'HEAD','Fetch'),
+                                (HOTWORDS,'GET','Document'),(HOTWORDS,'GET','Script'),
+                                (HOTWORDS+'/extra','GET','XHR'),
+                                (HOTWORDS.replace('word-list','word-list-v2'),'GET','XHR'),
+                                (HOTWORDS.replace('api-c.','other.'),'GET','XHR')]:
+            with self.subTest(url=url,method=method,kind=kind):
+                self.assertFalse(contract.ignored_request(url,method,kind))
+                with self.assertRaises(CrawlError):
+                    contract.match(url,method,kind,authentication=True)
+                self.b.contract=contract;self.b.error=None;self.b._halted=False
+                event=self.req(method=method,kind=kind);event['request']['url']=url
+                with patch.object(self.b.wire,'reserve') as reserve:
+                    self.b._paused('session',event)
+                reserve.assert_not_called()
+                self.b._send.assert_called_with('session','Fetch.failRequest',
+                    {'requestId':'fetch-1','errorReason':'BlockedByClient'})
+                if kind=='Script':
+                    # Unknown assets already abort without failing the task.
+                    self.assertIsNone(self.b.error)
+                    self.assertFalse(self.b._halted)
+                else:
+                    self.assertIn(self.b.error,{'native_operation_unreviewed','resource_domain_blocked'})
+                    self.assertTrue(self.b._halted)
+
+    def test_hotword_optional_handling_cannot_bypass_cancel_or_policy_revocation(self):
+        self.b.contract=contract_for(builtins().get('liepin'))
+        event=self.req(method='GET');event['request']['url']=HOTWORDS
+        self.b.cancelled.set()
+        self.b._paused('session',event)
+        self.assertEqual(self.b.error,'paused')
+        self.b.cancelled.clear();self.b.error=None;self.b._halted=False
+        self.b.policy_check=lambda:False
+        self.b._paused('session',event)
+        self.assertEqual(self.b.error,'native_policy_changed')
+
+    def test_hotword_local_abort_completion_is_not_a_required_network_failure(self):
+        self.b.contract=contract_for(builtins().get('liepin'))
+        for method in ('GET','OPTIONS'):
+            event=self.req(method=method);event['request']['url']=HOTWORDS
+            self.b._paused('session',event)
+            self.b._received({'sessionId':'session','message':json.dumps({
+                'method':'Network.loadingFailed','params':{
+                    'requestId':'net-1','errorText':'net::ERR_BLOCKED_BY_CLIENT'}})})
+            self.assertIsNone(self.b.error)
+            self.assertFalse(self.b._halted)
+        self.assertFalse(self.b._observations)
 
     def test_optional_placement_and_preflight_abort_without_network_or_task_failure(self):
         self.b.contract=contract_for(builtins().get('liepin'))
