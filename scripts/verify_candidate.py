@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import json
 import platform
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -31,13 +32,14 @@ def verify(out: Path) -> dict:
               'steps':[], 'tests':{}, 'scope':'Local source checks only, not signed attestation or release approval.'}
     try:
         (out/'unit-tests.json').unlink(missing_ok=True)
+        (out/'unit-tests.progress.log').unlink(missing_ok=True)
         before = fingerprint(ROOT)
         report['source'] = before
         report['source_checks'] = check_source(ROOT)
         with tempfile.TemporaryDirectory(prefix='radar-qualification-') as temp:
             run_root = Path(temp)
             unit_file = run_root/'unit-tests.json'
-            tasks = [('unit-tests',['scripts/run_tests.py','--report',str(unit_file)]),
+            tasks = [('unit-tests',['scripts/run_tests.py','--report',str(unit_file),'--progress']),
                      ('user-guide',['scripts/build_user_guide.py','--check']),
                      ('offline-demo',['scripts/run_demo.py','--out',str(run_root/'demo')]),
                      ('source-doctor',['scripts/start_workbench.py','--doctor','--workspace',str(run_root/'workspace')])]
@@ -45,17 +47,23 @@ def verify(out: Path) -> dict:
                 print('Running:', name, flush=True)
                 entry = {'name':name,'returncode':None}
                 report['steps'].append(entry)
+                timeout = 600 if name == 'unit-tests' else 180
                 try:
                     run = subprocess.run([sys.executable,*args], cwd=ROOT, stdin=subprocess.DEVNULL,
                                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                         timeout=180, shell=False)
+                                         timeout=timeout, shell=False)
                     entry['returncode'] = run.returncode
                     entry['output_tail'] = safe_text(run.stdout, 3000)
                 except subprocess.TimeoutExpired:
-                    entry.update(returncode=-1, error='local_check_timeout')
+                    entry.update(returncode=-1, error='local_check_timeout', timeout_seconds=timeout)
+                    report.update(error_type='TimeoutExpired', error='local_check_timeout',
+                                  failed_check=name, timeout_seconds=timeout)
                     break
                 if run.returncode:
                     break
+            progress=unit_file.with_suffix('.progress.log')
+            if progress.is_file() and progress.stat().st_size<=10_000_000:
+                shutil.copyfile(progress,out/'unit-tests.progress.log')
             if unit_file.is_file():
                 if unit_file.stat().st_size > 10_000_000:
                     raise ValueError('unit report is too large')
@@ -64,8 +72,11 @@ def verify(out: Path) -> dict:
         report['source_unchanged'] = fingerprint(ROOT) == before
         # One validator for both the producer and builder, including skipped
         # tests, strict integer counts, exact step order and matching bytes.
-        require_local_evidence(ROOT, {**report, 'success': True})
-        report['success'] = True
+        # A stopped check is already an explicit failure. Keep its stage and
+        # deadline instead of replacing it with a secondary missing-report error.
+        if report.get('error') != 'local_check_timeout':
+            require_local_evidence(ROOT, {**report, 'success': True})
+            report['success'] = True
     except Exception as exc:
         report['error_type'] = type(exc).__name__
         report['error'] = safe_text(exc)
@@ -83,7 +94,10 @@ def main() -> int:
     except (OSError, ValueError) as exc:
         print('Verification refused:', safe_text(exc), file=sys.stderr)
         return 2
-    print(json.dumps({k:result[k] for k in ('success','source_unchanged','remote_ci','live_sites')},ensure_ascii=True))
+    summary = {k:result[k] for k in ('success','source_unchanged','remote_ci','live_sites')}
+    if not result['success']:
+        summary.update({k:result[k] for k in ('error_type','error','failed_check','timeout_seconds') if k in result})
+    print(json.dumps(summary,ensure_ascii=True))
     print('Evidence:', (args.out/'result.json').resolve())
     return 0 if result['success'] else 1
 

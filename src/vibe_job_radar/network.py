@@ -9,6 +9,7 @@ import http.client
 import ipaddress
 import json
 import math
+import re
 import errno
 import socket
 import ssl
@@ -16,7 +17,7 @@ import time
 from dataclasses import dataclass, field
 from email.utils import parsedate_to_datetime
 from urllib.parse import urlsplit, urlunsplit
-from urllib.robotparser import RobotFileParser
+from .robots_rules import RobotsRules, RobotsError
 from .utils import domain_matches
 from .tls_context import create_client_context
 from .loopback_proxy import LoopbackProxy, LocalProxyError
@@ -67,6 +68,18 @@ class Response:
             except UnicodeDecodeError:
                 pass
         raise FetchError("encoding_unknown", "save and review the page manually")
+
+
+def valid_etag(value) -> bool:
+    # One bounded ASCII entity-tag, never '*', a list, controls or header lines.
+    return isinstance(value,str) and len(value)<=512 and re.fullmatch(r'(?:W/)?"[\x21\x23-\x7e]*"',value) is not None
+
+
+@dataclass(frozen=True)
+class JSONRepresentation:
+    status: int
+    payload: dict | None
+    etag: str | None
 
 
 def _connection_candidates(ips: str | tuple[str, ...]) -> tuple[str, ...]:
@@ -139,6 +152,7 @@ class PinnedHTTPSConnection(http.client.HTTPSConnection):
             self.connection_attempts.append(record)
             sock = None
             try:
+                self.network_policy.ensure_active()
                 if self._local_proxy:
                     sock = self._local_proxy.open_tunnel(ip, attempt_budget, self.source_address)
                 else:
@@ -202,6 +216,11 @@ def validate_public_url(url: str, allowed_domains: set[str], *, all_addresses: b
                         resolution_info: dict | None = None
                         ) -> tuple[str, str | tuple[str, ...], str]:
     host, target = validate_url_target(url, allowed_domains)
+    if network_policy is not None:
+        try:
+            network_policy.for_host(host)  # Invalid explicit credentials must not leak DNS first.
+        except LocalProxyError as exc:
+            raise FetchError(exc.code) from exc
     if network_policy is not None and network_policy.encrypted_dns:
         from .encrypted_dns import PublicResolver, ResolutionError
         active = resolver or network_policy.resolver or PublicResolver()
@@ -242,7 +261,12 @@ class SafeHTTP:
         self.blocked_hosts: set[str] = set()
 
     def request(self, url: str, *, method: str = "GET", headers: dict | None = None,
-                body: bytes | None = None, return_redirect: bool = False) -> Response:
+                body: bytes | None = None, return_redirect: bool = False,
+                if_none_match: str | None = None) -> Response:
+        if if_none_match is not None:
+            if (not valid_etag(if_none_match) or method!='GET' or body is not None or return_redirect
+                    or headers not in (None,{'Accept':'application/json'})):
+                raise FetchError('invalid_conditional_request')
         host, _ = validate_url_target(url, self.allowed_domains)
         if host in self.blocked_hosts:
             raise FetchError("host_circuit_open", host)
@@ -257,16 +281,25 @@ class SafeHTTP:
             conn = PinnedHTTPSConnection(host, ip, self.timeout)
         request_headers = {"User-Agent": USER_AGENT, "Accept-Encoding": "identity"}
         request_headers.update(headers or {})
+        if if_none_match is not None:request_headers['If-None-Match']=if_none_match
         try:
             conn.request(method, target, body=body, headers=request_headers)
             resp = conn.getresponse()
-            response_headers = {k.lower(): v for k, v in resp.getheaders()}
+            raw_headers=resp.getheaders()
+            response_headers = {k.lower(): v for k, v in raw_headers}
+            if sum(k.lower()=='etag' for k,v in raw_headers)>1:
+                response_headers['etag']=''  # Conflicting/list validators cannot qualify a 304.
             if resp.status in (401, 403, 429):
                 self.blocked_hosts.add(host)
                 raise FetchError(f"http_{resp.status}", "stopped; no bypass or retry",
                                  retry_after=retry_after_seconds(response_headers.get("retry-after", ""))
                                  if resp.status == 429 else None)
             if 300 <= resp.status < 400:
+                if resp.status==304 and if_none_match is not None:
+                    tag=response_headers.get('etag')
+                    if not valid_etag(tag) or tag.removeprefix('W/')!=if_none_match.removeprefix('W/'):
+                        raise FetchError('invalid_not_modified')
+                    return Response(304,response_headers,b'',url,resolution=dict(self.last_resolution))
                 if return_redirect and method == "GET" and not headers and body is None:
                     # Return metadata only; a higher-level policy validates the next
                     # target. API calls retain the original non-following contract.
@@ -294,6 +327,26 @@ class SafeHTTP:
         """Anonymous one-hop GET. Never follows or forwards credentials."""
         return self.request(url, return_redirect=True)
 
+    def conditional_json(self, url: str, *, etag: str | None = None) -> JSONRepresentation:
+        """Fixed anonymous JSON representation; only a valid condition admits 304."""
+        result=self.request(url,headers={'Accept':'application/json'},if_none_match=etag)
+        tag=result.headers.get('etag')
+        if result.status==304:
+            # Also validate injected Responses; no unconditional or mismatched 304.
+            if (not valid_etag(etag) or not valid_etag(tag)
+                    or tag.removeprefix('W/')!=etag.removeprefix('W/') or result.body):
+                raise FetchError('invalid_not_modified')
+            return JSONRepresentation(304,None,tag)
+        if result.status!=200:raise FetchError(f'http_{result.status}')
+        return JSONRepresentation(200,self._json_payload(result),tag if valid_etag(tag) else None)
+
+    @staticmethod
+    def _json_payload(result: Response) -> dict:
+        try:data=json.loads(result.text())
+        except (ValueError,UnicodeError) as exc:raise FetchError('invalid_api_json') from exc
+        if not isinstance(data,dict):raise FetchError('invalid_api_shape')
+        return data
+
     def json(self, url: str, *, method: str = "GET", headers: dict | None = None, payload: dict | None = None) -> dict:
         hdr = {"Accept": "application/json", **(headers or {})}
         body = None
@@ -303,13 +356,7 @@ class SafeHTTP:
         result = self.request(url, method=method, headers=hdr, body=body)
         if result.status != 200:
             raise FetchError(f"http_{result.status}")
-        try:
-            data = json.loads(result.text())
-        except (ValueError, UnicodeError) as exc:
-            raise FetchError("invalid_api_json") from exc
-        if not isinstance(data, dict):
-            raise FetchError("invalid_api_shape")
-        return data
+        return self._json_payload(result)
 
 
 class SiteFetcher:
@@ -325,18 +372,32 @@ class SiteFetcher:
         self.domains = set(permitted_domains)
         self.transport = transport or SafeHTTP(permitted_domains, interval=2.0)
         self.max_redirects = max_redirects
-        self.robots: dict[str, RobotFileParser | None] = {}
+        self.robots: dict[str, RobotsRules | None] = {}
         self.last_diagnostic: dict = {}
+        self.rate_gate = None
 
     def _get(self, url: str, phase: str) -> Response:
         from .redirect_policy import observed_origin
         self.last_diagnostic.update(phase=phase, last_origin=observed_origin(url))
+        if self.rate_gate is not None:
+            self.rate_gate.before_request(url)
         self.last_diagnostic["http_attempts"] += 1
         # Injected offline transports may expose only request(); production uses
         # SafeHTTP.public_get with pinned TLS and no implicit following.
         get = getattr(self.transport, "public_get", None) or self.transport.request
-        response = get(url)
+        try:
+            response = get(url)
+        except FetchError as exc:
+            if exc.code in {'http_401', 'http_403', 'http_429'}:
+                # Preserve the actual refusal even if persisting its cooldown
+                # subsequently fails and becomes the terminal error.
+                self.last_diagnostic['http_status'] = int(exc.code[-3:])
+            if self.rate_gate is not None:
+                self.rate_gate.failed(exc)
+            raise
         self.last_diagnostic["http_status"] = response.status
+        if self.rate_gate is not None:
+            self.rate_gate.response(response)
         return response
 
     def _follow(self, current: str, response: Response, phase: str,
@@ -372,27 +433,34 @@ class SiteFetcher:
                     current = self._follow(current, result, "robots", visited)
                     continue
                 break
-            if result.status == 200 and not result.headers.get("content-type", "").lower().startswith("text/html"):
-                rp = RobotFileParser()
-                rp.parse(result.text().splitlines())
-                self.robots[origin] = rp
+            # This legacy route still requires a present robots file; sharing
+            # matching does not expand its existing 404/410 access policy.
+            if result.status == 200:
+                try:
+                    # Preserve legacy header-less plain-text support, but the
+                    # shared parser now requires valid UTF-8 rules, never HTML.
+                    self.robots[origin] = RobotsRules(200,
+                        result.headers.get('content-type') or 'text/plain', result.body,
+                        user_agent=USER_AGENT)
+                except RobotsError:
+                    pass  # Cached unavailable decision; do not fetch the JD.
         rp = self.robots[origin]
         if rp is None:
             raise FetchError("robots_unavailable", "automation is not enabled for this origin")
-        if not rp.can_fetch(USER_AGENT, url):
+        if self.rate_gate is not None:
+            self.rate_gate.robots(origin, rp)
+        if not rp.allowed(url):
             raise FetchError("robots_denied")
-        delay = rp.crawl_delay(USER_AGENT)
-        if delay:
-            self.transport.interval = max(self.transport.interval, float(delay))
-        rate = rp.request_rate(USER_AGENT)
-        if rate and rate.requests:
-            self.transport.interval = max(self.transport.interval, rate.seconds / rate.requests)
+        self.transport.interval = max(self.transport.interval, rp.delay,
+            *(seconds / requests for requests, seconds in rp.windows))
 
     def fetch(self, url: str) -> Response:
         from .redirect_policy import validate_target, page_gate
         self.last_diagnostic = {"phase": "validation", "http_attempts": 0, "redirects": []}
         try:
             current = validate_target(url, self.domains)
+            if self.rate_gate is not None:
+                self.rate_gate.before_page(current)
             visited = {current}
             while True:
                 # Every redirected detail path is checked, including same-origin

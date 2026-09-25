@@ -6,6 +6,8 @@
 
 在源码根目录运行 `python scripts/verify_candidate.py`。它使用当前 Python 解释器，依次实际运行全量单元测试、HTML 使用指南同步检查、离线合成演示和临时工作区的 source doctor。不会安装软件或发起真实招聘站访问。结果保存在 release-verification/result.json。
 
+Issue #179 补充超时诊断：单测仍限600秒，其余每步仍限180秒。任一步超时后停止后续步骤，汇总和命令行保留 `TimeoutExpired`、`local_check_timeout`、`failed_check` 及 `timeout_seconds`，不再被缺少最终单测报告的次生错误覆盖。已有逐测试进度、源码是否改变和可能已经写出的测试结果仍分别保留；超时结果始终不具备打包资格。原600秒实站外CI失败及其复验单独记录，诊断改善不代表耗时根因已修复。
+
 然后运行 `python scripts/build_candidate.py`。没有通过且精确匹配当前源码的结果时拒绝构建，不能只用浏览器截图、旧日志或另一个分支的测试数字替代。ZIP 名包含实际 ZIP 内容摘要前缀；版本仍从 src/vibe_job_radar/_version.py 读取，当前不修改已合并版本。
 
 这两个命令是维护者的验收工具，不是普通用户获取岗位的新增操作。原网页流程不变。CI 的浏览器验收后也自动执行同一个源码验证器再打包，不要求用户手动准备云服务。
