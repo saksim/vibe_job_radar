@@ -17,8 +17,24 @@ class PortablePackagingTests(unittest.TestCase):
         self.root=Path(self.temp.name);self.bundle=self.root/'payload';self.bundle.mkdir()
         (self.bundle/'VibeJobRadar.exe').write_bytes(b'artificial unit fixture, not an executable')
 
+    def native_proof(self):
+        return dict(success=True,returncode=0,runtime='portable',code='native_component_ready',stage='passed',
+            browser_channel='bundled',browser_version='153.0.1.2',minimal_controller=True,
+            blank_page_check=True,request_guard_check=True,cleanup_verified=True,
+            external_connections=0,live_sites_certified=False)
+
+    def test_missing_or_partial_native_result_never_qualifies_build(self):
+        base={'success':True,'verified_browser':'bundled','files':self.builder.inventory(self.bundle)}
+        for native in (None,{}, {**self.native_proof(),'success':False},
+                       {**self.native_proof(),'runtime':'source'},
+                       {**self.native_proof(),'request_guard_check':False},
+                       {**self.native_proof(),'cleanup_verified':False},
+                       {**self.native_proof(),'external_connections':False}):
+            with self.subTest(native=native),self.assertRaises(ValueError):
+                self.builder.validate_runtime_evidence(self.bundle,{**base,'native_component':native})
+
     def test_changed_added_and_removed_payload_invalidates_prior_runtime_check(self):
-        proof={'success':True,'verified_browser':'bundled','files':self.builder.inventory(self.bundle)}
+        proof={'success':True,'verified_browser':'bundled','files':self.builder.inventory(self.bundle),'native_component':self.native_proof()}
         self.builder.validate_runtime_evidence(self.bundle,proof)
         binary=self.bundle/'VibeJobRadar.exe';original=binary.read_bytes()
         binary.write_bytes(b'different binary')
@@ -63,7 +79,7 @@ class PortablePackagingTests(unittest.TestCase):
             versions.assert_not_called();run.assert_not_called()
 
     def test_startup_evidence_is_required_only_for_explicit_ci_acceptance(self):
-        proof={'success':True,'verified_browser':'bundled','files':self.builder.inventory(self.bundle)}
+        proof={'success':True,'verified_browser':'bundled','files':self.builder.inventory(self.bundle),'native_component':self.native_proof()}
         with self.assertRaises(ValueError):
             self.builder.validate_runtime_evidence(self.bundle,proof,require_login_startup=True)
         proof['startup_registration_verified']=True
@@ -78,7 +94,7 @@ class PortablePackagingTests(unittest.TestCase):
             build.assert_not_called()
 
     def test_system_pac_evidence_is_required_when_explicitly_requested(self):
-        proof={'success':True,'verified_browser':'bundled','files':self.builder.inventory(self.bundle)}
+        proof={'success':True,'verified_browser':'bundled','files':self.builder.inventory(self.bundle),'native_component':self.native_proof()}
         with self.assertRaises(ValueError):
             self.builder.validate_runtime_evidence(self.bundle,proof,require_system_pac=True)
         proof['system_pac_verified']=True

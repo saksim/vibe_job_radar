@@ -14,7 +14,7 @@ import threading
 import time
 from urllib.parse import urlsplit
 
-from build_windows_portable import inventory
+from build_windows_portable import inventory, native_component_valid
 
 
 class RunningApp:
@@ -70,6 +70,30 @@ def browser_health_summary(health):
         'process_started','process_exit_code','process_exit_hex','error_type',
         'playwright_version','browser_channel','browser_version','selection_applied','blank_page_check')
     return {key:health[key] for key in fields if key in health}
+
+
+def verify_native_component(exe,cwd,env,evidence):
+    """Run the packaged controller itself; do not import checkout code instead."""
+    run=subprocess.run([str(exe),'--native-browser-check'],cwd=cwd,env=env,
+        capture_output=True,timeout=60,creationflags=subprocess.CREATE_NO_WINDOW)
+    evidence['returncode']=run.returncode
+    if len(run.stdout)>65536:raise AssertionError('native component output is oversized')
+    row=json.loads(run.stdout.decode('utf-8'))
+    if not isinstance(row,dict):raise AssertionError('native component output is invalid')
+    from vibe_job_radar.guided.browser_health import HEALTH_MESSAGES
+    for key in ('success','minimal_controller','blank_page_check','request_guard_check','cleanup_verified','live_sites_certified'):
+        evidence[key]=row.get(key) if type(row.get(key)) is bool else None
+    for key,choices in [('runtime',{'source','portable'}),('browser_channel',{'bundled','msedge'}),
+                        ('stage',{'launch','blank_page','request_guard','cleanup','passed'}),
+                        ('code',{'native_component_ready','native_check_failed',*HEALTH_MESSAGES})]:
+        value=row.get(key);evidence[key]=value if isinstance(value,str) and value in choices else 'unrecognized'
+    version=row.get('browser_version')
+    evidence['browser_version']=version if isinstance(version,str) and re.fullmatch(r'[0-9]+(?:\.[0-9]+){1,4}',version) else ''
+    count=row.get('external_connections')
+    evidence['external_connections']=count if type(count) is int and 0<=count<=1000000 else None
+    if not native_component_valid(evidence):
+        raise AssertionError('portable native component evidence incomplete')
+    return evidence
 
 
 def verify_public_share_input(app):
@@ -676,6 +700,10 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
             if doctor.returncode or json.loads(doctor.stdout.decode('utf-8')).get('workspace_writable') is not True:
                 raise AssertionError('portable doctor failed')
             result['checks'].append('exe runs from a different directory with no Python PATH, Unicode/spaced workspace and working SQLite')
+            result['stage']='native_component'
+            result['native_component']={}
+            verify_native_component(exe,cwd,env,result['native_component'])
+            result['checks'].append('actual exe runs the bundled minimal native controller, reads its fresh blank page, locally refuses an artificial request with zero upstream connections and cleans its own browser/profile; no recruiting or native JD certification')
             result['stage']='server_start'
             app=RunningApp(exe,workspace,cwd,env)
             try:
