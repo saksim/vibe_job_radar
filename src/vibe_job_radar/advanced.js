@@ -131,6 +131,26 @@ function showCollection(s){
     root.append(text("p",`${pageLabel} · ${row.status_message||row.status}；主列表卡片 ${row.card_count??"尚未确认"} 条，已选 ${(row.selected_positions||[]).length} 条。${duplicates?` 前页已出现 ${duplicates} 项，未重复请求。`:''}`));
   }
   if(s.mode==="liepin_category"&&["completed","needs_attention","empty"].includes(s.status)){
+    if(s.status==="needs_attention"&&!s.details.length&&s.category_outcomes?.[0]?.status==="network_error"){
+      const retry=text("div","");retry.className="guide-box";root.append(retry);
+      retry.append(button("预览失败分类页的同页重试（不联网）",async()=>{
+        const plan=await api("/api/collection/category_page_retry_preview",{id:s.id});
+        retry.replaceChildren(text("p",plan.notice));
+        retry.append(text("p",`第 ${plan.page} 页：${plan.url}；第 ${plan.generation}/${plan.maximum_retries} 次显式重试，最多 ${plan.selection_limit} 条正文。`));
+        if(plan.existing_task_id){
+          retry.append(button("打开已保存的同页重试",async()=>{
+            const saved=await api("/api/collection/status",{id:plan.existing_task_id});
+            collectionGuide.selectMode(saved.mode);showCollection(saved);await refreshCollections();
+          }));return;
+        }
+        retry.append(text("p","沿用原用途与许可范围："+plan.rights_note));
+        retry.append(button("确认保存同页重试（暂不联网）",async()=>{
+          const result=await api("/api/collection/category_page_retry_start",{id:plan.id,fingerprint:plan.fingerprint,consent:true});
+          collectionGuide.selectMode(result.task.mode);showCollection(result.task);await refreshCollections();
+          note("同页重试已保存。网络恢复后点击继续；原失败和配额保留，尚未访问网站。");
+        }));
+      }));
+    }
     if(s.details.some(row=>["rate_wait","publisher_wait","hourly_limit","daily_limit","cooldown"].includes(row.status))){
       const recovery=text("div","");recovery.className="guide-box";root.append(recovery);
       recovery.append(button("预览因等待未完成的正文（不联网）",async()=>{

@@ -282,7 +282,7 @@ class Handler(BaseHTTPRequestHandler):
             methods = {"/api/collection/background/" + name: name for name in ("start", "state", "pause")}
         elif route.startswith("/api/collection/"):
             target = self.server.guidance if route == "/api/collection/preview" else self.server.collector
-            methods = {"/api/collection/" + name: name for name in ("start", "step", "status", "list", "register", "preview", "category_next_preview", "category_next_start", "category_page_preview", "category_page_start", "category_recovery_preview", "category_recovery_start")}
+            methods = {"/api/collection/" + name: name for name in ("start", "step", "status", "list", "register", "preview", "category_next_preview", "category_next_start", "category_page_preview", "category_page_start", "category_recovery_preview", "category_recovery_start", "category_page_retry_preview", "category_page_retry_start")}
         if route not in methods:
             self._json(404, {"error": "入口不存在。"})
             return

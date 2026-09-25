@@ -22,6 +22,9 @@ def validate_scope(collector, state):
     from .public_category import category_for_state, MAX_DETAILS
     from .public_job_links import public_detail_parser
     category_for_state(state)
+    if 'category_page_retry' in state:
+        from .public_category_retry import validate_parent
+        validate_parent(collector, state)
     if (type(state.get('schema_version')) is not int or state['schema_version'] != 1 or state.get('status') not in {'paused','running'}
             or state.get('phase') not in {'category','detail','report'}
             or type(state.get('detail_budget')) is not int or not 1 <= state['detail_budget'] <= MAX_DETAILS

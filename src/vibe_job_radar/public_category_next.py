@@ -35,6 +35,9 @@ def _snapshot(collector, ident, *, rate_recovery=False):
             or state.get('status') not in {'completed', 'needs_attention', 'empty'}):
         raise InputError('请先让公开分类的当前批次结束；其他来源或仍在运行的任务不能续取名单。')
     category = category_for_state(state)
+    if 'category_page_retry' in state:
+        from .public_category_retry import validate_parent
+        validate_parent(collector, state)
     if 'category_rate_recovery' in state:
         from .public_category_recovery import validate_parent
         validate_parent(collector, state)
@@ -152,6 +155,7 @@ def start(collector, data):
     if plan['exhausted']:
         raise InputError('这份分类名单已全部选择完毕；这不代表网站或市场上没有其他岗位。')
     child = copy.deepcopy(parent)
+    child.pop('category_page_retry', None)
     child.update(id=child_id, status='paused', phase='detail', details=[], report_id='',
                  category_attempts=0, detail_attempts=0, search_requests=0, feed_requests=0,
                  warnings=[], created_at=utc_now(), updated_at=utc_now())
