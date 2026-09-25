@@ -50,12 +50,15 @@ class SearchFixture:
             protocol_version = 'HTTP/1.1'
             def log_message(self, *_): pass
             def send(self, content, mime='text/html; charset=utf-8', status=200, extra=()):
-                raw = content.encode('utf-8')
-                compressed = mime.startswith('text/html')
+                # A 204 ends at its headers. Even gzip of an empty string has
+                # bytes, which poison the next response on a reused connection.
+                no_body = status in {204, 205}
+                raw = b'' if no_body else content.encode('utf-8')
+                compressed = mime.startswith('text/html') and not no_body
                 if compressed: raw = gzip.compress(raw)
                 self.send_response(status)
                 self.send_header('Content-Type', mime)
-                self.send_header('Content-Length', str(len(raw)))
+                if status != 204: self.send_header('Content-Length', str(len(raw)))
                 if compressed: self.send_header('Content-Encoding', 'gzip')
                 for key, value in extra: self.send_header(key, value)
                 if mime.startswith('text/html'):

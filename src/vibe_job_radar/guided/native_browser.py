@@ -773,30 +773,34 @@ class NativeBackend(PlaywrightBackend):
             self._check_error()
             # Readiness is site content/response/challenge, not network-idle or a
             # fixed sleep. The existing parser still determines usable job data.
-            body = self.page.locator('body')
-            if not body.count():
-                # A navigation can replace the document after DOMContentLoaded.
-                # Stay within the existing overall deadline instead of failing
-                # the entire login after a one-second locator timeout.
-                self.page.wait_for_timeout(100)
-                continue
-            text=body.inner_text(timeout=1000)
-            if self.adapter.challenged(text,self.page.url):
-                raise CrawlError('manual_required')
-            if self.auth_mode and text.strip() and not search:
-                return
-            ready = getattr(self.adapter, 'native_ready', None)
-            if callable(ready) and ready(self.observations()):
-                return
-            snap=self.snapshot()
             try:
-                if self.adapter.cards(snap):
+                body = self.page.locator('body')
+                if not body.count():
+                    # A navigation can replace the document after DOMContentLoaded.
+                    self.page.wait_for_timeout(100)
+                    continue
+                text=body.inner_text(timeout=1000)
+                if self.adapter.challenged(text,self.page.url):
+                    raise CrawlError('manual_required')
+                if self.auth_mode and text.strip() and not search:
                     return
-            except CrawlError:
+                ready = getattr(self.adapter, 'native_ready', None)
+                if callable(ready) and ready(self.observations()):
+                    return
+                snap=self.snapshot()
                 try:
-                    self.adapter.detail(snap); return
+                    if self.adapter.cards(snap):
+                        return
                 except CrawlError:
-                    pass
+                    try:
+                        self.adapter.detail(snap); return
+                    except CrawlError:
+                        pass
+            except PageSnapshotChanged:
+                # Discard this read if a normal navigation/history update ran
+                # while CDP was answering it. Reobserve inside the same deadline;
+                # never navigate, resubmit input, or turn another error into a retry.
+                pass
             self.page.wait_for_timeout(100)
         # Pumping browser callbacks can consume the remaining deadline. Preserve
         # a native refusal delivered there instead of replacing it with timeout.

@@ -14,7 +14,59 @@ import run_native_liepin_search as acceptance
 from run_native_auth_probe import ObservedBackend, PROBES
 
 
+# Protocol enum values only. failedParameter can contain a publisher value and
+# is deliberately never recorded. See the official Network.loadingFailed schema.
+_CORS_ERRORS = frozenset('''DisallowedByMode InvalidResponse WildcardOriginNotAllowed
+MissingAllowOriginHeader MultipleAllowOriginValues InvalidAllowOriginValue
+AllowOriginMismatch InvalidAllowCredentials CorsDisabledScheme PreflightInvalidStatus
+PreflightDisallowedRedirect PreflightWildcardOriginNotAllowed PreflightMissingAllowOriginHeader
+PreflightMultipleAllowOriginValues PreflightInvalidAllowOriginValue PreflightAllowOriginMismatch
+PreflightInvalidAllowCredentials PreflightMissingAllowExternal PreflightInvalidAllowExternal
+InvalidAllowMethodsPreflightResponse InvalidAllowHeadersPreflightResponse
+MethodDisallowedByPreflightResponse HeaderDisallowedByPreflightResponse RedirectContainsCredentials
+InsecureLocalNetwork InvalidLocalNetworkAccess NoCorsRedirectModeNotFollow
+LocalNetworkAccessPermissionDenied'''.split())
+_BLOCKED_REASONS = frozenset('''other csp mixed-content origin inspector integrity
+subresource-filter content-type coep-frame-resource-needs-coep-header
+coop-sandboxed-iframe-cannot-navigate-to-coop-page corp-not-same-origin
+corp-not-same-origin-after-defaulted-to-same-origin-by-coep
+corp-not-same-origin-after-defaulted-to-same-origin-by-dip
+corp-not-same-origin-after-defaulted-to-same-origin-by-coep-and-dip
+corp-not-same-site sri-message-signature-mismatch'''.split())
+
+
+def failure_policy_metadata(data):
+    def category(value, allowed):
+        return None if value is None else value if isinstance(value, str) and value in allowed else 'unclassified'
+    cors = data.get('corsErrorStatus')
+    return dict(
+        blocked_reason=category(data.get('blockedReason'), _BLOCKED_REASONS),
+        cors_error=category(cors.get('corsError') if isinstance(cors, dict) else None, _CORS_ERRORS))
+
+
 class SearchObserver(ObservedBackend):
+    def _response_paused(self, session, event):
+        key = (session, event.get('networkId', event['requestId']))
+        record = self._requests.get(key)
+        if record and record.get('role') == 'business':
+            headers = event.get('responseHeaders', [])
+            allowed = [h['value'] for h in headers if h['name'].lower() == 'access-control-allow-origin']
+            origin = urlsplit(self.adapter.search_base)
+            expected = origin.scheme + '://' + origin.netloc
+            phase = dict(
+                method=event['request']['method'] if event['request']['method'] in {'GET','POST','OPTIONS'} else 'other',
+                status=event.get('responseStatusCode'), error_stage='responseErrorReason' in event,
+                phrase=event.get('responseStatusText') if event.get('responseStatusText') in {'OK','Connection Established','Connection','No Content'} else 'other',
+                header_count=len(headers),
+                json_type=any(h['name'].lower() == 'content-type' and h['value'].split(';')[0] == 'application/json' for h in headers),
+                request_matches=event['request']['url'] == record['url'],
+                allow_origin_count=len(allowed), allow_origin_matches=allowed == [expected],
+                allow_credentials=any(h['name'].lower() == 'access-control-allow-credentials' and h['value'] == 'true' for h in headers))
+            phases = record.setdefault('_probe_response_policy', [])
+            if len(phases) < 4:
+                phases.append(phase)
+        return super()._response_paused(session, event)
+
     def _received(self, event):
         message = json.loads(event['message'])
         if message.get('method') == 'Network.loadingFailed':
@@ -32,7 +84,8 @@ class SearchObserver(ObservedBackend):
                     operation=operation if re.fullmatch(r'[a-z0-9_]{1,80}',operation) else 'other',
                     response_status=record.get('status'), current_epoch=record.get('epoch') == self._epoch,
                     current_sequence=sequence == self._latest_business.get(operation),
-                    halted_before=self._halted))
+                    halted_before=self._halted, response_policy=record.get('_probe_response_policy'),
+                    **failure_policy_metadata(data)))
         if message.get('method') == 'Target.attachedToTarget':
             info = message.get('params', {}).get('targetInfo', {})
             items = self.probe.setdefault('child_attachments', [])
