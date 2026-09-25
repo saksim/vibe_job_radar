@@ -51,6 +51,7 @@ class SearchFixture:
         self.deny_login_config = False
         self.deny_query_documents = True
         self.pacing_burst = 0
+        self.closed_detail = False
         owner = self
         class Handler(http.server.BaseHTTPRequestHandler):
             protocol_version = 'HTTP/1.1'
@@ -180,7 +181,9 @@ Promise.all([Promise.all(optionalRequests), fetch('https://""" + REGION_HOST + R
                     self.send('<h1>人工登录</h1><form method="post" action="/fixture-login">'
                               '<button>人工确认</button></form>')
                 elif path == '/job/123.shtml':
-                    self.send(recorded_markup(recorded_posting(url=URL + path)))
+                    self.send('<h1>人工已停止职位</h1><p>该职位已暂停招聘</p>'
+                              '<aside><a href="/job/456.shtml">其他推荐岗位</a></aside>'
+                              if owner.closed_detail else recorded_markup(recorded_posting(url=URL + path)))
                 else: self.send('unknown', status=404)
             def do_OPTIONS(self):
                 self.record()
@@ -437,6 +440,28 @@ def main():
                     assert automatic_empty['code'] == 'no_matching_jobs', automatic_empty['code']
                     assert not automatic_empty['selection'] and not automatic_empty['report_id']
                     result['checks'].append('automatic mode keeps confirmed empty results empty without selecting stale jobs or creating a report')
+                    server.closed_detail = True
+                    before_closed = len(server.requests)
+                    with Store(workspace.db) as store:
+                        records_before_closed = store.records()
+                    try:
+                        service.create({**query, 'max_pages':1, 'auto_collect':True})
+                        closed = wait(service)
+                        result['closed_detail_state'] = {k:closed[k] for k in ('code','status')}
+                        assert closed['code'] == 'job_unavailable', closed['code']
+                        assert closed['cards'][0]['status'] == 'job_unavailable'
+                        assert closed['outcome']['saved'] == 0 and closed['outcome']['full_jd'] == 0
+                        assert not closed['report_id']
+                        assert closed['acquisition_items'][0]['result'] == 'job_unavailable'
+                        assert workspace.report(previous_report)
+                        with Store(workspace.db) as store:
+                            assert store.records() == records_before_closed
+                        requests = server.requests[before_closed:]
+                        assert sum(r['path']=='/job/123.shtml' for r in requests) == 1
+                        assert not any(r['path']=='/job/456.shtml' for r in requests)
+                    finally:
+                        server.closed_detail = False
+                    result['checks'].append('closed selected job retains job_unavailable without timeout, replay, recommended JD or new report; previous full JD and report remain intact')
                     service.close(); services.clear()
                     before = len(server.requests)
                     b = factory(local, RateLedger(root/'query-document-denied.sqlite', Limits(page_interval=0,request_interval=0)), threading.Event(), lambda *_: None)

@@ -813,7 +813,9 @@ class NativeBackend(PlaywrightBackend):
                 except CrawlError:
                     try:
                         self.adapter.detail(snap); return
-                    except CrawlError:
+                    except CrawlError as exc:
+                        if exc.code == 'job_unavailable':
+                            raise  # A closed job is final; its recommendations are not its JD.
                         pass
             except PageSnapshotChanged:
                 # Discard this read if a normal navigation/history update ran
