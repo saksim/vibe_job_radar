@@ -72,9 +72,9 @@ def describe_adapter(adapter):
         elif not known:
             message = '当前适配定义没有匹配的已记录验收；需单独验证，实站未认证。'
         elif adapter.key == 'liepin':
-            message = ('已有本机实现；真实搜索仍受阻，正常登录和完整 JD 尚未验通。'
+            message = ('浏览器桥的真实搜索、正常登录与完整 JD 链路仍待验收。'
                        if backend == 'bridge' else
-                       '原生模式仍为显式实验；本站取数受阻，人工夹具通过不代表实站可用。')
+                       '原生模式仍为显式实验；已有本机 Edge 单页关键词列表观察，正常登录、完整 JD 和原报告仍待实站验收。')
         else:
             message = '通用页面适配已实现；本站专用契约与真实登录、正文仍待验证。'
         rows.append({'backend':backend, 'available':available, 'default':backend == 'bridge',
@@ -96,7 +96,7 @@ def snapshot(registry=None):
     if registry is None:
         from .guided.adapters import builtins
         registry = builtins()
-    return {'schema_version':1, 'catalog_revision':'2026-09-23', 'main_baseline':BASELINE,
+    return {'schema_version':1, 'catalog_revision':'2026-09-25', 'main_baseline':BASELINE,
         'scope':'软件能力及历史受控证据；不证明本报告岗位的获取方式、真实登录或市场覆盖',
         'sites':[site['acquisition'] for site in registry.describe()]}
 
