@@ -184,3 +184,12 @@ class PageRetryTests(unittest.TestCase):
         self.assertNotIn('category_page_retry',recovery);self.now+=86401
         finished=self.finish(recovery,PageWire());self.assertEqual(finished['saved_detail_count'],3)
         self.assertEqual(self.collector.status({'id':parent['id']})['category_outcomes'][0]['status'],'network_error')
+
+    def test_direct_step_rejects_details_inserted_before_a_new_list_is_read(self):
+        parent=self.failed();_,saved=self.retry(parent)
+        changed=self.collector._load(saved['task']['id'])
+        changed['details']=[dict(url=job_url(999),platform='liepin',status='pending',record_id='')]
+        self.collector._save(changed);before=self.ledger.summary('liepin')
+        wire=PageWire()
+        with self.assertRaises(InputError):self.finish(changed,wire)
+        self.assertEqual(wire.calls,[]);self.assertEqual(self.ledger.summary('liepin'),before)

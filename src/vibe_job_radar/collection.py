@@ -575,8 +575,8 @@ class Collector:
         if state.get("in_flight"):
             raise InputError("此任务有未结束的请求，请勿并发执行。")
         if 'category_page_retry' in state:
-            from .public_category_retry import validate_parent
-            validate_parent(self, state)
+            from .collection_runtime import validate_scope
+            validate_scope(self, state)
         if 'category_rate_recovery' in state:
             from .public_category_recovery import validate_parent
             validate_parent(self, state)
