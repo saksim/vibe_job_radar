@@ -24,6 +24,8 @@
 
 BOSS、猎聘、51job 的浏览器采集仍需逐站现场验收，不能因入口存在就宣称三站已可用。手工导入只作为已有材料入口和正常兜底，不替代目标平台自动取数验收。
 
+本分支修复[robots前导通配符](docs/LEADING_WILDCARD_ROBOTS.md)被整份误判不可用的问题；明确禁止的查询和资源仍拒绝，BOSS专用访问契约及实站正文仍待验证。
+
 当前主干基线与待合并实现分别列在[能力矩阵](docs/ACQUISITION_CAPABILITIES.md)。同一能力快照进入采集页、适配注册表和新报告；受控测试、正常账号实测与默认启用分别记录。升级/回退须核对[已验证的工作区范围](docs/WORKSPACE_COMPATIBILITY.md)。
 
 首页可选择 **Anthropic Greenhouse**、**Cloudflare Greenhouse** 和本分支按#118新增的 **Cursor Ashby** 公开目录，免 Key、无需产品服务器。每次只获取用户所选公司，关键词、地区在本机筛选；缓存和变化记录隔离，请求额度仍共用。Cursor仅纳入公开列出的岗位，保留二级地区和来源remote标志。它可用于“真实来源→分析→证据”流程，但不是全市场搜索，不能替代中国招聘平台或时间序列/电力算法岗位研究。范围与实际观察见[固定公开来源](docs/PUBLIC_SOURCES.md)。

@@ -85,7 +85,11 @@ class RobotsRules:
         for group in selected:
             for key, value in group:
                 if key in {'allow','disallow'} and value:
-                    if not value.startswith('/'):
+                    # RFC 9309 section 5.1 includes leading wildcards (e.g.
+                    # *.gif$): '*' can also consume the initial path slash.
+                    # Keep the original pattern and specificity; never drop
+                    # a publisher's disallow or turn it into an empty rule.
+                    if not value.startswith(('/', '*')):
                         raise RobotsError('robots_unavailable')
                     value = _octets(value)
                     end = value.endswith('$')
