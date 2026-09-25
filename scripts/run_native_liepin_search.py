@@ -97,7 +97,9 @@ class SearchFixture:
                     early = ('<script>window.initialPopupBlocked = '
                              '(window.open("/apply") === null);</script>'
                              if parse_qs(urlsplit(self.path).query).get('key') == ['窗口隔离'] else '')
-                    self.send('<!doctype html><meta charset="utf-8">' + early + '<h1>合成搜索页</h1>'
+                    account = ('<div id="header-quick-menu-user-info">合成账号区域</div>'
+                               if 'local_login_fixture=valid' in self.headers.get('Cookie','') else '')
+                    self.send('<!doctype html><meta charset="utf-8">' + early + account + '<h1>合成搜索页</h1>'
                               '<iframe id="common-footer" src="https://' + CDN_HOST + '/footer"></iframe>'
                               '<div id="loaded"></div><script src="https://' + CDN_HOST + ASSET + '"></script>')
                 elif path == REGION_PATH and self.headers.get('Host') == REGION_HOST:
@@ -471,9 +473,31 @@ def main():
                         assert len(server.requests) == before_return
                         assert state['authentication']=='manual_pending'
                         assert 'effective_search' not in state
+                        # Return to the supported keyword-free login entry,
+                        # then exercise the one-shot normal form handoff.
+                        from vibe_job_radar.guided.liepin_form import matching_search_entry_signature, submit_search
+                        b.open_search(state['search_url'],keyword=state['keyword'],authentication=True)
+                        b.page.wait_for_function('window.initializationResponses === 1',timeout=15000)
+                        state.update(backend='native',cards=[],selection=[],status='waiting_manual')
+                        queued.clear();now[0]=3
+                        before_entry = len(server.requests)
+                        watcher.arm(state,b);watcher.tick(owner)
+                        assert not queued
+                        now[0]=4;watcher.tick(owner)
+                        assert len(queued)==1 and queued[0][:2]==('resume_returned_search','local-return')
+                        assert len(server.requests)==before_entry
+                        returned=queued[0][2]
+                        assert returned.backend is b and returned.keyword==state['keyword']
+                        assert matching_search_entry_signature(b,state,b.snapshot())==returned.signature
+                        b.collection_mode();submit_search(b,returned.keyword)
+                        assert b.page.evaluate('window.searchSubmissions')==1
+                        assert b.adapter.cards(b.snapshot())
+                        assert not any(r['path']=='/fixture-login' for r in server.requests[before_entry:])
+                        assert not any(r['path']=='/zhaopin/' for r in server.requests[before_entry:])
                     finally: b.close()
                     result['checks'].append('sandboxed gzip documents preserve normal same-tab form POST, HttpOnly Cookie and subsequent API-only search; artificial login only')
                     result['checks'].append('two passive native reads accept publisher-expanded original query scope after the artificial form, enqueue exactly one capture and send no new request; account authentication remains unverified')
+                    result['checks'].append('query-free artificial account/search controls require two stable observations and a fresh owner check, then submit the original keyword once through the visible form without another login or document navigation')
                     # A real publisher rejection must prevent the POST rather
                     # than getting replaced by a driver-generated success.
                     before = sum(r['method']=='POST' for r in server.requests)

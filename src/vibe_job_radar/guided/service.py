@@ -38,7 +38,7 @@ from .batch_identity import batch_cards, page_signature, strategy as identity_st
 from .checkpoint import decode as decode_checkpoint, binding as checkpoint_binding, ensure_compatible
 from .acquisition_results import analysis_by_record, audit_items
 from .search_scope import conditions as search_conditions, check_scope
-from .login_return import (LoginReturnManager, ReturnedDetail,
+from .login_return import (LoginReturnManager, ReturnedDetail, ReturnedSearch,
                            matching_detail_signature, pending_detail_target)
 from .session_reuse import reuse_current_session
 from .saved_session import SavedSession
@@ -85,7 +85,7 @@ MESSAGES = {
     'saved_session_cleared': '该平台保存的会话已清除，当前会话已关闭。岗位、报告、个人证据与配额保留。',
     'session_reuse_unavailable': '当前采集会话不是可复用的空闲会话。请先完成原任务的登录/等待，或停止该会话；不会自动另开浏览器重试。',
     'session_reuse_incompatible': '当前会话的平台、后端、浏览器或网络设置不匹配。请保留原任务，或明确停止旧会话后再开始；不会串用身份。',
-    'login_return_changed': '登录返回的详情或任务已变化，未保存、未重复请求该岗位。请核对当前页面后明确继续。',
+    'login_return_changed': '登录返回的页面或任务已变化，已保留原进度并停止自动接续。请核对当前页面后明确继续。',
     'manual_detail_open': '已打开所选岗位的正常平台页面。请完成平台要求的登录或验证；原岗位完整正文可读后自动接回采集，不必回列表。',
     'login_rate_limited': '打开登录的频次已达到限制：至少间隔5分钟，滚动24小时最多3次。请使用已经打开的登录窗口或等待，不要反复新建任务。',
     'list_page_limit': '本任务列表页数已达到上限。本任务仍受站点共享配额限制。',
@@ -1072,13 +1072,18 @@ class GuidedService:
             except RateLimit as exc:
                 self._save(state, wait_seconds=round(exc.wait, 1))
                 raise CrawlError('login_rate_limited') from exc
-        if action == 'resume_returned_detail':
+        if action in {'resume_returned_detail', 'resume_returned_search'}:
             # This internal action cannot be submitted by the HTTP/UI API. A
             # replaced browser must never inherit or replay another page's handoff.
-            if (not isinstance(secret, ReturnedDetail)
+            valid_target = (isinstance(secret, ReturnedDetail)
+                and action == 'resume_returned_detail' and pending_detail_target(state) == secret.target)
+            valid_search = (isinstance(secret, ReturnedSearch)
+                and action == 'resume_returned_search' and state.get('search_url') == secret.expected_url
+                and state.get('keyword') == secret.keyword
+                and isinstance(secret.signature, str) and bool(secret.signature))
+            if (not (valid_target or valid_search)
                     or self._backends.get(state['id']) is not secret.backend
-                    or state.get('authentication') != 'manual_pending'
-                    or pending_detail_target(state) != secret.target):
+                    or state.get('authentication') != 'manual_pending'):
                 raise CrawlError('login_return_changed')
             backend = secret.backend
             # A returned snapshot can only be consumed by its living owner.
@@ -1119,6 +1124,19 @@ class GuidedService:
                 backend.password_login(secret)
             self._save(state, 'login_password_submitted' if action == 'login_password' else 'manual_detail_open' if target else 'manual_browser_open',
                        status='waiting_manual', authentication='manual_pending')
+        elif action == 'resume_returned_search':
+            from .liepin_form import matching_search_entry_signature, submit_search
+            if self._cancel.is_set():
+                raise CrawlError('paused')
+            # Third fresh read on the original owner. A changed UI/session or
+            # query never falls back to navigation or a replacement browser.
+            if matching_search_entry_signature(backend, state, backend.snapshot()) != secret.signature:
+                raise CrawlError('login_return_changed')
+            if hasattr(backend, 'collection_mode'):
+                backend.collection_mode()
+            submit_search(backend, secret.keyword)
+            self._gather(state, backend, adapter)
+            self._save(state, login_continuation='resumed_search')
         elif action == 'resume_returned_detail':
             if self._cancel.is_set():
                 raise CrawlError('paused')
@@ -1145,9 +1163,9 @@ class GuidedService:
                 self._collect(state,backend,adapter)
             else:
                 self._gather(state,backend,adapter,navigate=action=='resume')
-        if action in {'search', 'capture', 'resume'}:
+        if action in {'search', 'capture', 'resume', 'resume_returned_search'}:
             self._auto_collect_ready(state, backend, adapter)
-        if (pending_login and action in {'capture', 'search', 'resume', 'collect', 'resume_returned_detail'}
+        if (pending_login and action in {'capture', 'search', 'resume', 'collect', 'resume_returned_detail', 'resume_returned_search'}
                 and state['status'] in {'ready', 'completed'}):
             # This is task progress after a user action, not login certification.
             self._save(state, authentication='user_resumed')
@@ -1306,7 +1324,7 @@ class GuidedService:
                 else:
                     try:
                         current = self._load(ident)
-                        if action == 'resume_returned_detail':
+                        if action in {'resume_returned_detail', 'resume_returned_search'}:
                             state['login_continuation'] = 'needs_attention'
                         stopping = self._stop_ident == ident
                         if stopping:

@@ -73,6 +73,15 @@ class ReturnedDetail:
     backend: object = field(repr=False)
 
 
+@dataclass(frozen=True)
+class ReturnedSearch:
+    """One-use owner-worker intent; no HTML, account values or credentials."""
+    expected_url: str = field(repr=False)
+    keyword: str = field(repr=False)
+    signature: str
+    backend: object = field(repr=False)
+
+
 def pending_detail_target(state):
     """Only the next unfinished explicit selection can consume a returned JD.
 
@@ -207,6 +216,11 @@ class LoginReturnManager:
                         raise
                     signature = None
                 surface = 'list'
+                if signature is None and watch.detail_target is None:
+                    from .liepin_form import matching_search_entry_signature
+                    signature = matching_search_entry_signature(watch.backend, state, page)
+                    if signature is not None:
+                        surface = 'search_entry'
                 if signature is None and watch.detail_target is not None:
                     if pending_detail_target(state) != watch.detail_target:
                         self._attention(service, ident, watch)
@@ -244,6 +258,10 @@ class LoginReturnManager:
                     service._save(state, status='queued', login_continuation='checking_detail')
                     service._submit('resume_returned_detail', ident,
                         ReturnedDetail(watch.detail_target, signature, watch.backend))
+                elif surface == 'search_entry':
+                    service._save(state, status='queued', login_continuation='checking_search')
+                    service._submit('resume_returned_search', ident,
+                        ReturnedSearch(watch.expected_url, state['keyword'], signature, watch.backend))
                 else:
                     action = 'resume' if state.get('phase') == 'collect' else 'capture'
                     service._save(state, status='queued', login_continuation='resumed')
