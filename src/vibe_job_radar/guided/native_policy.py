@@ -165,7 +165,7 @@ def liepin_bootstrap():
                    r'/api/com\.liepin\.cbp\.baizhong\.op\.(?:v2-show-4pc|v2-log-4pc|log-4pc)',
                    methods=('POST', 'OPTIONS'), resources=('Fetch', 'XHR', 'Preflight', 'Other'), role='asset'),
         NativeRule('liepin_telemetry', 'statistic.liepin.com',
-                   r'/statisticPlatform/standardFLog\.json', methods=('POST', 'OPTIONS'),
+                   r'/statisticPlatform/standard[FT]Log\.json', methods=('POST', 'OPTIONS'),
                    resources=('Fetch', 'XHR', 'Preflight', 'Other'), role='asset'),
     ))
 

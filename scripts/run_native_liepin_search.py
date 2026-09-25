@@ -88,7 +88,8 @@ class SearchFixture:
                               '<div id="loaded"></div><script src="https://' + CDN_HOST + ASSET + '"></script>')
                 elif path == ASSET:
                     self.send("""window.optionalBlocked = 0;
-for (const path of ['/api/com.liepin.cbp.baizhong.op.v2-show-4pc', '/statisticPlatform/standardFLog.json']) {
+for (const path of ['/api/com.liepin.cbp.baizhong.op.v2-show-4pc',
+ '/statisticPlatform/standardFLog.json', '/statisticPlatform/standardTLog.json']) {
  fetch('https://""" + OPTIONAL_HOST + """' + path, {method:'POST',
  headers:{'Content-Type':'application/json'},body:'{}'}).catch(() => window.optionalBlocked++);
 }
@@ -206,7 +207,7 @@ def main():
                     assert not any(r['host']==OPTIONAL_HOST for r in server.requests)
                     assert any(e['code']=='native_optional_request_blocked' and e['impact']=='optional'
                                for e in service.diagnostics({'id':task['id']})['events'])
-                    result['checks'].append('known marketing/statistics requests are aborted before network access without aborting search or report')
+                    result['checks'].append('known marketing, standardFLog and standardTLog requests are aborted before network access without aborting search or report')
                     assert not any(r['path']=='/robots-error-must-not-run' for r in server.requests)
                     result['checks'].append('API robots 404 is distinguished from refusal; its HTML error body cannot execute scripts or fetch resources')
                     assert not any(r['path']=='/footer' for r in server.requests)
