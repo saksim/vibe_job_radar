@@ -66,6 +66,23 @@ jobs:
           retention-days: 7
           name: browser-acceptance
           path: browser-acceptance/
+  verified-source-candidate:
+    # Browser execution and full source qualification must each have their own
+    # job budget. A browser failure still prevents candidate verification/build.
+    needs: chromium-user-journey
+    runs-on: ubuntu-latest
+    # verify_candidate keeps its 600s unit and 3x180s auxiliary limits. Include
+    # dependency setup, evidence upload and building without truncating them.
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install source qualification dependencies
+        run: |
+          python -m pip install playwright "packaging>=24.2"
+          python -m playwright install --with-deps chromium
       - name: Verify exact source before building candidate
         run: python scripts/verify_candidate.py
       - name: Save source verification evidence
