@@ -1,6 +1,8 @@
 # 当前取数能力与验证范围
 
-核对日期 2026-09-24，已合并主干基线 `ec458799`（PR61）。下表记录浏览器通道，由 `acquisition_status.py` 生成，同一份数据进入适配注册表、采集页与新报告的 `software_acquisition_capabilities`。修改生成数据后执行 `python scripts/check_acquisition_status.py --write` 并核对证据；自动测试检查文字表格未与程序脱节。当前候选新增的公开HTTP采集范围见表后说明，不改变浏览器实站认证状态。
+核对日期 2026-09-25，已合并主干基线 `ec458799`（PR61）。下表记录浏览器通道，由 `acquisition_status.py` 生成，同一份数据进入适配注册表、采集页与新报告的 `software_acquisition_capabilities`。修改生成数据后执行 `python scripts/check_acquisition_status.py --write` 并核对证据；自动测试检查文字表格未与程序脱节。当前候选新增的公开HTTP采集范围见表后说明，不改变浏览器实站认证状态。
+
+原生实验模式已在本机 Edge 用正常关键词取得一页42张卡；该任务仍0登录、0完整JD、0新报告。公开分类已采样两个真实日期，第二日3份为重复岗位，不增加不同岗位数。详见[当前证据与源码记录](CURRENT_ACQUISITION_EVIDENCE.md)。单页观察不会提升下表的整条链路认证，也不为默认浏览器桥或其他环境提供认证。
 
 <!-- acquisition-status:start -->
 | 平台 / 适配版本 | 后端 / 默认 | 实现 | 最近记录的受控验证 | 实站 / 剩余跟踪 |
@@ -31,7 +33,7 @@ PR187另修复共享robots前导通配符。BOSS公开首页一次200观察有10
 
 PR60 已合并人工登录返回后的自动接续、当前会话复用与完整 JD 到报告。PR61 已合并明确选择的工作区 Cookie 保存/恢复；默认不持久保存，不读取日常浏览器。Windows 使用当前用户 DPAPI，Linux/macOS 使用仅所有者权限文件且不加密。密码、localStorage、IndexedDB 不保存；Cookie 恢复不证明账号仍有效。见 [本机会话说明](SAVED_SESSION_D04.md)。
 
-原生实验已合并，但主干猎聘契约仍限 bootstrap，未知业务、SSO 或跨域行为不能通过开关自动获得支持。BOSS/51job 没有原生契约。真实猎聘搜索入口受 robots 及页面跳转空白影响，见 [#63](https://github.com/saksim/vibe_job_radar/issues/63)，未取得本系列真实账号成功及完整 JD 验收。
+原生实验已合并，但主干猎聘契约仍限 bootstrap，未知业务、SSO 或跨域行为不能通过开关自动获得支持。BOSS/51job 没有原生契约。当前待审候选的正常搜索及必要依赖补修已有本机单页观察，历史robots拒绝与页面清空见 [#63](https://github.com/saksim/vibe_job_radar/issues/63)；本系列真实账号成功及登录后完整JD仍待验收。
 
 ## 待合并实现与实站缺口
 

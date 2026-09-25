@@ -63,7 +63,7 @@ def main() -> int:
                         page.locator('summary').filter(has_text='平台接入状态与账号说明').click()
                         liepin=page.locator('#sources tbody tr').filter(has_text='猎聘')
                         expect(liepin).to_contain_text('可选单次密码提交（受控验证）')
-                        expect(liepin).to_contain_text('正常登录和完整 JD 尚未验通')
+                        expect(liepin).to_contain_text('浏览器桥的真实搜索、正常登录与完整 JD 链路仍待验收')
                         expect(page.locator('#sources tbody tr').filter(has_text='BOSS直聘')).to_contain_text('在采集浏览器人工登录')
                         expect(page.locator('#sources')).not_to_contain_text('自动登录')
                         assert server.guided.state()['jobs']==[] and not server.workspace.db.exists()
