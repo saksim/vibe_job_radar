@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import re
+import subprocess
 import tempfile
 import threading
 
@@ -16,12 +17,33 @@ from .native_policy import NativeContract
 from .rate import RateLedger
 
 
+def cleanup_snapshot(controller, tunnel):
+    """Fixed local completion facts, never paths, logs or exception messages."""
+    checks = {
+        'profile_removed': lambda: not controller.profile.exists(),
+        'profile_cleanup_failed': lambda: controller.cleanup_failed,
+        'bridge_exited': lambda: controller.process.poll() is not None,
+        'tunnel_closed': lambda: tunnel._closed,
+        'tunnel_thread_stopped': lambda: not tunnel.thread.is_alive(),
+    }
+    result = {}
+    for name, observe in checks.items():
+        try:
+            value = observe()
+            result[name] = value if type(value) is bool else None
+        except Exception:
+            result[name] = None
+    return result
+
+
 def check_native_browser():
     """Launch only the bundled fresh browser; never load user settings or a URL."""
     result=dict(success=False,code='native_check_failed',stage='launch',
         runtime=description()['kind'],browser_channel='bundled',browser_version='',
         minimal_controller=False,blank_page_check=False,request_guard_check=False,
-        external_connections=None,cleanup_verified=False,live_sites_certified=False)
+        external_connections=None,cleanup_verified=False,live_sites_certified=False,
+        cleanup={'attempted': False, 'close_returned': False,
+                 'close_error_type': '', **cleanup_snapshot(None, None)})
     backend=controller=tunnel=None
     try:
         # No network rule permits even this artificial host. The single probe
@@ -64,11 +86,24 @@ def check_native_browser():
                 result['stage']='cleanup'
             finally:
                 if backend is not None:
-                    backend.close()
-                    result['cleanup_verified']=(controller is not None and tunnel is not None
-                        and not controller.profile.exists() and not controller.cleanup_failed
-                        and controller.process.poll() is not None
-                        and tunnel._closed and not tunnel.thread.is_alive())
+                    cleanup = result['cleanup']
+                    cleanup['attempted'] = True
+                    try:
+                        backend.close()
+                        cleanup['close_returned'] = True
+                    except Exception as exc:
+                        known = (PermissionError, subprocess.TimeoutExpired, OSError, RuntimeError)
+                        cleanup['close_error_type'] = next(
+                            (kind.__name__ for kind in known if isinstance(exc, kind)), 'other')
+                        raise
+                    finally:
+                        cleanup.update(cleanup_snapshot(controller, tunnel))
+                        result['cleanup_verified']=(cleanup['close_returned']
+                            and cleanup['profile_removed'] is True
+                            and cleanup['profile_cleanup_failed'] is False
+                            and cleanup['bridge_exited'] is True
+                            and cleanup['tunnel_closed'] is True
+                            and cleanup['tunnel_thread_stopped'] is True)
             if not result['cleanup_verified']:
                 raise RuntimeError('native component cleanup not confirmed')
         result.update(success=True,code='native_component_ready',stage='passed')
