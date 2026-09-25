@@ -219,9 +219,23 @@ def main():
                     if address == ('93.184.216.34',443): return real_dial(server.server.server_address,*a,**kw)
                     if address[0] in ('127.0.0.1','localhost','::1'): return real_dial(address,*a,**kw)
                     raise AssertionError('external connection attempted')
+                class FixtureBackend(NativeBackend):
+                    def snapshot(self):
+                        page = super().snapshot()
+                        if urlsplit(page.url).path == '/zhaopin/':
+                            # GuidedService owns its browser on the worker. Read
+                            # fixture-only counters there and publish plain data;
+                            # the test's main thread must not issue CDP commands.
+                            self.form_observation = self.page.evaluate('''() => ({
+                                url: location.href,
+                                submissions: window.searchSubmissions,
+                                initializations: window.initializationResponses,
+                                suggestions: window.suggestionsArrived === true
+                            })''')
+                        return page
                 def factory(a,l,c,p,**saved):
                     with use_policy(NetworkPolicy()):
-                        return NativeBackend(a,l,c,p,headless=not args.headed,channel=args.channel,executable_path=args.executable,**saved)
+                        return FixtureBackend(a,l,c,p,headless=not args.headed,channel=args.channel,executable_path=args.executable,**saved)
                 def wait(service):
                     until=time.monotonic()+45
                     while service.state()['busy']:
@@ -267,9 +281,11 @@ def main():
                     assert {r['method'] for r in server.requests if r['host']==REGION_HOST and r['path']==REGION_PATH}=={'OPTIONS','GET'}
                     result['checks'].append('reviewed city catalogue GET and GET preflight use their own origin robots, native credential-aware CORS and request accounting; they cannot supply job cards')
                     assert native.page.document_url == local.search_base
-                    assert native.page.evaluate('window.searchSubmissions') == 1
-                    assert native.page.evaluate('window.initializationResponses') == 1
-                    assert native.page.evaluate('window.suggestionsArrived') is True
+                    observed_form = native.form_observation
+                    assert observed_form['url'] == native.page.url
+                    assert observed_form['submissions'] == 1
+                    assert observed_form['initializations'] == 1
+                    assert observed_form['suggestions'] is True
                     assert not any('key' in r['query_keys'] for r in server.requests[:])
                     try: native.wire.ensure_robots(native.page.url)
                     except CrawlError as exc: assert exc.code=='robots_denied',exc.code
