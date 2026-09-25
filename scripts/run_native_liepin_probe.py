@@ -6,6 +6,7 @@ requests, CSP, credentials or fixture outcomes; exceptions still fail the run.
 from __future__ import annotations
 
 import json
+import re
 from urllib.parse import urlsplit
 from unittest.mock import patch
 
@@ -16,6 +17,22 @@ from run_native_auth_probe import ObservedBackend, PROBES
 class SearchObserver(ObservedBackend):
     def _received(self, event):
         message = json.loads(event['message'])
+        if message.get('method') == 'Network.loadingFailed':
+            data = message.get('params', {})
+            record = self._requests.get((event.get('sessionId'), data.get('requestId')))
+            failures = self.probe.setdefault('tracked_network_failures', [])
+            if record and record.get('role') != 'asset' and len(failures) < 8:
+                error = data.get('errorText', '')
+                operation = record.get('operation', '')
+                sequence = record.get('context', {}).get('sequence')
+                failures.append(dict(
+                    error=error if isinstance(error,str) and re.fullmatch(r'(?:net::)?ERR_[A-Z0-9_]{1,80}',error) else 'unclassified',
+                    canceled=data.get('canceled') is True,
+                    role=record['role'] if record['role'] in {'document','business','robots','login'} else 'other',
+                    operation=operation if re.fullmatch(r'[a-z0-9_]{1,80}',operation) else 'other',
+                    response_status=record.get('status'), current_epoch=record.get('epoch') == self._epoch,
+                    current_sequence=sequence == self._latest_business.get(operation),
+                    halted_before=self._halted))
         if message.get('method') == 'Target.attachedToTarget':
             info = message.get('params', {}).get('targetInfo', {})
             items = self.probe.setdefault('child_attachments', [])

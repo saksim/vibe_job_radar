@@ -41,6 +41,7 @@ SUGGEST_PATH = '/api/com.liepin.searchfront4c.pc-search-suggest-list'
 class SearchFixture:
     def __init__(self, root):
         self.requests = []
+        self.search_shapes = []
         self.deny_cors = False
         self.deny_regions = False
         self.deny_query_documents = True
@@ -109,9 +110,21 @@ const optionalRequests=optionalPaths.map(path =>
 const key = new URL(location.href).searchParams.get('key') || '';
 window.searchSubmissions=0;window.initializationResponses=0;
 function search(keyword) {
+ const main={city:'410',dq:'410',pubTime:'7',currentPage:0,pageSize:40,key:keyword,
+  suggestTag:'fixture-tag',workYearCode:'',compId:'',compName:'',compTag:'',industry:'',
+  salaryCode:'10$30',jobKind:'',compScale:'',compKind:'',compStage:'',eduLevel:''};
+ const through={scene:'fixture-search',skId:'',fkId:'',ckId:'a'.repeat(32),suggest:null};
+ const form={...main,salaryCode:'',salaryLow:'10',salaryHigh:'30'};
+ let passThroughForm=through;
+ if(keyword) {
+  history.replaceState({},'',location.pathname+'?'+new URLSearchParams(
+   {...main,...through,suggest:'null',suggestId:''}));
+  delete form.pubTime;form.hrActiveTimeCode=main.pubTime;
+  passThroughForm={...through,ckId:'b'.repeat(32)};
+ }
  return fetch('https://""" + API_HOST + PATH + """', {
   method:'POST', headers:{'Content-Type':'application/json','X-Client-Type':'web'},
-  body: JSON.stringify({data:{mainSearchPcConditionForm:{key:keyword,currentPage:0,pageSize:40}}})
+  body: JSON.stringify({data:{mainSearchPcConditionForm:form,passThroughForm}})
  }).then(r => r.json()).then(j => {
   document.querySelector('#loaded').textContent='response received';
   document.querySelectorAll('[data-fixture-recommendation]').forEach(a => a.remove());
@@ -134,7 +147,6 @@ Promise.all([Promise.all(optionalRequests), fetch('https://""" + REGION_HOST + R
  field.addEventListener('keydown',event => {
   if(event.key==='Enter') {
    event.preventDefault();window.searchSubmissions++;
-   history.replaceState({},'',location.pathname+'?key='+encodeURIComponent(field.value));
    search(field.value);
   }
  });
@@ -161,7 +173,12 @@ Promise.all([Promise.all(optionalRequests), fetch('https://""" + REGION_HOST + R
                     return
                 if self.path != PATH: self.send('unknown', status=405); return
                 raw = self.rfile.read(int(self.headers.get('Content-Length', '0')))
-                form = json.loads(raw)['data']['mainSearchPcConditionForm']
+                data = json.loads(raw)['data']
+                form = data['mainSearchPcConditionForm']
+                owner.search_shapes.append(dict(keyword_empty=form['key']=='',
+                    date_alias='pubTime' not in form and form.get('hrActiveTimeCode')=='7',
+                    salary_split=form.get('salaryCode')=='' and form.get('salaryLow')=='10' and form.get('salaryHigh')=='30',
+                    rotated_id=data.get('passThroughForm',{}).get('ckId')=='b'*32))
                 jobs = [] if form['key'] == '明确无结果' else [
                     {'job': {'jobId': 'internal-not-url', 'title': RECORDED_TITLE, 'link': URL + '/job/123.shtml'}}]
                 self.send(json.dumps({'flag':1,'data':{'data':{'jobCardList':jobs},
@@ -288,11 +305,17 @@ def main():
                     assert observed_form['submissions'] == 1
                     assert observed_form['initializations'] == 1
                     assert observed_form['suggestions'] is True
+                    published_url = parse_qs(urlsplit(native.page.url).query, keep_blank_values=True)
+                    assert published_url['pubTime'] == ['7'] and published_url['salaryCode'] == ['10$30']
+                    assert published_url['ckId'] == ['a'*32] and published_url['suggest'] == ['null']
+                    submitted_shapes = [s for s in server.search_shapes if not s['keyword_empty']]
+                    assert len(submitted_shapes) == 1 and all(submitted_shapes[0][k] for k in ('date_alias','salary_split','rotated_id'))
                     assert not any('key' in r['query_keys'] for r in server.requests[:])
                     try: native.wire.ensure_robots(native.page.url)
                     except CrawlError as exc: assert exc.code=='robots_denied',exc.code
                     else: raise AssertionError('fixture must refuse an actual keyword document URL')
                     result['checks'].append('default service task uses the visible field and one Enter, reads suggestions without changing the keyword, pairs its response after history update and never fetches the forbidden keyword document or collects initial recommendations')
+                    result['checks'].append('publisher-shaped URL filters pair with the date alias, split salary and rotated pass-through ID; full current-response digest still selects the same complete JD')
                     # All outside DNS/dials above raise; ignored preflights must
                     # terminate locally while the real search/report succeeds.
                     assert not any(r['host']==OPTIONAL_HOST for r in server.requests)
@@ -353,7 +376,10 @@ def main():
                     result['checks'].append('one opted-in create action performs native API-only search, bounded selection, complete JD and original report without login or manual Collect')
                     service.create({**query, 'keyword': '明确无结果', 'auto_collect': True})
                     automatic_empty = wait(service)
-                    assert automatic_empty['code'] == 'no_matching_jobs'
+                    result['automatic_empty_state'] = {k:automatic_empty[k] for k in ('code','status')}
+                    if automatic_empty['code'] != 'no_matching_jobs':
+                        result['automatic_empty_diagnostics'] = service.diagnostics({'id':automatic_empty['id']})
+                    assert automatic_empty['code'] == 'no_matching_jobs', automatic_empty['code']
                     assert not automatic_empty['selection'] and not automatic_empty['report_id']
                     result['checks'].append('automatic mode keeps confirmed empty results empty without selecting stale jobs or creating a report')
                     service.close(); services.clear()
