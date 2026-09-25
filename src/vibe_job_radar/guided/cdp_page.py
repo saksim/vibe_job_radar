@@ -56,10 +56,12 @@ class CDPPage:
         self.main_frame = Frame(self, ident)
         self.closed = False
         self.navigation = 0
+        self.navigation_requests = 0
         self.loader = ''
         self.loaded, self.responses = {}, {}
         self.client.on('Page.frameNavigated', self._navigated)
         self.client.on('Page.navigatedWithinDocument', self._within_document)
+        self.client.on('Page.frameRequestedNavigation', self._requested_navigation)
         self.client.on('Page.lifecycleEvent', self._lifecycle)
         self.client.on('Network.responseReceived', self._response)
         self.client.on('Page.javascriptDialogOpening', lambda _: self._emit('dialog', Dialog(self)))
@@ -93,6 +95,10 @@ class CDPPage:
             self.main_frame.url = event['url']
             self.navigation += 1
             self._emit('framenavigated', self.main_frame)
+
+    def _requested_navigation(self, event):
+        if event.get('frameId') == self.main_frame.ident and event.get('disposition') == 'currentTab':
+            self.navigation_requests += 1
 
     def _lifecycle(self, event):
         if event['frameId'] != self.main_frame.ident:
@@ -145,6 +151,23 @@ class CDPPage:
         name, before = self._load_event(wait_until), self.navigation
         yield
         self._wait(lambda: self.navigation > before and name in self.loaded.get(self.loader, ()), timeout)
+
+    @contextmanager
+    def input_action(self, *, timeout=None):
+        """Wait for navigation caused by one input, never resubmit that input."""
+        before, requested = self.navigation, self.navigation_requests
+        yield
+        try:
+            # The input acknowledgement can precede the renderer's form or
+            # link navigation notification. Yield one actual frame so that
+            # notification is drained before deciding there was no navigation.
+            self.evaluate('() => new Promise(resolve => requestAnimationFrame(resolve))')
+        except (PageSnapshotChanged, PageOperationError):
+            if self.navigation == before and self.navigation_requests == requested:
+                raise
+        if self.navigation != before or self.navigation_requests != requested:
+            self._wait(lambda: self.navigation > before and 'DOMContentLoaded' in self.loaded.get(self.loader, ()),
+                       self.timeout if timeout is None else timeout)
 
     def wait_for_url(self, url, *, timeout=30000):
         self._wait(lambda: self.url == url, timeout)

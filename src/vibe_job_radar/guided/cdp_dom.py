@@ -135,9 +135,10 @@ class Locator:
             after = self._read(coordinates)
             return after.get('value') if after == before else None
         position = self._wait(point, timeout=timeout)
-        for kind in ('mousePressed', 'mouseReleased'):
-            self.page.client.send('Input.dispatchMouseEvent', {
-                'type': kind, **position, 'button': 'left', 'clickCount': 1})
+        with self.page.input_action(timeout=timeout):
+            for kind in ('mousePressed', 'mouseReleased'):
+                self.page.client.send('Input.dispatchMouseEvent', {
+                    'type': kind, **position, 'button': 'left', 'clickCount': 1})
 
     def fill(self, value, *, timeout=None):
         if not isinstance(value, str):

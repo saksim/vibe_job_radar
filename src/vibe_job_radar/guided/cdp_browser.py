@@ -109,6 +109,10 @@ class CDPBrowser:
         self.cleanup_failed = False
         try:
             browser_args = [*args, '--enable-automation', '--no-first-run',
+                # Match the previous SDK's stable startup configuration. The
+                # testing build's field trials can spawn an initially blank
+                # toolbar target; component extensions can spawn workers.
+                '--disable-field-trial-config', '--disable-component-extensions-with-background-pages',
                 '--disable-extensions', '--disable-default-apps', '--disable-component-update',
                 '--no-default-browser-check', '--remote-debugging-pipe', '--user-data-dir=' + str(self.profile),
                 '--proxy-server=' + proxy['server']]
