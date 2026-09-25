@@ -628,7 +628,9 @@ def main():
                         assert not b.observations() and len(server.requests)==before
                     finally: b.close()
                     result['checks'].append('a published main document leaving for blank stops with an explicit cause, discards old results and never retries')
-                    result['success']=True
+        # A resource/temporary-directory cleanup failure is a failed run even
+        # when all content assertions passed. Its artifact must say so too.
+        result['success']=True
     finally:
         for service in services: service.close()
         result['requests']=server.requests if server else []
