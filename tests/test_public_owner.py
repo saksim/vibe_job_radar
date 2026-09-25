@@ -17,6 +17,8 @@ from vibe_job_radar.local_public import LocalPublicDataClient
 from vibe_job_radar.public_tasks import PublicTasks,PublicTaskBusy
 from vibe_job_radar.public_schedule import PublicSchedule,DAY
 from vibe_job_radar.workspace import InputError,Workspace
+from public_owner_diagnostics import wait_diagnostic
+from worker_fsync_probe import WorkerFsyncProbe
 
 
 CHILD = r'''
@@ -26,6 +28,8 @@ from test_local_public import payload,query
 from vibe_job_radar.workspace import Workspace
 from vibe_job_radar.local_public import LocalPublicDataClient
 from vibe_job_radar.public_tasks import PublicTasks
+from public_owner_diagnostics import require_child_ready
+from worker_fsync_probe import WorkerFsyncProbe
 entered,release=threading.Event(),threading.Event()
 def held(url):
  entered.set()
@@ -34,9 +38,10 @@ def held(url):
 with patch('urllib.request.getproxies',return_value={}):
  w=Workspace(sys.argv[1]);transport=Mock();transport.json.side_effect=held
  tasks=PublicTasks(w,hybrid_client=LocalPublicDataClient(w,transport=transport,clock=lambda:float(sys.argv[2])))
+ probe=WorkerFsyncProbe(lambda:tasks._thread);probe.start()
  try:
   ident=tasks.search({'consent':True,'query':query().payload()})['id']
-  assert entered.wait(5)
+  require_child_ready(entered,tasks,probe,lambda line:print(line,flush=True))
   print(json.dumps({'id':ident}),flush=True)
   action=sys.stdin.readline().strip()
   if action=='crash':os._exit(23)
@@ -44,7 +49,10 @@ with patch('urllib.request.getproxies',return_value={}):
   release.set();tasks._thread.join(15)
   assert not tasks._thread.is_alive()
   print(json.dumps(tasks.snapshot()),flush=True)
- finally:release.set();tasks.close()
+ finally:
+  release.set()
+  try:tasks.close()
+  finally:probe.stop()
 '''
 
 
@@ -56,18 +64,26 @@ class OwnerTests(unittest.TestCase):
         env.start();self.addCleanup(env.stop)
         proxy=patch('urllib.request.getproxies',return_value={});proxy.start();self.addCleanup(proxy.stop)
         self.entered,self.release=threading.Event(),threading.Event()
+        self.instances=[]
+        self.write_probe=WorkerFsyncProbe(lambda:next((task._thread for task in self.instances
+            if task._thread is not None and task._thread.is_alive()),None))
+        self.write_probe.start();self.addCleanup(self.write_probe.stop)
         self.first,self.first_transport=self.instance();self.second,self.second_transport=self.instance()
         self.addCleanup(self.release.set)
 
     def instance(self):
         transport=Mock();transport.json.return_value=payload()
         task=PublicTasks(self.workspace,hybrid_client=LocalPublicDataClient(self.workspace,transport=transport,clock=lambda:self.now[0]))
+        self.instances.append(task)
         self.addCleanup(task.close);return task,transport
 
     def start(self,task=None):return (task or self.first).search({'consent':True,'query':query().payload()})['id']
 
     def wait(self,task=None):
-        task=task or self.first;task._thread.join(15);self.assertFalse(task._thread.is_alive());return task.snapshot()
+        task=task or self.first;before=self.write_probe.snapshot();task._thread.join(15)
+        if task._thread.is_alive():
+            self.fail('public owner remained running after 15s: '+json.dumps(wait_diagnostic(task,self.write_probe,before)))
+        return task.snapshot()
 
     def hold(self,url):
         self.entered.set()
@@ -76,7 +92,10 @@ class OwnerTests(unittest.TestCase):
 
     def running(self):
         self.first_transport.json.side_effect=self.hold
-        ident=self.start();self.assertTrue(self.entered.wait(5));return ident
+        ident=self.start();before=self.write_probe.snapshot()
+        if not self.entered.wait(5):
+            self.fail('public owner did not enter transport after 5s: '+json.dumps(wait_diagnostic(self.first,self.write_probe,before)))
+        return ident
 
     def cancelled(self):
         ident=self.running();self.first.cancel({'id':ident});self.release.set()
@@ -92,8 +111,11 @@ class OwnerTests(unittest.TestCase):
             child.communicate(timeout=5)
         self.addCleanup(cleanup)
         line=child.stdout.readline()
-        self.assertTrue(line,'child failed before task start')
-        return child,json.loads(line)['id']
+        self.assertTrue(line,'child failed before task start; returncode='+str(child.poll()))
+        started=json.loads(line)
+        if started.get('event')=='owner_wait_failed':
+            self.fail('child did not enter transport after 5s: '+json.dumps(started['diagnostic']))
+        return child,started['id']
 
     def test_second_instance_cannot_overwrite_or_cancel_running_task(self):
         ident=self.running();before=self.first.path.read_bytes()
