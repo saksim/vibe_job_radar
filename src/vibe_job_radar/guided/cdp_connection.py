@@ -57,6 +57,7 @@ class CDPConnection:
         self._events = deque()
         self._event_bytes = 0
         self._dispatching = False
+        self._pump_callbacks = []
         self.sessions = {}
         self.closed = False
         self.root = self.session(None)
@@ -128,6 +129,20 @@ class CDPConnection:
 
     def pump(self, timeout=.05):
         self._owner()
+        result = self._pump(timeout)
+        # Cooperative work may issue one command, but must never sleep for a
+        # future deadline. Nested acknowledgments defer events as callbacks do.
+        # Retirements/navigation already queued take precedence over due work.
+        if not self._dispatching and not self._events:
+            self._dispatching = True
+            try:
+                for callback in tuple(self._pump_callbacks):
+                    callback()
+            finally:
+                self._dispatching = False
+        return result
+
+    def _pump(self, timeout):
         if self._events and not self._dispatching:
             message, size, _ = self._events.popleft()
             self._event_bytes -= size
@@ -171,6 +186,18 @@ class CDPConnection:
             self._dispatch(message)
         return True
 
+    def add_pump_callback(self, callback):
+        self._owner()
+        if callback not in self._pump_callbacks:
+            if len(self._pump_callbacks) >= 8:
+                raise CrawlError('native_observation_limit')
+            self._pump_callbacks.append(callback)
+
+    def remove_pump_callback(self, callback):
+        self._owner()
+        if callback in self._pump_callbacks:
+            self._pump_callbacks.remove(callback)
+
     def _dispatch(self, message):
         session = self.sessions.get(message.get('sessionId'))
         if session is None or session.detached:
@@ -201,3 +228,4 @@ class CDPConnection:
             self.pending.clear()
             self._events.clear()
             self._event_bytes = 0
+            self._pump_callbacks.clear()

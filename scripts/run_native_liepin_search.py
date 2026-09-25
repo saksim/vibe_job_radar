@@ -50,6 +50,7 @@ class SearchFixture:
         self.deny_regions = False
         self.deny_login_config = False
         self.deny_query_documents = True
+        self.pacing_burst = 0
         owner = self
         class Handler(http.server.BaseHTTPRequestHandler):
             protocol_version = 'HTTP/1.1'
@@ -102,7 +103,9 @@ class SearchFixture:
                              if parse_qs(urlsplit(self.path).query).get('key') == ['窗口隔离'] else '')
                     account = ('<div id="header-quick-menu-user-info">合成账号区域</div>'
                                if 'local_login_fixture=valid' in self.headers.get('Cookie','') else '')
-                    self.send('<!doctype html><meta charset="utf-8">' + early + account + '<h1>合成搜索页</h1>'
+                    styles = ''.join('<link rel="stylesheet" href="https://' + CDN_HOST +
+                        '/fe-www-pc/v6/css/pacing-' + str(i) + '.css">' for i in range(owner.pacing_burst))
+                    self.send('<!doctype html><meta charset="utf-8">' + styles + early + account + '<h1>合成搜索页</h1>'
                               '<iframe id="common-footer" src="https://' + CDN_HOST + '/footer"></iframe>'
                               '<div id="loaded"></div><script src="https://' + CDN_HOST + ASSET + '"></script>')
                 elif path == REGION_PATH and self.headers.get('Host') == REGION_HOST:
@@ -171,6 +174,8 @@ Promise.all([Promise.all(optionalRequests), fetch('https://""" + REGION_HOST + R
  });
  return search(key);
 });""", 'application/javascript')
+                elif path.startswith('/fe-www-pc/v6/css/pacing-') and path.endswith('.css'):
+                    self.send('body { color: #123; }', 'text/css')
                 elif path == '/fixture-login':
                     self.send('<h1>人工登录</h1><form method="post" action="/fixture-login">'
                               '<button>人工确认</button></form>')
@@ -576,6 +581,39 @@ def main():
                     assert sum(r['method']=='POST' and r['path']==PATH for r in server.requests)==before_search
                     result['checks'].append('publisher login configuration OPTIONS refusal prevents that POST and dependent search; no synthetic default, QR action or credential retry')
                     server.deny_login_config = False
+                    # Real, default request pacing must coexist with a burst of
+                    # permitted assets and the ordinary automatic report path.
+                    # No clock/transport/controller wait is mocked here.
+                    server.pacing_burst = 20
+                    paced_workspace = Workspace(root/'paced-workspace')
+                    paced_ledger = RateLedger(root/'paced-rate.sqlite', Limits(page_interval=0))
+                    paced = GuidedService(paced_workspace, registry=Registry([local]),
+                        ledger=paced_ledger, native_backend_factory=factory)
+                    services.append(paced)
+                    before_paced = len(server.requests)
+                    try:
+                        paced.create({**query, 'max_pages':1, 'auto_collect':True})
+                        paced_task = wait(paced)
+                        assert paced_task['status']=='completed', paced_task.get('code')
+                        assert paced_task['outcome']['saved']==1
+                        with Store(paced_workspace.db) as store:
+                            paced_records = store.records()
+                            assert len(paced_records)==1 and paced_records[0].text==RECORDED_BODY
+                        assert paced_workspace.report(paced_task['report_id'])['manifest']['stats']['full_text_job_groups']==1
+                        requests = server.requests[before_paced:]
+                        assert sum('/css/pacing-' in r['path'] for r in requests)==20
+                        assert paced_ledger.summary('liepin')['request']['day']==len(requests)
+                        import sqlite3
+                        with sqlite3.connect(paced_ledger.path) as db:
+                            stamps = [r[0] for r in db.execute(
+                                "SELECT ts FROM visits WHERE site='liepin' AND kind='request' ORDER BY ts")]
+                        assert len(stamps)>20 and all(b-a>=.499 for a,b in zip(stamps, stamps[1:]))
+                        result['paced_request_count'] = len(stamps)
+                        result['paced_min_interval'] = min(b-a for a,b in zip(stamps, stamps[1:]))
+                    finally:
+                        server.pacing_burst = 0
+                        paced.close()
+                    result['checks'].append('20 permitted stylesheet requests retain the default 0.5s durable spacing while the visible keyword form, full JD and original report complete automatically without blocking CDP replies')
                     b = factory(local, RateLedger(root/'blank.sqlite', Limits(page_interval=0,request_interval=0)), threading.Event(), lambda *_: None)
                     try:
                         b.open(local.search_url('时间序列'))

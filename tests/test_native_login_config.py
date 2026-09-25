@@ -41,11 +41,11 @@ class LoginConfigTests(unittest.TestCase):
         self.b.contract=contract_for(builtins().get('liepin'))
         for method,kind in [('POST','XHR'),('OPTIONS','Preflight')]:
             event=self.event(method,kind)
-            with patch.object(self.b.wire,'ensure_robots') as robots,patch.object(self.b.wire,'reserve') as reserve:
+            self.b.wire.install_robots('https://api-c.liepin.com',200,'text/plain',b'User-agent: *\nAllow: /\n')
+            with patch.object(self.b.wire.ledger,'reserve',wraps=self.b.wire.ledger.reserve) as reserve:
                 self.b._paused('session',event)
             self.assertIsNone(self.b.error)
-            robots.assert_called_once_with(URL)
-            reserve.assert_called_once_with('request',origin='https://api-c.liepin.com')
+            reserve.assert_called_once_with('fixture','request',origin='https://api-c.liepin.com')
             self.b._send.assert_called_with('session','Fetch.continueRequest',{'requestId':'fetch-1'})
             response={**event,'responseStatusCode':200,'responseHeaders':[{'name':'Content-Type','value':'application/json'}]}
             self.b._paused('session',response)
@@ -57,6 +57,8 @@ class LoginConfigTests(unittest.TestCase):
         self.assertEqual(self.b.native_counts['login'],2)  # Request roles, not password submissions.
         self.assertEqual(self.b.native_counts['business'],0)
         self.assertFalse(self.b.auth_mode)
+        self.assertEqual(self.b.wire.ledger.summary('fixture')['request']['day'],2)
+        self.assertEqual(self.b.wire.ledger.summary('fixture')['login']['day'],0)
 
     def test_other_methods_document_paths_and_hosts_stay_unreviewed(self):
         contract=contract_for(builtins().get('liepin'))
@@ -73,7 +75,7 @@ class LoginConfigTests(unittest.TestCase):
             with self.subTest(headers=headers):
                 self.b.error=None;self.b._halted=False
                 event=self.event('OPTIONS','XHR');event['request']['headers'].update(headers)
-                with patch.object(self.b.wire,'reserve') as reserve:
+                with patch.object(self.b.wire.ledger,'reserve') as reserve:
                     self.b._paused('session',event)
                 reserve.assert_not_called()
                 self.assertEqual(self.b.error,'native_operation_unreviewed')

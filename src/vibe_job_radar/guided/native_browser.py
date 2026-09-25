@@ -48,6 +48,11 @@ class NativeControl(PinnedTransport):
     def fetch(self, *args, **kwargs):
         raise RuntimeError('native backend cannot replay HTTP')
 
+    def reserve_request_nowait(self, *, origin):
+        if self.cancelled.is_set():
+            raise CrawlError('paused')
+        self.ledger.reserve(self.adapter.key, 'request', origin=origin)
+
     def ensure_robots(self, url):
         p = urlsplit(url); origin = 'https://' + p.netloc
         policy = self.rules.get(origin)
@@ -424,6 +429,8 @@ class NativeBackend(PlaywrightBackend):
 
     def _detached(self, event):
         session = event['sessionId']
+        if pacer := self.__dict__.get('_request_pacer'):
+            pacer.retire(session)
         self._sessions.pop(session, None)
         self._page_sessions.pop(session, None)
         for page, bound in tuple(self._bound_pages.items()):
@@ -499,6 +506,8 @@ class NativeBackend(PlaywrightBackend):
             elif method == 'Network.loadingFinished':
                 self._finished(session, data)
             elif method == 'Network.loadingFailed':
+                if pacer := self.__dict__.get('_request_pacer'):
+                    pacer.retire(session, data['requestId'])
                 key=(session,data['requestId']); record=self._requests.pop(key,None)
                 self._hops.pop(key,None)
                 if record and record['role'] != 'asset' and not self.cancelled.is_set() and not self.error:
@@ -596,25 +605,35 @@ class NativeBackend(PlaywrightBackend):
                 self._pagination_page=None
             else:
                 self.wire.reserve('page')
-        self.wire.reserve('request', origin='https://'+p.netloc)
-        if self.cancelled.is_set():
-            raise CrawlError('paused')
         key=(session,event.get('networkId',event['requestId']))
-        if len(self._requests) >= 128 and key not in self._requests:
-            raise CrawlError('native_observation_limit')
         context = {}
         bind = getattr(self.adapter, 'native_request_context', None)
         if role == 'business' and r['method'] != 'OPTIONS' and callable(bind):
             context = bind(operation, r, self.page.url)
-        if role == 'business' and r['method'] != 'OPTIONS':
+        from .native_pacing import NativeRequestPacer, PausedRequest
+        if '_request_pacer' not in self.__dict__:
+            self._request_pacer = NativeRequestPacer(self)
+        record = {'context': context, 'epoch':self._epoch,'operation':operation,'role':role,'size':0,
+                  'url':url,'status':None, 'json':False}
+        self._request_pacer.submit(PausedRequest(session, event['requestId'], key, 'https://'+p.netloc,
+            record, role == 'business' and r['method'] != 'OPTIONS', not robots and rule.authentication))
+
+    def _admit_request(self, item):
+        record = item.record
+        context, operation = record['context'], record['operation']
+        if item.business:
+            # The browser has requested newer data even while pacing holds it.
+            # Never expose an older response during that new asynchronous wait.
             self._business_sequence = getattr(self, '_business_sequence', 0) + 1
             context['sequence'] = self._business_sequence
             self.__dict__.setdefault('_latest_business', {})[operation] = self._business_sequence
             self._observations = deque((o for o in self._observations if o.operation != operation), maxlen=20)
-        self._requests[key]={'context': context, 'epoch':self._epoch,'operation':operation,'role':role,'size':0,
-                             'url':url,'status':None, 'json':False}
-        self.native_counts[role] += 1
-        self._send(session,'Fetch.continueRequest',{'requestId':event['requestId']})
+
+    def _continue_request(self, item):
+        record = item.record
+        self._requests[item.key] = record
+        self.native_counts[record['role']] += 1
+        self._send(item.session,'Fetch.continueRequest',{'requestId':item.request_id})
 
     def _response_paused(self, session, event):
         url=event['request']['url']; status=event.get('responseStatusCode',0)
@@ -884,6 +903,8 @@ class NativeBackend(PlaywrightBackend):
 
     def close(self):
         self._closing=True
+        if pacer := self.__dict__.get('_request_pacer'):
+            pacer.close()
         super().close()
         if self.tunnel:
             self.tunnel.close(); self.tunnel=None
