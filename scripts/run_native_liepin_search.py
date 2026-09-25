@@ -39,6 +39,7 @@ ASSET = '/fe-www-pc/v6/js/search-fixture.js'
 REGION_PATH = '/api/com.liepin.bd.p.v4.get-all-dq'
 SUGGEST_PATH = '/api/com.liepin.searchfront4c.pc-search-suggest-list'
 HOTWORD_PATH = '/api/com.liepin.searchfront4c.pc-hot-search-word-list'
+LOGIN_CONFIG_PATH = '/api/com.liepin.pupa.get-pc-login-scan-config'
 
 
 class SearchFixture:
@@ -47,6 +48,7 @@ class SearchFixture:
         self.search_shapes = []
         self.deny_cors = False
         self.deny_regions = False
+        self.deny_login_config = False
         self.deny_query_documents = True
         owner = self
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -116,6 +118,7 @@ const optionalRequests=optionalPaths.map(path =>
  fetch('https://""" + OPTIONAL_HOST + """' + path, {method:'POST',
  headers:{'Content-Type':'application/json'},body:'{}'}).catch(() => window.optionalBlocked++));
 window.hotWordBlocked=0;
+window.loginConfigRead=false;
 const hotWordRequests=[{}, {headers:{'X-Client-Type':'web'}}].map(options =>
  fetch('https://""" + API_HOST + HOTWORD_PATH + """', options)
  .catch(() => window.hotWordBlocked++));
@@ -149,7 +152,11 @@ function search(keyword) {
 }
 Promise.all([Promise.all(optionalRequests), fetch('https://""" + REGION_HOST + REGION_PATH + """?from=component', {
  method:'GET', credentials:'include', headers:{'X-Client-Type':'web'}
-}).then(r => r.json()), Promise.all(hotWordRequests)]).then(([,regions]) => {
+}).then(r => r.json()), Promise.all(hotWordRequests),
+ fetch('https://""" + API_HOST + LOGIN_CONFIG_PATH + """', {
+  method:'POST', credentials:'include', headers:{'X-Client-Type':'web'}
+ }).then(r => r.json()).then(j => {window.loginConfigRead=j.data.graySwitch===true;})
+]).then(([,regions]) => {
  const field=document.createElement('input');field.type='text';field.placeholder='搜索职位、公司';
  document.body.append(field);
  field.addEventListener('input', () => {
@@ -172,12 +179,18 @@ Promise.all([Promise.all(optionalRequests), fetch('https://""" + REGION_HOST + R
                 else: self.send('unknown', status=404)
             def do_OPTIONS(self):
                 self.record()
-                if urlsplit(self.path).path == REGION_PATH and self.headers.get('Host') == REGION_HOST:
+                if urlsplit(self.path).path == LOGIN_CONFIG_PATH and self.headers.get('Host') == API_HOST:
+                    self.send('', status=403 if owner.deny_login_config else 204)
+                elif urlsplit(self.path).path == REGION_PATH and self.headers.get('Host') == REGION_HOST:
                     self.send('', status=403 if owner.deny_regions else 204)
                 elif urlsplit(self.path).path not in (PATH,SUGGEST_PATH): self.send('unknown', status=405)
                 else: self.send('', status=403 if owner.deny_cors else 204)
             def do_POST(self):
                 self.record()
+                if self.path == LOGIN_CONFIG_PATH and self.headers.get('Host') == API_HOST:
+                    assert not self.rfile.read(int(self.headers.get('Content-Length','0')))
+                    self.send(json.dumps({'flag':1,'data':{'graySwitch':True}}),'application/json')
+                    return
                 if self.path == '/fixture-login':
                     self.rfile.read(int(self.headers.get('Content-Length', '0')))
                     self.send('<h1>人工登录完成</h1>', extra=[
@@ -262,7 +275,8 @@ def main():
                                 initializations: window.initializationResponses,
                                 suggestions: window.suggestionsArrived === true,
                                 optionalBlocked: window.optionalBlocked,
-                                hotWordBlocked: window.hotWordBlocked
+                                hotWordBlocked: window.hotWordBlocked,
+                                loginConfigRead: window.loginConfigRead
                             })''')
                         return page
                 def factory(a,l,c,p,**saved):
@@ -318,6 +332,12 @@ def main():
                     assert observed_form['submissions'] == 1
                     assert observed_form['initializations'] == 1
                     assert observed_form['suggestions'] is True
+                    assert observed_form['loginConfigRead'] is True
+                    assert {r['method'] for r in server.requests[first_request:] if r['path']==LOGIN_CONFIG_PATH}=={'OPTIONS','POST'}
+                    assert native.native_counts['login']==2
+                    assert native.wire.ledger.summary(local.key)['login']['day']==0
+                    assert not any(o.operation in {'liepin_login_ui_config','liepin_login_ui_preflight'} for o in native.observations())
+                    result['checks'].append('publisher login display configuration uses its real POST preflight, reply and request quota before authentication; no credential submission, login budget or job-body observation')
                     assert observed_form['hotWordBlocked'] == 2
                     assert not any(r['path']==HOTWORD_PATH for r in server.requests)
                     optional_events = service.diagnostics({'id':task['id']})['events']
@@ -381,8 +401,8 @@ def main():
                     assert workspace.report(previous_report)
                     result['checks'].append('valid empty response means no matches, not required login; previous report preserved')
                     assert all(r['anonymous'] and r['no_credentials'] and r['identified'] for r in server.requests)
-                    assert not any('login' in r['path'] or 'apply' in r['path'] for r in server.requests)
-                    result['checks'].append('anonymous read sends no login request or credentials; application identity retained')
+                    assert not any(('login' in r['path'] and r['path']!=LOGIN_CONFIG_PATH) or 'apply' in r['path'] for r in server.requests)
+                    result['checks'].append('anonymous read sends only the exact login display configuration, no authentication request or credentials; application identity retained')
                     # Explicit query-order opt-in must complete the same
                     # pipeline with no UI/manual collect action or login request.
                     service.create({**query, 'auto_collect': True})
@@ -395,7 +415,7 @@ def main():
                     assert automatic['authentication'] == 'not_checked'
                     assert workspace.report(automatic['report_id'])['manifest']['stats']['full_text_job_groups'] == 1
                     assert workspace.report(previous_report)
-                    assert not any('login' in r['path'] or 'apply' in r['path'] for r in server.requests)
+                    assert not any(('login' in r['path'] and r['path']!=LOGIN_CONFIG_PATH) or 'apply' in r['path'] for r in server.requests)
                     result['checks'].append('one opted-in create action performs native API-only search, bounded selection, complete JD and original report without login or manual Collect')
                     service.create({**query, 'keyword': '明确无结果', 'auto_collect': True})
                     automatic_empty = wait(service)
@@ -516,7 +536,7 @@ def main():
                     result['checks'].append('query-free artificial account/search controls require two stable observations and a fresh owner check, then submit the original keyword once through the visible form without another login or document navigation')
                     # A real publisher rejection must prevent the POST rather
                     # than getting replaced by a driver-generated success.
-                    before = sum(r['method']=='POST' for r in server.requests)
+                    before = sum(r['method']=='POST' and r['path']==PATH for r in server.requests)
                     server.deny_cors = True
                     b = factory(local, RateLedger(root/'cors-denied.sqlite', Limits(page_interval=0,request_interval=0)), threading.Event(), lambda *_: None)
                     try:
@@ -525,11 +545,11 @@ def main():
                             assert getattr(exc, 'code', None)=='http_403', getattr(exc, 'code', None)
                         else: raise AssertionError('publisher preflight denial accepted')
                     finally: b.close()
-                    assert sum(r['method']=='POST' for r in server.requests)==before
+                    assert sum(r['method']=='POST' and r['path']==PATH for r in server.requests)==before
                     result['checks'].append('publisher OPTIONS denial prevents search POST and is not fabricated as success')
                     server.deny_cors = False
                     before_get = sum(r['method']=='GET' and r['path']==REGION_PATH for r in server.requests)
-                    before_post = sum(r['method']=='POST' for r in server.requests)
+                    before_post = sum(r['method']=='POST' and r['path']==PATH for r in server.requests)
                     server.deny_regions = True
                     b = factory(local, RateLedger(root/'regions-denied.sqlite', Limits(page_interval=0,request_interval=0)), threading.Event(), lambda *_: None)
                     try:
@@ -539,9 +559,23 @@ def main():
                         else: raise AssertionError('publisher region preflight denial accepted')
                     finally: b.close()
                     assert sum(r['method']=='GET' and r['path']==REGION_PATH for r in server.requests)==before_get
-                    assert sum(r['method']=='POST' for r in server.requests)==before_post
+                    assert sum(r['method']=='POST' and r['path']==PATH for r in server.requests)==before_post
                     result['checks'].append('publisher region OPTIONS refusal prevents its GET and the dependent search without replacing either response')
                     server.deny_regions = False
+                    before_config = sum(r['method']=='POST' and r['path']==LOGIN_CONFIG_PATH for r in server.requests)
+                    before_search = sum(r['method']=='POST' and r['path']==PATH for r in server.requests)
+                    server.deny_login_config = True
+                    b = factory(local, RateLedger(root/'login-config-denied.sqlite', Limits(page_interval=0,request_interval=0)), threading.Event(), lambda *_: None)
+                    try:
+                        try: b.open(local.search_url('时间序列'))
+                        except Exception as exc:
+                            assert getattr(exc,'code',None)=='http_403',getattr(exc,'code',None)
+                        else: raise AssertionError('publisher login config refusal accepted')
+                    finally: b.close()
+                    assert sum(r['method']=='POST' and r['path']==LOGIN_CONFIG_PATH for r in server.requests)==before_config
+                    assert sum(r['method']=='POST' and r['path']==PATH for r in server.requests)==before_search
+                    result['checks'].append('publisher login configuration OPTIONS refusal prevents that POST and dependent search; no synthetic default, QR action or credential retry')
+                    server.deny_login_config = False
                     b = factory(local, RateLedger(root/'blank.sqlite', Limits(page_interval=0,request_interval=0)), threading.Event(), lambda *_: None)
                     try:
                         b.open(local.search_url('时间序列'))

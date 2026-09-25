@@ -170,6 +170,15 @@ def liepin_bootstrap():
         NativeRule('liepin_regions', region, region_path, cors_method='GET', **cors),
         NativeRule('liepin_regions_preflight', region, region_path, methods=('OPTIONS',),
                    resources=('Preflight', 'Other', 'Fetch', 'XHR'), cors_method='GET', **cors),
+        # The published login container reads its display configuration before
+        # authentication. It neither creates/polls a QR code nor submits an
+        # account. Keep the native reply out of job observations and retain
+        # robots/CORS/request accounting (LIEPIN_LOGIN_UI_CONFIG.md).
+        NativeRule('liepin_login_ui_config', api, r'/api/com\.liepin\.pupa\.get-pc-login-scan-config',
+                   methods=('POST',), role='login', **cors),
+        NativeRule('liepin_login_ui_preflight', api, r'/api/com\.liepin\.pupa\.get-pc-login-scan-config',
+                   methods=('OPTIONS',), resources=('Preflight', 'Other', 'Fetch', 'XHR'),
+                   role='login', **cors),
         NativeRule('liepin_password_login', passport, login, methods=('POST',),
                    role='login', authentication=True, **cors),
         NativeRule('liepin_login_preflight', passport, login, methods=('OPTIONS',),
