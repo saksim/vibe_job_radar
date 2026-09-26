@@ -140,10 +140,25 @@ function renderBrief(report) {
     $('brief-capabilities').append(card);
   }
   $('brief-roles').replaceChildren();
+  const sampleNote = document.createElement('p');
+  sampleNote.textContent = brief.role_sample_note || '旧报告没有记录方向样本计数。';
+  $('brief-roles').append(sampleNote);
   for (const role of brief.roles) {
-    const p = document.createElement('p');
-    p.textContent = role.label + '：' + (role.capabilities.map(x => x.label).join('、') || '本批无已接收证据，不借用其他岗位要求。');
-    $('brief-roles').append(p);
+    const card = document.createElement('div'); card.className = 'brief-card';
+    const title = document.createElement('strong'); title.textContent = role.label;
+    const samples = document.createElement('p');
+    const counts = role.sample_counts;
+    samples.textContent = counts
+      ? '纳入来源 ' + counts.selected_source_records + ' 条；完整正文 ' + counts.full_text_job_groups +
+        ' 个去重岗位，其中有AI编程证据 ' + counts.vibe_evidence_job_groups + ' 个。要求 ' +
+        counts.requirement_rows + ' 行，待复核 ' + counts.review_queue_rows + ' 行。正向AI要求：规则接收 ' +
+        counts.rule_accepted_positive_rows + ' 行，人工确认 ' + counts.human_approved_positive_rows + ' 行。'
+      : '本报告未记录方向样本计数，不能将缺失当作0。';
+    const note = document.createElement('p'); note.textContent = role.sample_note || '';
+    const capabilities = document.createElement('p');
+    capabilities.textContent = '已接收能力：' + (role.capabilities.map(x => x.label).join('、') || '本批无已接收证据，不借用其他岗位要求。');
+    card.append(title, samples, note, capabilities);
+    $('brief-roles').append(card);
   }
   $('brief-evidence').textContent = `${brief.evidence_to_check} 条要求需补证或确认。` + brief.evidence_note;
   $('brief-next').textContent = brief.next_step;
