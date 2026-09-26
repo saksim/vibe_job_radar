@@ -112,39 +112,59 @@ class RateLedger:
                              (site, origin, requests, seconds))
             conn.commit()
 
+    def _budget_candidates(self, conn, site, kind, now):
+        p = self.limits
+        interval, hourly, daily = {
+            'page': (p.page_interval, p.pages_hour, p.pages_day),
+            'request': (p.request_interval, p.requests_hour, p.requests_day),
+            'login': (p.login_interval, p.logins_day, p.logins_day)}[kind]
+        observed = conn.execute('SELECT ts FROM clock_seen WHERE site=?', (site,)).fetchone()
+        if observed and observed[0] > now + 1:
+            raise RateLimit(observed[0] - now + interval, 'clock_rollback',
+                            next_allowed_at=observed[0] + interval)
+        candidates = [(now, 'rate_wait')]
+        cool = conn.execute('SELECT until FROM cooldown WHERE site=?', (site,)).fetchone()
+        if cool:
+            candidates.append((cool[0], 'cooldown'))
+        rows = [r[0] for r in conn.execute(
+            'SELECT ts FROM visits WHERE site=? AND kind=? AND ts>? ORDER BY ts',
+            (site, kind, now - 86400))]
+        if rows and rows[-1] > now + 1:
+            raise RateLimit(rows[-1] - now + interval, 'clock_rollback',
+                            next_allowed_at=rows[-1] + interval)
+        recent = [t for t in rows if t > now - 3600]
+        if len(rows) >= daily:
+            candidates.append((rows[-daily] + 86400, 'daily_limit'))
+        if len(recent) >= hourly:
+            candidates.append((recent[-hourly] + 3600, 'hourly_limit'))
+        if rows:
+            candidates.append((rows[-1] + interval, 'rate_wait'))
+        return candidates
+
+    def login_availability(self, site):
+        """Read-only UI advice; reserve() still authorizes every actual attempt."""
+        now = self._now()
+        with self._connection() as conn:
+            conn.execute('BEGIN')
+            try:
+                due, code = max(self._budget_candidates(conn, site, 'login', now),
+                                key=lambda item: item[0])
+            except RateLimit as exc:
+                due, code = exc.next_allowed_at, exc.code
+        blocked = due > now
+        return {'available': not blocked, 'reason': code if blocked else '',
+                'next_allowed_at': due if blocked else None,
+                'wait_seconds': round(max(0, due-now), 1)}
+
     def reserve(self, site: str, kind: str, *, origin: str | None = None) -> None:
         if kind not in {'page', 'request', 'login'}:
             raise ValueError('unknown budget kind')
         if origin is not None:
             origin = self._origin(origin)
-        now, p = self._now(), self.limits
-        interval, hourly, daily = {
-            'page': (p.page_interval, p.pages_hour, p.pages_day),
-            'request': (p.request_interval, p.requests_hour, p.requests_day),
-            'login': (p.login_interval, p.logins_day, p.logins_day)}[kind]
+        now = self._now()
         with self._connection() as conn:
             conn.execute('BEGIN IMMEDIATE')
-            observed = conn.execute('SELECT ts FROM clock_seen WHERE site=?', (site,)).fetchone()
-            if observed and observed[0] > now + 1:
-                raise RateLimit(observed[0] - now + interval, 'clock_rollback',
-                                next_allowed_at=observed[0] + interval)
-            candidates = [(now, 'rate_wait')]
-            cool = conn.execute('SELECT until FROM cooldown WHERE site=?', (site,)).fetchone()
-            if cool:
-                candidates.append((cool[0], 'cooldown'))
-            rows = [r[0] for r in conn.execute(
-                'SELECT ts FROM visits WHERE site=? AND kind=? AND ts>? ORDER BY ts',
-                (site, kind, now - 86400))]
-            if rows and rows[-1] > now + 1:
-                raise RateLimit(rows[-1] - now + interval, 'clock_rollback',
-                                next_allowed_at=rows[-1] + interval)
-            recent = [t for t in rows if t > now - 3600]
-            if len(rows) >= daily:
-                candidates.append((rows[-daily] + 86400, 'daily_limit'))
-            if len(recent) >= hourly:
-                candidates.append((recent[-hourly] + 3600, 'hourly_limit'))
-            if rows:
-                candidates.append((rows[-1] + interval, 'rate_wait'))
+            candidates = self._budget_candidates(conn, site, kind, now)
             if kind == 'request' and origin is not None:
                 policy = conn.execute('SELECT delay FROM publisher_policy WHERE site=? AND origin=?',
                                       (site, origin)).fetchone()

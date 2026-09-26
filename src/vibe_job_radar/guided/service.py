@@ -91,7 +91,7 @@ MESSAGES = {
     'session_reuse_incompatible': '当前会话的平台、后端、浏览器或网络设置不匹配。请保留原任务，或明确停止旧会话后再开始；不会串用身份。',
     'login_return_changed': '登录返回的页面或任务已变化，已保留原进度并停止自动接续。请核对当前页面后明确继续。',
     'manual_detail_open': '已打开所选岗位的正常平台页面。请完成平台要求的登录或验证；原岗位完整正文可读后自动接回采集，不必回列表。',
-    'login_rate_limited': '打开登录的频次已达到限制：至少间隔5分钟，滚动24小时最多3次。请使用已经打开的登录窗口或等待，不要反复新建任务。',
+    'login_rate_limited': '本程序的打开登录次数已受限，本次未新增打开窗口。下方显示当前限制及下次允许时间；无需反复提交账号。',
     'list_page_limit': '本任务列表页数已达到上限。本任务仍受站点共享配额限制。',
     'operation_error': '操作未完成，已有结果保留。请检查环境与页面。',
     'new': '任务已保存。正在准备采集浏览器。',
@@ -296,6 +296,7 @@ class GuidedService:
             foreign=self._ownership.foreign()
             jobs = []
             checkpoint_warnings = []
+            login_availability = {}
             for path in sorted(self.root.glob('*.json'), key=lambda p: p.stat().st_mtime, reverse=True)[:30]:
                 if path.is_symlink():
                     continue
@@ -306,6 +307,14 @@ class GuidedService:
                     continue
                 if not foreign and item['status'] in {'queued', 'running'} and item['id'] != self._active:
                     item.update(status='interrupted', code='interrupted', message=MESSAGES['interrupted'])
+                site = item['platform']
+                if site not in login_availability:
+                    try:
+                        login_availability[site] = self.ledger.login_availability(site)
+                    except CrawlError as exc:
+                        login_availability[site] = {'available': False, 'reason': exc.code,
+                                                    'next_allowed_at': None, 'wait_seconds': None}
+                item['login_availability'] = copy.deepcopy(login_availability[site])
                 item['browser_open'] = item['id'] in self._backends
                 item['owned_elsewhere']=foreign
                 item['automatic_resume_available'] = (item.get('auto_resume') is True
