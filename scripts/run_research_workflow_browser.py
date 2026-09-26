@@ -83,6 +83,14 @@ def main() -> int:
                         expect(page.locator('#brief-common')).to_contain_text('不足以归纳')
                         expect(page.locator('#brief-evidence')).to_contain_text('不等于本人不具备')
                         source_id = page.url.split('#report=')[1]
+                        cards = page.locator('#brief-roles .brief-card')
+                        expect(cards).to_have_count(3)
+                        expect(cards.filter(has_text='时间序列算法工程师')).to_contain_text('完整正文 1 个去重岗位，其中有AI编程证据 1 个')
+                        expect(cards.filter(has_text='垂直领域算法工程师')).to_contain_text('完整正文 0 个去重岗位')
+                        expect(cards.filter(has_text='架构师')).to_contain_text('人工确认 0 行')
+                        page.locator('#brief-roles').screenshot(path=str(out / 'role-sample-coverage.png'))
+                        result['checks'].append('per-role complete-text and accepted-AI denominators are separate; zero directions and unconfirmed rule rows stay explicit')
+
                         source_raw = workspace.report_file(source_id, 'requirements.jsonl').read_bytes()
                         before_hash = hashlib.sha256(source_raw).hexdigest()
                         decoy = workspace.analyze({'roles':['architect']})
@@ -123,13 +131,34 @@ def main() -> int:
                         page.reload()
                         expect(page.locator('#report-title')).to_contain_text(source_id[:8])
                         result['checks'].append('return and reload retain original batch instead of selecting latest report')
+                        page.set_viewport_size({'width':390,'height':844})
+                        assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+                        page.screenshot(path=str(out / 'research-mobile.png'), full_page=True)
+
+                        page.locator('#brief-roles').screenshot(path=str(out / 'role-sample-mobile.png'))
                         with page.expect_download() as download:
                             page.get_by_role('button', name='research_brief.md', exact=True).click()
                         download.value.save_as(str(out / 'fixture-research-brief.md'))
                         assert 'Cursor' in (out / 'fixture-research-brief.md').read_text(encoding='utf-8')
-                        page.set_viewport_size({'width':390,'height':844})
-                        assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
-                        page.screenshot(path=str(out / 'research-mobile.png'), full_page=True)
+                        # An artificial legacy manifest exercises the original read path.
+                        manifest_path = workspace.report_file(source_id, 'run_manifest.json')
+                        current_manifest = manifest_path.read_bytes()
+                        legacy = json.loads(current_manifest)
+                        legacy['research_brief'].pop('role_sample_note')
+                        for role in legacy['research_brief']['roles']:
+                            for key in ('sample_counts', 'sample_status', 'sample_note'):
+                                role.pop(key)
+                        legacy_raw = json.dumps(legacy, ensure_ascii=False).encode('utf-8')
+                        try:
+                            manifest_path.write_bytes(legacy_raw)
+                            page.reload()
+                            expect(page.locator('#brief-roles')).to_contain_text('未记录方向样本计数')
+                            expect(page.locator('#brief-roles')).not_to_contain_text('完整正文 0')
+                            assert manifest_path.read_bytes() == legacy_raw
+                            assert hashlib.sha256(workspace.report_file(source_id, 'requirements.jsonl').read_bytes()).hexdigest() == before_hash
+                            result['checks'].append('legacy report view leaves unknown role counts unknown and does not rewrite saved report files')
+                        finally:
+                            manifest_path.write_bytes(current_manifest)
                         page.goto(server.origin + '/advanced#report=invalid')
                         expect(page.locator('#notice')).to_contain_text('未自动加载其他报告')
                         expect(page.locator('#source-run')).to_have_value('')

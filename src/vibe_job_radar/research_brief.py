@@ -22,6 +22,47 @@ EXCLUSIONS = {
 }
 
 
+def role_sample_counts(audit: list[dict], requirements: list[Requirement],
+                       roles: list[str], stats: dict) -> dict[str, dict]:
+    """Count the selected snapshots and original groups, never infer missing ones."""
+    selected = [a for a in audit if a["status"] == "selected"]
+    recorded = (len(audit) == stats["current_source_records"]
+                and len(selected) == stats["selected_source_records"]
+                and all(isinstance(a.get("job_group_id"), str) and a["job_group_id"]
+                        for a in selected))
+    result = {}
+    for key in roles:
+        if not recorded:
+            result[key] = {"sample_counts": None, "sample_status": "not_recorded",
+                           "sample_note": "本报告未记录方向样本计数，不能将缺失当作0。"}
+            continue
+        records = [a for a in selected if key in a["roles"]]
+        full_groups = {a["job_group_id"] for a in records if a["evidence_level"] == "full_text"}
+        rows = [r for r in requirements if key in r.roles]
+        positive = [r for r in rows if r.accepted and r.positive
+                    and r.job_group_id in full_groups]
+        counts = {
+            "selected_source_records": len(records),
+            "full_text_job_groups": len(full_groups),
+            "vibe_evidence_job_groups": len({r.job_group_id for r in positive}),
+            "requirement_rows": len(rows),
+            "review_queue_rows": sum(r.review_status == "needs_review" for r in rows),
+            "rule_accepted_positive_rows": sum(r.review_status == "rule_accepted" for r in positive),
+            "human_approved_positive_rows": sum(r.review_status == "approved" for r in positive),
+        }
+        if not full_groups:
+            status = "no_full_text"
+            note = "本方向尚无纳入的完整正文，暂不能形成岗位要求结论。"
+        elif not positive:
+            status = "no_ai_evidence"
+            note = "已有完整正文，尚无已接收正向AI编程证据；请复核原文与待复核项。"
+        else:
+            status = "sample_observed"
+            note = "仅反映本次样本；规则接收不等于人工确认，也不证明样本充分。"
+        result[key] = {"sample_counts": counts, "sample_status": status, "sample_note": note}
+    return result
+
+
 def build_brief(manifest: dict, summary: list[dict], requirements: list[Requirement],
                 matrix: list[dict], audit: list[dict], config: dict) -> dict:
     """Build a bounded, deterministic first-read view without changing eligibility."""
@@ -32,6 +73,7 @@ def build_brief(manifest: dict, summary: list[dict], requirements: list[Requirem
                if r["requirement_id"] in by_id and r["status"] != "user_attested_exact"}
     roles = manifest["filters"]["roles"] or list(config["roles"])
     selected = [a for a in audit if a["status"] == "selected"]
+    role_samples = role_sample_counts(audit, requirements, roles, stats)
     excluded = Counter(a["status"] for a in audit if a["status"] != "selected")
     if not stats["full_text_job_groups"]:
         state, conclusion = "no_full_text", "本批没有可用于研究的目标岗位完整正文，暂不能给出能力结论。"
@@ -81,7 +123,8 @@ def build_brief(manifest: dict, summary: list[dict], requirements: list[Requirem
         "exclusions": [{"reason": key, "label": EXCLUSIONS.get(key, key), "count": value}
                        for key, value in sorted(excluded.items())],
         "capabilities": overall, "common_capability_ids": [c["id"] for c in common],
-        "roles": [{"id": key, "label": config["roles"][key]["label"],
+        "role_sample_note": "完整正文数包含未提取到AI编程证据的岗位。一个岗位可属于多个方向，各方向数量不能简单相加。",
+        "roles": [{"id": key, "label": config["roles"][key]["label"], **role_samples[key],
                    "capabilities": [capability(r) for r in summary if r["scope"] == key]}
                   for key in roles],
         "evidence_to_check": len(missing),
@@ -108,6 +151,23 @@ def brief_markdown(brief: dict) -> str:
              "来源：" + text("、".join(brief["source_labels"]))]
     for excluded in brief["exclusions"]:
         lines.append(f"- {text(excluded['label'])}：{excluded['count']} 条。")
+    lines += ["", "### 各方向样本覆盖", "",
+              brief.get("role_sample_note", "旧报告没有记录方向样本计数。"), "",
+              "| 方向 | 纳入来源记录 | 完整正文岗位（去重） | 含AI证据岗位 | 要求行 | 待复核行 | 正向AI要求：规则接收 / 人工确认 |",
+              "|---|---:|---:|---:|---:|---:|---:|"]
+    sample_notes = []
+    for role in brief["roles"]:
+        counts = role.get("sample_counts")
+        if counts is None:
+            lines.append("| " + text(role["label"]) + " | 未记录 | 未记录 | 未记录 | 未记录 | 未记录 | 未记录 |")
+        else:
+            values = [counts[k] for k in ("selected_source_records", "full_text_job_groups",
+                      "vibe_evidence_job_groups", "requirement_rows", "review_queue_rows")]
+            lines.append("| " + text(role["label"]) + " | " + " | ".join(str(v) for v in values) +
+                         f" | {counts['rule_accepted_positive_rows']} / {counts['human_approved_positive_rows']} |")
+        sample_notes.append(text(role["label"]) + "：" +
+                            text(role.get("sample_note", "本报告未记录方向样本计数，不能将缺失当作0。")))
+    lines += [""] + sample_notes
     lines += ["", "## 2. 样本要求与分岗位补充", "", brief["review_note"]]
     if not brief["common_capability_ids"]:
         lines += ["", "本批没有足够证据归纳跨岗位共同项；单个岗位要求不能直接作为通用底座。"]
