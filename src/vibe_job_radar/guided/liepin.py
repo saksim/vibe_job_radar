@@ -40,6 +40,24 @@ def _numbered_qualifications(body: str) -> bool:
     return True
 
 
+def _labelled_duties_and_qualifications(body: str) -> bool:
+    """Recognize labelled work sections and explicit qualifications together."""
+    lines = body.splitlines()
+    if not 5 <= len(lines) <= 100:
+        return False
+    sections, qualifications = set(), set()
+    for value in lines:
+        line = value.strip(' \t"“”')
+        section = re.fullmatch(r'([^：:]{2,32})[：:]\s*(.{20,})', line)
+        if (section and re.search(r'设计|实现|产品化|建设|管理|探索', section[1])
+                and re.search(r'设计|搭建|负责|带领|跟踪|开发|实施|推动|制定|维护', section[2])):
+            sections.add(section[1])
+        if (len(line) >= 20 and re.match(
+                r'(?:(?:具备|熟悉|熟练|掌握|精通)\S|有.{2,40}经验)', line)):
+            qualifications.add(line)
+    return len(sections) >= 3 and len(qualifications) >= 2
+
+
 def _hidden(node: Node) -> bool:
     style = re.sub(r'\s+', '', node.attrs.get('style', '')).lower()
     return (node.tag in _OMIT or 'hidden' in node.attrs
@@ -254,13 +272,13 @@ def structured_intro_detail(markup: str, url: str,
             parser = 'liepin:jsonld_string_whitespace:v1'
         if _INCOMPLETE.search(body) or _INCOMPLETE.search(description):
             raise CrawlError('jd_incomplete')
-        # The recorded unheaded form has both a visible introduction and a
-        # complete, identical structured description. A structured prefix or
-        # an uncorroborated DOM list cannot use this additional content check.
-        numbered_intro = (bool(anchors) and compact_body == compact_description
-                          and _numbered_qualifications(body))
+        # Unheaded forms require the entire visible introduction to agree
+        # with the same job's structured description, never only a prefix.
+        corroborated_intro = (bool(anchors) and compact_body == compact_description
+                              and (_numbered_qualifications(body)
+                                   or _labelled_duties_and_qualifications(body)))
         if (len(body) < 40 or len(body) > 150_000 or _FOREIGN.search(body)
-                or not (_JOB_CONTENT.search(body) or numbered_intro)):
+                or not (_JOB_CONTENT.search(body) or corroborated_intro)):
             raise CrawlError('structure_changed')
         org = posting.get('hiringOrganization')
         company = org.get('name', '') if isinstance(org, dict) else ''
