@@ -147,7 +147,7 @@ class DiagnosticTrace:
         self.task_id, self.session_id = task_id, uuid.uuid4().hex
         self.site = site if isinstance(site, str) and re.fullmatch(r'[a-z0-9_]{2,32}', site) else 'unknown'
         self.adapter_version = adapter_version if isinstance(adapter_version, str) and re.fullmatch(r'[0-9.]{1,20}', adapter_version) else 'unknown'
-        self.browser = browser if browser in {'bundled', 'msedge'} else 'unknown'
+        self.browser = browser if browser in {'bundled', 'msedge', 'chrome'} else 'unknown'
         self.browser_version = None
         self.runtime = runtime_metadata()
         self.events = deque(maxlen=max_events)

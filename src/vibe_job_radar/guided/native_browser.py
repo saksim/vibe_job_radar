@@ -105,10 +105,11 @@ class NativeBackend(PlaywrightBackend):
                 'args': [*options['args'], '--proxy-bypass-list=<-loopback>', '--block-new-web-contents']}
 
     def _launch_browser(self, options):
-        from .cdp_browser import CDPBrowser, edge_executable
+        from .cdp_browser import CDPBrowser, edge_executable, chrome_executable
         options = dict(options)
         channel = options.pop('channel', None)
         options['executable_path'] = (edge_executable() if channel == 'msedge'
+            else chrome_executable() if channel == 'chrome'
             else options.get('executable_path') or self.runtime.chromium.executable_path)
         return CDPBrowser(**options)
 

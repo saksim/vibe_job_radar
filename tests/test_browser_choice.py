@@ -66,7 +66,7 @@ class PreferenceTests(unittest.TestCase):
         self.assertEqual(self.store.read()['selected'],'bundled')
 
     def test_unknown_channels_and_paths_rejected(self):
-        for value in ('chrome','msedge-dev','https://example.com','C:/msedge.exe',None,True,[],{}):
+        for value in ('chrome-beta','msedge-dev','https://example.com','C:/msedge.exe',None,True,[],{}):
             with self.subTest(value=value),self.assertRaises(InputError):validate_choice(value)
 
     def test_corrupt_or_future_file_is_not_default_choice(self):
@@ -157,7 +157,7 @@ class ServiceChoiceTests(unittest.TestCase):
     def test_selection_requires_boolean_consent_and_only_fixed_fields(self):
         for d in ({'channel':'msedge'},{'channel':'msedge','consent':1},
                   {'channel':'msedge','consent':True,'url':'https://example.com'},
-                  {'channel':'chrome','consent':True},{'executable_path':'anything'}):
+                  {'channel':'chrome-beta','consent':True},{'executable_path':'anything'}):
             with self.subTest(d=d),self.assertRaises(InputError):self.service.check_browser(d)
         self.probe.assert_not_called()
 
@@ -223,7 +223,7 @@ class BackendChannelTests(unittest.TestCase):
         self.runtime.chromium.launch.assert_called_once()
 
     def test_unknown_channels_cannot_start_driver(self):
-        for ch in ('chrome','msedge-beta','/some/path',True):
+        for ch in ('chrome-beta','msedge-beta','/some/path',True):
             with self.assertRaises(ValueError):self.backend(ch)
         self.runtime.chromium.launch.assert_not_called()
 

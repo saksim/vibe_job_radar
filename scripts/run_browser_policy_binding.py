@@ -34,7 +34,7 @@ from vibe_job_radar.workspace import Workspace
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--channel', choices=['msedge'])
+    parser.add_argument('--channel', choices=['msedge','chrome'])
     args = parser.parse_args()
     out = ROOT/'browser-acceptance'/'policy-binding'; out.mkdir(parents=True, exist_ok=True)
     result = {'success':False, 'checks':[], 'callback_contexts':[], 'page_errors':[],

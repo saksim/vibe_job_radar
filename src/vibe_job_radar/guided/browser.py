@@ -24,7 +24,7 @@ from .browser_health import (BrowserStartupError, HEALTH_MESSAGES, environment_r
 class PlaywrightBackend:
     def __init__(self, adapter, ledger, cancelled, progress=lambda *_: None, *,
                  headless=False, executable_path=None, transport_factory=PinnedTransport, channel=None, storage_state=None):
-        if channel not in (None, 'msedge') or (channel and executable_path):
+        if channel not in (None, 'msedge', 'chrome') or (channel and executable_path):
             raise ValueError('unsupported browser choice')
         self.adapter, self.cancelled = adapter, cancelled
         self.wire = transport_factory(adapter, ledger, cancelled, progress)
@@ -67,8 +67,8 @@ class PlaywrightBackend:
             self.startup_report['stage'] = 'driver'
             self.runtime = sync_playwright().start()
             if channel:
-                # Let the SDK resolve its documented stable Edge channel. The
-                # bundled Chromium path says nothing about installed Edge. Never
+                # Let the SDK resolve a documented stable system channel. The
+                # bundled Chromium path says nothing about that browser. Never
                 # attach to a daily profile or install/overwrite a system browser.
                 self.startup_report.update(stage='executable', executable_path='',
                                            executable_exists=None)

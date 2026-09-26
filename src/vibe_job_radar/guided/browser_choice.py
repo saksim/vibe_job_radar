@@ -16,12 +16,13 @@ from ..collection import writer_lock
 from ..utils import atomic_json, parse_time
 from ..workspace import InputError
 
-CHOICES = {'bundled': 'Playwright 配套 Chromium', 'msedge': '本机 Microsoft Edge（独立会话）'}
+CHOICES = {'bundled': 'Playwright 配套 Chromium', 'msedge': '本机 Microsoft Edge（独立会话）',
+           'chrome': '本机 Google Chrome（独立会话）'}
 
 
 def validate_choice(value):
     if not isinstance(value, str) or value not in CHOICES:
-        raise InputError('只接受配套 Chromium 或本机 Edge；不接受路径、命令或其他通道。')
+        raise InputError('只接受配套 Chromium、本机 Edge 或 Chrome；不接受路径、命令或其他通道。')
     return value
 
 
@@ -34,8 +35,10 @@ def _validate_probe(probe):
     if probe is None:
         return None
     keys = {'checked_at', 'channel', 'code', 'ready', 'playwright_version', 'interpreter_id', 'exit_hex'}
-    if not isinstance(probe, dict) or set(probe) != keys:
+    if not isinstance(probe, dict) or set(probe) not in (keys, keys | {'network_backend'}):
         raise ValueError('invalid historical probe')
+    if probe.get('network_backend', 'bridge') not in {'bridge', 'native'}:
+        raise ValueError('invalid historical backend')
     validate_choice(probe['channel'])
     if type(probe['ready']) is not bool:
         raise ValueError('invalid historical readiness')
@@ -84,6 +87,7 @@ class BrowserChoice:
             raise InputError('所选浏览器尚未通过启动检查，不保存为采集浏览器。')
         probe = _validate_probe({
             'checked_at': report['checked_at'], 'channel': channel,
+            'network_backend': report.get('network_backend', 'bridge'),
             'code': report['code'], 'ready': report['ready'],
             'playwright_version': report.get('playwright_version') or '',
             'interpreter_id': interpreter_id(), 'exit_hex': report.get('process_exit_hex', ''),
