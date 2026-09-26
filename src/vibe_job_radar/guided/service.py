@@ -493,11 +493,13 @@ class GuidedService:
 
     def check_browser(self, data):
         if data:
-            if (not isinstance(data, dict) or set(data) != {'channel', 'consent'}
-                    or data.get('consent') is not True):
+            if (not isinstance(data, dict) or set(data) not in ({'channel', 'consent'}, {'channel', 'consent', 'backend'})
+                    or data.get('consent') is not True or not isinstance(data.get('backend', 'bridge'), str)
+                    or data.get('backend', 'bridge') not in {'bridge', 'native'}):
                 raise InputError('更换浏览器需明确确认；不接受网址、命令或路径。')
             channel = validate_choice(data['channel'])
-            self._submit_setup('choose_browser', mode=channel)
+            mode = {'channel': channel, 'backend': 'native'} if data.get('backend') == 'native' else channel
+            self._submit_setup('choose_browser', mode=mode)
         else:
             self._submit_setup('check_browser')
         return {'queued': True, 'network_scope': 'blank local page only; no job requests'}
@@ -521,7 +523,7 @@ class GuidedService:
             if select:
                 raise InputError(self._choice_error) from exc
 
-    def _check_browser(self, channel=None, *, select=False):
+    def _check_browser(self, channel=None, *, select=False, backend='bridge'):
         channel = channel or self._selected_browser
         if self._restart_required:
             report = self._restart_report()
@@ -536,8 +538,12 @@ class GuidedService:
             with self._lock:
                 self._setup.update(stage='launch_check', message='正在实际打开并关闭所选浏览器空白页，不访问招聘网站。')
             # No automatic fallback on failure, and no in-use context is replaced.
-            report = self._health_probe(**({'channel': channel} if channel != 'bundled' else {}))
-            report = {**report, 'browser_channel': channel}
+            if backend == 'native':
+                from .native_check import probe_native_browser
+                report = probe_native_browser(channel=channel if channel != 'bundled' else None)
+            else:
+                report = self._health_probe(**({'channel': channel} if channel != 'bundled' else {}))
+            report = {**report, 'browser_channel': channel, 'network_backend': backend}
             with self._lock:
                 try:
                     self._remember_check(report, channel, select=select and report['ready'] is True)
@@ -1312,7 +1318,10 @@ class GuidedService:
                     self._check_browser()
                     continue
                 if action == 'choose_browser':
-                    self._check_browser(secret, select=True)
+                    if isinstance(secret, dict):
+                        self._check_browser(**secret, select=True)
+                    else:
+                        self._check_browser(secret, select=True)
                     continue
                 state = self._load(ident)
                 from ..network_policy import use_policy

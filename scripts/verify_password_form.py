@@ -33,14 +33,14 @@ document.querySelector('button').textContent='账号或密码错误';};</script>
 @contextmanager
 def fixture_browser(runtime, args):
     if args.native:
-        from vibe_job_radar.guided.cdp_browser import CDPBrowser, edge_executable
+        from vibe_job_radar.guided.cdp_browser import CDPBrowser, edge_executable, chrome_executable
         # Reserve an unlistened loopback port for the lifetime of the browser,
         # so another local service cannot turn this fixture into an egress proxy.
         denied_proxy = socket.socket()
         denied_proxy.bind(('127.0.0.1', 0))
         browser = None
         try:
-            browser = CDPBrowser(executable_path=edge_executable() if args.channel == 'msedge' else runtime.chromium.executable_path,
+            browser = CDPBrowser(executable_path=(edge_executable() if args.channel == 'msedge' else chrome_executable() if args.channel == 'chrome' else runtime.chromium.executable_path),
                                  headless=True, args=[], proxy={'server': 'http://127.0.0.1:' + str(denied_proxy.getsockname()[1])})
             page = browser.new_context().new_page()
             # All document requests are fulfilled inside the owned CDP page.
@@ -69,7 +69,7 @@ def fixture_browser(runtime, args):
 
 
 def main():
-    parser = argparse.ArgumentParser(); parser.add_argument('--channel')
+    parser = argparse.ArgumentParser(); parser.add_argument('--channel', choices=['msedge', 'chrome'])
     parser.add_argument('--native', action='store_true', help='Exercise the production CDP page/input implementation')
     args = parser.parse_args()
     from playwright.sync_api import sync_playwright

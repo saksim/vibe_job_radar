@@ -35,6 +35,21 @@ def edge_executable():
     raise FileNotFoundError('selected Edge executable is unavailable')
 
 
+def chrome_executable():
+    # Only fixed application locations, never a daily profile or arbitrary path.
+    if sys.platform == 'win32':
+        roots = [os.environ.get(name) for name in ('PROGRAMFILES', 'PROGRAMFILES(X86)', 'LOCALAPPDATA')]
+        candidates = [Path(root) / 'Google/Chrome/Application/chrome.exe' for root in roots if root]
+    elif sys.platform == 'darwin':
+        candidates = [Path('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome')]
+    else:
+        candidates = [Path('/opt/google/chrome/chrome')]
+    for candidate in candidates:
+        if candidate.is_file():
+            return str(candidate)
+    raise FileNotFoundError("Executable doesn't exist for selected Chrome channel")
+
+
 class CDPContext:
     def __init__(self, browser, ident, storage_state=None):
         self.browser, self.ident = browser, ident

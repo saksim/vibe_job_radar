@@ -35,7 +35,7 @@ HEALTH_MESSAGES = {
     'playwright_import_failed': 'Playwright 已有包记录，但导入失败。请检查诊断中的导入位置/异常，修复同一个 Python 环境。',
     'browser_launch_timeout': '浏览器启动超时。检查系统权限、资源和安全软件记录，然后重新检查。',
     'browser_native_heap_corruption': '浏览器文件存在且进程已经启动，但发生 Windows 堆损坏异常（0xC0000374），并非未安装。重下载或更新后仍同码失败时，请停止循环重装，查看 Windows 应用错误的故障模块。可明确选择本机已安装且允许使用的 Edge 做独立启动检查；不会自动切换、关闭安全防护或修改 DNS。',
-    'browser_channel_missing': '未找到所选的本机 Edge。没有自动安装、覆盖系统浏览器或改用 Chromium；请选择已经安装且允许使用的浏览器。',
+    'browser_channel_missing': '未找到所选的本机 Edge 或 Chrome。没有自动安装、覆盖系统浏览器或改用 Chromium；请选择已经安装且允许使用的浏览器。',
     'browser_choice_invalid': '浏览器选择记录无法读取，尚未启动浏览器；不会悄悄换用默认浏览器。',
     'browser_restart_required': '浏览器组件已经尝试更新，请退出并用原解释器重新启动工作台，再点“检查浏览器”。当前进程可能仍加载旧 SDK，尚不宣称修复成功；岗位与历史报告保留。',
     'browser_launch_failed': 'Chromium 启动失败；不一定是未安装。请展开诊断查看阶段、异常类型和摘要。',
@@ -167,7 +167,7 @@ def failed_report(report: dict, exc: Exception, *, code: str | None = None) -> d
         elif facts.get('process_status') == 'STATUS_HEAP_CORRUPTION':
             code = 'browser_native_heap_corruption'
         elif 'executable doesn\'t exist' in text or 'executable does not exist' in text:
-            code = 'browser_channel_missing' if report.get('browser_channel') == 'msedge' else 'browser_executable_missing'
+            code = 'browser_channel_missing' if report.get('browser_channel') in {'msedge', 'chrome'} else 'browser_executable_missing'
         elif any(s in text for s in ('missing x server', '$display', 'cannot open display', 'no display server')):
             code = 'browser_display_unavailable'
         elif stage == 'import':

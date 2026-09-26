@@ -36,10 +36,10 @@ def cleanup_snapshot(controller, tunnel):
     return result
 
 
-def check_native_browser():
-    """Launch only the bundled fresh browser; never load user settings or a URL."""
+def check_native_browser(*, channel=None, headless=True):
+    """Check a fresh selected browser; the CLI defaults remain bundled/headless."""
     result=dict(success=False,code='native_check_failed',stage='launch',
-        runtime=description()['kind'],browser_channel='bundled',browser_version='',
+        runtime=description()['kind'],browser_channel=channel or 'bundled',browser_version='',
         minimal_controller=False,blank_page_check=False,request_guard_check=False,
         external_connections=None,cleanup_verified=False,live_sites_certified=False,
         cleanup={'attempted': False, 'close_returned': False,
@@ -57,7 +57,7 @@ def check_native_browser():
             try:
                 with use_policy(NetworkPolicy()):
                     backend=NativeBackend(adapter,RateLedger(Path(tmp)/'rate.sqlite'),
-                        threading.Event(),headless=True)
+                        threading.Event(),headless=headless, **({'channel': channel} if channel else {}))
                 controller,tunnel=backend.browser,backend.tunnel
                 result['stage']='blank_page'
                 result['minimal_controller']=controller.minimal_events is True
@@ -115,6 +115,21 @@ def check_native_browser():
     except Exception:
         pass
     return result
+
+
+def probe_native_browser(*, channel=None):
+    from .browser_health import environment_report
+    from .browser_choice import validate_choice
+    validate_choice(channel or 'bundled')
+    result = check_native_browser(channel=channel, headless=False)
+    ready = result['success']
+    return {**environment_report(), 'network_backend': 'native', 'mode': 'headed',
+            'browser_channel': channel or 'bundled', 'browser_version': result['browser_version'],
+            'launch_tested': True, 'ready': ready, 'stage': result['stage'],
+            'code': 'browser_ready' if ready else result['code'],
+            'message': ('已通过原生实验的空白页、请求拦截和退出检查；默认浏览器桥未由此检查认证。'
+                        if ready else HEALTH_MESSAGES.get(result['code'], '原生实验启动或退出检查未通过；未更换采集浏览器。')),
+            'native_component': result}
 
 
 def run_cli():

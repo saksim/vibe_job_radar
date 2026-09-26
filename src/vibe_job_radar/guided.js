@@ -35,12 +35,12 @@ function render(){
   if(!$('browser-choice').options.length){options($('browser-choice'),Object.entries(choice.options));$('browser-choice').value=choice.selected||'bundled';}
   const previous=choice.last_check;
   $('browser-history').textContent=choice.error || (previous
-   ? `上次组件检查（历史，不代表本次就绪）：${previous.checked_at} · ${choice.options[previous.channel]||previous.channel} · Playwright ${previous.playwright_version} · ${previous.code}${previous.exit_hex?' · '+previous.exit_hex:''}。${previous.matches_environment?'同一解释器和SDK；仍需本次检查。':'环境或SDK已变化；不能沿用旧结果。'}`
+   ? `上次组件检查（历史，不代表本次就绪）：${previous.checked_at} · ${choice.options[previous.channel]||previous.channel} · ${previous.network_backend==='native'?'原生实验':'默认浏览器桥'} · Playwright ${previous.playwright_version} · ${previous.code}${previous.exit_hex?' · '+previous.exit_hex:''}。${previous.matches_environment?'同一解释器和SDK；仍需本次检查。':'环境或SDK已变化；不能沿用旧结果。'}`
    : '尚无已保存的组件检查记录；不表示未安装，也不会自动安装。');
   $('browser-selected').textContent='当前采集浏览器：'+(choice.options[choice.selected]||'尚无法读取选择')+'。更换须空白页检查通过；不接管日常浏览器或保存其登录态。';
  }
  const health=state.browser_health;
- if(health){$('browser-summary').textContent=(health.browser_channel ? '本次检查：'+(choice?.options[health.browser_channel]||health.browser_channel)+'。' : '')+health.message;
+ if(health){$('browser-summary').textContent=(health.browser_channel ? '本次检查：'+(choice?.options[health.browser_channel]||health.browser_channel)+'。' : '')+(health.network_backend==='native'?'原生实验：':'默认浏览器桥：')+health.message;
  $('browser-diagnostic').textContent=JSON.stringify({browser:health,installation:state.setup,choice},null,2);}
  if(!$('site').options.length)options($('site'),state.sites.map(s=>[s.key,s.label+'（实站未验证）']));
  $('capability-status').replaceChildren();
@@ -117,6 +117,11 @@ $('use-browser-choice').addEventListener('click',()=>{
  const channel=$('browser-choice').value;
  if(confirm('将用所选浏览器打开独立空白页；只有检查通过后才保存选择，后续采集沿用原网络和访问规则。不安装系统浏览器、不接管日常标签页或登录资料；已有采集会话需先停止。是否继续？'))
   act(()=>api('/api/guided/check_browser',{channel,consent:true}));
+});
+$('use-native-browser-choice').addEventListener('click',()=>{
+ const channel=$('browser-choice').value;
+ if(confirm('将检查所选浏览器的原生实验模式：独立空白页、请求拦截和退出，不访问招聘站。通过后保存浏览器选择；本任务仍须选择原生实验。已有采集会话需先停止。是否继续？'))
+  act(()=>api('/api/guided/check_browser',{channel,backend:'native',consent:true}));
 });
 $('check-browser').addEventListener('click',()=>act(()=>api('/api/guided/check_browser',{})));
 $('copy-browser-diagnostic').addEventListener('click',()=>act(async()=>{const text=$('browser-diagnostic').textContent;try{await navigator.clipboard.writeText(text);sticky='诊断已复制；分享前可遮住本机用户名。';}catch{const selection=getSelection();const range=document.createRange();range.selectNodeContents($('browser-diagnostic'));selection.removeAllRanges();selection.addRange(range);sticky='浏览器未允许自动复制；已选中诊断，请按 Ctrl+C。';}}));

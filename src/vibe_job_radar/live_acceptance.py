@@ -87,7 +87,7 @@ class AcceptanceLedger:
                 or any(not isinstance(r,str) or r not in load_config()['roles'] for r in roles)
                 or len(set(roles)) != len(roles)
                 or data['backend'] not in {'bridge','native'}
-                or data['browser'] not in {'msedge','bundled'}
+                or data['browser'] not in {'msedge','bundled','chrome'}
                 or not _text(data['browser_version'],80) or not _text(data['planner_os'],200)
                 or data['network_mode'] not in {'direct','system','static_http','static_socks5','unknown'}
                 or not isinstance(data['source_revision'],str) or not re.fullmatch('[0-9a-f]{40}',data['source_revision'])

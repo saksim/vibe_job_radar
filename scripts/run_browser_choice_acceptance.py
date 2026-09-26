@@ -1,9 +1,10 @@
-"""Windows Edge: real headed collector, local UI and restart persistence.
+"""Windows installed browser: real headed collector, local UI and persistence.
 
-The initial bundled crash is a fixture. Edge is actually launched, not installed
+The initial bundled crash is a fixture. The selected browser is launched, not installed
 by this script. No real account, profile, site navigation or automated fallback.
 """
 from __future__ import annotations
+import argparse
 import json
 import sys
 import tempfile
@@ -36,9 +37,18 @@ def open_workbench(page, server, expect):
 
 def main():
     from playwright.sync_api import sync_playwright, expect
-    out=ROOT/'browser-acceptance'/'browser-choice';out.mkdir(parents=True,exist_ok=True)
+    parser=argparse.ArgumentParser();parser.add_argument('--channel',choices=['msedge','chrome'],default='msedge')
+    parser.add_argument('--backend',choices=['bridge','native'],default='bridge')
+    parser.add_argument('--ui-channel',choices=['msedge','chrome'])
+    args=parser.parse_args();channel=args.channel
+    native=args.backend=='native'
+    label='Microsoft Edge' if channel=='msedge' else 'Google Chrome'
+    folder=('browser-choice' if channel=='msedge' else 'browser-choice-chrome')+('-native' if native else '')
+    out=ROOT/'browser-acceptance'/folder;out.mkdir(parents=True,exist_ok=True)
+    ready_text='已通过原生实验的空白页' if native else '已通过空白页启动检查'
+    choose_button='#use-native-browser-choice' if native else '#use-browser-choice'
     result={'success':False,'stage':'startup','ui_events':[],'checks':[],'page_errors':[], 'external_ui_requests':[],
-            'scope':'Real installed Edge headed collector and local UI; bundled native exception is artificial. Not user-PC crash reproduction or site certification.'}
+            'channel':channel,'backend':args.backend,'scope':'Real selected installed browser headed collector and local UI; bundled native exception is artificial. Not user-PC crash reproduction or site certification.'}
     fixture=failed_report({**environment_report(),'stage':'launch'},RuntimeError(
         '<launched> pid=123\n[pid=123] <process did exit: exitCode=3221226356, signal=null>'))
     try:
@@ -46,13 +56,13 @@ def main():
             workspace=Workspace(tmp);server=LocalServer(workspace)
             thread=threading.Thread(target=server.serve_forever,kwargs={'poll_interval':.01},daemon=True);thread.start()
             def probe(**kw):
-                return probe_browser(**kw) if kw.get('channel')=='msedge' else fixture
+                return probe_browser(**kw) if kw.get('channel')==channel else fixture
             server.guided._health_probe=probe
             server.guided._installer=lambda *a,**k:(_ for _ in ()).throw(AssertionError('unexpected install'))
             try:
                 with sync_playwright() as pw:
                     # The workbench UI browser is separate from the headed collector.
-                    browser=pw.chromium.launch(channel='msedge',headless=True)
+                    browser=pw.chromium.launch(channel=args.ui_channel or channel,headless=True)
                     try:
                         context=browser.new_context(viewport={'width':1280,'height':960})
                         def route(r):
@@ -93,36 +103,44 @@ def main():
                         expect(page.locator('#browser-history')).to_contain_text('0xC0000374')
                         result['checks'].append('operation log is not installation detection; failed check records minimal history')
                         page.locator('#browser-alternative summary').click()
-                        page.locator('#browser-choice').select_option('msedge')
-                        page.locator('#use-browser-choice').click()
-                        expect(page.locator('#browser-selected')).to_contain_text('当前采集浏览器：本机 Microsoft Edge',timeout=45000)
-                        expect(page.locator('#browser-summary')).to_contain_text('已通过空白页启动检查')
+                        page.locator('#browser-choice').select_option(channel)
+                        page.locator(choose_button).click()
+                        expect(page.locator('#browser-selected')).to_contain_text('当前采集浏览器：本机 '+label,timeout=45000)
+                        expect(page.locator('#browser-summary')).to_contain_text(ready_text)
                         health=server.guided.state()['browser_health']
                         assert health['selection_applied'] and health['mode']=='headed'
-                        assert health['browser_channel']=='msedge' and health['launch_tested']
-                        result['edge_version']=health['browser_version']
+                        assert health['browser_channel']==channel and health['launch_tested']
+                        assert health['network_backend']==args.backend
+                        if native:
+                            assert health['native_component']['external_connections']==0
+                            assert health['native_component']['cleanup_verified']
+                        result['browser_version']=health['browser_version']
+                        result['edge_version' if channel=='msedge' else 'chrome_version']=health['browser_version']
                         result['playwright_version']=health['playwright_version']
                         assert server.guided.state()['jobs']==[]
                         assert server.guided.ledger.summary('liepin')['request']['day']==0
-                        result['checks'].append('explicit Edge choice runs the real headed collector on a blank page before persisting; no install, jobs or source quota')
-                        page.screenshot(path=str(out/'edge-ready.png'),full_page=True)
+                        result['checks'].append('explicit selected browser choice runs the real headed collector on a blank page before persisting; no install, jobs or source quota')
+                        page.screenshot(path=str(out/(('edge' if channel=='msedge' else 'chrome')+'-ready.png')),full_page=True)
                         # Service restart exercises the persisted product state, not a browser reload.
                         server.guided.close()
                         from vibe_job_radar.guided.service import GuidedService
                         server.guided=GuidedService(workspace)
                         page.reload(wait_until="domcontentloaded")
-                        expect(page.locator('#browser-selected')).to_contain_text('本机 Microsoft Edge')
-                        expect(page.locator('#browser-choice')).to_have_value('msedge')
+                        expect(page.locator('#browser-selected')).to_contain_text('本机 '+label)
+                        expect(page.locator('#browser-choice')).to_have_value(channel)
                         expect(page.locator('#browser-summary')).to_contain_text('尚未验证')
                         expect(page.locator('#browser-history')).to_contain_text('历史，不代表本次就绪')
                         assert not server.guided.state()['browser_health']['ready']
                         result['checks'].append('restart keeps the selected channel and history but never calls a historical green check current readiness')
-                        page.locator('#check-browser').click()
-                        expect(page.locator('#browser-summary')).to_contain_text('已通过空白页启动检查',timeout=45000)
-                        assert server.guided.state()['browser_health']['browser_channel']=='msedge'
+                        result['stage']='restart-recheck'
+                        if native:
+                            page.locator('#browser-alternative summary').click()
+                        page.locator(choose_button if native else '#check-browser').click()
+                        expect(page.locator('#browser-summary')).to_contain_text(ready_text,timeout=45000)
+                        assert server.guided.state()['browser_health']['browser_channel']==channel
                         page.set_viewport_size({'width':390,'height':844})
                         assert page.evaluate('() => document.documentElement.scrollWidth <= innerWidth')
-                        page.screenshot(path=str(out/'edge-mobile.png'),full_page=True)
+                        page.screenshot(path=str(out/(('edge' if channel=='msedge' else 'chrome')+'-mobile.png')),full_page=True)
                         assert not result['page_errors'] and not result['external_ui_requests']
                         assert not workspace.db.exists()
                         result['checks'].append('regular recheck uses the saved channel, no source requests or JS errors; narrow layout fits')
