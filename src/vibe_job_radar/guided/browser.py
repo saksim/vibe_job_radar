@@ -343,7 +343,7 @@ class PlaywrightBackend:
 
     def password_login(self, credentials):
         from .password_login import submit_password_login
-        submit_password_login(self, credentials)
+        return submit_password_login(self, credentials)
 
     def _before_pagination_click(self) -> None:
         """Backend state transition after permission/quota checks, before clicking."""

@@ -521,6 +521,7 @@ class NativeBackend(PlaywrightBackend):
         if not self.error:
             self.error = code
             self.wait_error = error if isinstance(error,(RateLimit,TransientReadFailure)) else None
+            notify(getattr(self, '_diagnostics', None), 'backend_stop', code=code)
         self._halted = True
         if code == 'native_protocol_error' and self._cdp:
             # A failed interception command must not leave a page running with
@@ -551,7 +552,7 @@ class NativeBackend(PlaywrightBackend):
         response = 'responseStatusCode' in event or 'responseErrorReason' in event
         ignored = not response and self.contract.ignored_request(url, request['method'], kind)
         resource = {'XHR':'xhr','Fetch':'fetch','Document':'document','Stylesheet':'stylesheet',
-                    'Script':'script','Image':'image','Font':'font','Media':'media'}.get(kind,'other')
+                    'Script':'script','Image':'image','Font':'font','Media':'media','Preflight':'preflight'}.get(kind,'other')
         with observe(getattr(self,'_diagnostics',None), 'http_request' if response else 'route',
                 actor='browser', url=url, method=request['method'], resource=resource,
                 impact='optional' if ignored or resource in {'script','stylesheet','image','font','media'} else 'required_by_backend'):
