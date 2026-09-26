@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import re
+import time
 from urllib.parse import urljoin, urlsplit
 
 from ..workspace import InputError
@@ -35,9 +36,23 @@ class LoginCredentials:
         self.username = self.password = ''
 
 
+def _visible_password_tab(page):
+    # Playwright includes hidden text matches; the native locator already
+    # filters them. Use the same unique-visible contract for both backends.
+    matches = page.get_by_text('密码登录', exact=True)
+    count = matches.count()
+    if count > 20:
+        raise CrawlError('login_password_tab_unavailable')
+    visible = [matches.nth(index) for index in range(count) if matches.nth(index).is_visible()]
+    if len(visible) > 1:
+        raise CrawlError('login_password_tab_unavailable')
+    return visible[0] if visible else None
+
+
 def submit_password_login(backend, credentials):
     """Fill the observed site's fields; leave agreements/2FA to its own UI."""
     page = backend.page
+    failure_code = 'login_form_changed'
 
     def check():
         if backend.cancelled.is_set():
@@ -59,13 +74,30 @@ def submit_password_login(backend, credentials):
         check()
         password = page.locator('input[data-nick="login-pwd"]:visible')
         if not password.count():
-            trigger = page.locator('#header-quick-menu-login:visible')
-            if trigger.count():
-                trigger.click(timeout=10000)
+            failure_code = 'login_password_tab_unavailable'
+            tab = _visible_password_tab(page)
+            if tab is None:
+                # An existing SMS dialog can cover the header. Open the login
+                # entry only when its password tab is not already available.
+                failure_code = 'login_entry_unavailable'
+                page.locator('#header-quick-menu-login:visible').click(timeout=10000)
+                check()
+                failure_code = 'login_password_tab_unavailable'
+                deadline = time.monotonic() + 10
+                while tab is None:
+                    check()
+                    tab = _visible_password_tab(page)
+                    if tab is None:
+                        if time.monotonic() >= deadline:
+                            raise CrawlError(failure_code)
+                        page.wait_for_timeout(100)
             check()
-            page.get_by_text('密码登录', exact=True).click(timeout=10000)
+            tab.click(timeout=10000)
+            check()
+        failure_code = 'login_password_form_unavailable'
         password.wait_for(state='visible', timeout=10000)
         check()
+        failure_code = 'login_form_changed'
         form = page.locator('form').filter(has=password)
         if form.count() != 1 or password.count() != 1:
             raise CrawlError('login_form_changed')
@@ -100,6 +132,8 @@ def submit_password_login(backend, credentials):
         raise
     except Exception:
         # Playwright exceptions may include form values; keep only a fixed code.
-        raise CrawlError('login_form_changed') from None
+        if backend.error:
+            raise getattr(backend, 'wait_error', None) or CrawlError(backend.error)
+        raise CrawlError(failure_code) from None
     finally:
         credentials.clear()

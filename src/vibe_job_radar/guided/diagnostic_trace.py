@@ -36,6 +36,7 @@ CODES = frozenset('''operation_error network_error dns_error non_public_address
     robots_denied robots_unavailable resource_domain_blocked write_not_allowed native_optional_request_blocked
     method_blocked redirect_requires_attention login_origin_changed invalid_url
     wrong_platform credential_url not_job_url not_job_list manual_required
+    login_entry_unavailable login_password_tab_unavailable login_password_form_unavailable
     login_form_changed login_credentials_rejected login_agreement_required login_password_submitted job_unavailable invalid_page_observation
     structure_changed invalid_job_data response_too_large request_too_large
     unexpected_compression request_headers_invalid request_headers_conflict remote_server_error site_stopped

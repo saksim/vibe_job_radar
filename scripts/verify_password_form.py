@@ -68,6 +68,73 @@ def fixture_browser(runtime, args):
             browser.close()
 
 
+
+def setup_entry(page, scenario):
+    """An SMS panel with the same entry/tab/field roles as the public bundle."""
+    page.evaluate("""scenario => {
+        const saved=document.querySelector('form').outerHTML+document.querySelector('label').outerHTML;
+        document.body.innerHTML='';
+        window.headerClicks=0;window.tabClicks=0;window.clicks=0;window.submissions=0;
+        const header=document.createElement('span');header.id='header-quick-menu-login';
+        header.textContent='登录/注册';header.style='position:fixed;top:8px;left:8px';
+        document.body.append(header);
+        const panel=document.createElement('div');panel.id='login-panel';
+        panel.style=scenario==='sms_inline'?'margin-top:45px':'position:fixed;inset:0;background:white;z-index:10';
+        panel.innerHTML='<div id="password-tab" role="tab">密码登录</div><form id="sms-form"><input placeholder="手机号"><input placeholder="短信验证码"></form><div id="password-panel" hidden>'+saved+'</div>';
+        document.body.append(panel);document.querySelector('#terms').checked=false;
+        const tab=document.querySelector('#password-tab');
+        const closed=['closed_login','hidden_switch','delayed_switch'].includes(scenario);
+        panel.hidden=closed;
+        header.onclick=()=>{
+            window.headerClicks++;panel.hidden=false;
+            if(scenario==='delayed_switch'){
+                tab.hidden=true;requestAnimationFrame(()=>requestAnimationFrame(()=>tab.hidden=false));
+            }
+        };
+        tab.onclick=()=>{
+            window.tabClicks++;
+            if(scenario==='unchanged_sms')return;
+            document.querySelector('#sms-form').hidden=true;
+            document.querySelector('#password-panel').hidden=false;
+        };
+        if(scenario==='hidden_switch'||scenario==='duplicate_switch'){
+            const duplicate=tab.cloneNode(true);duplicate.id='other-password-tab';
+            duplicate.hidden=scenario==='hidden_switch';document.body.append(duplicate);
+        }
+        const form=document.querySelector('#password-panel form');
+        form.onsubmit=e=>{e.preventDefault();window.submissions++;};
+        form.querySelector('button').onclick=()=>window.clicks++;
+        return true;
+    }""", scenario)
+
+
+def verify_entry_paths(page, backend):
+    checks=[]
+    for scenario in ('sms_overlay', 'sms_inline', 'closed_login', 'hidden_switch',
+                     'delayed_switch', 'duplicate_switch', 'unchanged_sms'):
+        page.goto(backend.adapter.search_url('synthetic login entry fixture'))
+        setup_entry(page, scenario)
+        credentials=LoginCredentials('synthetic-user', 'synthetic-password')
+        expected={'duplicate_switch':'login_password_tab_unavailable',
+                  'unchanged_sms':'login_password_form_unavailable'}.get(scenario)
+        try:
+            code=submit_password_login(backend,credentials)
+            assert expected is None and code=='login_agreement_required', (scenario,code)
+        except CrawlError as exc:
+            assert exc.code==expected, (scenario,exc.code)
+        assert not credentials.username and not credentials.password, scenario
+        assert page.evaluate('window.headerClicks')==int(scenario in {'closed_login','hidden_switch','delayed_switch'}), scenario
+        assert page.evaluate('window.tabClicks')==int(scenario!='duplicate_switch'), scenario
+        assert page.evaluate('window.clicks')==0 and page.evaluate('window.submissions')==0, scenario
+        assert page.locator('#terms').evaluate('e=>e.checked') is False, scenario
+        # Read booleans for these synthetic fields; no real account is involved.
+        values=page.evaluate("Array.from(document.querySelectorAll('#password-panel form input')).map(e=>e.value)")
+        assert values==(['',''] if expected else ['synthetic-user','synthetic-password']), scenario
+        assert page.evaluate("Array.from(document.querySelectorAll('#sms-form input')).every(e=>e.value==='')") is True, scenario
+        checks.append(scenario)
+    return checks
+
+
 def main():
     parser = argparse.ArgumentParser(); parser.add_argument('--channel', choices=['msedge', 'chrome'])
     parser.add_argument('--native', action='store_true', help='Exercise the production CDP page/input implementation')
@@ -144,6 +211,7 @@ def main():
                 else:
                     assert page.locator('input[data-nick="login-pwd"]').evaluate('e => e.value === ""') is True, scenario
                 checks.append(scenario)
+            checks.extend(verify_entry_paths(page, backend))
             print(json.dumps({'success': True, 'checks': checks, 'external_requests': 0,
                               'real_account_tested': False, 'input_backend': 'native_cdp' if args.native else 'playwright',
                               'browser_version': browser.version}))
