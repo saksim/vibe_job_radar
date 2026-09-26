@@ -4,7 +4,7 @@
 
 本分支按#190修复[已有职位库的并发报告读取](docs/STORE_READ_OPEN.md)：只有版本0需要写入版本号，已初始化的库不再因重复写版本而申请写锁。旧记录、补建/升级和未知版本拒绝保持；独立程序资格与历史Windows等待问题分别记录。
 
-当前候选继承[52项改进基线](docs/CURRENT_DELIVERY_CANDIDATE.md)及后续修复。原89条完整职位记录中49个符合目标规则，报告含94条要求（24规则接受、70待复核）；9月25日另采3条重复岗位，实际日期共两天。本机 Edge 原生实验模式已用正常关键词取得一页42张卡，真实登录、所选完整JD和原报告仍待验收。各次源码、CI及实际观察见[当前证据](docs/CURRENT_ACQUISITION_EVIDENCE.md)；候选未合入main或发布，Windows包须使用对应提交自己的成功CI产物。
+当前运行版本、真实采样、登录等待与各次失败统一记录在[当前取数证据](docs/CURRENT_ACQUISITION_EVIDENCE.md)。现有功能与历史目标的缺口、优先级和后续工作见[GAP 审计](docs/PROJECT_GAP_AUDIT_2026_09_26.md)及 [Issue #210](https://github.com/saksim/vibe_job_radar/issues/210)；[52项改进基线](docs/CURRENT_DELIVERY_CANDIDATE.md)保留为历史。候选、main 与发行分别判断，Windows 包须使用对应提交自己的成功 CI 产物。
 
 ## 先完成一次目标岗位研究
 
