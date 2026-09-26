@@ -25,7 +25,7 @@ STAGES = frozenset({'task', 'browser_session', 'listing', 'list_parse', 'collect
     'detail_navigation', 'detail_identity', 'detail_parse', 'persist', 'report', 'network_policy',
     'route', 'http_request', 'robots', 'navigation', 'login', 'pagination', 'unknown'})
 RESOURCES = frozenset({'document', 'stylesheet', 'script', 'image', 'media', 'font',
-    'xhr', 'fetch', 'websocket', 'other', 'unknown'})
+    'xhr', 'fetch', 'preflight', 'websocket', 'other', 'unknown'})
 CODES = frozenset('''operation_error network_error dns_error non_public_address
     workspace_proxy_environment_conflict
     pac_unavailable pac_invalid_script pac_invalid_result pac_timeout pac_busy
@@ -36,7 +36,7 @@ CODES = frozenset('''operation_error network_error dns_error non_public_address
     robots_denied robots_unavailable resource_domain_blocked write_not_allowed native_optional_request_blocked
     method_blocked redirect_requires_attention login_origin_changed invalid_url
     wrong_platform credential_url not_job_url not_job_list manual_required
-    login_form_changed login_credentials_rejected login_password_submitted job_unavailable invalid_page_observation
+    login_form_changed login_credentials_rejected login_agreement_required login_password_submitted job_unavailable invalid_page_observation
     structure_changed invalid_job_data response_too_large request_too_large
     unexpected_compression request_headers_invalid request_headers_conflict remote_server_error site_stopped
     page_not_ready browser_closed browser_missing playwright_missing
@@ -81,6 +81,13 @@ LOCAL_POLICIES = {
 # might themselves contain a credential. Values/fragments/userinfo never survive.
 PATH_PARTS = frozenset({'robots.txt', 'web', 'geek', 'job', 'job_detail', 'user',
     'zhaopin', 'pc', 'search', 'jobdetail', 'login', 'api', 'v1', 'v2', 'jobs'})
+# Public operation names from the recorded official login bundle, for
+# diagnosis only. Inclusion here NEVER grants a request access.
+LOGIN_PATHS = frozenset('/api/com.liepin.passport.' + suffix for suffix in (
+    'account.account-pwd-login', 'account.check-login', 'account.v2.check-login',
+    'account.get-category', 'account.send-two-factor-sms-code',
+    'account.verify-two-factor-sms-code', 'captcha.get-smart-captcha',
+    'qr.get-qrcode', 'qr.ack'))
 QUERY_NAMES = frozenset({'q', 'query', 'keyword', 'key', 'page', 'pageSize',
     'currentPage', 'jobId', 'city', 'industry', 'offset', 'limit'})
 
@@ -98,6 +105,8 @@ def safe_target(url):
         result['host'] = host
         parts = parsed.path.split('/')[1:17]
         result['path_template'] = '/' + '/'.join(p if p in PATH_PARTS else ':segment' for p in parts)
+        if host == 'api-passport.liepin.com' and parsed.path in LOGIN_PATHS:
+            result['path_template'] = parsed.path
         if len(parsed.path.split('/')) > 17:
             result['path_template'] += '/:truncated'
         pairs = parse_qsl(parsed.query, keep_blank_values=True, max_num_fields=64)
@@ -145,7 +154,7 @@ class DiagnosticTrace:
         self._lock, self._clock = threading.RLock(), clock
         self._sequence = self.dropped = self.observer_errors = 0
         self._frames = []
-        self.first_failure = self.first_content_candidate = None
+        self.first_failure = self.first_content_candidate = self.first_backend_stop = None
         self.enabled = True
 
     def _emit(self, frame, outcome):
@@ -220,6 +229,24 @@ class DiagnosticTrace:
                 if self._frames and self._frames[-1] is frame:
                     self._frames.pop()
 
+    def backend_stop(self, code):
+        # Called only at the controller's first transition to stopped. Optional
+        # failures and later collateral blocks cannot replace this observation.
+        with self._lock:
+            if not self.enabled or self.first_backend_stop is not None:
+                return
+            fallback = self.begin('network_policy', 'browser') if not self._frames else None
+            try:
+                frame = copy.deepcopy(self._frames[-1])
+                fixed = code if isinstance(code, str) and code in CODES else 'operation_error'
+                frame.update(code=fixed, local_block=True if fixed in LOCAL_POLICIES else None,
+                             policy=LOCAL_POLICIES.get(fixed, 'shared_quota' if fixed in WAITS else ''))
+                self._emit(frame, 'backend_stopped')
+                self.first_backend_stop = copy.deepcopy(self.events[-1])
+            finally:
+                if fallback is not None:
+                    self.finish(fallback)
+
     def set_browser_version(self, value):
         with self._lock:
             self.browser_version = value if isinstance(value, str) and re.fullmatch(r'[0-9.]{1,40}', value) else None
@@ -228,7 +255,7 @@ class DiagnosticTrace:
         with self._lock:
             self.enabled = False
             self.events.clear()
-            self.first_failure = self.first_content_candidate = None
+            self.first_failure = self.first_content_candidate = self.first_backend_stop = None
 
     def snapshot(self):
         with self._lock:
@@ -239,6 +266,7 @@ class DiagnosticTrace:
                 'runtime': self.runtime, 'events': list(self.events), 'dropped_events': self.dropped,
                 'observer_errors': self.observer_errors, 'first_failure': self.first_failure,
                 'first_content_candidate': self.first_content_candidate,
+                'first_backend_stop': self.first_backend_stop,
                 'scope': 'Opt-in in-memory metadata only; not a HAR, root-cause proof or live-site certification. '
                          'Required means the existing backend classification, not proven business relevance. '
                          'Recordings are lost on service exit; download after local preview to retain evidence.'})

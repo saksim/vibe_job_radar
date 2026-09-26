@@ -66,7 +66,8 @@ MESSAGES = {
     'checkpoint_records_missing': '任务中已保存的正文记录缺失或不一致，已停止；请恢复工作区备份，不会把缺失正文算成成功或自动重复抓取。',
     'batch_identity_unsupported': '当前版本无法恢复该批次的岗位标识规则；原选择与记录已保留，请使用兼容版本继续。',
     'login_form_changed': '未找到可确认的猎聘密码登录表单，已停止自动填写。请在采集浏览器检查页面并正常登录。',
-    'login_password_submitted': '已在猎聘正常表单提交一次。请查看平台反馈；协议、验证码或短信验证需在该页面完成。原搜索或所选完整岗位可读后自动继续，不会重复提交密码。',
+    'login_agreement_required': '账号密码已填入，尚未点击登录。请在猎聘网页阅读并勾选条款，再点击该网页的“登录”；只勾选不会提交。随后按平台提示完成验证，原任务可读后自动继续。',
+    'login_password_submitted': '已在猎聘网页点击一次“登录”，是否提交成功以平台反馈为准。请在该页面完成验证码或短信验证；原任务可读后自动继续，不会重复提交密码。',
     'invalid_page_observation': '页面观察无效，已保留任务并停止读取。',
     'job_unavailable': '平台已标明该职位暂停招聘或已下线，未把推荐职位保存为该岗位正文。',
     'login_credentials_rejected': '平台提示账号或密码错误。自动接续已停止，不会重试密码；请在平台正常页面核对。',
@@ -1128,9 +1129,12 @@ class GuidedService:
             if action == 'login_password':
                 if not isinstance(secret, LoginCredentials):
                     raise CrawlError('login_form_changed')
-                backend.password_login(secret)
-            self._save(state, 'login_password_submitted' if action == 'login_password' else 'manual_detail_open' if target else 'manual_browser_open',
-                       status='waiting_manual', authentication='manual_pending')
+                login_code = backend.password_login(secret)
+                if login_code not in {'login_agreement_required', 'login_password_submitted'}:
+                    raise CrawlError('login_form_changed')
+            else:
+                login_code = 'manual_detail_open' if target else 'manual_browser_open'
+            self._save(state, login_code, status='waiting_manual', authentication='manual_pending')
         elif action == 'resume_returned_search':
             from .liepin_form import matching_search_entry_signature, submit_search
             if self._cancel.is_set():

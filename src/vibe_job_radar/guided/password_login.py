@@ -76,13 +76,26 @@ def submit_password_login(backend, credentials):
         submit = form.locator('button.login-submit-btn:visible')
         if username.count() != 1 or submit.count() != 1:
             raise CrawlError('login_form_changed')
+        # The observed agreement is a sibling of the password form. Only read
+        # its state; a local credential consent does not accept site terms.
+        agreement = page.locator('label:visible:has-text("同意猎聘")').locator('input[type="checkbox"]')
+        if agreement.count() != 1:
+            raise CrawlError('login_form_changed')
         username.fill(credentials.username, timeout=5000)
         check()
         password.fill(credentials.password, timeout=5000)
         check()
+        if agreement.evaluate('e => e.checked === true') is not True:
+            # Checking the site's agreement does not resubmit its form. Leave
+            # the filled page with an explicit two-step handoff, not a false
+            # submitted result or a background password retry.
+            return 'login_agreement_required'
         submit.click(timeout=10000)
         # The return watcher observes actual readable task content. A click is
         # not evidence of successful authentication or a reason to click again.
+        if backend.error:
+            raise getattr(backend, 'wait_error', None) or CrawlError(backend.error)
+        return 'login_password_submitted'
     except CrawlError:
         raise
     except Exception:
