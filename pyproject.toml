@@ -13,6 +13,7 @@ authors = [{name = "WEIYU AI Studio"}]
 dependencies = []
 
 [project.optional-dependencies]
+acceptance = ["tzdata"]
 browser = ["playwright>=1.48,<2", "packaging>=24.2"]
 tls = ["truststore>=0.10.4,<0.11; sys_platform == 'win32'"]
 

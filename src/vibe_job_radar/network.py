@@ -202,6 +202,11 @@ def validate_public_url(url: str, allowed_domains: set[str], *, all_addresses: b
                         resolution_info: dict | None = None
                         ) -> tuple[str, str | tuple[str, ...], str]:
     host, target = validate_url_target(url, allowed_domains)
+    if network_policy is not None:
+        try:
+            network_policy.for_host(host)  # Invalid explicit credentials must not leak DNS first.
+        except LocalProxyError as exc:
+            raise FetchError(exc.code) from exc
     if network_policy is not None and network_policy.encrypted_dns:
         from .encrypted_dns import PublicResolver, ResolutionError
         active = resolver or network_policy.resolver or PublicResolver()

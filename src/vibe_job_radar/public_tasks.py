@@ -108,9 +108,11 @@ class PublicTasks:
             # Error messages from external providers may echo credentials.
             from .network import FetchError
             from .network_settings import DNS_MESSAGES
-            code = exc.code if isinstance(exc, FetchError) and exc.code in DNS_MESSAGES else 'public_task_failed'
+            from .proxy_credentials import ERROR_MESSAGES as PROXY_AUTH_MESSAGES
+            messages = {**DNS_MESSAGES, **PROXY_AUTH_MESSAGES}
+            code = exc.code if isinstance(exc, FetchError) and exc.code in messages else 'public_task_failed'
             self._save(status='failed',code=code,error_type=type(exc).__name__,
-                       message=DNS_MESSAGES.get(code,'任务未完成，已有数据仍在本机；请检查来源可用性或稍后重新确认，不会生成模拟数据。'))
+                       message=messages.get(code,'任务未完成，已有数据仍在本机；请检查来源可用性或稍后重新确认，不会生成模拟数据。'))
 
     def _import(self, result, query):
         jobs=result['response']['jobs']

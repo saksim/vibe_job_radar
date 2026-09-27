@@ -18,6 +18,7 @@ function options(element,values){const value=element.value;element.replaceChildr
 function active(){if(!current)throw Error('先在第2步创建任务。');return current.id;}
 function render(){
  if(!state)return;
+ $('guided-startup').disabled=false;$('guided-startup').setAttribute('aria-busy','false');$('guided-initializing').hidden=true;
  $('environment').textContent=`当前 Python：${state.python}。Playwright：${state.browser_package||'尚未安装'}。本次组件操作：${installationNames[state.installation]||state.installation}。`;
  const tls=state.tls_environment;
  if(tls){
@@ -37,6 +38,14 @@ function render(){
  if(health){$('browser-summary').textContent=(health.browser_channel ? '本次检查：'+(choice?.options[health.browser_channel]||health.browser_channel)+'。' : '')+health.message;
  $('browser-diagnostic').textContent=JSON.stringify({browser:health,installation:state.setup,choice},null,2);}
  if(!$('site').options.length)options($('site'),state.sites.map(s=>[s.key,s.label+'（实站未验证）']));
+ $('capability-status').replaceChildren();
+ for(const site of state.sites){
+  for(const capability of site.acquisition?.backends || []){
+   const line=document.createElement('p');
+   line.textContent=`${site.label} · ${capability.backend==='bridge'?'默认浏览器桥':'原生实验'}：${capability.message}`;
+   $('capability-status').append(line);
+  }
+ }
  if(!$('role').options.length){options($('role'),Object.entries(state.roles));$('role').value='time_series';}
  if(!intakeApplied){
   intakeApplied=true;
