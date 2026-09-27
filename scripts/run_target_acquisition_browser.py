@@ -98,6 +98,7 @@ def main():
                         assert [c['status'] for c in state['cards']]==['ok','ok','ok','structure_changed','invalid_job_data']
                         assert state['outcome']['selected']==5 and state['outcome']['saved']==3 and state['outcome']['failed']==2
                         assert state['outcome']['target_jobs']==3 and state['outcome']['ai_jobs']==3
+                        expect(page.locator('#acquisition-counts')).to_contain_text('发现 5 · 所选 5 · 完整正文 3 · 目标岗位 3 · 有明确AI要求的岗位 3')
                         assert all(CALLS.count(p)==1 for p in PATHS)
                         assert '/job/9.shtml' not in CALLS and '/job/8.shtml' not in CALLS
                         result['checks'].append('target JSON-LD chosen by current URL; recommendations never requested or saved; invalid row does not abort batch')
@@ -106,6 +107,9 @@ def main():
                         file=out/'fixture-acquisition.json';download.value.save_as(str(file))
                         audit=json.loads(file.read_text(encoding='utf-8'))
                         assert audit['outcome']==state['outcome'] and len(audit['items'])==5
+                        assert [item['result'] for item in audit['items']] == ['complete_with_explicit_ai_requirements']*3+['unconfirmed_full_jd']*2
+                        assert all(item['collected_at'] and item['explicit_ai_requirement_ids'] for item in audit['items'][:3])
+                        result['checks'].append('funnel distinguishes source-job counts from requirement rows; each complete result traces to original requirement IDs')
                         result['outcome']=audit['outcome']
                         page.get_by_role('link',name='查看本批研究结论').click()
                         expect(page.locator('#brief-acquisition')).to_contain_text('失败 2 条')

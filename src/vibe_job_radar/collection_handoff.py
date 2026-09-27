@@ -168,6 +168,8 @@ class CollectionHandoff:
                                  'source_report_id': preview['source_report_id'], 'rows': rows,
                                  'http_budget': preview['budget'], 'additional_browser_budget': len(cards),
                                  'confirmed_at': now, 'credentials_transferred': False}}
+            from .guided.checkpoint import binding
+            child['execution_binding'] = binding(child, self.guided.registry.get(child['platform']))
             self.guided._save(child)
             self.guided._submit('collect', ident)
             return {'id': ident, 'reused': False, 'queued': True, 'url': '/guided?task=' + ident}

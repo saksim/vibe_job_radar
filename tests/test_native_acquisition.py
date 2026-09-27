@@ -48,8 +48,12 @@ def robots(text='User-agent: *\nAllow: /\n'):
 class NativePolicyTests(unittest.TestCase):
     def test_bootstrap_is_not_a_claim_of_live_api(self):
         c=contract_for(builtins().get('liepin'))
-        self.assertTrue(c.bootstrap_only)
-        self.assertFalse(any(r.role=='business' for r in c.rules))
+        self.assertFalse(c.bootstrap_only)
+        self.assertEqual({r.key for r in c.rules if r.role=='business'},
+                         {'liepin_search', 'liepin_search_preflight', 'liepin_search_filters', 'liepin_filters_preflight'})
+        self.assertEqual({r.key for r in c.rules if r.role == 'login'},
+                         {'liepin_password_login', 'liepin_login_preflight'})
+        self.assertTrue(all(r.authentication for r in c.rules if r.role == 'login'))
         for site in ('boss','51job'):
             with self.assertRaises(CrawlError):contract_for(builtins().get(site))
     def test_reviewed_read_post_is_allowed(self):
@@ -73,7 +77,7 @@ class NativePolicyTests(unittest.TestCase):
     def test_exact_host_only_no_wildcard_host(self):
         with self.assertRaises(ValueError):NativeContract('fixture',('*.test',),())
     def test_html_non200_and_empty_fail_closed(self):
-        for status,mime,body in ((200,'text/html',b'User-agent: *'),(404,'text/plain',b''),
+        for status,mime,body in ((200,'text/html',b'User-agent: *'),(503,'text/plain',b''),
                                 (200,'text/plain',b''),(200,'text/plain',b'<html>')):
             with self.subTest(status=status,mime=mime),self.assertRaises(CrawlError):NativeRobots(status,mime,body)
     def test_robots_encoding_size(self):
@@ -284,7 +288,8 @@ class NativeServiceTests(unittest.TestCase):
     def test_capabilities_are_honest_about_bootstrap(self):
         s=GuidedService(Workspace(Path(self.tmp.name)/'builtin'));self.addCleanup(s.close)
         sites={s['key']:s['native'] for s in s.state()['sites']}
-        self.assertTrue(sites['liepin']['bootstrap_only']);self.assertFalse(sites['boss']['available'])
+        self.assertFalse(sites['liepin']['bootstrap_only']);
+        self.assertEqual(sites['liepin']['certification'], 'not_live_verified');self.assertFalse(sites['boss']['available'])
 
 
 if __name__=='__main__': unittest.main()

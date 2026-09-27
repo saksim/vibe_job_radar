@@ -143,6 +143,14 @@ class ReturnWatcherTests(unittest.TestCase):
         self.backend.snapshot.assert_called_once()
         self.service._submit.assert_not_called()
 
+    def test_rejected_password_is_reported_and_never_retried(self):
+        self.backend.snapshot.side_effect=CrawlError('login_credentials_rejected')
+        self.tick();self.tick()
+        self.assertEqual(self.state['code'],'login_credentials_rejected')
+        self.assertEqual(self.state['login_continuation'],'needs_attention')
+        self.backend.snapshot.assert_called_once()
+        self.service._submit.assert_not_called()
+
     def test_pause_disarm_cancels_a_stable_candidate(self):
         self.tick();self.manager.disarm('task');self.tick()
         self.service._submit.assert_not_called()
@@ -184,7 +192,8 @@ class ReturnServiceTests(unittest.TestCase):
         while self.service._load(self.ident).get('login_continuation')!='resumed' and time.monotonic()<until:time.sleep(.02)
         self.wait()
         state=self.service._load(self.ident)
-        self.assertEqual(state['status'],'ready')
+        self.assertEqual(state['status'],'ready',
+                         {k:state.get(k) for k in ('code','login_continuation','authentication')})
         self.assertEqual(state['login_continuation'],'resumed')
         self.assertEqual(state['authentication'],'user_resumed')
         self.service.action({'id':self.ident,'action':'collect','selected':[state['cards'][0]['id']]});self.wait()

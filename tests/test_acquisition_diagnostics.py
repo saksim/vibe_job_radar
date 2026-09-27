@@ -210,6 +210,15 @@ class TransportTraceTests(unittest.TestCase):
             RateLedger(Path(self.tmp.name)/'rates.sqlite',Limits(request_interval=0,page_interval=0)),threading.Event())
         self.trace=trace(); self.wire._diagnostics=self.trace
 
+    def test_missing_file_is_distinct_from_unreachable_and_does_not_expose_body(self):
+        response = WireResponse(404, {'content-type':'text/html'}, SECRET.encode())
+        with patch.object(self.wire, 'fetch', return_value=response):
+            self.wire.ensure_robots('https://' + HOST + '/search')
+        snapshot = self.trace.snapshot()
+        self.assertIn('robots_file_absent', {e['code'] for e in snapshot['events']})
+        self.assertNotIn(SECRET, json.dumps(snapshot))
+        self.assertIsNone(self.trace.first_failure)
+
     def test_robots_html_categorized_without_relaxing_decision(self):
         with patch.object(self.wire,'fetch',return_value=WireResponse(200,{'content-type':'text/html'},SECRET.encode())) as fetch:
             with self.assertRaises(CrawlError) as got:self.wire.ensure_robots('https://'+HOST+'/search')
