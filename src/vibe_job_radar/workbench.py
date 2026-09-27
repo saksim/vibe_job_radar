@@ -21,7 +21,7 @@ from .guided.service import GuidedService, MESSAGES
 from .guided.contracts import CrawlError
 from .collection_guidance import CollectionGuidance
 from .evidence_ui import Conflict, EvidenceService
-from .public_tasks import PublicTasks
+from .public_tasks import PublicTasks, PublicTaskBusy
 
 MAX_BODY = 2_000_000
 _DEFAULT_PUBLIC_CLIENT = object()
@@ -225,7 +225,7 @@ class Handler(BaseHTTPRequestHandler):
         target = self.server.workspace
         if route.startswith("/api/public/"):
             target = self.server.public_tasks
-            methods = {"/api/public/" + name: name for name in ("start", "search")}
+            methods = {"/api/public/" + name: name for name in ("start", "search", "cancel", "resume")}
         elif route.startswith("/api/guided/"):
             target = self.server.guided
             methods = {"/api/guided/" + name: name for name in ("create", "action", "install", "check_browser", "diagnose", "export", "diagnostics")}
@@ -251,6 +251,8 @@ class Handler(BaseHTTPRequestHandler):
             status, response = 400, {"error": MESSAGES.get(exc.code, "请检查平台、输入和当前任务状态。"), "code": exc.code}
         except Conflict as exc:
             status, response = 409, {"error": str(exc)}
+        except PublicTaskBusy as exc:
+            status, response = 409, {"error": str(exc), "code": "public_task_busy"}
         except InputError as exc:
             status, response = 400, {"error": str(exc)}
         except (ValueError, TypeError) as exc:

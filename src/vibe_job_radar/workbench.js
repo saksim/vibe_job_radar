@@ -214,10 +214,14 @@ else refresh().then(async () => {
 
 
 // Public tasks poll LOCAL state only. Loading this page never queries a source.
-let publicPolling = false, publicWatchVersion = 0, publicReport = '', publicNextQuery = null;
+let publicPolling = false, publicWatchVersion = 0, publicReport = '', publicNextQuery = null, publicTaskId = '';
 async function publicState() {
   const result = await request('/api/public/state');
   const task = result.task;
+  publicTaskId = task.id || '';
+  $('public-cancel').hidden = !task.can_cancel;
+  $('public-resume').hidden = !task.can_resume;
+  $('public-saved-query').textContent = task.query?.query ? `已保存查询：${task.query.query} · 地区：${task.query.region||'不限'}。继续时采用这些条件。` : '';
   $('public-status').textContent = task.message || '';
   const changeMessage = task.catalog_change?.message || '';
   $('public-changes').textContent = changeMessage;
@@ -230,7 +234,7 @@ async function publicState() {
   $('public-consent-text').textContent = result.privacy;
   $('public-search-button').textContent = local ? '获取并在本机筛选' : '查询所选公开来源';
   $('public-network').textContent = JSON.stringify(result.network_policy, null, 2);
-  const busy = ['queued', 'running'].includes(task.status);
+  const busy = task.owned_elsewhere || ['queued', 'running', 'cancelling'].includes(task.status);
   $('public-example').disabled = busy;
   $('public-search-button').disabled = busy || !result.query_available;
   publicNextQuery = task.status === 'completed' && task.next_cursor
@@ -254,7 +258,7 @@ async function watchPublic() {
       observedVersion = publicWatchVersion;
       const task = await publicState();
       if (observedVersion !== publicWatchVersion) continue;
-      if (!['queued', 'running'].includes(task.status)) {
+      if (!task.owned_elsewhere && !['queued', 'running', 'cancelling'].includes(task.status)) {
         if (!reportPinned && task.status === 'completed' && task.report_id && task.report_id !== publicReport) {
           await refresh();
           const report = await request('/api/report/' + task.report_id);
@@ -294,6 +298,14 @@ $('public-next').addEventListener('click', async () => {
   if (!publicNextQuery) return;
   const query = {...publicNextQuery};
   await operation(async () => { await request('/api/public/search', {consent: true, query}); reportPinned = false; });
+  await watchPublic();
+});
+$('public-cancel').addEventListener('click', async () => {
+  await operation(async () => { await request('/api/public/cancel', {id:publicTaskId}); await publicState(); });
+  await watchPublic();
+});
+$('public-resume').addEventListener('click', async () => {
+  await operation(async () => { await request('/api/public/resume', {id:publicTaskId,consent:true}); reportPinned=false; });
   await watchPublic();
 });
 if (token) watchPublic();

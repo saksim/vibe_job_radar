@@ -22,6 +22,7 @@ from .store import Store
 from .utils import atomic_json, parse_time, utc_now
 from .workspace import InputError
 from .guided.rate import Limits, RateLedger, RateLimit
+from .public_lifecycle import check_cancelled
 
 JOB_ID = 5421566008
 API_URL = f'https://boards-api.greenhouse.io/v1/boards/anthropic/jobs/{JOB_ID}'
@@ -61,6 +62,8 @@ def parse_public_job(payload: dict) -> JobRecord:
 class PublicExample:
     def __init__(self, workspace, transport=None):
         self.workspace = workspace
+        self.cancelled = None
+        self.before_commit = None
         self.root = workspace.root / 'public_examples'
         self.root.mkdir(exist_ok=True, mode=0o700)
         if self.root.is_symlink():
@@ -78,6 +81,7 @@ class PublicExample:
             return self._run()
 
     def _run(self):
+        check_cancelled(self.cancelled)
         last = self.root/'latest.json'
         if last.is_symlink():
             raise InputError('案例记录不能是符号链接。')
@@ -89,6 +93,7 @@ class PublicExample:
                 return {**previous, 'cache_reused': True, 'network_requests_this_click': 0,
                         'report': report, 'message': '复用10分钟内的真实获取结果，不重复请求；获取时间保持原值。'}
         try:
+            check_cancelled(self.cancelled)
             self.ledger.reserve('greenhouse_public_example', 'request')
         except RateLimit as exc:
             raise InputError(f'真实案例请求过密，请至少等待 {int(exc.wait)+1} 秒；不会自动重试。') from exc
@@ -98,7 +103,12 @@ class PublicExample:
                  'scope': 'Anthropic公开架构师岗位；不是BOSS/中国大陆平台实站认证。', 'report_id': ''}
         try:
             payload = self.client.json(API_URL)  # no authentication header; no API redirect following
+            check_cancelled(self.cancelled)
             record = parse_public_job(payload)
+            if self.before_commit is not None:
+                self.before_commit()
+            else:
+                check_cancelled(self.cancelled)
             with Store(self.workspace.db) as store:
                 store.add(record)
             from .pipeline import analyze
