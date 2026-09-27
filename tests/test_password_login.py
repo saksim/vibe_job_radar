@@ -94,7 +94,7 @@ class PasswordServiceTests(unittest.TestCase):
     def test_password_action_stays_on_original_query_and_arms_return(self):
         self.action()
         secret = self.service._submit.call_args.args[2]
-        backend = MemoryBackend(); backend.password_login = Mock(side_effect=lambda value: value.clear())
+        backend = MemoryBackend(); backend.password_login = Mock(side_effect=lambda value: (value.clear(), 'login_password_submitted')[1])
         self.service._backends[self.ident] = backend
         state = self.service._load(self.ident)
         self.service._run('login_password', state, secret)
@@ -117,6 +117,25 @@ class PasswordServiceTests(unittest.TestCase):
         self.assertEqual(state['status'], 'completed')
         self.assertEqual(state['outcome']['saved'], 1)
         self.assertTrue(state['report_id'])
+        backend.password_login.assert_called_once()
+
+    def test_unchecked_agreement_handoff_keeps_original_task_watching(self):
+        self.action()
+        secret = self.service._submit.call_args.args[2]
+        backend = MemoryBackend()
+        backend.password_login = Mock(side_effect=lambda value: (value.clear(), 'login_agreement_required')[1])
+        self.service._backends[self.ident] = backend
+        state = self.service._load(self.ident)
+        self.service._run('login_password', state, secret)
+        self.assertEqual(state['code'], 'login_agreement_required')
+        self.assertEqual(state['status'], 'waiting_manual')
+        self.assertEqual(state['authentication'], 'manual_pending')
+        self.assertEqual(state['login_continuation'], 'watching')
+        self.assertFalse(state.get('report_id'))
+        self.assertEqual(backend.calls, [(state['search_url'], True)])
+        self.assertEqual(secret.password, '')
+        public = json.dumps(self.service.state()) + self.service._path(self.ident).read_text(encoding='utf-8')
+        self.assertNotIn(USERNAME, public); self.assertNotIn(PASSWORD, public)
         backend.password_login.assert_called_once()
 
     def test_opted_in_manual_login_also_preserves_query(self):

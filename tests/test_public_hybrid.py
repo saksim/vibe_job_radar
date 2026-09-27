@@ -323,7 +323,7 @@ class PublicHTTPTests(unittest.TestCase):
         with patch.object(SafeHTTP,'json',side_effect=delayed) as network:
             try:
                 self.call('/api/public/start',{'consent':True});self.assertTrue(entered.wait(2))
-                self.assertEqual(self.call('/api/public/start',{'consent':True})[0],400)
+                self.assertEqual(self.call('/api/public/start',{'consent':True})[0],409)
             finally:release.set()
             self.wait()
         self.assertEqual(network.call_count,1)
