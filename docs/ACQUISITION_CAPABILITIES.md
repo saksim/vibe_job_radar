@@ -1,6 +1,6 @@
 # 当前取数能力与验证范围
 
-核对日期 2026-09-23，已合并主干基线 `ec458799`（PR61）。本表由 `acquisition_status.py` 生成，同一份数据进入适配注册表、采集页与新报告的 `software_acquisition_capabilities`。修改后执行 `python scripts/check_acquisition_status.py --write` 并核对证据；自动测试检查文字表格未与程序脱节。
+核对日期 2026-09-27，已验证主干基线 `2e50b608`（PR80）；当前 PR62 整合候选尚待自身 CI 与合并验收。本表由 `acquisition_status.py` 生成，同一份数据进入适配注册表、采集页与新报告的 `software_acquisition_capabilities`。修改后执行 `python scripts/check_acquisition_status.py --write` 并核对证据；自动测试检查文字表格未与程序脱节。
 
 <!-- acquisition-status:start -->
 | 平台 / 适配版本 | 后端 / 默认 | 实现 | 最近记录的受控验证 | 实站 / 剩余跟踪 |
@@ -13,7 +13,7 @@
 | 前程无忧 / 1 | native / 不可用 | blocked | 无匹配记录 | not_verified；[#56](https://github.com/saksim/vibe_job_radar/issues/56) |
 <!-- acquisition-status:end -->
 
-表中的受控验证记录绑定历史源码 `cde1e1c`、适配定义与访问契约，保留对应 CI、日期、浏览器/OS、网络和人工页面范围。它不证明修改后的全部代码、当前用户环境或真实平台。定义变化会撤下匹配的受控记录，不能只沿用同名平台的旧成功。报告中的软件快照不改变某条岗位的来源方式或证据等级；真实正文仍以逐条原文、采集时间和来源链判断。
+表中的受控验证记录分别绑定历史源码 `cde1e1c`（2026-09-18）或猎聘定义 `0d85f554`（2026-09-23）、适配定义与访问契约，保留对应 CI、日期、浏览器/OS、网络和人工页面范围。它不证明修改后的全部代码、当前用户环境或真实平台。定义变化会撤下匹配的受控记录，不能只沿用同名平台的旧成功。报告中的软件快照不改变某条岗位的来源方式或证据等级；真实正文仍以逐条原文、采集时间和来源链判断。
 
 `implemented` 表示有实现；`controlled_verified` 表示注明范围的人工环境曾验过；`pilot_verified` 应有单独实际环境证据；`live_verified` 应达到对应站点样本、日期和恢复要求；`blocked` 表示条件受阻。**当前三站均没有 pilot/live 认证。** 后端是否允许选择、是否默认和是否实站成功分别记录，选择默认浏览器桥不代表网站已能抓取。
 
@@ -23,16 +23,16 @@
 
 PR60 已合并人工登录返回后的自动接续、当前会话复用与完整 JD 到报告。PR61 已合并明确选择的工作区 Cookie 保存/恢复；默认不持久保存，不读取日常浏览器。Windows 使用当前用户 DPAPI，Linux/macOS 使用仅所有者权限文件且不加密。密码、localStorage、IndexedDB 不保存；Cookie 恢复不证明账号仍有效。见 [本机会话说明](SAVED_SESSION_D04.md)。
 
-原生实验已合并，但主干猎聘契约仍限 bootstrap，未知业务、SSO 或跨域行为不能通过开关自动获得支持。BOSS/51job 没有原生契约。真实猎聘搜索入口受 robots 及页面跳转空白影响，见 [#63](https://github.com/saksim/vibe_job_radar/issues/63)，未取得本系列真实账号成功及完整 JD 验收。
+原生实验已合并；当前 PR62 候选扩展了明确列出的猎聘搜索与资源契约，并有独立受控测试。未知业务、SSO 或跨域行为不能通过开关自动获得支持，已有人工环境记录也不证明候选或实站验证完成。BOSS/51job 没有原生契约。真实猎聘搜索入口受 robots 及页面跳转空白影响，见 [#63](https://github.com/saksim/vibe_job_radar/issues/63)，未取得本系列真实账号成功及完整 JD 验收。
 
-## 待合并实现与实站缺口
+## 当前整合状态与实站缺口
 
 - [PR62](https://github.com/saksim/vibe_job_radar/pull/62)：猎聘单次正常密码表单、自动接续、小批身份去重、查询范围与检查点、逐条取数漏斗。代码和受控测试结果以该 PR 当前 head 为准；未合并，不写成主干已支持密码自动填写。
-- [PR66](https://github.com/saksim/vibe_job_radar/pull/66)：高级采集/CLI 工作区网络偏好接线。
-- [PR67](https://github.com/saksim/vibe_job_radar/pull/67)：Windows 拒绝 POST 时可靠返回错误。
+- [PR66](https://github.com/saksim/vibe_job_radar/pull/66) 已合并并通过主干验收：高级采集/CLI 工作区网络偏好接线。
+- [PR67](https://github.com/saksim/vibe_job_radar/pull/67) 已合并并通过主干验收：Windows 拒绝 POST 时可靠返回错误。
 - [PR69](https://github.com/saksim/vibe_job_radar/pull/69)：公开任务停止和重启后确认继续。
 
-三站真实正常登录、首条/小批完整 JD、跨日期至少 30 条/3 日期、过期与结构变化现场恢复仍须逐项验收。无 href、特殊 iframe/SSO/业务响应需专用契约。PAC、代理认证、VM宿主机、所有 VPN/TUN 产品、长期调度和跨设备账户配额均未完成。完整清单见 [交付状态](DELIVERY_STATUS.md)。
+三站真实正常登录、首条/小批完整 JD、跨日期至少 30 条/3 日期、过期与结构变化现场恢复仍须逐项验收。无 href、特殊 iframe/SSO/业务响应需专用契约。本机代理认证与有限 GET 读取重试分别随 PR76、PR80 合并并完成受控验收，不能替代用户网络验证。PAC、VM 宿主机、各 VPN/TUN 产品现场矩阵、长期调度和跨设备账户配额仍未完成。完整清单见 [交付状态](DELIVERY_STATUS.md)。
 
 ## 数据与回退
 
