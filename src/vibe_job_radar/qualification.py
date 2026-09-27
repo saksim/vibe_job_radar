@@ -37,6 +37,8 @@ def source_files(root: Path) -> dict[str, Path]:
             rel = path.relative_to(root)
             if '.radar-sessions' in rel.parts:
                 raise ValueError('private browser state inside source payload')
+            if '.radar-acceptance' in rel.parts:
+                raise ValueError('private acceptance observations inside source payload')
             if '__pycache__' in rel.parts or path.suffix in {'.pyc','.pyo','.zip','.log'}:
                 continue
             if path.is_symlink():
