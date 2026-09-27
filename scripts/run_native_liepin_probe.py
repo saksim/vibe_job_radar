@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 import run_native_liepin_search as acceptance
 from run_native_auth_probe import ObservedBackend, PROBES
+from native_wait_diagnostics import Stages, capture, observed_backend, require_ci
 
 
 class SearchObserver(ObservedBackend):
@@ -30,8 +31,12 @@ class SearchObserver(ObservedBackend):
 
 
 def main():
+    require_ci()
+    stages = Stages()
+    out = acceptance.ROOT / 'browser-acceptance' / 'native'
     try:
-        with patch.object(acceptance, 'NativeBackend', SearchObserver):
+        with capture(stages, out, 'search-wait'), \
+                patch.object(acceptance, 'NativeBackend', observed_backend(SearchObserver, stages)):
             acceptance.main()
     finally:
         out = acceptance.ROOT / 'browser-acceptance' / 'native'
