@@ -40,8 +40,11 @@ class ScheduleTests(unittest.TestCase):
             'revision':self.schedule.state()['revision'],**overrides})
 
     def wait(self):
-        self.tasks._thread.join(15)
-        self.assertFalse(self.tasks._thread.is_alive())
+        # The background scheduler may publish a Thread immediately before
+        # start(). Take the same lock as submit before inspecting/joining it.
+        with self.tasks._lock:worker=self.tasks._thread
+        worker.join(15)
+        self.assertFalse(worker.is_alive())
         return self.tasks._state.copy()
 
     def hold(self,url):
