@@ -13,7 +13,14 @@ const statusNames={queued:'准备中',running:'执行中',ready:'可以选择岗
 Object.assign(cardStatus,{read_transient_failure:'来源暂时不可用，等待有限重试',read_retry_exhausted:'两次自动重试已用完',read_retry_after_invalid:'来源重试时间需核对',read_retry_unavailable:'无法确认自动重试条件'});
 async function api(path,data){const response=await fetch(path,{method:data===undefined?'GET':'POST',headers:{'X-Radar-Token':token,...(data===undefined?{}:{'Content-Type':'application/json'})},body:data===undefined?undefined:JSON.stringify(data),cache:'no-store'});const result=await response.json();if(!response.ok)throw Error(result.error||'操作失败');return result;}
 function note(text){$('busy').textContent=text;}
-async function act(fn){if(requesting)return;requesting=true;sticky='';try{await fn();await refresh();}catch(e){sticky=e.message;note(sticky);}finally{requesting=false;}}
+function actionControls(){
+ if(!state)return;
+ for(const button of document.querySelectorAll('button'))button.disabled=requesting || (state.busy && !['pause','stop'].includes(button.id));
+ const tls=state.tls_environment;
+ if(tls)$('repair-tls').disabled=requesting||state.busy||tls.restart_required||!tls.repair_available;
+ note([sticky || (requesting?'正在处理本次操作，请稍候。':state.busy?(!state.active?state.setup?.message:current?.message)||'正在运行后端操作；可以暂停或停止。':''), ...(state.checkpoint_warnings||[])].filter(Boolean).join('\n'));
+}
+async function act(fn){if(requesting)return;requesting=true;sticky='';actionControls();try{await fn();await refresh();}catch(e){sticky=e.message;note(sticky);}finally{requesting=false;actionControls();}}
 function options(element,values){const value=element.value;element.replaceChildren();values.forEach(([id,label])=>{const o=document.createElement('option');o.value=id;o.textContent=label;element.append(o);});if(values.some(x=>x[0]===value))element.value=value;}
 function active(){if(!current)throw Error('先在第2步创建任务。');return current.id;}
 function render(){
@@ -84,9 +91,7 @@ function render(){
  }
  if(current.report_id){for(const [file,label] of [['requirements_zh.csv','下载岗位要求 CSV'],['descriptions.md','下载描述模板'],...(current.outcome ? [['guided_acquisition.json','下载本批采集结果']] : [])]){const b=document.createElement('button');b.className='secondary';b.textContent=label;const id=current.report_id;b.onclick=()=>act(()=>downloadReport(id,file));$('result').append(b);}const view=document.createElement('a');view.href='/#report='+current.report_id;view.textContent=' 查看本批研究结论';const a=document.createElement('a');a.href='/advanced#report='+current.report_id;a.textContent=' 用本批要求进入个人证据中心';$('result').append(view);if(!current.outcome||current.outcome.target_jobs>0)$('result').append(a);}
  }
- for(const button of document.querySelectorAll('button'))button.disabled=state.busy && !['pause','stop'].includes(button.id);
- if(tls) $('repair-tls').disabled=state.busy||tls.restart_required||!tls.repair_available;
- note([sticky || (state.busy?(!state.active?state.setup?.message:current?.message)||'正在运行后端操作；可以暂停或停止。':''), ...(state.checkpoint_warnings||[])].filter(Boolean).join('\n'));
+ actionControls();
 }
 function renderCards(){const root=$('cards');root.replaceChildren();if(!current.cards.length){root.textContent=current.code==='no_matching_jobs'?current.message:'尚未取得可用岗位清单。请查看上方任务状态；仅在平台明确要求时处理登录，不必先提供密码。';return;}
  current.cards.forEach(c=>{const box=document.createElement('div');box.className='card';const label=document.createElement('label');const input=document.createElement('input');input.type='checkbox';input.checked=selecting.has(c.id);input.addEventListener('change',()=>{if(input.checked)selecting.add(c.id);else selecting.delete(c.id);});label.append(input,document.createTextNode(' '+c.title));const source=document.createElement('small');source.textContent='列表观察到的链接：'+c.url;const outcome=document.createElement('small');outcome.textContent='结果：'+(cardStatus[c.status]||c.status)+(c.resolved_url?' · 详情真实地址：'+c.resolved_url:'');box.append(label,source,outcome);root.append(box);});}
