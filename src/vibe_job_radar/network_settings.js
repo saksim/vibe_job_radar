@@ -17,12 +17,13 @@
   const proxy = document.createElement('fieldset');
   proxy.style.cssText = 'min-width:0;max-width:100%';
   proxy.innerHTML = `<legend>本工作区的代理</legend>
-    <p>自动模式沿用应用或系统配置。固定入口仅支持匿名本机代理；更换后请停止并重开已有采集会话。</p>
+    <p>自动模式沿用应用或系统配置。固定入口支持匿名本机代理，或已授权给此来宾的宿主机代理；更换后请停止并重开已有采集会话。</p>
     <label for="workspace-proxy-mode">连接方式</label>
-    <select id="workspace-proxy-mode"><option value="auto">自动发现</option><option value="http">固定本机 HTTP</option><option value="socks5">固定本机 SOCKS5</option></select>
+    <select id="workspace-proxy-mode"><option value="auto">自动发现</option><option value="http">固定本机 HTTP</option><option value="socks5">固定本机 SOCKS5</option><option value="vm_http">宿主机 HTTP</option><option value="vm_socks5">宿主机 SOCKS5</option></select>
     <label for="workspace-proxy-endpoint">已配置的代理地址和端口</label>
     <input id="workspace-proxy-endpoint" type="text" autocomplete="off" spellcheck="false" style="max-width:100%;box-sizing:border-box" placeholder="填写你的本机代理入口，不含账号密码" disabled>
-    <label><input id="workspace-proxy-consent" type="checkbox" disabled>确认仅在此工作区使用上述匿名本机代理</label>
+    <p id="workspace-proxy-scope"></p>
+    <label><input id="workspace-proxy-consent" type="checkbox" disabled><span id="workspace-proxy-consent-label">确认仅在此工作区使用上述匿名本机代理</span></label>
     <p>认证代理继续使用应用专用配置；检测到冲突时停止。不会将凭据转交给这里的新地址。保存不会访问代理或招聘网站。</p>
     <button id="save-workspace-proxy" type="button">保存工作区代理</button>
     <p id="workspace-proxy-status" role="status" aria-live="polite">正在读取工作区代理。</p>`;
@@ -36,6 +37,14 @@
   function selection() {
     endpoint.disabled = consent.disabled = mode.value === 'auto';
     consent.checked = false;
+    const vm = mode.value.startsWith('vm_');
+    endpoint.placeholder = vm ? '填写宿主机已授权监听的 RFC1918 IPv4 和端口' : '填写你的本机代理入口，不含账号密码';
+    proxy.querySelector('#workspace-proxy-consent-label').textContent = vm
+      ? '确认该地址是宿主机授权给此来宾的匿名代理入口，仅在此工作区使用'
+      : '确认仅在此工作区使用上述匿名本机代理';
+    proxy.querySelector('#workspace-proxy-scope').textContent = vm
+      ? '来宾的127.0.0.1不是宿主机。请填写已知的HTTP或SOCKS5完整地址，不自动猜网关或开启监听；代理可看到目标IP和流量时间。具体虚拟机环境尚需实测。'
+      : '本机模式只接受此系统的loopback地址。';
   }
   mode.addEventListener('change', selection);
   endpoint.addEventListener('input', () => { consent.checked = false; });

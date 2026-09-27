@@ -61,3 +61,5 @@ def explain(state: dict) -> dict:
 from .network_settings import DNS_MESSAGES
 
 REASONS.update({code: ("网络解析未完成", message) for code, message in DNS_MESSAGES.items()})
+from .vm_proxy import ERROR_MESSAGES as VM_MESSAGES
+REASONS.update({code: ("宿主机代理未连接", message) for code, message in VM_MESSAGES.items()})

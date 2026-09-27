@@ -1,0 +1,28 @@
+name: vm-proxy-network
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  isolated-host-guest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify explicit proxy across two isolated private network peers
+        run: sudo --preserve-env=CI,GITHUB_ACTIONS,LD_LIBRARY_PATH "$(command -v python)" scripts/run_vm_proxy_network.py
+      - name: Preserve controlled network evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          retention-days: 7
+          name: vm-host-network
+          path: browser-acceptance/vm-host-network/

@@ -84,7 +84,7 @@ class RealSocksTests(unittest.TestCase):
         self.tmp=tempfile.TemporaryDirectory(); self.requests=[];self.connects=[];self.dials=[];self.sni=[]
         self.reply=0;self.method=0;self.version=5;self.bound_type=1;self.reserved=0;self.truncate=False
         self.symbol=IP4;self.http_status=200;self.fragment=False;self.pause_handshake=False;owner=self
-        self.expected_credentials=None;self.authentication=[];self.greetings=[]
+        self.expected_credentials=None;self.authentication=[];self.greetings=[];self.proxy_peers=[]
         self.auth_status=0;self.auth_version=1
         class Origin(http.server.BaseHTTPRequestHandler):
             def log_message(self,*a):pass
@@ -111,6 +111,7 @@ class RealSocksTests(unittest.TestCase):
                     self.wfile.write(item);self.wfile.flush()
                     if owner.fragment:time.sleep(.001)
             def handle(self):
+                owner.proxy_peers.append(self.client_address[0])
                 self.connection.settimeout(2)
                 hello=self.rfile.read(3)
                 owner.greetings.append(hello)
@@ -158,7 +159,7 @@ class RealSocksTests(unittest.TestCase):
         class Server(socketserver.ThreadingTCPServer):
             allow_reuse_address=True;daemon_threads=True
             def handle_error(self,*a):pass
-        self.proxy=Server(('127.0.0.1',0),Socks)
+        self.proxy=Server((getattr(self,'proxy_bind','127.0.0.1'),0),Socks)
         self.threads=[]
         for server in (self.origin,self.proxy):
             thread=threading.Thread(target=server.serve_forever,kwargs={'poll_interval':.01},daemon=True)
