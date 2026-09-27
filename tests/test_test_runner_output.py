@@ -18,6 +18,20 @@ def runner_module():
 
 
 class RunnerOutputTests(unittest.TestCase):
+    def test_progress_preserves_test_identity_and_failure_without_changing_result(self):
+        runner=runner_module()
+        def artificial_failure():raise AssertionError('fixture failure')
+        suite=unittest.TestSuite([unittest.FunctionTestCase(artificial_failure)])
+        with tempfile.TemporaryDirectory() as tmp:
+            report=Path(tmp)/'result.json'
+            with patch.object(sys,'argv',['run_tests.py','--report',str(report),'--progress']),\
+                 patch.object(sys,'stdout',io.StringIO()),\
+                 patch.object(unittest.defaultTestLoader,'discover',return_value=suite):
+                self.assertEqual(runner.main(),1)
+            progress=report.with_suffix('.progress.log').read_text(encoding='utf-8')
+            self.assertIn('START artificial_failure',progress);self.assertIn('END artificial_failure',progress)
+            self.assertEqual(json.loads(report.read_text(encoding='utf-8'))['failures'],1)
+
     def test_legacy_console_keeps_failure_exit_and_utf8_evidence(self):
         runner = runner_module()
         def fail():

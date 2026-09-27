@@ -10,12 +10,13 @@ class RobotsError(ValueError):
         super().__init__(code)
 
 
-def _octets(value):
+def _octets(value, *, pattern=False):
     """RFC9309 comparison: UTF-8 octets, unreserved %-escapes decoded only."""
     def escape(m):
         c = chr(int(m[0][1:], 16))
         return c if c.isascii() and (c.isalnum() or c in '-._~') else m[0].upper()
-    return re.sub(r'%[0-9A-Fa-f]{2}', escape, quote(value, safe="/%*?$&=:+,;@!'-._~()"))
+    safe = "/%?&=:+,;@!'-._~()" + ("*" if pattern else "")
+    return re.sub(r'%[0-9A-Fa-f]{2}', escape, quote(value, safe=safe))
 
 
 def _glob_matches(pattern, target, anchored):
@@ -85,16 +86,15 @@ class RobotsRules:
         for group in selected:
             for key, value in group:
                 if key in {'allow','disallow'} and value:
-                    if not value.startswith('/'):
+                    if not value.startswith(('/', '*')):
                         raise RobotsError('robots_unavailable')
-                    value = _octets(value)
                     end = value.endswith('$')
-                    pattern = value[:-1] if end else value
+                    pattern = _octets(value[:-1] if end else value, pattern=True)
                     # Literal chunk matching bounds work even for hostile wildcards.
                     if pattern.count('*') > 32:
                         raise RobotsError('robots_unavailable')
                     pattern = re.sub(r'\*+', '*', pattern)
-                    self.rules.append((len(value.replace('*','').rstrip('$')), key == 'allow', pattern, end))
+                    self.rules.append((len(pattern.replace('*','')), key == 'allow', pattern, end))
                 elif key == 'crawl-delay':
                     if not re.fullmatch(r'[0-9]{1,6}(?:\.[0-9]{1,3})?', value):
                         raise RobotsError('robots_unavailable')

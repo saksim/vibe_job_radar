@@ -29,8 +29,11 @@ class Store:
             collected_at TEXT NOT NULL, source_ref TEXT NOT NULL, source_mode TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS events(
             id INTEGER PRIMARY KEY, created_at TEXT NOT NULL, action TEXT NOT NULL, status TEXT NOT NULL, details TEXT NOT NULL);
-        PRAGMA user_version=1;
         ''')
+        # Rewriting the same version still takes a SQLite write lock. A current
+        # WAL database must remain readable while another connection is writing.
+        if version == 0:
+            self.conn.execute("PRAGMA user_version=1")
         self.conn.commit()
 
     def __enter__(self):

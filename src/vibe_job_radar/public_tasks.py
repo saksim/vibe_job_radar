@@ -7,7 +7,7 @@ network requests require a user's explicit start/search consent.
 from __future__ import annotations
 
 import copy
-from contextlib import contextmanager, ExitStack
+from contextlib import contextmanager
 import hashlib
 import json
 import tempfile
@@ -19,6 +19,7 @@ from pathlib import Path
 
 from .catalog_changes import compact_change
 from .collection import writer_lock
+from .record_lock import record_lock
 from .network_policy import current_policy
 from .public_contract import PublicQuery, as_record
 from .public_example import PublicExample
@@ -72,19 +73,15 @@ class PublicTasks:
         # Atomic replacement on Windows can fail while another instance reads
         # the old file. Readers/writers share a short lock; owner leases remain
         # nonblocking and are never inferred from PID/stale-file timestamps.
-        deadline=time.monotonic()+5
-        with ExitStack() as stack:
-            while True:
-                try:stack.enter_context(writer_lock(self.root));break
-                except InputError as exc:
-                    if not isinstance(exc.__cause__,OSError) or time.monotonic()>=deadline:raise
-                    time.sleep(.01)
-            yield
+        with record_lock(self.root):yield
 
-    def _read_record(self):
+    def _read_record(self, *, refresh_ownership=False):
         if self.root.is_symlink():
             raise InputError('公开任务记录不能使用符号链接。')
         with self._record_lock():
+            # Observe ownership and its record in the same short critical section.
+            # A new owner cannot publish running state between these observations.
+            if refresh_ownership:self._foreign=self.busy()
             # Even Windows metadata probes can briefly hold a file handle.
             # Keep all accesses to state.json under the replacement lock.
             if self.path.is_symlink():raise InputError('公开任务记录不能使用符号链接。')
@@ -99,8 +96,7 @@ class PublicTasks:
 
     def _refresh(self):
         if self._lease is not None:return
-        self._foreign=self.busy()
-        self._read_record()
+        self._read_record(refresh_ownership=True)
         if not self._foreign and self._state.get('status') in {'queued','running','cancelling'}:
             self._state.update(status='interrupted',message='上次服务已退出；已保存条件和数据，确认后可继续。')
 

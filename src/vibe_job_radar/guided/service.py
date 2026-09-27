@@ -29,6 +29,7 @@ from ..models import JobRecord
 from ..store import Store
 from ..utils import atomic_json, utc_now
 from ..workspace import InputError, text_field
+from ..runtime import description as runtime_description, require_source_install
 from .adapters import Registry, builtins
 from .browser import PlaywrightBackend
 from .native_browser import NativeBackend
@@ -63,7 +64,11 @@ MESSAGES = {
     'checkpoint_records_missing': '任务中已保存的正文记录缺失或不一致，已停止；请恢复工作区备份，不会把缺失正文算成成功或自动重复抓取。',
     'batch_identity_unsupported': '当前版本无法恢复该批次的岗位标识规则；原选择与记录已保留，请使用兼容版本继续。',
     'login_form_changed': '未找到可确认的猎聘密码登录表单，已停止自动填写。请在采集浏览器检查页面并正常登录。',
-    'login_password_submitted': '已在猎聘正常表单提交一次。请查看平台反馈；协议、验证码或短信验证需在该页面完成。原搜索或所选完整岗位可读后自动继续，不会重复提交密码。',
+    'login_agreement_required': '账号密码已填入，尚未点击登录。请在猎聘网页阅读并勾选条款，再点击该网页的“登录”；只勾选不会提交。随后按平台提示完成验证，原任务可读后自动继续。',
+    'login_entry_unavailable': '未能打开猎聘登录框，尚未填写账号密码。请保留采集页面，检查页面是否仍在加载。',
+    'login_password_tab_unavailable': '未能切换到猎聘密码登录，尚未填写账号密码。请保留当前页面，检查“密码登录”标签是否显示。',
+    'login_password_form_unavailable': '已检查密码登录入口，但密码表单尚未可用，尚未填写账号密码。请保留当前页面检查加载状态。',
+    'login_password_submitted': '已在猎聘网页点击一次“登录”，是否提交成功以平台反馈为准。请在该页面完成验证码或短信验证；原任务可读后自动继续，不会重复提交密码。',
     'invalid_page_observation': '页面观察无效，已保留任务并停止读取。',
     'job_unavailable': '平台已标明该职位暂停招聘或已下线，未把推荐职位保存为该岗位正文。',
     'login_credentials_rejected': '平台提示账号或密码错误。自动接续已停止，不会重试密码；请在平台正常页面核对。',
@@ -320,7 +325,7 @@ class GuidedService:
                                        'error': self._choice_error,
                                        'last_check': self._choice.historical_view(self._choice_data, self._package())},
                     'browser_health': copy.deepcopy(self._browser_health), 'setup': copy.deepcopy(self._setup),
-                    'python': sys.executable, 'roles': {k: v['label'] for k,v in self.workspace.config['roles'].items()},
+                    'python': sys.executable, 'runtime':runtime_description(), 'roles': {k: v['label'] for k,v in self.workspace.config['roles'].items()},
                     'sessions_persisted': any(j.get('saved_session_status') == 'saved_unverified' for j in jobs),
                     'session_storage_scope': 'opt_in_cookies_only_not_account_certification',
                     'external_site_certification': False}
@@ -459,6 +464,7 @@ class GuidedService:
         return {'id': ident, 'queued': True}
 
     def install(self, data):
+        require_source_install()
         if (not isinstance(data, dict) or set(data) - {'consent', 'mode'}
                 or data.get('consent') is not True
                 or not isinstance(data.get('mode', 'ensure'), str)
@@ -1089,9 +1095,12 @@ class GuidedService:
             if action == 'login_password':
                 if not isinstance(secret, LoginCredentials):
                     raise CrawlError('login_form_changed')
-                backend.password_login(secret)
-            self._save(state, 'login_password_submitted' if action == 'login_password' else 'manual_detail_open' if target else 'manual_browser_open',
-                       status='waiting_manual', authentication='manual_pending')
+                login_code = backend.password_login(secret)
+                if login_code not in {'login_agreement_required', 'login_password_submitted'}:
+                    raise CrawlError('login_form_changed')
+            else:
+                login_code = 'manual_detail_open' if target else 'manual_browser_open'
+            self._save(state, login_code, status='waiting_manual', authentication='manual_pending')
         elif action == 'resume_returned_detail':
             if self._cancel.is_set():
                 raise CrawlError('paused')

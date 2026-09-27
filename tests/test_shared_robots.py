@@ -61,7 +61,7 @@ class SharedRobotsTests(unittest.TestCase):
         for body,mime in ((b'<html><div id="app"></div></html>','text/plain'),
                          (b'User-agent: *\nAllow: /','text/html'),(b'', 'text/plain'),
                          (b'\xff', 'text/plain'),(b'not a robots file', 'text/plain'),
-                         (b'User-agent: *\nDisallow: *?query=*','text/plain')):
+                         (b'User-agent: *\nDisallow: ?query=*','text/plain')):
             with self.subTest(body=body,mime=mime):
                 fake=transport(body,mime=mime);fetcher=SiteFetcher({'jobs.fixture.test'},fake)
                 for _ in range(2):

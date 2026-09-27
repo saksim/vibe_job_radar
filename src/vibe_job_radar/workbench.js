@@ -214,7 +214,7 @@ else refresh().then(async () => {
 
 
 // Public tasks poll LOCAL state only. Loading this page never queries a source.
-let publicPolling = false, publicReport = '', publicNextQuery = null, publicTaskId = '';
+let publicPolling = false, publicWatchVersion = 0, publicReport = '', publicNextQuery = null, publicTaskId = '';
 async function publicState() {
   const result = await request('/api/public/state');
   const task = result.task;
@@ -249,23 +249,36 @@ async function publicState() {
   return task;
 }
 async function watchPublic() {
+  const requestedVersion = ++publicWatchVersion;
   if (publicPolling) return;
   publicPolling = true;
+  let observedVersion = requestedVersion;
   try {
     for (let i = 0; i < 120; i++) {
+      observedVersion = publicWatchVersion;
       const task = await publicState();
+      if (observedVersion !== publicWatchVersion) continue;
       if (!task.owned_elsewhere && !['queued', 'running', 'cancelling'].includes(task.status)) {
         if (!reportPinned && task.status === 'completed' && task.report_id && task.report_id !== publicReport) {
-          publicReport = task.report_id;
-          await refresh(); showReport(await request('/api/report/' + task.report_id));
+          await refresh();
+          const report = await request('/api/report/' + task.report_id);
+          // A new explicit action can arrive while the old report is loading.
+          // Keep the current task observed and never pin that stale report.
+          if (observedVersion !== publicWatchVersion) continue;
+          if (reportPinned) return;
+          showReport(report); publicReport = task.report_id;
         }
         return;
       }
       await new Promise(resolve => setTimeout(resolve, 1000));
     }
     $('public-status').textContent = '任务仍在后台处理，已保存进度；刷新页面查看，不必重复提交。';
-  } catch (error) { $('public-status').textContent = error.message; }
-  finally { publicPolling = false; }
+  } catch (error) {
+    if (observedVersion === publicWatchVersion) $('public-status').textContent = error.message;
+  } finally {
+    publicPolling = false;
+    if (observedVersion !== publicWatchVersion) void watchPublic();
+  }
 }
 $('public-example').addEventListener('click', async () => {
   if (!confirm('仅请求官方公开岗位接口，按来源限制获取并在本机生成报告。不上传简历或登录态。是否继续？')) return;
