@@ -72,6 +72,26 @@ def browser_health_summary(health):
     return {key:health[key] for key in fields if key in health}
 
 
+def verify_store_report_reader(app, workspace, previous):
+    """The actual exe must read an initialized WAL store beside an open writer."""
+    from contextlib import closing
+    import sqlite3
+    with closing(sqlite3.connect(Path(workspace)/'jobs.sqlite')) as writer:
+        writer.execute('BEGIN IMMEDIATE')
+        writer.execute("INSERT INTO events(created_at,action,status,details) VALUES('2000-01-01','uncommitted-portable-fixture','fixture','{}')")
+        try:
+            report=app.json('/api/analyze',{'dataset':'real','roles':['time_series']})
+        finally:
+            writer.rollback()
+        if writer.execute("SELECT COUNT(*) FROM events WHERE action='uncommitted-portable-fixture'").fetchone()[0]:
+            raise AssertionError('artificial writer was committed')
+    if report['id']==previous['id'] or report['requirements']!=previous['requirements']:
+        raise AssertionError('report read beside a writer lost committed requirements')
+    if app.json('/api/report/'+previous['id'])['requirements']!=previous['requirements']:
+        raise AssertionError('concurrent report read changed prior evidence')
+    return report
+
+
 def verify(bundle,report_path,*,browser_choice='bundled'):
     if browser_choice not in ('bundled','msedge'):raise ValueError('unsupported verification browser')
     if sys.platform!='win32':raise ValueError('portable executable verification requires Windows')
@@ -139,6 +159,10 @@ def verify(bundle,report_path,*,browser_choice='bundled'):
                 report=app.json('/api/analyze',{'dataset':'real','roles':['time_series']});ident=report['id']
                 status,data=app.call(f'/api/download/{ident}/requirements_zh.csv')
                 if status!=200 or b'Cursor' not in data:raise AssertionError('portable original report/download failed')
+                result['stage']='existing_store_report_reader'
+                reader_report=verify_store_report_reader(app,workspace,report)
+                result['existing_store_report_reader_verified']=True
+                result['checks'].append('actual frozen report reads the committed WAL snapshot while a separate artificial writer holds an uncommitted transaction; prior requirements remain and the artificial write is rolled back')
                 result['stage']='real_browser_ui'
                 from playwright.sync_api import sync_playwright,expect
                 with sync_playwright() as pw:
@@ -171,6 +195,9 @@ def verify(bundle,report_path,*,browser_choice='bundled'):
             restarted=RunningApp(exe,workspace,cwd,env)
             try:
                 if restarted.json('/api/report/'+ident)['id']!=ident:raise AssertionError('portable restart lost report')
+                if restarted.json('/api/report/'+reader_report['id'])['requirements']!=reader_report['requirements']:
+                    raise AssertionError('portable restart changed the report read beside a writer')
+                result['existing_store_report_reader_restart_verified']=True
                 if restarted.json('/api/public/schedule/state')['status']!='disabled':raise AssertionError('portable restart implicitly scheduled work')
                 if restarted.json('/api/guided/state')['browser_health']['ready']:raise AssertionError('portable restart trusted old browser readiness')
             finally:restarted.close()

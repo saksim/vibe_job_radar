@@ -104,3 +104,5 @@ python scripts/run_guided_browser.py
 ### 原生浏览器实验（D02 / #48）
 
 新建任务可显式选择原生实验并确认范围，旧HTTP桥仍默认。页面HTTP/TLS由浏览器完成，经过只透明转发加密字节的本机公网目标CONNECT守卫；不是Python重发页面。当前仅猎聘主站bootstrap契约，真实业务API/跨域依赖尚待逐站核实，BOSS/51job未启用native；不能把开关出现当成三站取数成功。详见[实现与限制](docs/NATIVE_BROWSER_D02.md)。
+
+报告分析重新打开当前版本的职位库时，本分支移除重复版本写锁；原数据库等待与写入语义保持，范围和首次失败记录见[并发报告读取](docs/STORE_READ_OPEN.md)。
