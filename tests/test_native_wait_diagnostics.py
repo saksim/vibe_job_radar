@@ -80,14 +80,14 @@ class NativeWaitDiagnosticsTests(unittest.TestCase):
             backend.close()
             self.assertFalse(worker.is_alive())
             self.assertEqual(stages.snapshot()['pending'], {'1': []})
-            snapshots = [json.loads(x) for x in (out/'wait-checkpoints.jsonl').read_text().splitlines()]
+            snapshots = [json.loads(x) for x in (out/'wait-checkpoints.jsonl').read_text(encoding='utf-8').splitlines()]
             self.assertTrue(any(x['pending']['1'] == ['open', 'cdp.Fetch.getResponseBody'] for x in snapshots))
-            final = json.loads((out/'wait-progress.json').read_text())
+            final = json.loads((out/'wait-progress.json').read_text(encoding='utf-8'))
             self.assertFalse(final['success']); self.assertTrue(final['watchdog_stopped'])
             self.assertEqual(final['error_types'], ['TimeoutError'])
-            stacks = (out/'wait-threads.log').read_text()
+            stacks = (out/'wait-threads.log').read_text(encoding='utf-8')
             self.assertIn('blocked', stacks)
-            self.assertTrue(all(SECRET not in x.read_text() for x in out.iterdir()))
+            self.assertTrue(all(SECRET not in x.read_text(encoding='utf-8') for x in out.iterdir()))
 
     def test_original_failure_survives_evidence_write_failure(self):
         stages = probe.Stages(); failure = ValueError(SECRET)
@@ -113,7 +113,7 @@ class NativeWaitDiagnosticsTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'evidence incomplete'):
                 with probe.capture(stages, out, 'wait'):
                     self.assertTrue(failed.wait(2))
-            report = json.loads((out/'wait-progress.json').read_text())
+            report = json.loads((out/'wait-progress.json').read_text(encoding='utf-8'))
             self.assertFalse(report['success'])
             self.assertEqual(report['writer_error_types'], ['OSError'])
             self.assertNotIn(SECRET, json.dumps(report))
