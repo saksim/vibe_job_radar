@@ -44,3 +44,5 @@
 - https://docs.python.org/3.12/library/ssl.html （SSLCertVerificationError 与 Windows 默认根证书加载）
 - https://playwright.dev/python/docs/api/class-route#route-abort （blockedbyclient）
 - https://developers.cloudflare.com/1.1.1.1/encryption/dns-over-https/make-api-requests/ （DoH端点与TLS）
+
+普通 OSError/HTTPException 的允许字段、公开采集透传与冷却证据见 [普通加密 DNS 通信失败](ENCRYPTED_DNS_FAILURES.md)（#225）；保持原 TLS 分类和修复条件。
