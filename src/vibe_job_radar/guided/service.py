@@ -867,12 +867,12 @@ class GuidedService:
                 return
             signature = page_signature(state, cards)
             if signature in state['pages_seen']:
-                self._save(state, last_list_url=page.url, list_end='repeated_page')
+                end_reason = 'repeated_page'
                 break
             if len(state['pages_seen']) >= state['max_pages']:
                 raise CrawlError('list_page_limit')
             if cursor is not None and cursor in state.get('cursors_seen', []):
-                self._save(state, last_list_url=page.url, list_end='repeated_cursor')
+                end_reason = 'repeated_cursor'
                 break
             state['pages_seen'].append(signature)
             if cursor is not None:
@@ -884,20 +884,23 @@ class GuidedService:
                     state['cards'].append({**asdict(card), 'status': 'discovered', 'record_id': '', 'resolved_url': ''})
                     existing.add(card.id)
                     added += 1
-            self._save(state, 'reading', status='running', last_list_url=page.url)
             if not added:
-                self._save(state, list_end='no_new_entities')
-                break
-            if len(state['cards']) >= 100:
-                self._save(state, list_end='card_limit')
-                break
-            if len(state['pages_seen']) >= state['max_pages']:
-                self._save(state, list_end='page_limit')
-                break
-            if not backend.next_page():
-                self._save(state, list_end='no_next_button')
-                break
-        self._save(state, 'ready' if state['cards'] else 'empty_list', status='ready' if state['cards'] else 'waiting_manual', phase='select')
+                end_reason = 'no_new_entities'
+            elif len(state['cards']) >= 100:
+                end_reason = 'card_limit'
+            elif len(state['pages_seen']) >= state['max_pages']:
+                end_reason = 'page_limit'
+            else:
+                # Persist this page before another navigation can fail or be interrupted.
+                self._save(state, 'reading', status='running', last_list_url=page.url)
+                if backend.next_page():
+                    continue
+                end_reason = 'no_next_button'
+            break
+        # Once the end is known, cards, reason and readiness share one durable commit.
+        self._save(state, 'ready' if state['cards'] else 'empty_list',
+                   status='ready' if state['cards'] else 'waiting_manual', phase='select',
+                   last_list_url=page.url, list_end=end_reason)
 
     @traced('collection', 'service', state_index=0)
     def _collect(self, state, backend, adapter, *, returned_detail=None):
