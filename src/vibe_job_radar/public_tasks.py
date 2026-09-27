@@ -81,10 +81,13 @@ class PublicTasks:
                     time.sleep(.01)
             yield
 
-    def _read_record(self):
+    def _read_record(self, *, refresh_ownership=False):
         if self.root.is_symlink():
             raise InputError('公开任务记录不能使用符号链接。')
         with self._record_lock():
+            # Observe ownership and its record in the same short critical section.
+            # A new owner cannot publish running state between these observations.
+            if refresh_ownership:self._foreign=self.busy()
             # Even Windows metadata probes can briefly hold a file handle.
             # Keep all accesses to state.json under the replacement lock.
             if self.path.is_symlink():raise InputError('公开任务记录不能使用符号链接。')
@@ -99,8 +102,7 @@ class PublicTasks:
 
     def _refresh(self):
         if self._lease is not None:return
-        self._foreign=self.busy()
-        self._read_record()
+        self._read_record(refresh_ownership=True)
         if not self._foreign and self._state.get('status') in {'queued','running','cancelling'}:
             self._state.update(status='interrupted',message='上次服务已退出；已保存条件和数据，确认后可继续。')
 
