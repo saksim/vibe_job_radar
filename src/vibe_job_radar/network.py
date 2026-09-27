@@ -16,7 +16,7 @@ import time
 from dataclasses import dataclass, field
 from email.utils import parsedate_to_datetime
 from urllib.parse import urlsplit, urlunsplit
-from urllib.robotparser import RobotFileParser
+from .robots_rules import RobotsRules, RobotsError
 from .utils import domain_matches
 from .tls_context import create_client_context
 from .loopback_proxy import LoopbackProxy, LocalProxyError
@@ -330,7 +330,7 @@ class SiteFetcher:
         self.domains = set(permitted_domains)
         self.transport = transport or SafeHTTP(permitted_domains, interval=2.0)
         self.max_redirects = max_redirects
-        self.robots: dict[str, RobotFileParser | None] = {}
+        self.robots: dict[str, RobotsRules | None] = {}
         self.last_diagnostic: dict = {}
 
     def _get(self, url: str, phase: str) -> Response:
@@ -377,21 +377,24 @@ class SiteFetcher:
                     current = self._follow(current, result, "robots", visited)
                     continue
                 break
-            if result.status == 200 and not result.headers.get("content-type", "").lower().startswith("text/html"):
-                rp = RobotFileParser()
-                rp.parse(result.text().splitlines())
-                self.robots[origin] = rp
+            # This legacy route still requires a present robots file; sharing
+            # matching does not expand its existing 404/410 access policy.
+            if result.status == 200:
+                try:
+                    # Preserve legacy header-less plain-text support, but the
+                    # shared parser now requires valid UTF-8 rules, never HTML.
+                    self.robots[origin] = RobotsRules(200,
+                        result.headers.get('content-type') or 'text/plain', result.body,
+                        user_agent=USER_AGENT)
+                except RobotsError:
+                    pass  # Cached unavailable decision; do not fetch the JD.
         rp = self.robots[origin]
         if rp is None:
             raise FetchError("robots_unavailable", "automation is not enabled for this origin")
-        if not rp.can_fetch(USER_AGENT, url):
+        if not rp.allowed(url):
             raise FetchError("robots_denied")
-        delay = rp.crawl_delay(USER_AGENT)
-        if delay:
-            self.transport.interval = max(self.transport.interval, float(delay))
-        rate = rp.request_rate(USER_AGENT)
-        if rate and rate.requests:
-            self.transport.interval = max(self.transport.interval, rate.seconds / rate.requests)
+        self.transport.interval = max(self.transport.interval, rp.delay,
+            *(seconds / requests for requests, seconds in rp.windows))
 
     def fetch(self, url: str) -> Response:
         from .redirect_policy import validate_target, page_gate

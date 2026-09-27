@@ -105,7 +105,7 @@ class RealProxyTests(unittest.TestCase):
                 payload=getattr(owner,'payload',b'{"ok":true,"source":"real-controlled-tls"}')
                 content_type=getattr(owner,'content_type','application/json')
                 if getattr(owner,'browser_fixture',False) and self.path=='/robots.txt':
-                    payload=b'User-agent: *\nAllow: /\n';content_type='text/plain'
+                    payload=getattr(owner,'robots_payload',b'User-agent: *\nAllow: /\n');content_type='text/plain'
                 self.send_response(owner.http_status);self.send_header('Content-Length',str(len(payload)))
                 self.send_header('Content-Type',content_type);self.end_headers();self.wfile.write(payload)
             do_GET=do_POST=answer
