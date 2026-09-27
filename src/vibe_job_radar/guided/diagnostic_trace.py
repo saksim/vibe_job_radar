@@ -37,7 +37,7 @@ CODES = frozenset('''operation_error network_error dns_error non_public_address
     playwright_incompatible browser_executable_missing browser_launch_failed
     browser_choice_invalid paused rate_wait publisher_wait cooldown hourly_limit
     daily_limit list_page_limit login_rate_limited rate_storage_error clock_rollback
-    publisher_policy_invalid encrypted_dns_consent_required encrypted_dns_tls_failed
+    publisher_policy_invalid automatic_resume_unavailable encrypted_dns_consent_required encrypted_dns_tls_failed
     encrypted_dns_unavailable encrypted_dns_invalid_response encrypted_dns_disabled
     encrypted_dns_non_public_answer encrypted_dns_route_failed encrypted_dns_timeout
     encrypted_dns_http_rejected encrypted_dns_refused encrypted_dns_name_not_found
