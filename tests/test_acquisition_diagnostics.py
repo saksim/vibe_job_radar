@@ -319,6 +319,7 @@ class ServiceTraceTests(unittest.TestCase):
     def test_restart_loses_recording_not_prior_task(self):
         ident=self.helper.create(diagnostics=True)
         old=self.service.diagnostics({'id':ident})
+        self.service.close()  # Restart means the previous owner has exited.
         other=GuidedService(self.helper.workspace,registry=Registry([fixtures.fixture_adapter()]),backend_factory=fixtures.FakeBackend)
         self.addCleanup(other.close)
         new=other.diagnostics({'id':ident})

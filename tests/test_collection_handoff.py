@@ -14,6 +14,7 @@ from vibe_job_radar.collection_handoff import CollectionHandoff
 from vibe_job_radar.guided.adapters import builtins
 from vibe_job_radar.guided.contracts import PageSnapshot
 from vibe_job_radar.guided.service import GuidedService
+from vibe_job_radar.guided.ownership import GuidedTaskBusy
 from vibe_job_radar.store import Store
 from vibe_job_radar.workbench import LocalServer
 from vibe_job_radar.workspace import Workspace, InputError
@@ -97,6 +98,28 @@ class HandoffTests(unittest.TestCase):
         self.assertEqual(one['id'], two['id']); self.assertTrue(two['reused'])
         self.assertEqual(submit.call_count, 1)
         self.assertEqual(self.preview()['groups'][0]['existing_url'], one['url'])
+
+    def test_handoff_respects_foreign_browser_owner_before_child_creation(self):
+        other=GuidedService(self.workspace,backend_factory=DetailBackend)
+        self.addCleanup(other.close)
+        other._ownership.acquire()
+        before=self.collector._path(self.state['id']).read_bytes()
+        with patch.object(self.guided,'_submit') as submit:
+            with self.assertRaises(GuidedTaskBusy):self.bridge.handoff_start(self.request())
+            submit.assert_not_called()
+        self.assertEqual(list(self.guided.root.glob('*.json')),[])
+        self.assertEqual(self.collector._path(self.state['id']).read_bytes(),before)
+
+    def test_handoff_holds_claim_across_child_save_and_enqueue(self):
+        other=GuidedService(self.workspace,backend_factory=DetailBackend)
+        self.addCleanup(other.close);observed=[]
+        def queued(*args):
+            with self.assertRaises(GuidedTaskBusy):other._ownership.acquire()
+            observed.append(True)
+        with patch.object(self.guided,'_submit',side_effect=queued):
+            self.bridge.handoff_start(self.request())
+        self.assertEqual(observed,[True])
+        other._ownership.acquire()  # No queue/backend was created by this fixture.
 
     def test_existing_task_survives_service_restart_without_replay(self):
         data = self.request()

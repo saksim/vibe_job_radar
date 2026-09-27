@@ -15,10 +15,12 @@ async function api(path,data){const response=await fetch(path,{method:data===und
 function note(text){$('busy').textContent=text;}
 function actionControls(){
  if(!state)return;
- for(const button of document.querySelectorAll('button'))button.disabled=requesting || (state.busy && !['pause','stop'].includes(button.id));
+ const foreign=state.owned_elsewhere===true;
+ for(const button of document.querySelectorAll('button'))button.disabled=requesting || (foreign ? !['copy-browser-diagnostic','export'].includes(button.id) : state.busy && !['pause','stop'].includes(button.id));
  const tls=state.tls_environment;
- if(tls)$('repair-tls').disabled=requesting||state.busy||tls.restart_required||!tls.repair_available;
- note([sticky || (requesting?'正在处理本次操作，请稍候。':state.busy?(!state.active?state.setup?.message:current?.message)||'正在运行后端操作；可以暂停或停止。':''), ...(state.checkpoint_warnings||[])].filter(Boolean).join('\n'));
+ if(tls)$('repair-tls').disabled=requesting||foreign||state.busy||tls.restart_required||!tls.repair_available;
+ for(const input of document.querySelectorAll('#password-login-form input'))input.disabled=foreign;
+ note([state.ownership_message, state.closure_uncertain?'无法确认上次采集浏览器已关闭，请退出原工作台进程并核对浏览器后重开。':'', sticky || (requesting?'正在处理本次操作，请稍候。':state.busy?(!state.active?state.setup?.message:current?.message)||'正在运行后端操作；可以暂停或停止。':''), ...(state.checkpoint_warnings||[])].filter(Boolean).join('\n'));
 }
 async function act(fn){if(requesting)return;requesting=true;sticky='';actionControls();try{await fn();await refresh();}catch(e){sticky=e.message;note(sticky);}finally{requesting=false;actionControls();}}
 function options(element,values){const value=element.value;element.replaceChildren();values.forEach(([id,label])=>{const o=document.createElement('option');o.value=id;o.textContent=label;element.append(o);});if(values.some(x=>x[0]===value))element.value=value;}
@@ -104,7 +106,7 @@ $('search-form').addEventListener('submit',e=>{e.preventDefault();const f=e.curr
 $('task').addEventListener('change',()=>{loadedId='';render();});
 $('password-login-form').addEventListener('submit', e=>{
  e.preventDefault();
- if(requesting || state?.busy)return;
+ if(requesting || state?.busy || state?.owned_elsewhere===true)return;
  const form=e.currentTarget;
  const data={id:active(),action:'login_password',username:form.elements.username.value,
   password:form.elements.password.value,credential_consent:form.elements.credential_consent.checked};

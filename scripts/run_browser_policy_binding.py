@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from contextlib import ExitStack
 import os
 from pathlib import Path
 import sys
@@ -111,9 +112,8 @@ def main():
     elif os.environ.get('RADAR_TEST_CHROMIUM'): options['executable_path'] = os.environ['RADAR_TEST_CHROMIUM']
     adapter = DOMAdapter('fixture','人工策略验收',(HOST,),f'https://{HOST}/search','q',
         r'^/job/[0-9]+$', f'https://{HOST}/login', (HOST,))
-    services = []
     try:
-        with tempfile.TemporaryDirectory() as folder:
+        with tempfile.TemporaryDirectory() as folder, ExitStack() as cleanup:
             root = Path(folder)
             def make(name,consent):
                 workspace = Workspace(root/name)
@@ -121,7 +121,7 @@ def main():
                 ledger = RateLedger(workspace.root/'fixture-rates.sqlite',Limits(page_interval=0,request_interval=0))
                 service = GuidedService(workspace, registry=Registry([adapter]), ledger=ledger,
                     backend_factory=lambda a,l,c,p:ObservedBackend(a,l,c,p,**options))
-                services.append(service)
+                cleanup.callback(service.close)
                 return workspace,service
             workspace, service = make('consented',True)
             query = {'platform':'fixture','keyword':'时间序列算法工程师','roles':['time_series'],
@@ -184,7 +184,6 @@ def main():
                 result['success']=True
             fixture.perform(exercise)
     finally:
-        for service in services: service.close()
         fixture.origin.RequestHandlerClass.do_GET = original_get
         fixture.tearDown()
         (out/'results.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
