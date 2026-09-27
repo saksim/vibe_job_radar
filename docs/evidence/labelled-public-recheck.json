@@ -1,0 +1,212 @@
+{
+  "schema_version": 1,
+  "issue": 223,
+  "frozen_at": "2026-09-27T06:21:01.634126+00:00",
+  "scope": "One public detail parser revalidation; not normal account/search, human full-text certification, or a market success rate.",
+  "execution_revision": "bdc125cb966a3a410fff19e8a495ce594d9bd5a9",
+  "parser_git_sha256": "b285cfe1b7e9fa33653a4676da0c6358c81515ef24cf330afa51ee2ed87aa1a8",
+  "platform": "liepin",
+  "url": "https://www.liepin.com/a/80299035.shtml",
+  "qualification": {
+    "first_ci": "22/23",
+    "current_ci": "23/23",
+    "failed_job_rechecks": 1,
+    "source_files": 538,
+    "actual_windows_executable_verified": true,
+    "windows_latency_root_cause_resolved": false
+  },
+  "initial_attempt": {
+    "started_at": "2026-09-27T06:14:29.414086+00:00",
+    "finished_at": "2026-09-27T06:14:32.782262+00:00",
+    "outcome": "encrypted_dns_unavailable",
+    "source_transport_entries": 1,
+    "source_http_requests": 0,
+    "detail_processing_attempts": 1,
+    "full_jds": 0,
+    "report_generated": false,
+    "quota_reservations": {
+      "page": 1,
+      "request": 1
+    },
+    "proof_sha256": "b22ac71c5ff6960829dc9d38b5b293df7fd2addb01eaec4cf28d09fbb0a710ac",
+    "plan": "https://github.com/saksim/vibe_job_radar/issues/223#issuecomment-5853277134",
+    "script_sha256": "8abbebabdb4847873af72df9b1f3c5362564481a01fc81d5dd46c89bcdf57e79"
+  },
+  "separate_dns_observation": {
+    "started_at": "2026-09-27T06:17:06.081568+00:00",
+    "finished_at": "2026-09-27T06:17:10.601428+00:00",
+    "success": true,
+    "source_http_requests": 0,
+    "doh_post_calls": 2,
+    "http_statuses": [
+      200,
+      200
+    ],
+    "address_count": 2,
+    "settings_changed": false,
+    "does_not_establish_first_failure_cause": true,
+    "proof_sha256": "9f9aa5e45438c8aa3ad26ba84cc39a4d020911132bcfdb39b4538704ca2f95f9"
+  },
+  "single_registered_continuation": {
+    "started_at": "2026-09-27T06:18:35.997938+00:00",
+    "finished_at": "2026-09-27T06:18:49.351959+00:00",
+    "outcome": "completed",
+    "source_transport_entries": 2,
+    "source_http_requests": 2,
+    "detail_processing_attempts": 1,
+    "full_jds": 1,
+    "report_generated": true,
+    "actual_local_dates": [
+      "2026-09-27"
+    ],
+    "timezone": "America/Denver",
+    "network_preference": "fake_ip_doh",
+    "record": {
+      "record_id": "j_e55b45020f1fd4d0169d53e7",
+      "url": "https://www.liepin.com/a/80299035.shtml",
+      "title": "AI架构师",
+      "collected_at": "2026-09-27T06:18:49.148613+00:00",
+      "source_mode": "public_fetch",
+      "evidence_level": "full_text",
+      "synthetic": false,
+      "parser": "liepin_public_detail_v1:liepin:job_intro_jsonld:v1",
+      "text_characters": 1139,
+      "text_sha256": "2b5e62be65150ba685a6e4726fba1707268f7e1453fa37ad37ccc84a5cdd2e16",
+      "raw_sha256": "b5ce3d62995c3cdc8749ab26798672e9ab5500ee2ad08e2dc21a38085b54cfec",
+      "labelled_format_without_generic_heading": true
+    },
+    "requests": [
+      {
+        "kind": "robots",
+        "url": "https://www.liepin.com/robots.txt",
+        "started_at": "2026-09-27T06:18:36.154142+00:00",
+        "status": 200,
+        "bytes": 178,
+        "sha256": "acebcf9a04e064a3600b77c07c93ec2448ddb73cf5c8b09e085be59d0ccd6edc",
+        "finished_at": "2026-09-27T06:18:43.605433+00:00"
+      },
+      {
+        "kind": "detail",
+        "url": "https://www.liepin.com/a/80299035.shtml",
+        "started_at": "2026-09-27T06:18:43.617897+00:00",
+        "status": 200,
+        "bytes": 42371,
+        "sha256": "b5ce3d62995c3cdc8749ab26798672e9ab5500ee2ad08e2dc21a38085b54cfec",
+        "finished_at": "2026-09-27T06:18:49.097912+00:00"
+      }
+    ],
+    "quota_reservations": {
+      "page": 1,
+      "request": 2
+    },
+    "proof_sha256": "b86029a9723cf1246eea85590f8ab7c3bf889877d3da72a29ffe13f7634a262c",
+    "plan": "https://github.com/saksim/vibe_job_radar/issues/223#issuecomment-5853312568",
+    "script_sha256": "9b17cffba8cd95a9c485353d03e6ffd1093f93a162c5e6910cec777a00b3071c",
+    "same_text_as_original_failure": true,
+    "labelled_format_still_exercised": true,
+    "report_id": "8e8e7a77dc3e4e8492e15e3e2f772205",
+    "stats": {
+      "stored_snapshots": 1,
+      "current_source_records": 1,
+      "selected_source_records": 1,
+      "deduplicated_groups": 1,
+      "full_text_job_groups": 1,
+      "vibe_evidence_job_groups": 0,
+      "vibe_evidence_source_records": 0,
+      "requirement_rows": 0,
+      "accepted_positive_requirement_rows": 0,
+      "review_queue_rows": 0,
+      "hard_constraint_rows": 1,
+      "duplicate_groups": 0,
+      "analysis_error_rows": 0
+    },
+    "manifest_sha256": "fed32f89dc8deceb308d5fc176b4eb77ccd8e5dacc6ae145f43326051704a8d4",
+    "report_files_sha256": {
+      "analysis_errors.csv": "14025556c9c0fa9e511a1df5ad396a8e6bd55d3310363811f78e97486222f45a",
+      "ats_keywords.csv": "7f3d74672d169c19e4b144c396ccddba1a2280b62816e8e4412c5756aa1608be",
+      "audit_events.csv": "6e2da5c13b652945a01be37932f7214bc3a4faac7c9c63de1324eda03eb8b930",
+      "candidate.effective.json": "db98194691ec5f221bf2cd00a67df3e1b45ca3cabb4bd2d23afefc2aa098e970",
+      "candidate.template.json": "db98194691ec5f221bf2cd00a67df3e1b45ca3cabb4bd2d23afefc2aa098e970",
+      "capability_summary.csv": "70519a0183870fd4c9df1b5c6e9989bb0580d0b0613d32fe4ed4f9d3623874c0",
+      "dashboard.html": "5c6fc1ec5d3e060f335d020e745fb1f0691a450077555b5166ec03a4eaf2857e",
+      "descriptions.md": "d3545c8f1e8e26e26a220f0b55c4365e00ee5cb5df882cf831b1e0caceb2f5c9",
+      "duplicate_groups.csv": "f92bf2c34f2c341d83ccb7200243531327c494153ce79d87ab8a73b8e51c7571",
+      "effective_config.json": "334afd2030a2092f964421e28dd4eeaf6e41ea083d4219bcf1c7dc865b1cf03b",
+      "evidence_gaps.md": "575fa6e46a477d3051f6ab9bb991e4d60563cf7a0729303186ee6c88f75ff83a",
+      "hard_constraints.csv": "963d9dd42be3c8635182d456dc16c6bc382b5a9090fef85675ca300e5eadf49a",
+      "input_audit.csv": "1120e95d3b7e522453770bf78a52cc23a74395c4d8d2950827460f766357340d",
+      "job_coverage.csv": "6ae622f5a530b86efd3807a6435c4fbcfdefa7b2606447f13f83ccec972fac4a",
+      "jobs.jsonl": "fffdc585eb53581da93df61425ba29d8cd07248676bdbbe12452d6062d05f20d",
+      "llm_audit.json": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+      "metrics_catalog.csv": "4e1a7a81208a16ddf13e02fb45c75fff10424f01669353f709240ce1b351aa6f",
+      "negative_constraints.csv": "6f384ec18c4c31bd4c95e0d135bbd89fa47922ab13e770595b97876a3cd0b1b8",
+      "README_OUTPUT.md": "0c5718b90479a345c8c639cbe2772419e2a247f491e49085a901b78f2888b6cc",
+      "requirement_evidence_matrix.csv": "8727c66cf9c865ea6566758b376e97f13fc5d7f5a2710516c5934757a4a93ca2",
+      "requirements.csv": "6f384ec18c4c31bd4c95e0d135bbd89fa47922ab13e770595b97876a3cd0b1b8",
+      "requirements.jsonl": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "requirements_zh.csv": "144be52a6e598bce4fbcf9231f1683fc2a630242e39699e019d699bff6412299",
+      "research_brief.json": "8c8b615590a2d024ff0c416c2b850d00cc7eea1f2c961c1bc37f87b75b95c961",
+      "research_brief.md": "622dd559baaa294659a146aed09329b4ce4382c6d704aac8e0cceb0e5320d8cf",
+      "review_queue.csv": "6f384ec18c4c31bd4c95e0d135bbd89fa47922ab13e770595b97876a3cd0b1b8",
+      "reviews.effective.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+      "reviews.template.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+      "role_descriptions.md": "d86b180b0fe10de0a75ed579bd8c67672496c79ae8fe558f21600e240ad3a34c",
+      "collection_manifest.json": "adb8093413c5f33a2890c26a808bee280520fe1ae1679dbf2ab15028afb768d8"
+    }
+  },
+  "denominators": {
+    "selected_detail_operations": 2,
+    "successful_operations": 1,
+    "unsuccessful_operations": 1,
+    "distinct_selected_urls": 1,
+    "source_transport_entries": 3,
+    "source_http_requests": 2,
+    "page_reservations": 2,
+    "request_reservations": 3,
+    "all_doh_http_calls_known": false,
+    "extra_dns_observation_doh_calls": 2,
+    "prior_distinct_full_urls": 90,
+    "new_distinct_full_urls": 1,
+    "distinct_full_urls_after": 91,
+    "successful_sample_dates_after": [
+      "2026-09-24",
+      "2026-09-25",
+      "2026-09-26",
+      "2026-09-27"
+    ],
+    "human_confirmations": 0
+  },
+  "protected": {
+    "prior_reports": [
+      {
+        "report_id": "86c81eb16ef0424ead0b1d5ecb94785c",
+        "input_records": 89,
+        "manifest_sha256": "663c12a1b76056c507a69b93514c98d5029a4a66871abe506aa3e2ebd4b970f5"
+      },
+      {
+        "report_id": "c48034caba0646db8a4384a33fe5df35",
+        "input_records": 3,
+        "manifest_sha256": "4878f1350e0bab5ddd0c9d36c096d9f2a85c1b240788a2aa8957783f7fe7489a"
+      },
+      {
+        "report_id": "4fae46aa4eac49018f25ba2796951904",
+        "input_records": 2,
+        "manifest_sha256": "20a8c0b505aad0b0944d94f7771b545f00460a429a197dbd25f08f1dcd4f36eb"
+      }
+    ],
+    "prior_reports_unchanged": true,
+    "first_new_failure_unchanged": true,
+    "third_date_original_outcomes": {
+      "ok": 2,
+      "structure_changed": 1
+    },
+    "third_date_proof_sha256": "d271b2d5ad1ac0648f762bf2c998a34ce6a11f97aa23ae68a11af2f06258519d",
+    "saved_response_proof_sha256": "07125d3568eaf3d2b060699c784d12478ae9dc7de1fa9602e692a6e1bf3c4cfb"
+  },
+  "limits": [
+    "Original89 report stays89 and no combined91-job report was generated.",
+    "Successful HTTP/parser consistency is not human confirmation.",
+    "No normal login/search, BOSS/51job certification, default change, workbench upgrade, main merge or release.",
+    "DoH was unavailable first and later available; first failure phase/cause remains unknown."
+  ]
+}
