@@ -15,6 +15,7 @@ from unittest.mock import Mock, patch
 from test_local_public import payload,query
 from vibe_job_radar.local_public import LocalPublicDataClient
 from vibe_job_radar.public_tasks import PublicTasks,PublicTaskBusy
+from vibe_job_radar.public_schedule import PublicSchedule,DAY
 from vibe_job_radar.workspace import InputError,Workspace
 
 
@@ -223,6 +224,32 @@ class OwnerTests(unittest.TestCase):
             self.assertEqual(db.execute('SELECT COUNT(*) FROM visits').fetchone()[0],2)
 
 
+
+    def test_schedule_waits_for_other_owner_without_rewriting_plan_or_task(self):
+        scheduler=PublicSchedule(self.workspace,self.second,clock=lambda:self.now[0]);self.addCleanup(scheduler.close)
+        scheduler.configure({'consent':True,'query':query().payload(),'revision':0});self.now[0]+=DAY
+        self.running();before=self.first.path.read_bytes();revision=scheduler.state()['revision']
+        scheduler.tick();self.assertEqual(scheduler.state()['revision'],revision)
+        self.assertEqual(self.first.path.read_bytes(),before)
+        # Race: another owner acquired between the advisory check and submit.
+        with patch.object(self.second,'busy',return_value=False):scheduler.tick()
+        self.assertEqual(scheduler.state()['status'],'scheduled');self.assertEqual(scheduler._read()['attempt_id'],'')
+        self.assertEqual(self.first.path.read_bytes(),before)
+        self.release.set();self.wait();scheduler.tick();self.wait(self.second);scheduler.tick()
+        self.assertEqual(len(scheduler.state()['history']),1);self.second_transport.json.assert_not_called()
+
+    def test_scheduler_handoff_waits_for_still_owned_task_and_keeps_report(self):
+        scheduler=PublicSchedule(self.workspace,self.second,clock=lambda:self.now[0]);self.addCleanup(scheduler.close)
+        scheduler.configure({'consent':True,'query':query().payload(),'revision':0})
+        ident=self.running();value=scheduler._read()
+        value.update(status='running',code='running',attempt_id='a'*32,active_task_id=ident)
+        scheduler._write(value);scheduler.recover()
+        self.assertEqual(scheduler.state()['status'],'running')
+        scheduler.disable({'revision':scheduler.state()['revision']});scheduler.tick()
+        self.assertFalse(self.first._cancel.is_set())  # This instance cannot steal another owner's controls.
+        self.release.set();complete=self.wait();scheduler.tick()
+        self.assertEqual(scheduler.state()['status'],'disabled')
+        self.assertEqual(scheduler.state()['history'][0]['report_id'],complete['report_id'])
 
     def test_concurrent_observer_reads_do_not_break_atomic_saves(self):
         self.running();errors=[]

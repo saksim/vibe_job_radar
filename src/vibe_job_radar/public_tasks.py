@@ -7,7 +7,7 @@ network requests require a user's explicit start/search consent.
 from __future__ import annotations
 
 import copy
-from contextlib import contextmanager, ExitStack
+from contextlib import contextmanager
 import hashlib
 import json
 import tempfile
@@ -19,6 +19,7 @@ from pathlib import Path
 
 from .catalog_changes import compact_change
 from .collection import writer_lock
+from .record_lock import record_lock
 from .network_policy import current_policy
 from .public_contract import PublicQuery, as_record
 from .public_example import PublicExample
@@ -72,14 +73,7 @@ class PublicTasks:
         # Atomic replacement on Windows can fail while another instance reads
         # the old file. Readers/writers share a short lock; owner leases remain
         # nonblocking and are never inferred from PID/stale-file timestamps.
-        deadline=time.monotonic()+5
-        with ExitStack() as stack:
-            while True:
-                try:stack.enter_context(writer_lock(self.root));break
-                except InputError as exc:
-                    if not isinstance(exc.__cause__,OSError) or time.monotonic()>=deadline:raise
-                    time.sleep(.01)
-            yield
+        with record_lock(self.root):yield
 
     def _read_record(self, *, refresh_ownership=False):
         if self.root.is_symlink():
@@ -170,6 +164,20 @@ class PublicTasks:
             raise InputError('原任务的来源或执行方式不可用，请重新核对来源后建立任务。')
         return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 
+    def scheduled_search(self, query, *, binding, policy_id):
+        """Internal dispatch from a previously confirmed durable local plan.
+
+        Freeze the approved route before starting the worker: a preferences
+        change while the thread is queued must not silently change its route.
+        No policy object or credential is persisted in the task record.
+        """
+        with self._lock:
+            policy=self.workspace.network_policy()
+            if (self.mode()!='local_direct' or policy.error or policy.fingerprint!=policy_id
+                    or self._binding('search',query)!=binding):
+                raise InputError('计划来源或网络条件已变化，请重新确认。')
+            return self._submit('search',query,network_policy=policy)
+
     def _can_resume(self):
         state = self._state
         if (state.get('status') not in {'cancelled','interrupted'}
@@ -204,7 +212,7 @@ class PublicTasks:
                 raise InputError('此任务不处于可恢复的中断状态，或来源/契约已变化；已保存结果保留，请核对后新建任务。')
             return self._submit(self._state['kind'], self._state['query'], resume_id=data['id'])
 
-    def _submit(self, kind, query, *, resume_id=''):
+    def _submit(self, kind, query, *, resume_id='', network_policy=None):
         with self._lock:
             if self._closed:
                 raise InputError('本地服务正在关闭。')
@@ -226,7 +234,7 @@ class PublicTasks:
                              'created_at':previous.get('created_at', utc_now()), 'resume_binding':binding,
                              'attempt':previous.get('attempt', 0)+1}
                 self._save(status='queued',message='任务已保存，正在准备获取公开数据。',report_id='')
-                args=(kind,query)
+                args=(kind,query) if network_policy is None else (kind,query,network_policy)
                 self._thread=threading.Thread(target=self._run_owned,args=args,name='radar-public-data',daemon=True)
                 self._thread.start()
                 return {'id':self._state['id'],'queued':True}
@@ -252,7 +260,7 @@ class PublicTasks:
             check_cancelled(self._cancel)
             self._save(phase='saving', message='正在保存本批公开结果；完成后保留报告，不再启动后续查询。')
 
-    def _run(self, kind, value):
+    def _run(self, kind, value, network_policy=None):
         try:
             with self._lock:
                 check_cancelled(self._cancel)
@@ -264,7 +272,8 @@ class PublicTasks:
             else:
                 query=PublicQuery.from_dict(value)
                 check_cancelled(self._cancel)
-                response=self.hybrid.search(query,consent=True)
+                options={} if network_policy is None else {'network_policy':network_policy}
+                response=self.hybrid.search(query,consent=True,**options)
                 self._begin_commit()
                 result=self._import(response,query)
             # Do not persist the report's full private rendering in task status.

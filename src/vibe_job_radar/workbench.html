@@ -11,6 +11,7 @@ body{overflow-wrap:anywhere}
 <style>#workspace,#public-saved-query{overflow-wrap:anywhere}</style>
 <script src="/app.js" defer></script>
 <script src="/network-settings.js" defer></script>
+<script src="/public-schedule.js" defer></script>
 </head>
 <body><main><header><div class="tag">EVIDENCE FIRST / LOCAL WORKSPACE</div><h1>招聘要求 → 逐条证据 → 可量化描述</h1>
 <p class="intro">研究目标岗位如何要求 AI 辅助编程，保留招聘原文，再用自己的项目和观测数据形成可信描述。先取得相关 JD，再复核要求，最后补本人证据。</p>
@@ -35,6 +36,16 @@ body{overflow-wrap:anywhere}
 <button id="public-cancel" type="button" hidden>停止当前公开任务</button>
 <button id="public-resume" type="button" hidden>确认继续已保存的公开查询</button>
 <p id="public-saved-query" class="muted"></p>
+<details id="public-schedule"><summary>每24小时自动更新这组公开查询</summary>
+<p>默认关闭。沿用上方查询词、地区与来源，每次最多20条首屏结果，不自动翻页。保存后首次在24小时后运行；关闭网页不影响，但本机工作台服务必须保持运行。服务重启后只补一次到期查询。</p>
+<p>来源或网络路线变化、失败或过期缓存会暂停计划，需要重新确认。停止会取消后续步骤；已经开始的只读请求或本地保存结束后停止，已有报告保留。</p>
+<fieldset id="schedule-controls" disabled><legend>本机执行计划</legend>
+<label class="check"><input id="schedule-consent" type="checkbox">我同意按上方当前来源与查询每24小时执行一次，并把计划保存在此工作区</label>
+<button id="schedule-save" type="button">保存24小时计划</button>
+<button id="schedule-stop" type="button" class="secondary">停止计划</button></fieldset>
+<p id="schedule-status" role="status" aria-live="polite">正在读取计划，不请求外部来源。</p>
+<p id="schedule-message" role="status" aria-live="polite"></p><p id="schedule-query" class="muted"></p>
+<ul id="schedule-history" aria-label="定时查询的最近结果"></ul></details>
 <p class="muted">默认来源仅为 Anthropic 公开招聘，不代表全市场，也不替代指定招聘平台。筛选按原文关键词，不推断远程资格。来源时间与缓存状态会明确标注。</p>
 </details></section><p><a href="/guided">新手推荐：选平台 → 找岗位 → 勾选采集（无需手工整理 URL）</a></p>
 

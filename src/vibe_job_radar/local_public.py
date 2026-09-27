@@ -215,7 +215,7 @@ class LocalPublicDataClient:
             return self._select(query, value, now, cached=True,
                                 error=self.failure_guard.read(now)) if value else None
 
-    def search(self, query, *, consent=False):
+    def search(self, query, *, consent=False, network_policy=None):
         self._scope(query)
         if consent is not True:
             raise InputError('请确认本机获取所选公开来源；不提交申请或上传个人资料。')
@@ -248,7 +248,7 @@ class LocalPublicDataClient:
                 if self._default_transport:
                     # A new confirmed query may adopt changed preferences. The
                     # active query and existing circuit state are not reset.
-                    self.client.network_policy = self.workspace.network_policy()
+                    self.client.network_policy = network_policy or self.workspace.network_policy()
                     self.client.resolver = self.workspace.dns_resolver
                 # This constant GET carries no user query, region, files, cookies,
                 # passwords, application API key or Authorization header.
