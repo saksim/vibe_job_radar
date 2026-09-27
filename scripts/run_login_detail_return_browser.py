@@ -13,10 +13,13 @@ import sys
 import tempfile
 import threading
 import time
+import traceback
 from urllib.parse import urlsplit
+from unittest.mock import patch
 
 ROOT=Path(__file__).resolve().parents[1]
-sys.path.insert(0,str(ROOT/'src'))
+sys.path[:0]=[str(ROOT/'src'),str(ROOT/'tests')]
+from guided_wait_diagnostic import wait_diagnostic
 from vibe_job_radar.guided.adapters import Registry, builtins
 from vibe_job_radar.guided.browser import PlaywrightBackend
 from vibe_job_radar.guided.contracts import CrawlError
@@ -84,7 +87,23 @@ def main():
             if human_click.is_set():
                 human_click.clear()
                 self.page.locator('#human-confirm').click()
+                self.fixture_login_clicked=True
             super().pump()
+        def snapshot(self):
+            # Artificial supplier only: move a known tracking value between
+            # the original URL and content reads, without another request.
+            # This makes the real DOM observation race deterministic in CI.
+            if (args.automatic and getattr(self,'fixture_login_clicked',False)
+                    and not result.get('snapshot_url_change_injected')
+                    and self.page.url==ORIGIN+'/job/2.shtml'):
+                original_content=self.page.content
+                def changing_content():
+                    content=original_content()
+                    self.page.evaluate("history.replaceState(null,'',location.pathname+'?d_sfrom=fixture')")
+                    result['snapshot_url_change_injected']=True
+                    return content
+                with patch.object(self.page,'content',side_effect=changing_content):return super().snapshot()
+            return super().snapshot()
     executable=os.environ.get('RADAR_TEST_CHROMIUM')
     options={'headless':True}
     if executable:options['executable_path']=executable
@@ -104,6 +123,7 @@ def main():
             try:
                 with sync_playwright() as pw:
                     browser=pw.chromium.launch(**options)
+                    result['browser_version']=browser.version
                     try:
                         context=browser.new_context(viewport={'width':1280,'height':960})
                         def local_route(route):
@@ -116,6 +136,11 @@ def main():
                             route.continue_()
                         context.route('**/*',local_route)
                         page=context.new_page();page.on('pageerror',lambda e:result['page_errors'].append(str(e)))
+                        def response_seen(response):
+                            if (result['phase'] in {'opening_login','arming_login_watcher'} and response.request.method=='POST'
+                                    and response.url==server.origin+'/api/guided/action'):
+                                result['login_action_http_status']=response.status
+                        page.on('response',response_seen)
                         page.goto(server.entry_url);page.locator('a[href="/guided"]').click()
                         form=page.locator('#search-form')
                         form.locator('[name=keyword]').fill('时间序列算法工程师')
@@ -215,6 +240,7 @@ def main():
                         assert workspace.report_file(first_report,'run_manifest.json').is_file()
                         assert first_report!=finished['report_id']
                         assert workspace.report(finished['report_id'])['manifest']['stats']['current_source_records']==2
+                        if args.automatic:assert result.get('snapshot_url_change_injected') is True
                         result['checks'].append('one manual fixture login returns to selected detail; no Capture/Resume, home/list detour or duplicate detail GET')
                         result['checks'].append('returned full JD enters original report, previous result/report retained, no recommended job fetched')
                         page.screenshot(path=str(out/'selected-detail-completed.png'),full_page=True)
@@ -224,6 +250,22 @@ def main():
                         assert api_actions.count('login')==1
                         result['phase']='completed'
                         result['success']=True
+                    except Exception as exc:
+                        # Capture before browser/server cleanup. Never include exception
+                        # text, source lines, DOM, tokens or worker-local values.
+                        result['script_line']=next((f.lineno for f in reversed(traceback.extract_tb(exc.__traceback__))
+                            if Path(f.filename).resolve()==Path(__file__).resolve()),None)
+                        result['fixture_requests']={
+                            'search_get':calls.count(('GET','/zhaopin/')),
+                            'first_detail_get':calls.count(('GET','/job/1.shtml')),
+                            'selected_detail_get':calls.count(('GET','/job/2.shtml')),
+                            'login_post':calls.count(('POST','/normal-login')),
+                            'home_get':calls.count(('GET','/')),
+                            'other':sum(pair not in {('GET','/zhaopin/'),('GET','/job/1.shtml'),
+                                ('GET','/job/2.shtml'),('POST','/normal-login'),('GET','/')} for pair in calls)}
+                        try:result['wait_diagnostic']=wait_diagnostic(server.guided,server.guided.state())
+                        except Exception as diagnostic_error:result['diagnostic_error_type']=type(diagnostic_error).__name__
+                        raise
                     finally:
                         release.set();release_state.set()
                         result['requests']=calls
