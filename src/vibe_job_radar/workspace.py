@@ -97,6 +97,10 @@ class Workspace:
         from .network_settings import save
         return save(self, data)
 
+    def network_proxy_preferences(self, data):
+        from .network_settings import save_proxy
+        return save_proxy(self, data)
+
     def doctor(self) -> dict:
         # Probe the actual directory and SQLite, not just os.access(). Never contacts a provider.
         with tempfile.TemporaryDirectory(prefix=".doctor-", dir=self.root) as tmp:
