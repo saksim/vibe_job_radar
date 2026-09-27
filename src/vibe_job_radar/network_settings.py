@@ -66,7 +66,7 @@ def save(workspace, data):
                  'consent_version': CONSENT if data['mode'] == 'fake_ip_doh' else '', 'updated_at': utc_now()}
         atomic_json(workspace.root/'network-preferences.json', value)
     workspace.dns_resolver.clear()
-    return {**state(workspace), 'message': '已保存。新公开查询和新浏览器会话采用此设置；已有会话不偷偷更换网络。关闭后不再发起新的加密DNS请求。'}
+    return {**state(workspace), 'message': '已保存。新公开查询、高级采集的下一步和新浏览器会话采用此设置；已有浏览器会话不偷偷更换网络。关闭后不再发起新的加密DNS请求。'}
 
 
 DNS_MESSAGES = {

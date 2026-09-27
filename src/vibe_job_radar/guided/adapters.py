@@ -10,11 +10,12 @@ import re
 from dataclasses import dataclass
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
-from ..html_parser import Document, ParseError, parse_job_html, plain_text
+from ..html_parser import Document, ParseError, parse_job_html
 from ..url_safety import credential_query_key
 from ..utils import domain_matches
 from .contracts import Card, CrawlError, PageSnapshot, SiteAdapter
 from .selectors import select_nodes
+from .page_surface import surface_text
 
 
 @dataclass(frozen=True)
@@ -82,7 +83,7 @@ class DOMAdapter:
         if (re.search(self.detail_pattern, urlsplit(page.url).path)
                 or (path != search_path and path in {'', login_path})):
             raise CrawlError('not_job_list')
-        if self.challenged(plain_text(page.html), page.url):
+        if self.challenged(surface_text(page), page.url):
             raise CrawlError('manual_required')
         out = {}
         for node in select_nodes(Document(page.html).root, self.card_selector):
@@ -107,7 +108,7 @@ class DOMAdapter:
 
     def detail(self, page: PageSnapshot) -> dict:
         self.accept_url(page.url, detail=True)
-        if self.challenged(plain_text(page.html), page.url):
+        if self.challenged(surface_text(page), page.url):
             raise CrawlError('manual_required')
         try:
             markup = re.sub(r'<script\b[^>]*>.*?</script\s*>',
@@ -138,9 +139,12 @@ class Registry:
             raise CrawlError('unknown_site') from exc
 
     def describe(self) -> list[dict]:
+        from ..acquisition_status import describe_adapter
         return [{'key': a.key, 'label': a.label, 'version': getattr(a, 'version', 'custom'),
-                 'certification': getattr(a, 'certification', 'not_live_verified'),
-                 'login': 'manual_in_platform_browser'} for a in self._adapters.values()]
+                 'certification': 'not_live_verified', 'acquisition':describe_adapter(a),
+                 'login': 'manual_in_platform_browser',
+                 'password_login': 'controlled_test_only' if a.key == 'liepin' else 'unsupported'}
+                for a in self._adapters.values()]
 
 
 def builtins() -> Registry:
@@ -154,7 +158,7 @@ def builtins() -> Registry:
                    'https://www.liepin.com/zhaopin/', 'key',
                    r'^(?:/job/[^/]+\.(?:shtml|html)|/a/[0-9]+\.shtml|/lptjob/[0-9]+)$',
                    'https://www.liepin.com/', ('www.liepin.com', 'passport.liepin.com'),
-                   ('liepin.com', 'liepin.cn'), version='3'),
+                   ('liepin.com', 'liepin.cn', 'concat.lietou-static.com', 'image0.lietou-static.com'), version='3'),
         DOMAdapter('51job', '前程无忧', ('51job.com',),
                    'https://we.51job.com/pc/search', 'keyword', r'(?:/[^/]+/\d+\.html$|^/pc/jobdetail)',
                    'https://login.51job.com/', ('login.51job.com',),

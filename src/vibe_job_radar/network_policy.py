@@ -1,7 +1,8 @@
 """Immutable route selection shared by HTTP, CLI and the browser request bridge.
 
-Static loopback HTTP and anonymous SOCKS5 share one immutable policy.
-Workspace-consented Fake-IP DoH repair is opt-in; PAC and credentials remain separate.
+Static loopback HTTP and SOCKS5 share one immutable policy. Optional credentials
+require explicit application endpoints. Workspace-consented Fake-IP DoH repair
+is opt-in; PAC remains separate.
 No settings are written to the OS, no endpoints scanned, no TLS checks removed.
 """
 from __future__ import annotations
@@ -18,6 +19,7 @@ from dataclasses import dataclass, field
 
 from .loopback_proxy import LocalProxyError, LoopbackProxy
 from .loopback_socks import LoopbackSocks5, select_loopback_proxy
+from .proxy_credentials import configured as credentials_configured
 
 _ACTIVE: ContextVar = ContextVar('radar_network_policy', default=None)
 
@@ -80,7 +82,7 @@ class NetworkPolicy:
     def capture(cls, *, discover=None) -> NetworkPolicy:
         explicit = os.environ.get('VIBE_RADAR_HTTP_PROXY', '')
         socks = os.environ.get('VIBE_RADAR_SOCKS_PROXY', '')
-        if explicit.strip() or socks.strip():
+        if explicit.strip() or socks.strip() or credentials_configured():
             # An explicit application route is authoritative; ambient NO_PROXY
             # must not silently override it. The legacy parser remains strict.
             try:
@@ -136,6 +138,8 @@ class NetworkPolicy:
     def fingerprint(self) -> str:
         value = [self.source, self.transport_name(self.proxy), self.proxy.host if self.proxy else None,
                  self.proxy.port if self.proxy else None, self.bypass, self.error, self.encrypted_dns]
+        if self.proxy and self.proxy.credentials is not None:
+            value.append(self.proxy.credentials.binding)
         return hashlib.sha256(json.dumps(value, separators=(',', ':')).encode()).hexdigest()[:16]
 
     def describe(self, host: str | None = None) -> dict:
@@ -145,7 +149,9 @@ class NetworkPolicy:
                   'pac_supported': False, 'socks_supported': True, 'fake_ip_supported': self.encrypted_dns,
                   'fake_ip_scope': 'opt_in_198.18.0.0/15_only',
                   'encrypted_dns_provider': 'Cloudflare' if self.encrypted_dns else None,
-                  'proxy_credentials_supported': False,
+                  'proxy_credentials_supported': True,
+                  'proxy_credentials_scope': 'explicit_application_loopback_only',
+                  'proxy_authentication_configured': bool(self.proxy and self.proxy.credentials is not None),
                   'network_tested': False}
         try:
             selected = self.for_host(host or '')

@@ -25,34 +25,39 @@ STAGES = frozenset({'task', 'browser_session', 'listing', 'list_parse', 'collect
     'detail_navigation', 'detail_identity', 'detail_parse', 'persist', 'report', 'network_policy',
     'route', 'http_request', 'robots', 'navigation', 'login', 'pagination', 'unknown'})
 RESOURCES = frozenset({'document', 'stylesheet', 'script', 'image', 'media', 'font',
-    'xhr', 'fetch', 'websocket', 'other', 'unknown'})
+    'xhr', 'fetch', 'preflight', 'websocket', 'other', 'unknown'})
 CODES = frozenset('''operation_error network_error dns_error non_public_address
+    read_transient_failure read_retry_wait read_retry_exhausted read_retry_unavailable
+    read_retry_state_invalid read_retry_after_invalid
     tls_verification_failed tls_handshake_failed http_401 http_403 http_429
-    robots_denied robots_unavailable resource_domain_blocked write_not_allowed
+    robots_denied robots_unavailable resource_domain_blocked write_not_allowed native_optional_request_blocked
     method_blocked redirect_requires_attention login_origin_changed invalid_url
     wrong_platform credential_url not_job_url not_job_list manual_required
+    login_entry_unavailable login_password_tab_unavailable login_password_form_unavailable
+    login_form_changed login_credentials_rejected login_agreement_required login_password_submitted job_unavailable invalid_page_observation
     structure_changed invalid_job_data response_too_large request_too_large
     unexpected_compression request_headers_invalid request_headers_conflict remote_server_error site_stopped
     page_not_ready browser_closed browser_missing playwright_missing
     playwright_incompatible browser_executable_missing browser_launch_failed
     browser_choice_invalid paused rate_wait publisher_wait cooldown hourly_limit
     daily_limit list_page_limit login_rate_limited rate_storage_error clock_rollback
-    publisher_policy_invalid encrypted_dns_consent_required encrypted_dns_tls_failed
+    publisher_policy_invalid automatic_resume_unavailable encrypted_dns_consent_required encrypted_dns_tls_failed
     encrypted_dns_unavailable encrypted_dns_invalid_response encrypted_dns_disabled
     encrypted_dns_non_public_answer encrypted_dns_route_failed encrypted_dns_timeout
     encrypted_dns_http_rejected encrypted_dns_refused encrypted_dns_name_not_found
     encrypted_dns_empty_answer encrypted_dns_expired_answer encrypted_dns_cooldown
     encrypted_dns_budget encrypted_dns_clock_rollback
     local_proxy_configuration_conflict local_proxy_configuration_invalid
+    local_proxy_credentials_invalid local_proxy_credentials_require_explicit local_proxy_auth_failed
     local_proxy_connection_failed local_socks_configuration_invalid
     local_socks_auth_unsupported local_socks_protocol_error local_socks_timeout
     local_socks_connection_failed local_socks_request_rejected local_socks_truncated_reply
-    robots_response_html robots_http_unavailable robots_encoding_invalid
+    robots_response_html robots_http_unavailable robots_encoding_invalid robots_file_absent
     robots_rules_observed robots_extensions_observed robots_no_rules_observed
     robots_inspection_truncated no_cards no_records native_administrator_blocked native_contract_unavailable
     native_contract_invalid native_operation_unreviewed native_surface_unsupported
-    native_protocol_error native_proxy_auth_failed native_policy_changed native_observation_limit
-    native_unaccounted_response native_business_response_invalid'''.split())
+    native_protocol_error native_proxy_auth_failed native_policy_changed native_observation_limit native_page_cleared
+    native_unaccounted_response native_business_response_invalid checkpoint_incompatible checkpoint_records_missing batch_identity_unsupported search_scope_changed'''.split())
 WAITS = frozenset({'paused', 'rate_wait', 'publisher_wait', 'cooldown', 'http_429',
     'hourly_limit', 'daily_limit', 'login_rate_limited'})
 LOCAL_POLICIES = {
@@ -65,6 +70,7 @@ LOCAL_POLICIES = {
     'response_too_large': 'response_size', 'request_too_large': 'request_size',
     'request_headers_invalid': 'header_validation', 'request_headers_conflict': 'header_validation',
     'paused': 'cancellation', 'native_operation_unreviewed': 'native_site_contract',
+    'native_optional_request_blocked': 'native_optional_dependency',
     'native_surface_unsupported': 'native_surface_policy', 'native_policy_changed': 'workspace_policy',
     'native_observation_limit': 'native_response_limit',
 }
@@ -72,6 +78,13 @@ LOCAL_POLICIES = {
 # might themselves contain a credential. Values/fragments/userinfo never survive.
 PATH_PARTS = frozenset({'robots.txt', 'web', 'geek', 'job', 'job_detail', 'user',
     'zhaopin', 'pc', 'search', 'jobdetail', 'login', 'api', 'v1', 'v2', 'jobs'})
+# Public operation names from the recorded official login bundle, for
+# diagnosis only. Inclusion here NEVER grants a request access.
+LOGIN_PATHS = frozenset('/api/com.liepin.passport.' + suffix for suffix in (
+    'account.account-pwd-login', 'account.check-login', 'account.v2.check-login',
+    'account.get-category', 'account.send-two-factor-sms-code',
+    'account.verify-two-factor-sms-code', 'captcha.get-smart-captcha',
+    'qr.get-qrcode', 'qr.ack'))
 QUERY_NAMES = frozenset({'q', 'query', 'keyword', 'key', 'page', 'pageSize',
     'currentPage', 'jobId', 'city', 'industry', 'offset', 'limit'})
 
@@ -89,6 +102,8 @@ def safe_target(url):
         result['host'] = host
         parts = parsed.path.split('/')[1:17]
         result['path_template'] = '/' + '/'.join(p if p in PATH_PARTS else ':segment' for p in parts)
+        if host == 'api-passport.liepin.com' and parsed.path in LOGIN_PATHS:
+            result['path_template'] = parsed.path
         if len(parsed.path.split('/')) > 17:
             result['path_template'] += '/:truncated'
         pairs = parse_qsl(parsed.query, keep_blank_values=True, max_num_fields=64)
@@ -136,7 +151,7 @@ class DiagnosticTrace:
         self._lock, self._clock = threading.RLock(), clock
         self._sequence = self.dropped = self.observer_errors = 0
         self._frames = []
-        self.first_failure = self.first_content_candidate = None
+        self.first_failure = self.first_content_candidate = self.first_backend_stop = None
         self.enabled = True
 
     def _emit(self, frame, outcome):
@@ -158,7 +173,7 @@ class DiagnosticTrace:
 
     def begin(self, stage, actor, *, url='', resource='unknown', method='', impact='unknown', operation='', entity=''):
         with self._lock:
-            operation = operation if operation in {'search', 'login', 'capture', 'more', 'collect', 'pause_idle', 'close', 'resume'} else ''
+            operation = operation if operation in {'search', 'login', 'login_password', 'capture', 'more', 'collect', 'pause_idle', 'close', 'resume'} else ''
             entity = entity if isinstance(entity, str) and re.fullmatch(r'[a-f0-9]{24}', entity) else ''
             parent = self._frames[-1] if self._frames else {}
             frame = {'operation': operation or parent.get('operation', ''), 'entity': entity or parent.get('entity', ''), 'stage': stage if stage in STAGES else 'unknown',
@@ -211,6 +226,24 @@ class DiagnosticTrace:
                 if self._frames and self._frames[-1] is frame:
                     self._frames.pop()
 
+    def backend_stop(self, code):
+        # Called only at the controller's first transition to stopped. Optional
+        # failures and later collateral blocks cannot replace this observation.
+        with self._lock:
+            if not self.enabled or self.first_backend_stop is not None:
+                return
+            fallback = self.begin('network_policy', 'browser') if not self._frames else None
+            try:
+                frame = copy.deepcopy(self._frames[-1])
+                fixed = code if isinstance(code, str) and code in CODES else 'operation_error'
+                frame.update(code=fixed, local_block=True if fixed in LOCAL_POLICIES else None,
+                             policy=LOCAL_POLICIES.get(fixed, 'shared_quota' if fixed in WAITS else ''))
+                self._emit(frame, 'backend_stopped')
+                self.first_backend_stop = copy.deepcopy(self.events[-1])
+            finally:
+                if fallback is not None:
+                    self.finish(fallback)
+
     def set_browser_version(self, value):
         with self._lock:
             self.browser_version = value if isinstance(value, str) and re.fullmatch(r'[0-9.]{1,40}', value) else None
@@ -219,7 +252,7 @@ class DiagnosticTrace:
         with self._lock:
             self.enabled = False
             self.events.clear()
-            self.first_failure = self.first_content_candidate = None
+            self.first_failure = self.first_content_candidate = self.first_backend_stop = None
 
     def snapshot(self):
         with self._lock:
@@ -230,6 +263,7 @@ class DiagnosticTrace:
                 'runtime': self.runtime, 'events': list(self.events), 'dropped_events': self.dropped,
                 'observer_errors': self.observer_errors, 'first_failure': self.first_failure,
                 'first_content_candidate': self.first_content_candidate,
+                'first_backend_stop': self.first_backend_stop,
                 'scope': 'Opt-in in-memory metadata only; not a HAR, root-cause proof or live-site certification. '
                          'Required means the existing backend classification, not proven business relevance. '
                          'Recordings are lost on service exit; download after local preview to retain evidence.'})
@@ -295,7 +329,9 @@ def observe_robots(trace, result):
     if type(trace) is not DiagnosticTrace:
         return
     try:
-        if result.status != 200:
+        if result.status in {404, 410}:
+            code = 'robots_file_absent'
+        elif result.status != 200:
             code = 'robots_http_unavailable'
         elif 'html' in result.headers.get('content-type', '').lower():
             code = 'robots_response_html'

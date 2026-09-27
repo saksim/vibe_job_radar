@@ -8,6 +8,7 @@ from collections import defaultdict
 from pathlib import Path
 from . import config as cfg
 from ._version import __version__
+from .acquisition_status import snapshot as acquisition_snapshot
 from .extract import RuleExtractor, apply_reviews, hard_constraints
 from .metrics import catalog_rows
 from .models import Requirement
@@ -147,6 +148,7 @@ def analyze(db: str | Path, output: str | Path, *, config: dict | None = None,
         "schema_version": 1, "project_version": __version__, "created_at": utc_now(), "as_of": now.isoformat(),
         "mode": "synthetic_demo" if demo_mode else "real_sample", "status": "incomplete" if errors else "completed",
         "complete_market_coverage": False, "market_population_denominator": None,
+        "software_acquisition_capabilities": acquisition_snapshot(),
         "rule_engine": extractor.version, "config_sha256": digest(json_text(conf)),
         "snapshot_sha256": digest(json_text([j.to_dict() for j in current])),
         "candidate_sha256": digest(json_text(candidate)), "reviews_sha256": digest(json_text(reviews)),
@@ -154,6 +156,7 @@ def analyze(db: str | Path, output: str | Path, *, config: dict | None = None,
         "stats": {"stored_snapshots": len(historical), "current_source_records": len(current), "selected_source_records": len(chosen),
                   "deduplicated_groups": len(groups), "full_text_job_groups": len(full_groups),
                   "vibe_evidence_job_groups": len({r.job_group_id for r in accepted}),
+                  "vibe_evidence_source_records": len({ident for r in accepted for ident in (r.source_record_ids or [r.record_id])}),
                   "requirement_rows": len(requirements), "accepted_positive_requirement_rows": len(accepted),
                   "review_queue_rows": len(pending), "hard_constraint_rows": len(constraints),
                   "duplicate_groups": len(duplicates), "analysis_error_rows": len(errors)},

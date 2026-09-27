@@ -55,6 +55,7 @@ class FakeBackend:
             self.page = listing(2); return True
         return False
     def pump(self): pass
+    def alive(self): return not self.closed
     def close(self): self.closed = True
 
 
