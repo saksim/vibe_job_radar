@@ -6,6 +6,8 @@
 
 当前运行版本、真实采样、登录等待与各次失败统一记录在[当前取数证据](docs/CURRENT_ACQUISITION_EVIDENCE.md)。现有功能与历史目标的缺口、优先级和后续工作见[GAP 审计](docs/PROJECT_GAP_AUDIT_2026_09_26.md)及 [Issue #210](https://github.com/saksim/vibe_job_radar/issues/210)；[52项改进基线](docs/CURRENT_DELIVERY_CANDIDATE.md)保留为历史。候选、main 与发行分别判断，Windows 包须使用对应提交自己的成功 CI 产物。
 
+内部核查既有报告的质量时，可使用[独立标注与评估](docs/QUALITY_REVIEW.md)。原预测、助手草稿与真人确认分别保留，只有明确完成的适用标注进入质量指标。
+
 ## 先完成一次目标岗位研究
 
 本分支另按#177补充[明确使用AI的长句要求](docs/EXPLICIT_AI_APPLICATION.md)，覆盖带模型知识说明的代码生成/评审能力。它保留原文和否定语义，重新分析生成独立报告，旧报告和个人复核不改写；当前增量的验收结果以对应PR为准。
