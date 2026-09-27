@@ -282,10 +282,16 @@ class ResolverEvidenceTests(OfflineTestCase):
         self.factory.assert_called_once()
 
     def test_expired_cooldown_new_failure_is_a_new_observation_without_automatic_retry(self):
-        first = self.failure()
-        self.now += 31
-        self.conn.connect.side_effect = TimeoutError('PRIVATE')
-        again = self.failure()
+        # The resolver clock advances here; the wall clock may have coarse
+        # resolution. Control observations instead of depending on sub-ms ticks.
+        stamps = ['2026-09-27T07:00:00+00:00', '2026-09-27T07:00:31+00:00']
+        with patch('vibe_job_radar.dns_transport_diagnostic.utc_now', side_effect=stamps) as observed:
+            first = self.failure()
+            self.now += 31
+            self.conn.connect.side_effect = TimeoutError('PRIVATE')
+            again = self.failure()
+        self.assertEqual(observed.call_count, 2)
+        self.assertEqual([first.diagnostic['observed_at'], again.diagnostic['observed_at']], stamps)
         self.assertEqual(again.code, 'encrypted_dns_unavailable')
         self.assertEqual(again.diagnostic['error_type'], 'TimeoutError')
         self.assertFalse(again.diagnostic['reused_failure'])
