@@ -1,4 +1,5 @@
 """Short artificial budgets validate diagnostics, never production timeout changes."""
+from contextlib import contextmanager
 import importlib.util
 import io
 import json
@@ -14,6 +15,19 @@ from unittest.mock import patch
 from test_test_runner_output import runner_module
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+@contextmanager
+def owned_snapshot_threads(runner):
+    """Observe this context's thread objects without counting an outer runner."""
+    thread_type = threading.Thread
+    created = []
+    def create(*args, **kwargs):
+        thread = thread_type(*args, **kwargs)
+        created.append(thread)
+        return thread
+    with patch.object(runner.threading, "Thread", side_effect=create):
+        yield created
 
 
 class SuiteBudgetTests(unittest.TestCase):
@@ -107,10 +121,13 @@ class SuiteBudgetTests(unittest.TestCase):
         runner = runner_module()
         path = self.root / "progress.log"
         with path.open("w", encoding="utf-8") as progress, \
-                patch.object(runner.faulthandler, "dump_traceback") as capture:
+                patch.object(runner.faulthandler, "dump_traceback") as capture, \
+                owned_snapshot_threads(runner) as created:
             with runner.suite_budget_snapshot(progress, 30):
                 pass
-            self.assertFalse(any(t.name == "radar-suite-budget-snapshot" for t in threading.enumerate()))
+            self.assertEqual(len(created), 1)
+            self.assertFalse(created[0].is_alive())
+            self.assertNotIn(created[0], threading.enumerate())
             capture.assert_not_called()
         self.assertEqual(path.read_text(encoding="utf-8"), "")
 
@@ -129,14 +146,36 @@ class SuiteBudgetTests(unittest.TestCase):
             helper = threading.Thread(target=release_after_body)
             helper.start()
             try:
-                with patch.object(runner.faulthandler, "dump_traceback", side_effect=capture):
+                with patch.object(runner.faulthandler, "dump_traceback", side_effect=capture), \
+                        owned_snapshot_threads(runner) as created:
                     with runner.suite_budget_snapshot(progress, .001):
                         self.assertTrue(entered.wait(5))
                 self.assertEqual(observed, [False])
             finally:
                 released.set()
                 helper.join()
-        self.assertFalse(any(t.name == "radar-suite-budget-snapshot" for t in threading.enumerate()))
+        self.assertEqual(len(created), 1)
+        self.assertFalse(created[0].is_alive())
+        self.assertNotIn(created[0], threading.enumerate())
+
+    def test_cleanup_in_nested_run_keeps_outer_diagnostic_active(self):
+        runner = runner_module()
+        with (self.root / "outer.log").open("w", encoding="utf-8") as progress, \
+                owned_snapshot_threads(runner) as created:
+            with runner.suite_budget_snapshot(progress, 30):
+                self.assertEqual(len(created), 1)
+                outer = created[0]
+                result = unittest.TestResult()
+                unittest.TestSuite([
+                    SuiteBudgetTests("test_early_exit_cancels_thread_before_progress_file_closes"),
+                    SuiteBudgetTests("test_inflight_snapshot_is_joined_before_file_close"),
+                ]).run(result)
+                self.assertEqual(result.testsRun, 2)
+                self.assertEqual(result.failures, [])
+                self.assertEqual(result.errors, [])
+                self.assertTrue(outer.is_alive())
+            self.assertFalse(outer.is_alive())
+            self.assertNotIn(outer, threading.enumerate())
 
     def test_snapshot_error_preserves_original_failure_and_excludes_diagnostic_message(self):
         runner = runner_module()
