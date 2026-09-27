@@ -31,6 +31,7 @@ jobs:
           python scripts/run_guided_startup_browser.py
           python scripts/run_guided_review_browser.py
           python scripts/run_deferred_browser.py
+          python scripts/run_read_retry_browser.py
           python scripts/run_proxy_auth_browser.py
           python scripts/run_public_poll_handoff_browser.py
           python scripts/run_recovery_browser.py
