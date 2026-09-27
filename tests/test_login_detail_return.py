@@ -11,7 +11,7 @@ import unittest
 from unittest.mock import Mock
 
 from vibe_job_radar.guided.adapters import DOMAdapter, Registry, builtins
-from vibe_job_radar.guided.contracts import CrawlError, PageSnapshot
+from vibe_job_radar.guided.contracts import CrawlError, PageSnapshot, PageSnapshotChanged
 from vibe_job_radar.guided.login_return import (
     DetailTarget, LoginReturnManager, ReturnedDetail,
     matching_detail_signature, pending_detail_target,
@@ -38,6 +38,19 @@ def task_state():
             ]}
 
 class DetailSignatureTests(unittest.TestCase):
+    def test_browser_marks_url_change_during_dom_read_without_returning_mixed_snapshot(self):
+        from vibe_job_radar.guided.browser import PlaywrightBackend
+        backend=PlaywrightBackend.__new__(PlaywrightBackend)
+        backend.error=None;backend.auth_mode=False;backend.adapter=ADAPTER
+        backend.page=Mock(url=URL);backend.page.is_closed.return_value=False
+        backend.page.locator.return_value.inner_text.return_value=BODY
+        def content():
+            backend.page.url=URL+'?d_sfrom=returned';return markup()
+        backend.page.content.side_effect=content
+        with self.assertRaises(PageSnapshotChanged) as caught:backend.snapshot()
+        self.assertEqual(caught.exception.code,'page_not_ready')
+
+
     def test_full_selected_detail_is_ready(self):
         self.assertTrue(matching_detail_signature(ADAPTER, URL, PageSnapshot(URL, markup())))
 
@@ -107,6 +120,17 @@ class DetailSignatureTests(unittest.TestCase):
         self.assertIsNone(pending_detail_target(state))
 
 class DetailWatcherTests(unittest.TestCase):
+    def test_changing_detail_discards_previous_signature_without_reopening_or_losing_target(self):
+        self.tick();watch=self.manager._watches['task'];target=watch.detail_target;deadline=watch.expires
+        self.backend.snapshot.side_effect=PageSnapshotChanged();self.tick()
+        self.assertIs(self.manager._watches['task'],watch);self.assertEqual(watch.detail_target,target)
+        self.assertEqual(watch.expires,deadline);self.assertIsNone(watch.signature)
+        self.backend.snapshot.side_effect=None;self.tick();self.service._submit.assert_not_called()
+        self.tick();self.service._submit.assert_called_once()
+        self.assertEqual(self.service._submit.call_args.args[0],'resume_returned_detail')
+        self.backend.open.assert_not_called()
+
+
     def setUp(self):
         self.now=0.0
         self.state=task_state()
