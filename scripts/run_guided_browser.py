@@ -86,6 +86,20 @@ class ManualFixtureBackend(PlaywrightBackend):
         super().pump()
 
 
+def completed_report(page, server, workspace):
+    from playwright.sync_api import expect
+    ident=page.locator('#task').input_value()
+    expect(page.locator('#task-status')).to_contain_text('本批次已结束',timeout=30000)
+    expect(page.locator('#result')).to_contain_text('已保存 1 个岗位',timeout=30000)
+    assert page.locator('#task').input_value()==ident
+    state=server.guided._load(ident);report=state['report_id']
+    assert state['status']=='completed' and len(report)==32
+    assert all(c in '0123456789abcdef' for c in report)
+    assert workspace.report(report)['requirements']
+    expect(page.locator('#result a[href^="/#report="]')).to_have_attribute('href','/#report='+report)
+    return state
+
+
 def main():
     from playwright.sync_api import sync_playwright, expect
     output=ROOT/'browser-acceptance'/'guided';output.mkdir(parents=True,exist_ok=True)
@@ -104,6 +118,16 @@ def main():
         ledger=RateLedger(Path(tmp)/'guided'/'rates.sqlite',Limits(page_interval=0,request_interval=0,login_interval=0))
         server.guided=GuidedService(workspace,registry=Registry([adapter]),ledger=ledger,
             backend_factory=lambda a,l,c,p,**saved:ManualFixtureBackend(a,l,c,p,headless=True,executable_path=executable,transport_factory=FixtureWire,**saved))
+        # Hold the first one-job report after its record has been saved. A
+        # saved-record counter is not proof that the report was committed.
+        report_entered,report_release=threading.Event(),threading.Event()
+        original_report=server.guided._finalize_report
+        def held_report(state,adapter):
+            if len(state.get('selection',[]))==1 and not report_entered.is_set():
+                report_entered.set()
+                assert report_release.wait(20),'controlled report gate was not released'
+            return original_report(state,adapter)
+        server.guided._finalize_report=held_report
         thread=threading.Thread(target=server.serve_forever,kwargs={'poll_interval':.01},daemon=True);thread.start()
         try:
             with sync_playwright() as pw:
@@ -209,12 +233,24 @@ def main():
                 page.locator('#cards input[type=checkbox]').first.check()
                 page.locator('#collect').click()
                 expect(page.locator('#result')).to_contain_text('已保存 1 个岗位',timeout=30000)
+                assert report_entered.is_set()
+                partial=server.guided._load(page.locator('#task').input_value())
+                assert partial['report_id']=='' and partial['status']!='completed'
+                expect(page.locator('#result a[href^="/#report="]')).to_have_count(0)
+                expect(page.locator('#find')).to_be_disabled()
+                result['report_checkpoint']={'saved_count':1,'report_id':partial['report_id'],
+                    'status':partial['status'],'new_query_disabled':True}
+                report_release.set()
+                completed_report(page,server,workspace)
+                result['checks'].append('saved-record count appears before report commit; new query remains disabled and acceptance waits for a completed, accessible report')
+
                 result['checks'].append('opt-in matching login return automatically reads the original list without Capture/Resume; selected detail enters the same report pipeline')
                 # A separate query explicitly reuses this still-open, now idle
                 # browser. Login count must not change and prior reports survive.
                 previous_id=page.locator('#task').input_value()
                 previous_backend=server.guided._backends[previous_id]
                 previous_report=server.guided._load(previous_id)['report_id']
+                assert previous_report and workspace.report(previous_report)['requirements']
                 login_posts=CALLS.count(('POST','/login'))
                 expect(form.locator('[name=reuse_current_session]')).not_to_be_checked()
                 form.locator('[name=reuse_current_session]').check()
@@ -231,7 +267,7 @@ def main():
                 assert server.guided._load(previous_id)['report_id']==previous_report
                 page.locator('#cards input[type=checkbox]').first.check()
                 page.locator('#collect').click()
-                expect(page.locator('#result')).to_contain_text('已保存 1 个岗位',timeout=30000)
+                completed_report(page,server,workspace)
                 assert server.guided._load(current_id)['report_id']!=previous_report
                 assert CALLS.count(('POST','/login'))==login_posts
                 result['checks'].append('new opted-in query reuses the same authenticated browser with no additional login; selected detail creates a separate report and prior report survives')
@@ -261,7 +297,7 @@ def main():
                 assert server.guided._load(restarted_id)['authentication']=='restored_session_unverified'
                 assert CALLS.count(('POST','/login'))==login_posts
                 page.locator('#cards input[type=checkbox]').first.check();page.locator('#collect').click()
-                expect(page.locator('#result')).to_contain_text('已保存 1 个岗位',timeout=30000)
+                completed_report(page,server,workspace)
                 assert server.guided._load(previous_id)['report_id']==previous_report
                 assert 'fixture_login' not in json.dumps(server.guided.state())
                 result['checks'].append('opt-in cookies restore into a new service and new collection browser; no additional login POST, full selected JD reaches report, old reports remain')
@@ -282,6 +318,7 @@ def main():
                 result['success']=True
                 browser.close()
         finally:
+            report_release.set()
             server.shutdown();server.server_close();thread.join(timeout=5)
             (output/'results.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
     print(json.dumps(result,ensure_ascii=True,indent=2))

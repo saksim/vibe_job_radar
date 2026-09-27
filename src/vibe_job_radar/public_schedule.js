@@ -4,7 +4,7 @@
   const form = byId('public-search'), controls = byId('schedule-controls');
   const consent = byId('schedule-consent'), message = byId('schedule-message');
   const localToken = sessionStorage.getItem('radar-session') || '';
-  let saved = null, pending = false, acceptedQuery = '';
+  let saved = null, pending = false, acceptedQuery = '', readVersion = 0;
   const query = () => ({query:form.elements.query.value, region:form.elements.region.value,
     source_scope:[form.elements.source.value], limit:20});
   const revoke = () => {consent.checked = false; acceptedQuery = '';};
@@ -49,11 +49,20 @@
   }
   async function refresh() {
     if (pending) return;
-    try {render(await call('state'));}
-    catch (error) {saved = null; controls.disabled = true; revoke(); byId('schedule-status').textContent = error.message;}
+    const version = ++readVersion;
+    try {
+      const value = await call('state');
+      if (version === readVersion && !pending) render(value);
+    } catch (error) {
+      if (version !== readVersion || pending) return;
+      saved = null; controls.disabled = true; revoke();
+      byId('schedule-status').textContent = error.message;
+    }
   }
   async function change(action, body) {
     if (pending || !saved) return;
+    // Invalidate reads started before this mutation, including late failures.
+    readVersion++;
     pending = true; controls.disabled = true; message.textContent = '';
     try {render(await call(action, {...body, revision:saved.revision})); revoke();}
     catch (error) {message.textContent = error.message; revoke();}
