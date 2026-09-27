@@ -296,8 +296,15 @@ class PublicResolver:
         except FetchError as exc:
             # Keep the reason category only, never upstream headers or URL data.
             raise ResolutionError('encrypted_dns_route_failed') from exc
-        except (OSError, http.client.HTTPException):
-            raise ResolutionError('encrypted_dns_unavailable') from None
+        except (OSError, http.client.HTTPException) as exc:
+            details = None
+            try:
+                from .dns_transport_diagnostic import failure_details
+                details = failure_details(exc, phase=phase, connection=conn,
+                                          policy_id=policy.fingerprint)
+            except Exception:
+                pass  # Optional evidence must not replace the original failure.
+            raise ResolutionError('encrypted_dns_unavailable', diagnostic=details) from None
         finally:
             if conn is not None:
                 conn.close()
