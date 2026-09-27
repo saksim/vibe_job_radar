@@ -8,6 +8,7 @@ from collections import defaultdict
 from pathlib import Path
 from . import config as cfg
 from ._version import __version__
+from .acquisition_status import snapshot as acquisition_snapshot
 from .extract import RuleExtractor, apply_reviews, hard_constraints
 from .metrics import catalog_rows
 from .models import Requirement
@@ -147,6 +148,7 @@ def analyze(db: str | Path, output: str | Path, *, config: dict | None = None,
         "schema_version": 1, "project_version": __version__, "created_at": utc_now(), "as_of": now.isoformat(),
         "mode": "synthetic_demo" if demo_mode else "real_sample", "status": "incomplete" if errors else "completed",
         "complete_market_coverage": False, "market_population_denominator": None,
+        "software_acquisition_capabilities": acquisition_snapshot(),
         "rule_engine": extractor.version, "config_sha256": digest(json_text(conf)),
         "snapshot_sha256": digest(json_text([j.to_dict() for j in current])),
         "candidate_sha256": digest(json_text(candidate)), "reviews_sha256": digest(json_text(reviews)),

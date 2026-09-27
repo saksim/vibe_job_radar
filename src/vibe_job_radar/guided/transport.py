@@ -116,7 +116,8 @@ class PinnedTransport:
             self.network_policy = current_policy()
         try:
             if not self.network_policy.encrypted_dns:
-                host, ip, target = validate_public_url(url, self.domains, all_addresses=True)
+                host, ip, target = validate_public_url(url, self.domains, all_addresses=True,
+                                                     network_policy=self.network_policy)
             self.reserve('request', origin='https://' + host)
             if self.network_policy.encrypted_dns:
                 # A fresh snapshot is obtained after publisher waits, not before.
@@ -137,6 +138,8 @@ class PinnedTransport:
             notify(getattr(self, '_diagnostics', None), 'mark', status=response.status)
             pairs = response.getheaders()
             metadata = {k.lower(): v for k, v in pairs if k.lower() != 'set-cookie'}
+            if response.status in {502, 503, 504} and sum(k.lower() == 'retry-after' for k, _ in pairs) > 1:
+                metadata['retry-after'] = 'invalid'  # Ambiguous deadlines cannot authorize a retry.
             if response.status in {401, 403, 429}:
                 if required or response.status == 429:
                     self.blocked.add(host)

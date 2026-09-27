@@ -5,7 +5,7 @@ from unittest.mock import Mock
 
 import test_native_acquisition as fixture
 from vibe_job_radar.guided.contracts import CrawlError
-from vibe_job_radar.guided.native_errors import native_failure_code
+from vibe_job_radar.guided.native_errors import native_failure_code, native_transport_failure
 
 
 class NativeFailureClassificationTests(TestCase):
@@ -34,6 +34,23 @@ class NativeFailureClassificationTests(TestCase):
                       'timeout\nERR_CERT_AUTHORITY_INVALID', None]:
             with self.subTest(value=value):
                 self.assertEqual(native_failure_code(value), '')
+
+    def test_tunnel_noise_preserves_upstream_auth_and_specific_tls_still_wins(self):
+        self.assertEqual(native_transport_failure('net::ERR_TUNNEL_CONNECTION_FAILED','local_proxy_auth_failed'),
+                         'local_proxy_auth_failed')
+        self.assertEqual(native_transport_failure('net::ERR_TUNNEL_CONNECTION_FAILED','local_socks_truncated_reply'),
+                         'local_socks_truncated_reply')
+        self.assertEqual(native_transport_failure('net::ERR_CERT_AUTHORITY_INVALID','local_proxy_auth_failed'),
+                         'tls_verification_failed')
+        self.assertEqual(native_transport_failure('net::ERR_INVALID_AUTH_CREDENTIALS','local_proxy_auth_failed'),
+                         'native_proxy_auth_failed')
+
+    def test_loading_failed_keeps_actual_upstream_authentication_refusal(self):
+        self.b._paused('session',self.helper.req())
+        self.b.tunnel.last_error='local_proxy_auth_failed'
+        self.b._received({'sessionId':'session','message':json.dumps({'method':'Network.loadingFailed',
+            'params':{'requestId':'net-1','errorText':'net::ERR_TUNNEL_CONNECTION_FAILED'}})})
+        self.assertEqual(self.b.error,'local_proxy_auth_failed')
 
     def test_failed_response_preserves_browser_error_not_a_new_client_block(self):
         self.b._paused('session', self.helper.req())
