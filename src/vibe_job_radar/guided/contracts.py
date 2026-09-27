@@ -28,6 +28,12 @@ class CrawlError(RuntimeError):
         super().__init__(code)
 
 
+class PageSnapshotChanged(CrawlError):
+    """The observed URL changed during a local DOM read; no snapshot is usable."""
+    def __init__(self):
+        super().__init__('page_not_ready')
+
+
 class SiteAdapter(Protocol):
     key: str
     label: str
