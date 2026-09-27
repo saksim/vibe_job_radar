@@ -6,6 +6,8 @@
 
 当前运行版本、真实采样、登录等待与各次失败统一记录在[当前取数证据](docs/CURRENT_ACQUISITION_EVIDENCE.md)。现有功能与历史目标的缺口、优先级和后续工作见[GAP 审计](docs/PROJECT_GAP_AUDIT_2026_09_26.md)及 [Issue #210](https://github.com/saksim/vibe_job_radar/issues/210)；[52项改进基线](docs/CURRENT_DELIVERY_CANDIDATE.md)保留为历史。候选、main 与发行分别判断，Windows 包须使用对应提交自己的成功 CI 产物。
 
+交付审查可从[PR220固定候选交接与升级回退清单](docs/MAIN_HANDOFF_REVIEW.md)进入，逐项核对开放PR包含关系、实际包摘要、待验条件和主干合入步骤。该清单是固定候选的审查材料。
+
 内部核查既有报告的质量时，可使用[独立标注与评估](docs/QUALITY_REVIEW.md)。原预测、助手草稿与真人确认分别保留，只有明确完成的适用标注进入质量指标。
 
 ## 先完成一次目标岗位研究
