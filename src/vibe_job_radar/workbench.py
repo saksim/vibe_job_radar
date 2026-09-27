@@ -21,7 +21,7 @@ from .guided.service import GuidedService, MESSAGES
 from .guided.contracts import CrawlError
 from .collection_guidance import CollectionGuidance
 from .evidence_ui import Conflict, EvidenceService
-from .public_tasks import PublicTasks
+from .public_tasks import PublicTasks, PublicTaskBusy
 
 MAX_BODY = 2_000_000
 _DEFAULT_PUBLIC_CLIENT = object()
@@ -95,11 +95,14 @@ class Handler(BaseHTTPRequestHandler):
             pass
 
     def _discard_rejected_body(self):
-        """After sending a refusal, drain only an unambiguous bounded frame.
+        """After a refusal, discard a bounded prefix of an unambiguous frame.
 
         Closing a Windows socket with unread inbound data can reset the peer
-        before it sees the 403. Never parse unauthorized JSON, dispatch it,
+        before it sees the 403/413. Never parse unauthorized JSON, dispatch it,
         reuse the connection, or wait indefinitely for a slow/truncated body.
+        An oversized declaration can still have a short buffered body; ignore
+        its excess length without leaving that prefix unread. The original
+        byte/time limits also apply to oversized or incomplete transmissions.
         """
         if getattr(self, '_body_consumed', False) or self.headers.get('Transfer-Encoding'):
             return
@@ -110,8 +113,9 @@ class Handler(BaseHTTPRequestHandler):
             remaining = int(lengths[0])
         except ValueError:
             return
-        if not 0 < remaining <= MAX_BODY:
+        if remaining <= 0:
             return
+        remaining = min(remaining, MAX_BODY)
         previous_timeout = self.connection.gettimeout()
         deadline = time.monotonic() + .2
         try:
@@ -248,6 +252,8 @@ class Handler(BaseHTTPRequestHandler):
             status, response = 400, {"error": MESSAGES.get(exc.code, "请检查平台、输入和当前任务状态。"), "code": exc.code}
         except Conflict as exc:
             status, response = 409, {"error": str(exc)}
+        except PublicTaskBusy as exc:
+            status, response = 409, {"error": str(exc), "code": "public_task_busy"}
         except InputError as exc:
             status, response = 400, {"error": str(exc)}
         except (ValueError, TypeError) as exc:
