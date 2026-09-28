@@ -1,6 +1,7 @@
 """Bounded test failure facts; shared implementation first reviewed in PR127."""
 from pathlib import Path
 import sys
+import threading
 import traceback
 from vibe_job_radar.guided.service import MESSAGES
 
@@ -20,5 +21,20 @@ def wait_diagnostic(service, view):
                 frames.append({'file':Path(frame.f_code.co_filename).name,
                                'line':number,'function':frame.f_code.co_name})
                 if len(frames)==24:break
+    report_writers=[]
+    if worker is not None and worker.ident is not None:
+        owned_prefix=f'radar-report-{worker.ident}_'
+        snapshots=sys._current_frames()
+        for thread in threading.enumerate():
+            if len(report_writers)>=4:break
+            if not thread.name.startswith(owned_prefix):continue
+            frame=snapshots.get(thread.ident)
+            if frame is None:continue
+            stack=[]
+            for item,number in traceback.walk_stack(frame):
+                stack.append({'file':Path(item.f_code.co_filename).name,
+                              'line':number,'function':item.f_code.co_name})
+                if len(stack)>=24:break
+            report_writers.append(stack)
     return {'busy':view['busy'],'worker_alive':bool(worker and worker.is_alive()),
-            'task':state,'worker_stack':frames}
+            'task':state,'worker_stack':frames,'report_writer_stacks':report_writers}
