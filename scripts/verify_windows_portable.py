@@ -109,6 +109,20 @@ def verify_store_report_reader(app, workspace, previous):
     return report
 
 
+def verify_payload_unchanged(bundle,before,result):
+    """Preserve bounded path/hash diagnostics; never archive modified bytes."""
+    result['stage']='payload_immutability'
+    after=inventory(bundle)
+    if after==before:return
+    differences=[]
+    for name in sorted(before.keys()|after.keys()):
+        if before.get(name)==after.get(name):continue
+        differences.append({'path':name,'before_sha256':before.get(name),'after_sha256':after.get(name)})
+    result['payload_changes']={'count':len(differences),'files':differences[:100],
+                               'truncated':len(differences)>100}
+    raise AssertionError('portable application modified its bundled components')
+
+
 def verify(bundle,report_path,*,browser_choice='bundled'):
     if browser_choice not in ('bundled','msedge'):raise ValueError('unsupported verification browser')
     if sys.platform!='win32':raise ValueError('portable executable verification requires Windows')
@@ -224,7 +238,7 @@ def verify(bundle,report_path,*,browser_choice='bundled'):
                 if restarted.json('/api/guided/state')['browser_health']['ready']:raise AssertionError('portable restart trusted old browser readiness')
             finally:restarted.close()
             result['checks'].append('fresh exe process preserves original report, leaves daily plan off and requires a fresh browser check')
-        if inventory(bundle)!=before:raise AssertionError('portable application modified its bundled components')
+        verify_payload_unchanged(bundle,before,result)
         result.update(success=True,stage='complete',files=before)
     except Exception as exc:
         result['error_type']=type(exc).__name__
