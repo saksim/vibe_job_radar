@@ -132,7 +132,7 @@ def build_candidate(out,evidence_path):
             '完整解压整个目录后双击 VibeJobRadar.exe。不要只复制exe或从zip内部运行。\n'
             '建议VibeJobRadar程序文件夹完整路径不超过110字符，避免Windows深层目录限制。无需修改系统长路径设置。\n'
             '自带Python、Playwright和配套Chromium；无需改动原Anaconda环境。\n'
-            '打开本机地址后可检查采集浏览器，也可明确选择已安装的Edge。组件更新请更换完整候选包。\n'
+            '打开本机地址后可检查采集浏览器，也可明确选择已安装的Edge或Chrome。组件更新请更换完整候选包。\n'
             '默认数据仍在用户目录 .vibe-job-radar；程序不会将工作区放进本包。\n'
             '升级/回退前停止任务与计划、关闭所有工作台，并备份整个工作区。\n'
             '三站实站登录/完整JD仍未认证；包的启动成功不代表网站允许采集。\n'

@@ -15,3 +15,15 @@ Chrome原生只启动新的独立临时会话，控制通道为继承管道；�
 当前隔离原型证据：Chrome156原生组件和保留SDK的Edge154组件通过；Chrome17项密码/短信入口场景、7项本地工作台选择/重启/模式边界、201项相关回归通过。相同两个模拟时钟场景，旧同步等待1失败1错误，排队修复全部通过且20次请求保留0.5秒间隔。原打包元数据缺失和本地验收包装脚本错误均分别记录；它们不改写任何CI结果。
 
 工程验收须新增独立Chrome界面作业和两种模式的原生TLS夹具作业，保留原Edge/Chromium作业。完整JD、原报告、迟到进度状态、有限重试和代理认证必须由这些隔离作业及当前源码/实际exe共同核验。测试CA只允许CI隔离机器，个人主机不安装。上述组件/合成场景不等于实站登录、验证码、真实JD链路或整个旧PR196已完成；准确候选和合并后主干的首次结果以关联PR为准。
+
+
+## PR245 首次失败与修正边界（2026-09-28 UTC）
+
+- 初版 head `73c629bd` 首次 CI 24/25；诊断版 `8cc9d0a1` 首次 23/25。两个原始结果均保留，未重跑工作流。当前修正需要新的完整候选和真实主干验收。
+- 实际 exe 的 bundled/Chrome 组件及七项流程都完成，但包目录最后新增 `browsers/chromium_headless_shell-1243/chrome-headless-shell-win64/debug.log`，故不得归档为合格包。诊断版记录有界相对路径与前后 SHA256，不读取内容、不忽略变化。
+- Windows 便携运行现在通过 Playwright 的公开 `executable_path` 选项，在有头/无头模式均使用同一个包内完整 Chromium；缺失即失败。源码默认无头选择及用户明确选择的 Edge/Chrome 通道保持。没有删除产生的日志或放宽包文件摘要检查。
+- 两个独立副本的人工 GPU 错误刺激：旧无头壳生成相同位置 `debug.log`；完整 Chromium 未修改包目录，但本机启动失败，不能把这项对照称为正常运行成功。本机正常完整 Chromium 无头组件检查也报 `0xC0000374`，与既有宿主启动限制一起保留；冻结 exe 的当前 CI 仍须独立通过，不能用源码/旧包替代。
+- 诊断版 Chrome 有头搜索作业在 35 秒栈转储处突然结束，缺少正常 finally 产物。一次独立 Python 3.12.12 元数据遍历/1ms 转储对照中，原 C 定时转储以 `0xC0000005` 退出，同步 Python 线程转储完成。该对照支持避免无锁帧遍历，未证明原 CI 唯一底层原因。
+- 现由原观察线程按相同默认 35 秒周期调用同步 `faulthandler.dump_traceback`。原 5 秒检查点、180 秒观察上限、测试断言/请求/配额/外层时限保持；写入或转储失败仍不能报成功。此 Python 观察线程不能保证在整个解释器锁被占住时运行，外层 CI 时限仍负责最终终止。
+
+公开实现参考：[Chromium 默认日志路径](https://raw.githubusercontent.com/chromium/chromium/main/base/logging.cc)、[无头壳初始化](https://raw.githubusercontent.com/chromium/chromium/main/headless/lib/headless_content_main_delegate.cc)、[CPython 3.12.10 转储实现](https://raw.githubusercontent.com/python/cpython/v3.12.10/Modules/faulthandler.c)。这些源码支持行为分析，不替代本项目的首次失败和新提交实测。

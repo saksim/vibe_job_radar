@@ -129,7 +129,7 @@ def observed_backend(base, stages):
 
 
 @contextmanager
-def capture(stages, out, prefix, *, interval=5):
+def capture(stages, out, prefix, *, interval=5, stack_interval=35):
     """Retain pre-cleanup evidence without file writes inside browser callbacks."""
     out.mkdir(parents=True, exist_ok=True)
     progress = out / (prefix + '-progress.json')
@@ -141,6 +141,7 @@ def capture(stages, out, prefix, *, interval=5):
         progress.write_text(json.dumps(stages.snapshot(), indent=2), encoding='utf-8')
 
     def watch():
+        next_stack=time.monotonic()+stack_interval
         try:
             with checkpoints.open('w', encoding='utf-8') as stream:
                 for _ in range(36):
@@ -148,14 +149,19 @@ def capture(stages, out, prefix, *, interval=5):
                         return
                     stream.write(json.dumps(stages.snapshot()) + '\n')
                     stream.flush()
-        except OSError as error:
+                    if time.monotonic()>=next_stack:
+                        # Synchronous dumping from this Python thread holds the
+                        # interpreter lock while traversing other Python frames.
+                        # The C watchdog can race active frame/metadata updates.
+                        faulthandler.dump_traceback(file=stacks,all_threads=True)
+                        next_stack=time.monotonic()+stack_interval
+        except (OSError,RuntimeError) as error:
             writer_errors.extend(error_chain(error))
 
     save()
     watcher = threading.Thread(target=watch, name='native-wait-evidence', daemon=True)
     failed = False
     with (out / (prefix + '-threads.log')).open('w', encoding='utf-8') as stacks:
-        faulthandler.dump_traceback_later(35, repeat=True, file=stacks)
         watcher.start()
         try:
             yield
@@ -169,7 +175,6 @@ def capture(stages, out, prefix, *, interval=5):
                 pass
             raise
         finally:
-            faulthandler.cancel_dump_traceback_later()
             stop.set(); watcher.join(timeout=2)
             stages.result['watchdog_stopped'] = not watcher.is_alive()
             stages.result['writer_error_types'] = writer_errors[:8]

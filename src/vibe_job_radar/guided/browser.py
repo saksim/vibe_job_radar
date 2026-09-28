@@ -12,6 +12,7 @@ from urllib.parse import urljoin, urlsplit
 
 from ..utils import domain_matches
 from ..network_policy import current_policy
+from ..runtime import is_portable
 from .contracts import CrawlError, PageSnapshot, PageSnapshotChanged
 from .rate import RateLimit
 from .read_retry import TransientReadFailure, document_failure, read_attempt
@@ -26,6 +27,7 @@ class PlaywrightBackend:
                  headless=False, executable_path=None, transport_factory=PinnedTransport, channel=None, storage_state=None):
         if channel not in (None, 'msedge', 'chrome') or (channel and executable_path):
             raise ValueError('unsupported browser choice')
+        portable_bundled = is_portable() and channel is None
         self.adapter, self.cancelled = adapter, cancelled
         self.wire = transport_factory(adapter, ledger, cancelled, progress)
         # Capture the workspace snapshot here, on the owner context, not in the
@@ -84,13 +86,17 @@ class PlaywrightBackend:
                 # a path that cannot be inspected is not a proved missing executable.
                 # Headed collection needs the regular Chromium build, not only the
                 # separately installed headless shell. Test backends can select a path.
-                if (not headless or executable_path) and not self.startup_report['executable_exists']:
+                if (not headless or executable_path or portable_bundled) and not self.startup_report['executable_exists']:
                     raise BrowserStartupError(failed_report(self.startup_report, FileNotFoundError(expected), code='browser_executable_missing'))
             args = ['--disable-background-networking', '--disable-quic', '--disable-sync',
                     '--force-webrtc-ip-handling-policy=disable_non_proxied_udp']
             options = {'headless': headless, 'args': args, 'timeout': 30000}
-            if executable_path:
-                options['executable_path'] = executable_path
+            if executable_path or portable_bundled:
+                # A portable application uses its packaged regular Chromium in
+                # both modes. The separate Windows headless shell can create
+                # debug.log next to its executable, mutating the verified bundle.
+                # No fallback or SDK patch: this is the public launch option.
+                options['executable_path'] = str(executable_path or expected)
             if channel:
                 options['channel'] = channel
             self.startup_report.update(stage='launch', launch_tested=True)
