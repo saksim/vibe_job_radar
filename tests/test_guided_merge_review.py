@@ -14,6 +14,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from test_guided import FakeBackend, fixture_adapter
+from guided_wait_diagnostic import wait_diagnostic
 from vibe_job_radar import __version__
 from vibe_job_radar.cli import parser
 from vibe_job_radar.guided.adapters import Registry
@@ -172,7 +173,8 @@ class ServiceReviewTests(unittest.TestCase):
         deadline = time.monotonic()+15
         while self.service.state()['busy'] and time.monotonic()<deadline:
             time.sleep(.01)
-        self.assertFalse(self.service.state()['busy'])
+        view = self.service.state()
+        self.assertFalse(view['busy'], wait_diagnostic(self.service, view) if view['busy'] else None)
 
     def create(self, **kw):
         data = dict(platform='fixture', keyword='时间序列', roles=['time_series'], consent=True, rights_note='人工测试样本', max_pages=2, max_jobs=5)

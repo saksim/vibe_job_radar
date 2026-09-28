@@ -106,11 +106,14 @@ class Handler(BaseHTTPRequestHandler):
             pass
 
     def _discard_rejected_body(self):
-        """After sending a refusal, drain only an unambiguous bounded frame.
+        """After a refusal, discard a bounded prefix of an unambiguous frame.
 
         Closing a Windows socket with unread inbound data can reset the peer
-        before it sees the 403. Never parse unauthorized JSON, dispatch it,
+        before it sees the 403/413. Never parse unauthorized JSON, dispatch it,
         reuse the connection, or wait indefinitely for a slow/truncated body.
+        An oversized declaration can still have a short buffered body; ignore
+        its excess length without leaving that prefix unread. The original
+        byte/time limits also apply to oversized or incomplete transmissions.
         """
         if getattr(self, '_body_consumed', False) or self.headers.get('Transfer-Encoding'):
             return
@@ -121,8 +124,9 @@ class Handler(BaseHTTPRequestHandler):
             remaining = int(lengths[0])
         except ValueError:
             return
-        if not 0 < remaining <= MAX_BODY:
+        if remaining <= 0:
             return
+        remaining = min(remaining, MAX_BODY)
         previous_timeout = self.connection.gettimeout()
         deadline = time.monotonic() + .2
         try:
@@ -289,10 +293,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--workspace", type=Path, default=Path.home() / ".vibe-job-radar")
     parser.add_argument("--port", type=int, default=0, help="默认由系统选择空闲端口，仅绑定 127.0.0.1")
     parser.add_argument("--no-browser", action="store_true")
-    parser.add_argument("--doctor", action="store_true", help="离线检查 Python、SQLite 和目录写入能力")
+    modes=parser.add_mutually_exclusive_group()
+    modes.add_argument("--doctor", action="store_true", help="离线检查 Python、SQLite 和目录写入能力")
+    modes.add_argument('--native-browser-check',action='store_true',help='检查新临时原生浏览器的空白页、请求拒绝与退出；不连接招聘网站')
+    parser.add_argument('--native-browser-channel',choices=['bundled','msedge','chrome'],help='仅用于原生组件检查，默认配套Chromium')
     args = parser.parse_args(argv)
     if not 0 <= args.port <= 65535:
         parser.error("port 必须为 0～65535")
+    if args.native_browser_check:
+        if args.port:parser.error('原生组件检查不启动服务，请移除--port')
+        from .guided.native_check import run_cli
+        return run_cli(channel=args.native_browser_channel)
+    if args.native_browser_channel:parser.error('--native-browser-channel 仅配合 --native-browser-check')
     try:
         workspace = Workspace(args.workspace)
         diagnostic = workspace.doctor()

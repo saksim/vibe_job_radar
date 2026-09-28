@@ -52,6 +52,16 @@ jobs:
         if: runner.os == 'Windows'
         timeout-minutes: 3
         run: python scripts/run_native_liepin_probe.py --controlled --channel msedge ${{ matrix.mode == 'headed' && '--headed' || '' }}
+      - name: Verify finite native document retries on Linux
+        if: runner.os == 'Linux' && matrix.mode == 'headless'
+        run: python scripts/run_native_read_retry_probe.py --controlled
+      - name: Verify headed finite native document retries on Linux
+        if: runner.os == 'Linux' && matrix.mode == 'headed'
+        run: xvfb-run -a python scripts/run_native_read_retry_probe.py --controlled --headed
+      - name: Verify finite native document retries on Windows
+        if: runner.os == 'Windows'
+        timeout-minutes: 3
+        run: python scripts/run_native_read_retry_probe.py --controlled --channel msedge ${{ matrix.mode == 'headed' && '--headed' || '' }}
       - name: Verify native authenticated proxies on Linux
         if: runner.os == 'Linux' && matrix.mode == 'headless'
         timeout-minutes: 3
@@ -64,16 +74,6 @@ jobs:
         if: runner.os == 'Windows'
         timeout-minutes: 3
         run: python scripts/run_native_proxy_auth.py --controlled --channel msedge ${{ matrix.mode == 'headed' && '--headed' || '' }}
-      - name: Verify finite native document retries on Linux
-        if: runner.os == 'Linux' && matrix.mode == 'headless'
-        run: python scripts/run_native_read_retry.py --controlled
-      - name: Verify headed finite native document retries on Linux
-        if: runner.os == 'Linux' && matrix.mode == 'headed'
-        run: xvfb-run -a python scripts/run_native_read_retry.py --controlled --headed
-      - name: Verify finite native document retries on Windows
-        if: runner.os == 'Windows'
-        timeout-minutes: 3
-        run: python scripts/run_native_read_retry.py --controlled --channel msedge ${{ matrix.mode == 'headed' && '--headed' || '' }}
       - name: Preserve native evidence including failures
         if: always()
         uses: actions/upload-artifact@v4
@@ -82,5 +82,42 @@ jobs:
           retention-days: 7
           path: |
             browser-acceptance/native/
-            browser-acceptance/native-proxy-auth/
             browser-acceptance/native-read-retry/
+            browser-acceptance/native-proxy-auth/
+
+  native-chrome:
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [headless, headed]
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install developer-only native tools
+        run: python -m pip install "playwright>=1.48,<2" "packaging>=24.2" "cryptography>=43"
+      - name: Verify installed native Chrome authentication against artificial local TLS
+        timeout-minutes: 3
+        run: python scripts/run_native_auth_probe.py --controlled --channel chrome ${{ matrix.mode == 'headed' && '--headed' || '' }}
+      - name: Verify native Chrome search, complete JD, report and delayed progress
+        timeout-minutes: 3
+        run: python scripts/run_native_liepin_probe.py --controlled --channel chrome ${{ matrix.mode == 'headed' && '--headed' || '' }}
+      - name: Verify finite native Chrome document retries
+        timeout-minutes: 3
+        run: python scripts/run_native_read_retry_probe.py --controlled --channel chrome ${{ matrix.mode == 'headed' && '--headed' || '' }}
+      - name: Verify native Chrome authenticated proxies
+        timeout-minutes: 3
+        run: python scripts/run_native_proxy_auth.py --controlled --channel chrome ${{ matrix.mode == 'headed' && '--headed' || '' }}
+      - name: Preserve native Chrome evidence including failures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-browser-Chrome-Windows-${{ matrix.mode }}
+          retention-days: 7
+          path: |
+            browser-acceptance/native/
+            browser-acceptance/native-read-retry/
+            browser-acceptance/native-proxy-auth/

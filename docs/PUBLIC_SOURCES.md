@@ -13,7 +13,7 @@
 
 均为HTTPS。未知公司、任意URL、多来源同时获取、额外认证字段及未核对的职位URL查询不接受。Cloudflare接口中的正文、ID、总数和公司均需完整校验；URL来自原回答，不另发详情请求或推断仍在招聘。远程属性未明确提供时仍为未知。
 
-依据为[Greenhouse官方公开Job Board API](https://docs.greenhouse.io/job-board.html)，其GET无需认证，`content=true`包含正文；受认证的申请POST不在本项目访问范围。[Cloudflare Greenhouse入口](https://job-boards.greenhouse.io/cloudflare)正常跳转其[官方职业页](https://www.cloudflare.com/careers/jobs/)。公开可读与生产转载/分发许可分别处理。
+依据为[Greenhouse官方公开Job Board API](https://docs.greenhouse.io/job-board.html)，其GET无需认证，`content=true`包含正文；受认证的申请POST不在本项目访问范围。2026-09-23核对时，[Cloudflare Greenhouse入口](https://job-boards.greenhouse.io/cloudflare)转至其[官方职业页](https://www.cloudflare.com/careers/jobs/)。2026-09-28再次读取中间入口时Web工具返回内部错误，未据此确认当前跳转；固定API当前可读性以新提交的实际GET验收为准。公开可读与生产转载/分发许可分别处理。
 
 2026-09-23一次真实匿名GET得到HTTP200、382条记录且总数一致，新解析器可读取382条，最短纯文本6421字符。对该次全部正文做字面检索，Cursor、Claude、Copilot、vibe coding均为0匹配；不把数量当作Vibe Coding要求、岗位活跃证明或覆盖率。下一次真实原任务/报告链路查询Architect得到235条宽匹配，旧ID排序的前20条均被原岗位分类过滤；因此新增标题匹配优先。对同一真实缓存重算，无新增请求且保留原采集时间，前20条中的8条纳入原报告完整JD组，已接受Vibe要求仍为0；首次空报告也保留，未放松分类或补造要求。源码与CI不捆绑原始全文，日后来源可改变。中国三站的正常登录/完整JD及跨日期认证继续#49/#50/#54/#55/#56/#63跟踪。
 
@@ -29,6 +29,6 @@
 
 `test_public_sources.py`使用标注的人工目录验证身份/查询边界、来源隔离、游标、共享额度/429、撤销、旧计划绑定、报告和每日执行；实际Edge/Chromium脚本`run_public_sources_browser.py`验证选择、切换后分页、原报告、独立计划和390px页面。人工夹具里的Cursor要求不代表真实Cloudflare正文。
 
-`check_live_local_public.py --live --source cloudflare`只对该固定目录执行一次真实GET；省略source仍为Anthropic。CI在每个真实请求间留31秒，产物只含计数和元数据。具体提交是否通过须回读CI，不能由脚本存在推断成功。
+`check_live_local_public.py --live --source cloudflare`只对该固定目录执行一次真实GET；省略source仍为Anthropic。CI在每个真实请求间留31秒，产物只含计数和元数据。相关路径的PR和main提交均执行该只读工作流；具体提交是否通过须回读CI，不能由脚本存在或旧观察推断成功。
 
 升级前停止旧服务并备份工作区；回退不要删配额库、缓存或报告。原Anthropic来源契约、缓存名称、默认选择和计划绑定不变。旧版本不认识Cloudflare，留下的新来源缓存和历史报告保留；含新来源的计划不能继续执行，应先停止并核对，而不是替换成Anthropic。仍不提供生产服务、全天运行保证或跨设备全局配额。

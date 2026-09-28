@@ -190,6 +190,19 @@ class QualificationTests(unittest.TestCase):
             self.assertFalse(module.verify(out)['success'])
         report=json.loads((out/'result.json').read_text(encoding='utf-8'))
         self.assertEqual(report['steps'][0]['error'],'local_check_timeout')
+
+    def test_timeout_keeps_current_progress_without_accepting_incomplete_tests(self):
+        from unittest.mock import patch
+        import subprocess
+        module=self.load_script('verify_candidate');out=self.root/'out'
+        def stalled(args,**kwargs):
+            target=Path(args[args.index('--report')+1])
+            target.with_suffix('.progress.log').write_text('START artificial_stalled_test\n',encoding='utf-8')
+            raise subprocess.TimeoutExpired(args,600)
+        with patch.object(module.platform,'platform',return_value='fixture'),patch.object(module.subprocess,'run',side_effect=stalled):
+            report=module.verify(out)
+        self.assertFalse(report['success']);self.assertEqual(report['tests'],{})
+        self.assertIn('artificial_stalled_test',(out/'unit-tests.progress.log').read_text(encoding='utf-8'))
     def test_root_and_git_directory_cannot_be_output(self):
         from vibe_job_radar.qualification import output_directory
         for path in (self.root,self.root/'.git'/'unsafe',self.root/'docs'/'output'):

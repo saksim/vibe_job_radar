@@ -26,8 +26,8 @@ from .native_tunnel import NativeTunnel
 from .native_errors import native_transport_failure
 from .native_documents import continue_document_response
 from .rate import RateLimit
-from .transport import PinnedTransport, WireResponse
 from .read_retry import TransientReadFailure, document_failure, read_attempt
+from .transport import PinnedTransport, WireResponse
 from ..network import USER_AGENT
 
 
@@ -48,6 +48,12 @@ class NativeControl(PinnedTransport):
 
     def fetch(self, *args, **kwargs):
         raise RuntimeError('native backend cannot replay HTTP')
+
+    def reserve_request_nowait(self, *, origin):
+        if self.cancelled.is_set():
+            raise CrawlError('paused')
+        self.ledger.reserve(self.adapter.key, 'request', origin=origin)
+
 
     def ensure_robots(self, url):
         p = urlsplit(url); origin = 'https://' + p.netloc
@@ -100,17 +106,33 @@ class NativeBackend(PlaywrightBackend):
         return {**options, 'proxy': {'server': self.tunnel.endpoint},
                 'args': [*options['args'], '--proxy-bypass-list=<-loopback>', '--block-new-web-contents']}
 
+    def _launch_browser(self, options):
+        # The installed Chrome native experiment uses this control layer.
+        # Keep the established bundled/Edge path explicit; no launch fallback.
+        if options.get('channel') != 'chrome':
+            return super()._launch_browser(options)
+        from .cdp_browser import CDPBrowser, edge_executable, chrome_executable
+        options = dict(options)
+        channel = options.pop('channel', None)
+        options['executable_path'] = (edge_executable() if channel == 'msedge'
+            else chrome_executable() if channel == 'chrome'
+            else options.get('executable_path') or self.runtime.chromium.executable_path)
+        return CDPBrowser(**options)
+
+
     def _configure_context(self):
         # Install before any page is created. Target debugger pause does not
         # alone prevent the browser's initial popup network request.
         self._native_cors = any(rule.cors_origin for rule in self.contract.rules)
+        self._direct_cdp = getattr(self.browser, 'minimal_events', False) is True
         # Playwright's route layer auto-fulfills CORS OPTIONS. For reviewed
         # CORS contracts use direct CDP controls, so the publisher really
         # receives and decides preflight. Unsupported targets get an abort-only
         # Fetch guard before their deferred close, never collection controls.
-        if not self._native_cors:
+        if not self._native_cors and not self._direct_cdp:
             self.context.route('**/*', self._ownership_route)
-        self.context.route_web_socket('**/*', lambda ws: ws.close())
+        if not self._direct_cdp:
+            self.context.route_web_socket('**/*', lambda ws: ws.close())
         self.context.on('page', self._page_created)
         self._cdp = self.browser.new_browser_cdp_session()
         contexts = self._cdp.send('Target.getBrowserContexts')['browserContextIds']
@@ -182,7 +204,7 @@ class NativeBackend(PlaywrightBackend):
             return
         rejected.add(target)
         self.__dict__.setdefault('_pending_rejected_targets', []).append(target)
-        if self.__dict__.get('_native_cors', False):
+        if self.__dict__.get('_native_cors', False) or self.__dict__.get('_direct_cdp', False):
             from .native_cors import quarantine_target
             quarantine_target(self, target)
 
@@ -395,6 +417,8 @@ class NativeBackend(PlaywrightBackend):
 
     def _detached(self, event):
         session = event['sessionId']
+        if pacer := self.__dict__.get('_request_pacer'):
+            pacer.retire(session)
         self._sessions.pop(session, None)
         self._page_sessions.pop(session, None)
         for page, bound in tuple(self._bound_pages.items()):
@@ -470,6 +494,8 @@ class NativeBackend(PlaywrightBackend):
             elif method == 'Network.loadingFinished':
                 self._finished(session, data)
             elif method == 'Network.loadingFailed':
+                if pacer := self.__dict__.get('_request_pacer'):
+                    pacer.retire(session, data['requestId'])
                 key=(session,data['requestId']); record=self._requests.pop(key,None)
                 self._hops.pop(key,None)
                 if record and record['role'] != 'asset' and not self.cancelled.is_set() and not self.error:
@@ -483,6 +509,7 @@ class NativeBackend(PlaywrightBackend):
         if not self.error:
             self.error = code
             self.wait_error = error if isinstance(error,(RateLimit,TransientReadFailure)) else None
+            notify(getattr(self, '_diagnostics', None), 'backend_stop', code=code)
         self._halted = True
         if code == 'native_protocol_error' and self._cdp:
             # A failed interception command must not leave a page running with
@@ -513,7 +540,7 @@ class NativeBackend(PlaywrightBackend):
         response = 'responseStatusCode' in event or 'responseErrorReason' in event
         ignored = not response and self.contract.ignored_request(url, request['method'], kind)
         resource = {'XHR':'xhr','Fetch':'fetch','Document':'document','Stylesheet':'stylesheet',
-                    'Script':'script','Image':'image','Font':'font','Media':'media'}.get(kind,'other')
+                    'Script':'script','Image':'image','Font':'font','Media':'media','Preflight':'preflight'}.get(kind,'other')
         with observe(getattr(self,'_diagnostics',None), 'http_request' if response else 'route',
                 actor='browser', url=url, method=request['method'], resource=resource,
                 impact='optional' if ignored or resource in {'script','stylesheet','image','font','media'} else 'required_by_backend'):
@@ -547,6 +574,8 @@ class NativeBackend(PlaywrightBackend):
                     self._fatal('native_protocol_error')
 
     def _request_paused(self, session, event):
+        if self.__dict__.get('_direct_cdp', False):
+            return self._request_paused_direct(session, event)
         r=event['request']; url=r['url']; kind=event.get('resourceType','Other')
         p, _ = self.contract.target(url)
         if event.get('frameId') and event['frameId'] != self._sessions.get(session):
@@ -586,6 +615,60 @@ class NativeBackend(PlaywrightBackend):
                              'url':url,'status':None, 'json':False}
         self.native_counts[role] += 1
         self._send(session,'Fetch.continueRequest',{'requestId':event['requestId']})
+
+    def _request_paused_direct(self, session, event):
+        r=event['request']; url=r['url']; kind=event.get('resourceType','Other')
+        p, _ = self.contract.target(url)
+        if event.get('frameId') and event['frameId'] != self._sessions.get(session):
+            raise CrawlError('native_surface_unsupported')
+        robots = self._loading_robots and url == self._robots_url and kind == 'Document' and r['method']=='GET'
+        if robots:
+            role, operation='robots','robots'
+        else:
+            rule=self.contract.match(url,r['method'],kind,authentication=self.auth_mode)
+            rule.validate_headers(r['method'], r.get('headers', {}))
+            role,operation=rule.role,rule.key
+            if role != 'asset':
+                self.wire.ensure_robots(url)
+        if len(r.get('postData','').encode('utf-8')) > 1_000_000:
+            raise CrawlError('request_too_large')
+        if kind == 'Document' and not robots:
+            if self._pagination_page is not None:
+                self._pagination_page=None
+            else:
+                self.wire.reserve('page')
+        key=(session,event.get('networkId',event['requestId']))
+        context = {}
+        bind = getattr(self.adapter, 'native_request_context', None)
+        if role == 'business' and r['method'] != 'OPTIONS' and callable(bind):
+            context = bind(operation, r, self.page.url)
+        from .native_pacing import NativeRequestPacer, PausedRequest
+        if '_request_pacer' not in self.__dict__:
+            self._request_pacer = NativeRequestPacer(self)
+        record = {'context': context, 'epoch':self._epoch,'operation':operation,'role':role,'size':0,
+                  'url':url,'status':None, 'json':False}
+        self._request_pacer.submit(PausedRequest(session, event['requestId'], key, 'https://'+p.netloc,
+            record, role == 'business' and r['method'] != 'OPTIONS', not robots and rule.authentication))
+
+
+    def _admit_request(self, item):
+        record = item.record
+        context, operation = record['context'], record['operation']
+        if item.business:
+            # The browser has requested newer data even while pacing holds it.
+            # Never expose an older response during that new asynchronous wait.
+            self._business_sequence = getattr(self, '_business_sequence', 0) + 1
+            context['sequence'] = self._business_sequence
+            self.__dict__.setdefault('_latest_business', {})[operation] = self._business_sequence
+            self._observations = deque((o for o in self._observations if o.operation != operation), maxlen=20)
+
+
+    def _continue_request(self, item):
+        record = item.record
+        self._requests[item.key] = record
+        self.native_counts[record['role']] += 1
+        self._send(item.session,'Fetch.continueRequest',{'requestId':item.request_id})
+
 
     def _response_paused(self, session, event):
         url=event['request']['url']; status=event.get('responseStatusCode',0)
@@ -803,6 +886,8 @@ class NativeBackend(PlaywrightBackend):
 
     def close(self):
         self._closing=True
+        if pacer := self.__dict__.get('_request_pacer'):
+            pacer.close()
         super().close()
         if self.tunnel:
             self.tunnel.close(); self.tunnel=None

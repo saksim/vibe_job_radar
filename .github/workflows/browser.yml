@@ -9,7 +9,7 @@ concurrency:
 permissions:
   contents: read
 jobs:
-  chromium-user-journey:
+  browser-exercises:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -32,20 +32,23 @@ jobs:
           python scripts/run_guided_startup_browser.py
           python scripts/run_guided_review_browser.py
           python scripts/run_deferred_browser.py
-          python scripts/run_proxy_auth_browser.py
           python scripts/run_read_retry_browser.py
           python scripts/run_read_retry_browser.py --automatic
+          python scripts/run_proxy_auth_browser.py
+          python scripts/run_public_poll_handoff_browser.py
           python scripts/run_recovery_browser.py
+          python scripts/run_public_owner_browser.py
           python scripts/run_network_settings_browser.py
           python scripts/run_workspace_proxy_browser.py
           python scripts/run_workspace_proxy_browser.py --vm
           python scripts/run_public_schedule_browser.py
+          python scripts/run_public_schedule_handoff_browser.py
           python scripts/run_public_sources_browser.py
-          python scripts/run_public_owner_browser.py
           python scripts/run_guided_owner_browser.py
           python scripts/run_research_workflow_browser.py
           python scripts/run_native_login_browser.py
           python scripts/run_login_detail_return_browser.py
+          python scripts/run_login_detail_return_browser.py --pending-action
           python scripts/run_login_detail_return_browser.py --automatic
           python scripts/run_target_acquisition_browser.py
           python scripts/run_browser_policy_binding.py
@@ -56,6 +59,30 @@ jobs:
           retention-days: 7
           name: browser-acceptance
           path: browser-acceptance/
+  chromium-user-journey:
+    # Browser execution and full source qualification must each have their own
+    # job budget. A browser failure still prevents candidate verification/build.
+    # Keep the original required-check name as the final gate. A skipped
+    # dependent job can satisfy GitHub requirements, so fail it explicitly.
+    needs: browser-exercises
+    if: always()
+    runs-on: ubuntu-latest
+    # verify_candidate keeps its 600s unit and 3x180s auxiliary limits. Include
+    # dependency setup, evidence upload and building without truncating them.
+    timeout-minutes: 25
+    steps:
+      - name: Require successful browser exercises
+        env:
+          BROWSER_RESULT: ${{ needs['browser-exercises'].result }}
+        run: test "$BROWSER_RESULT" = success
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install source qualification dependencies
+        run: |
+          python -m pip install playwright "packaging>=24.2"
+          python -m playwright install --with-deps chromium
       - name: Verify exact source before building candidate
         run: python scripts/verify_candidate.py
       - name: Save source verification evidence

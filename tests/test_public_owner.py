@@ -95,6 +95,51 @@ class OwnerTests(unittest.TestCase):
         self.assertTrue(line,'child failed before task start')
         return child,json.loads(line)['id']
 
+    def test_new_owner_between_probe_and_read_does_not_look_interrupted(self):
+        from vibe_job_radar.collection import writer_lock
+
+        self.first_transport.json.side_effect=self.hold
+        claimed=threading.Event();started=[];errors=[]
+        original_busy,original_claim=self.second.busy,self.first._claim
+        def claim():
+            lease=original_claim();claimed.set();return lease
+        def start():
+            try:started.append(self.start())
+            except BaseException as exc:errors.append(exc)
+        owner=threading.Thread(target=start)
+        def probe():
+            busy=original_busy();self.assertFalse(busy)
+            # Use the real OS lock to coordinate publication without sleeps.
+            # When this reader holds it, the new owner must wait for the read;
+            # otherwise let the actual worker publish its running record first.
+            try:
+                with writer_lock(self.second.root):pass
+            except InputError as exc:
+                self.assertIsInstance(exc.__cause__,OSError);record_held=True
+            else:record_held=False
+            owner.start();self.assertTrue(claimed.wait(5))
+            if not record_held:self.assertTrue(self.entered.wait(5))
+            return busy
+        try:
+            with patch.object(self.first,'_claim',side_effect=claim),patch.object(self.second,'busy',side_effect=probe):
+                observed=self.second.snapshot()
+            owner.join(5);self.assertFalse(owner.is_alive());self.assertEqual(errors,[])
+            self.assertTrue(self.entered.wait(5));self.assertTrue(self.first._thread.is_alive())
+            before=self.first.path.read_bytes();current=self.second.snapshot()
+            self.assertEqual(current['id'],started[0]);self.assertEqual(current['status'],'running')
+            self.assertTrue(current['owned_elsewhere']);self.assertFalse(current['can_resume'])
+            with self.assertRaises(InputError):self.second.resume({'id':started[0],'consent':True})
+            self.assertEqual(self.first.path.read_bytes(),before)
+            self.assertEqual(self.first_transport.json.call_count,1);self.second_transport.json.assert_not_called()
+            self.release.set();finished=self.wait()
+            self.assertEqual(finished['status'],'completed');self.assertTrue(self.workspace.report(finished['report_id']))
+            # The observation linearizes before the newly starting task. It
+            # cannot mix an earlier unowned probe with that task's new record.
+            self.assertEqual(observed['status'],'idle');self.assertFalse(observed['can_resume'])
+        finally:
+            self.release.set()
+            if owner.ident is not None:owner.join(10)
+
     def test_second_instance_cannot_overwrite_or_cancel_running_task(self):
         ident=self.running();before=self.first.path.read_bytes()
         for other in (self.second,self.instance()[0]):
@@ -177,6 +222,8 @@ class OwnerTests(unittest.TestCase):
         self.assertEqual((complete['id'],complete['attempt'],complete['status']),(ident,2,'completed'))
         with closing(sqlite3.connect(self.workspace.root/'public_examples'/'rates.sqlite')) as db:
             self.assertEqual(db.execute('SELECT COUNT(*) FROM visits').fetchone()[0],2)
+
+
 
     def test_schedule_waits_for_other_owner_without_rewriting_plan_or_task(self):
         scheduler=PublicSchedule(self.workspace,self.second,clock=lambda:self.now[0]);self.addCleanup(scheduler.close)

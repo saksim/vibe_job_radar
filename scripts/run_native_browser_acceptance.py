@@ -168,7 +168,7 @@ class Fixture:
 
 
 def main():
-    parser=argparse.ArgumentParser();parser.add_argument('--controlled',action='store_true');parser.add_argument('--channel',choices=['msedge']);parser.add_argument('--executable');parser.add_argument('--headed',action='store_true')
+    parser=argparse.ArgumentParser();parser.add_argument('--controlled',action='store_true');parser.add_argument('--channel',choices=['msedge','chrome']);parser.add_argument('--executable');parser.add_argument('--headed',action='store_true')
     args=parser.parse_args()
     if not args.controlled:
         print('No requests. Use --controlled for explicit developer-only local fixture acceptance.');return

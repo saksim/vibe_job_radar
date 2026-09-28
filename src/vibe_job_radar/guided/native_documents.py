@@ -15,7 +15,7 @@ from .contracts import CrawlError
 
 # Preserve scripts, the original origin and same-tab normal forms. Do not grant
 # popups, popup escape, downloads, top navigation or other unsupported surfaces.
-DOCUMENT_SANDBOX = "sandbox allow-scripts allow-same-origin allow-forms; frame-src 'none'"
+DOCUMENT_SANDBOX = "sandbox allow-scripts allow-same-origin allow-forms; frame-src 'none'; worker-src 'none'; connect-src https: http:"
 ROBOTS_SANDBOX = "sandbox; default-src 'none'; base-uri 'none'; form-action 'none'"
 
 
@@ -46,7 +46,7 @@ def continue_document_response(backend, session: str, event: dict, *, robots: bo
     Supplying the unchanged decoded body makes the browser parse all headers
     together. Other responses keep the normal native continuation.
     """
-    params = document_response_params(event, enabled=getattr(backend, '_native_cors', False), robots=robots)
+    params = document_response_params(event, enabled=(getattr(backend, '_native_cors', False) or getattr(backend, '_direct_cdp', False)), robots=robots)
     if 'responseHeaders' not in params or event['responseStatusCode'] in {204, 205}:
         backend._send(session, 'Fetch.continueResponse', {'requestId': event['requestId']})
         return

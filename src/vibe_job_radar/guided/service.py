@@ -29,6 +29,7 @@ from ..models import JobRecord
 from ..store import Store
 from ..utils import atomic_json, utc_now
 from ..workspace import InputError, text_field
+from ..runtime import description as runtime_description, require_source_install
 from .adapters import Registry, builtins
 from .browser import PlaywrightBackend
 from .native_browser import NativeBackend
@@ -63,7 +64,11 @@ MESSAGES = {
     'checkpoint_records_missing': '任务中已保存的正文记录缺失或不一致，已停止；请恢复工作区备份，不会把缺失正文算成成功或自动重复抓取。',
     'batch_identity_unsupported': '当前版本无法恢复该批次的岗位标识规则；原选择与记录已保留，请使用兼容版本继续。',
     'login_form_changed': '未找到可确认的猎聘密码登录表单，已停止自动填写。请在采集浏览器检查页面并正常登录。',
-    'login_password_submitted': '已在猎聘正常表单提交一次。请查看平台反馈；协议、验证码或短信验证需在该页面完成。原搜索或所选完整岗位可读后自动继续，不会重复提交密码。',
+    'login_agreement_required': '账号密码已填入，尚未点击登录。请在猎聘网页阅读并勾选条款，再点击该网页的“登录”；只勾选不会提交。随后按平台提示完成验证，原任务可读后自动继续。',
+    'login_entry_unavailable': '未能打开猎聘登录框，尚未填写账号密码。请保留采集页面，检查页面是否仍在加载。',
+    'login_password_tab_unavailable': '未能切换到猎聘密码登录，尚未填写账号密码。请保留当前页面，检查“密码登录”标签是否显示。',
+    'login_password_form_unavailable': '已检查密码登录入口，但密码表单尚未可用，尚未填写账号密码。请保留当前页面检查加载状态。',
+    'login_password_submitted': '已在猎聘网页点击一次“登录”，是否提交成功以平台反馈为准。请在该页面完成验证码或短信验证；原任务可读后自动继续，不会重复提交密码。',
     'invalid_page_observation': '页面观察无效，已保留任务并停止读取。',
     'job_unavailable': '平台已标明该职位暂停招聘或已下线，未把推荐职位保存为该岗位正文。',
     'login_credentials_rejected': '平台提示账号或密码错误。自动接续已停止，不会重试密码；请在平台正常页面核对。',
@@ -320,7 +325,7 @@ class GuidedService:
                                        'error': self._choice_error,
                                        'last_check': self._choice.historical_view(self._choice_data, self._package())},
                     'browser_health': copy.deepcopy(self._browser_health), 'setup': copy.deepcopy(self._setup),
-                    'python': sys.executable, 'roles': {k: v['label'] for k,v in self.workspace.config['roles'].items()},
+                    'python': sys.executable, 'runtime':runtime_description(), 'roles': {k: v['label'] for k,v in self.workspace.config['roles'].items()},
                     'sessions_persisted': any(j.get('saved_session_status') == 'saved_unverified' for j in jobs),
                     'session_storage_scope': 'opt_in_cookies_only_not_account_certification',
                     'external_site_certification': False}
@@ -459,6 +464,7 @@ class GuidedService:
         return {'id': ident, 'queued': True}
 
     def install(self, data):
+        require_source_install()
         if (not isinstance(data, dict) or set(data) - {'consent', 'mode'}
                 or data.get('consent') is not True
                 or not isinstance(data.get('mode', 'ensure'), str)
@@ -484,11 +490,13 @@ class GuidedService:
 
     def check_browser(self, data):
         if data:
-            if (not isinstance(data, dict) or set(data) != {'channel', 'consent'}
-                    or data.get('consent') is not True):
+            if (not isinstance(data, dict) or set(data) not in ({'channel', 'consent'}, {'channel', 'consent', 'backend'})
+                    or data.get('consent') is not True or not isinstance(data.get('backend', 'bridge'), str)
+                    or data.get('backend', 'bridge') not in {'bridge', 'native'}):
                 raise InputError('更换浏览器需明确确认；不接受网址、命令或路径。')
             channel = validate_choice(data['channel'])
-            self._submit_setup('choose_browser', mode=channel)
+            mode = {'channel': channel, 'backend': 'native'} if data.get('backend') == 'native' else channel
+            self._submit_setup('choose_browser', mode=mode)
         else:
             self._submit_setup('check_browser')
         return {'queued': True, 'network_scope': 'blank local page only; no job requests'}
@@ -512,7 +520,7 @@ class GuidedService:
             if select:
                 raise InputError(self._choice_error) from exc
 
-    def _check_browser(self, channel=None, *, select=False):
+    def _check_browser(self, channel=None, *, select=False, backend='bridge'):
         channel = channel or self._selected_browser
         if self._restart_required:
             report = self._restart_report()
@@ -527,8 +535,12 @@ class GuidedService:
             with self._lock:
                 self._setup.update(stage='launch_check', message='正在实际打开并关闭所选浏览器空白页，不访问招聘网站。')
             # No automatic fallback on failure, and no in-use context is replaced.
-            report = self._health_probe(**({'channel': channel} if channel != 'bundled' else {}))
-            report = {**report, 'browser_channel': channel}
+            if backend == 'native':
+                from .native_check import probe_native_browser
+                report = probe_native_browser(channel=channel if channel != 'bundled' else None)
+            else:
+                report = self._health_probe(**({'channel': channel} if channel != 'bundled' else {}))
+            report = {**report, 'browser_channel': channel, 'network_backend': backend}
             with self._lock:
                 try:
                     self._remember_check(report, channel, select=select and report['ready'] is True)
@@ -754,7 +766,14 @@ class GuidedService:
             for old in list(self._backends):
                 self._close_backend(old)
             def progress(code, seconds):
-                self._save(state, code, wait_seconds=seconds)
+                # A browser outlives the action that created it. Later pacing
+                # callbacks must not restore that action's old checkpoint.
+                with self._records():
+                    current = self._load(ident)
+                    if (current['status'] != 'running' or self._cancel.is_set()
+                            or self._shutdown.is_set()):
+                        return
+                    self._save(current, code, wait_seconds=seconds)
             factory = self.native_factory if native else self.factory
             options = {'channel': self._selected_browser} if self._selected_browser != 'bundled' else {}
             lease = None
@@ -1089,9 +1108,12 @@ class GuidedService:
             if action == 'login_password':
                 if not isinstance(secret, LoginCredentials):
                     raise CrawlError('login_form_changed')
-                backend.password_login(secret)
-            self._save(state, 'login_password_submitted' if action == 'login_password' else 'manual_detail_open' if target else 'manual_browser_open',
-                       status='waiting_manual', authentication='manual_pending')
+                login_code = backend.password_login(secret)
+                if login_code not in {'login_agreement_required', 'login_password_submitted'}:
+                    raise CrawlError('login_form_changed')
+            else:
+                login_code = 'manual_detail_open' if target else 'manual_browser_open'
+            self._save(state, login_code, status='waiting_manual', authentication='manual_pending')
         elif action == 'resume_returned_detail':
             if self._cancel.is_set():
                 raise CrawlError('paused')
@@ -1252,7 +1274,10 @@ class GuidedService:
                     self._check_browser()
                     continue
                 if action == 'choose_browser':
-                    self._check_browser(secret, select=True)
+                    if isinstance(secret, dict):
+                        self._check_browser(**secret, select=True)
+                    else:
+                        self._check_browser(secret, select=True)
                     continue
                 state = self._load(ident)
                 from ..network_policy import use_policy

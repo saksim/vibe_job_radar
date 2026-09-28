@@ -15,6 +15,22 @@ on:
       - 'src/vibe_job_radar/redirect_policy.py'
       - 'scripts/check_live_public_example.py'
       - '.github/workflows/live-public-example.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'src/vibe_job_radar/public_example.py'
+      - 'src/vibe_job_radar/local_public.py'
+      - 'src/vibe_job_radar/public_boards.py'
+      - 'src/vibe_job_radar/public_contract.py'
+      - 'scripts/check_live_local_public.py'
+      - 'src/vibe_job_radar/network.py'
+      - 'src/vibe_job_radar/encrypted_dns.py'
+      - 'src/vibe_job_radar/dns_wire.py'
+      - 'src/vibe_job_radar/network_settings.py'
+      - 'scripts/check_live_encrypted_dns.py'
+      - 'src/vibe_job_radar/redirect_policy.py'
+      - 'scripts/check_live_public_example.py'
+      - '.github/workflows/live-public-example.yml'
   workflow_dispatch:
 permissions:
   contents: read

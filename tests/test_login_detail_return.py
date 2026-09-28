@@ -8,10 +8,11 @@ import threading
 import time
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
+from guided_wait_diagnostic import wait_diagnostic
 
 from vibe_job_radar.guided.adapters import DOMAdapter, Registry, builtins
-from vibe_job_radar.guided.contracts import CrawlError, PageSnapshot
+from vibe_job_radar.guided.contracts import CrawlError, PageSnapshot, PageSnapshotChanged
 from vibe_job_radar.guided.login_return import (
     DetailTarget, LoginReturnManager, ReturnedDetail,
     matching_detail_signature, pending_detail_target,
@@ -38,6 +39,19 @@ def task_state():
             ]}
 
 class DetailSignatureTests(unittest.TestCase):
+    def test_browser_marks_url_change_during_dom_read_without_returning_mixed_snapshot(self):
+        from vibe_job_radar.guided.browser import PlaywrightBackend
+        backend=PlaywrightBackend.__new__(PlaywrightBackend)
+        backend.error=None;backend.auth_mode=False;backend.adapter=ADAPTER
+        backend.page=Mock(url=URL);backend.page.is_closed.return_value=False
+        backend.page.locator.return_value.inner_text.return_value=BODY
+        def content():
+            backend.page.url=URL+'?d_sfrom=returned';return markup()
+        backend.page.content.side_effect=content
+        with self.assertRaises(PageSnapshotChanged) as caught:backend.snapshot()
+        self.assertEqual(caught.exception.code,'page_not_ready')
+
+
     def test_full_selected_detail_is_ready(self):
         self.assertTrue(matching_detail_signature(ADAPTER, URL, PageSnapshot(URL, markup())))
 
@@ -107,6 +121,17 @@ class DetailSignatureTests(unittest.TestCase):
         self.assertIsNone(pending_detail_target(state))
 
 class DetailWatcherTests(unittest.TestCase):
+    def test_changing_detail_discards_previous_signature_without_reopening_or_losing_target(self):
+        self.tick();watch=self.manager._watches['task'];target=watch.detail_target;deadline=watch.expires
+        self.backend.snapshot.side_effect=PageSnapshotChanged();self.tick()
+        self.assertIs(self.manager._watches['task'],watch);self.assertEqual(watch.detail_target,target)
+        self.assertEqual(watch.expires,deadline);self.assertIsNone(watch.signature)
+        self.backend.snapshot.side_effect=None;self.tick();self.service._submit.assert_not_called()
+        self.tick();self.service._submit.assert_called_once()
+        self.assertEqual(self.service._submit.call_args.args[0],'resume_returned_detail')
+        self.backend.open.assert_not_called()
+
+
     def setUp(self):
         self.now=0.0
         self.state=task_state()
@@ -186,6 +211,7 @@ class DetailWatcherTests(unittest.TestCase):
 class DetailReturnServiceTests(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
         self.workspace=Workspace(Path(self.tmp.name))
         class Backend:
             """Synthetic returned DOM; never creates or fetches an external page."""
@@ -214,6 +240,7 @@ class DetailReturnServiceTests(unittest.TestCase):
             def close(self):pass
         self.service=GuidedService(self.workspace,registry=Registry([ADAPTER]),backend_factory=Backend,
             ledger=RateLedger(self.workspace.root/'guided'/'rates.sqlite',Limits(login_interval=0)))
+        self.addCleanup(self.service.close)
         self.ident=self.service.create({'platform':'liepin','keyword':'时间序列算法工程师','roles':['time_series'],
             'consent':True,'rights_note':'合成页面测试，非猎聘实站验收','max_pages':1,'max_jobs':2})['id']
         self.wait_idle()
@@ -225,12 +252,14 @@ class DetailReturnServiceTests(unittest.TestCase):
         self.partial_report=state['report_id'];self.first_record=state['cards'][0]['record_id']
         self.backend=self.service._backends[self.ident]
         self.service._login_return.interval=.01
-    def tearDown(self):
-        self.service.close();self.tmp.cleanup()
     def wait_idle(self):
         end=time.monotonic()+5
-        while self.service.state()['busy'] and time.monotonic()<end:time.sleep(.01)
-        self.assertFalse(self.service.state()['busy'])
+        while True:
+            view=self.service.state()
+            if not view['busy']:return
+            if time.monotonic()>=end:break
+            time.sleep(.01)
+        self.fail('guided action remained busy after 5s: '+json.dumps(wait_diagnostic(self.service,view)))
     def await_state(self,key,value):
         end=time.monotonic()+5
         while time.monotonic()<end:
@@ -331,5 +360,60 @@ class DetailReturnServiceTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, 'login_return_changed')
         self.service._backend.assert_not_called()
         self.assertEqual(state['report_id'], self.partial_report)
+
+class DetailReturnFixtureTests(unittest.TestCase):
+    def test_setup_failure_closes_live_worker_and_releases_ownership_before_removing_workspace(self):
+        case=DetailReturnServiceTests('test_dead_owner_does_not_create_or_restore_replacement_browser')
+        original_wait=case.wait_idle;entered=threading.Event();calls=0
+        def wait():
+            nonlocal calls
+            calls+=1
+            if calls==1:
+                original_wait();original_collect=case.service._collect
+                def held(*args,**kwargs):
+                    entered.set();case.service._cancel.wait(10)
+                    return original_collect(*args,**kwargs)
+                replacement=patch.object(case.service,'_collect',side_effect=held)
+                replacement.start();case.addCleanup(replacement.stop)
+            else:
+                self.assertTrue(entered.wait(5))
+                raise AssertionError('injected_setup_failure')
+        case.wait_idle=wait
+        # Even a regression must not leave this test's worker in the suite.
+        try:
+            result=unittest.TestResult();case.run(result)
+            self.assertEqual(len(result.failures),1);self.assertEqual(result.errors,[])
+            self.assertIn('injected_setup_failure',result.failures[0][1])
+            self.assertIsNone(case.service._thread)
+            self.assertIsNone(case.service._ownership.lease)
+            self.assertFalse(case.workspace.root.exists())
+        finally:
+            if hasattr(case,'service'):case.service.close()
+            if hasattr(case,'tmp'):case.tmp.cleanup()
+
+    def test_same_five_second_deadline_reports_bounded_stage_and_worker_frames_without_inputs(self):
+        release=threading.Event();entered=threading.Event()
+        def blocked_worker():entered.set();release.wait(10)
+        worker=threading.Thread(target=blocked_worker);worker.start()
+        try:
+            self.assertTrue(entered.wait(5))
+            view={'busy':True,'active':'task','jobs':[{'id':'task','status':'running','phase':'collect',
+                'code':'collecting','query':'PRIVATE_QUERY','message':'PRIVATE_MESSAGE','url':'PRIVATE_URL',
+                'cookie':'PRIVATE_COOKIE','html':'PRIVATE_HTML'}]}
+            case=DetailReturnServiceTests();case.service=SimpleNamespace(_thread=worker,state=Mock(return_value=view))
+            with patch('test_login_detail_return.time.monotonic',side_effect=[0,5]),self.assertRaises(AssertionError) as caught:
+                case.wait_idle()
+            message=str(caught.exception);self.assertIn('after 5s',message)
+            evidence=json.loads(message.split(': ',1)[1])
+            self.assertEqual(evidence['task'],{'status':'running','phase':'collect','code':'collecting',
+                'authentication':'unknown','login_continuation':'unknown'})
+            self.assertTrue(evidence['busy']);self.assertTrue(evidence['worker_alive'])
+            self.assertTrue(any(f['function']=='blocked_worker' for f in evidence['worker_stack']))
+            self.assertLessEqual(len(evidence['worker_stack']),24)
+            self.assertNotIn('PRIVATE_',message)
+            for frame in evidence['worker_stack']:
+                self.assertNotIn('/',frame['file']);self.assertNotIn('\\',frame['file'])
+        finally:release.set();worker.join(5)
+
 
 if __name__=='__main__':unittest.main()
