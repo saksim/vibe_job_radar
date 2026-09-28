@@ -32,3 +32,34 @@ jobs:
           path: |
             browser-acceptance/browser-choice/
             browser-acceptance/policy-binding/
+
+  installed-chrome:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install supported Python SDK
+        run: python -m pip install "playwright>=1.48,<2" "packaging>=24.2"
+      - name: Verify Chrome bridge selection and separate native check
+        run: python scripts/run_browser_choice_acceptance.py --channel chrome
+      - name: Verify Chrome native selection and restart without borrowing bridge readiness
+        run: python scripts/run_browser_choice_acceptance.py --channel chrome --backend native --ui-channel msedge
+      - name: Verify workspace policy inside actual Chrome bridge callbacks
+        run: python scripts/run_browser_policy_binding.py --channel chrome
+      - name: Verify original password and SMS-entry forms in Chrome bridge
+        run: python scripts/verify_password_form.py --channel chrome
+      - name: Verify the same original forms in Chrome native input
+        run: python scripts/verify_password_form.py --channel chrome --native
+      - name: Preserve exact Chrome results including failures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-choice-chrome-windows
+          retention-days: 7
+          path: |
+            browser-acceptance/browser-choice-chrome/
+            browser-acceptance/browser-choice-chrome-native/
+            browser-acceptance/policy-binding-chrome/

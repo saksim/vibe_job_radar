@@ -14,7 +14,7 @@ import threading
 import time
 from urllib.parse import urlsplit
 
-from build_windows_portable import inventory
+from build_windows_portable import inventory, native_component_valid
 
 
 class RunningApp:
@@ -72,6 +72,23 @@ def browser_health_summary(health):
     return {key:health[key] for key in fields if key in health}
 
 
+def verify_native_component(exe,cwd,env,channel):
+    """Run the packaged entry point, never substitute checkout code."""
+    if channel not in {'bundled','chrome'}:raise ValueError('unsupported component check')
+    run=subprocess.run([str(exe),'--native-browser-check','--native-browser-channel',channel],
+        cwd=cwd,env=env,capture_output=True,timeout=60,creationflags=subprocess.CREATE_NO_WINDOW)
+    if len(run.stdout)>65536:raise AssertionError('native component output is oversized')
+    row=json.loads(run.stdout.decode('utf-8'))
+    if not isinstance(row,dict):raise AssertionError('native component output is invalid')
+    # This developer artifact contains fixed component facts, never unknown fields.
+    evidence={k:row.get(k) for k in ('success','runtime','browser_channel','controller','minimal_controller',
+        'code','stage','browser_version','blank_page_check','request_guard_check','cleanup_verified',
+        'external_connections','live_sites_certified')}
+    evidence['returncode']=run.returncode
+    if not native_component_valid(evidence,channel):raise AssertionError('native component evidence incomplete')
+    return evidence
+
+
 def verify_store_report_reader(app, workspace, previous):
     """The actual exe must read an initialized WAL store beside an open writer."""
     from contextlib import closing
@@ -90,6 +107,20 @@ def verify_store_report_reader(app, workspace, previous):
     if app.json('/api/report/'+previous['id'])['requirements']!=previous['requirements']:
         raise AssertionError('concurrent report read changed prior evidence')
     return report
+
+
+def verify_payload_unchanged(bundle,before,result):
+    """Preserve bounded path/hash diagnostics; never archive modified bytes."""
+    result['stage']='payload_immutability'
+    after=inventory(bundle)
+    if after==before:return
+    differences=[]
+    for name in sorted(before.keys()|after.keys()):
+        if before.get(name)==after.get(name):continue
+        differences.append({'path':name,'before_sha256':before.get(name),'after_sha256':after.get(name)})
+    result['payload_changes']={'count':len(differences),'files':differences[:100],
+                               'truncated':len(differences)>100}
+    raise AssertionError('portable application modified its bundled components')
 
 
 def verify(bundle,report_path,*,browser_choice='bundled'):
@@ -118,6 +149,11 @@ def verify(bundle,report_path,*,browser_choice='bundled'):
             if doctor.returncode or json.loads(doctor.stdout.decode('utf-8')).get('workspace_writable') is not True:
                 raise AssertionError('portable doctor failed')
             result['checks'].append('exe runs from a different directory with no Python PATH, Unicode/spaced workspace and working SQLite')
+            result['native_components']={}
+            for channel in ['bundled','chrome']:
+                result['stage']='native_component_'+channel
+                result['native_components'][channel]=verify_native_component(exe,cwd,env,channel)
+                result['checks'].append('actual exe checks native '+channel+' blank page, refused synthetic request, zero external connections and owned-browser cleanup')
             result['stage']='server_start'
             app=RunningApp(exe,workspace,cwd,env)
             try:
@@ -202,7 +238,7 @@ def verify(bundle,report_path,*,browser_choice='bundled'):
                 if restarted.json('/api/guided/state')['browser_health']['ready']:raise AssertionError('portable restart trusted old browser readiness')
             finally:restarted.close()
             result['checks'].append('fresh exe process preserves original report, leaves daily plan off and requires a fresh browser check')
-        if inventory(bundle)!=before:raise AssertionError('portable application modified its bundled components')
+        verify_payload_unchanged(bundle,before,result)
         result.update(success=True,stage='complete',files=before)
     except Exception as exc:
         result['error_type']=type(exc).__name__

@@ -118,6 +118,37 @@ class NativeWaitDiagnosticsTests(unittest.TestCase):
             self.assertEqual(report['writer_error_types'], ['OSError'])
             self.assertNotIn(SECRET, json.dumps(report))
 
+    def test_periodic_stack_dump_runs_on_owned_python_watcher_without_c_timer(self):
+        stages=probe.Stages();observed=threading.Event();threads=[]
+        original=probe.faulthandler.dump_traceback
+        def dump(*args,**kwargs):
+            threads.append(threading.current_thread().name)
+            original(*args,**kwargs);observed.set()
+        with tempfile.TemporaryDirectory() as tmp,patch.object(probe.faulthandler,'dump_traceback',dump), \
+                patch.object(probe.faulthandler,'dump_traceback_later') as timer, \
+                patch.object(probe.faulthandler,'cancel_dump_traceback_later') as cancel:
+            out=Path(tmp)
+            with probe.capture(stages,out,'periodic',interval=.01,stack_interval=.01):
+                self.assertTrue(observed.wait(2))
+            timer.assert_not_called();cancel.assert_not_called()
+            self.assertTrue(threads);self.assertEqual(set(threads),{'native-wait-evidence'})
+            self.assertIn('watch',(out/'periodic-threads.log').read_text(encoding='utf-8'))
+            result=json.loads((out/'periodic-progress.json').read_text(encoding='utf-8'))
+            self.assertTrue(result['success']);self.assertTrue(result['watchdog_stopped'])
+            self.assertNotIn(SECRET,json.dumps(result))
+
+    def test_failed_periodic_stack_dump_cannot_claim_success(self):
+        failed=threading.Event()
+        def dump(*args,**kwargs):failed.set();raise RuntimeError(SECRET)
+        with tempfile.TemporaryDirectory() as tmp,patch.object(probe.faulthandler,'dump_traceback',dump):
+            out=Path(tmp)
+            with self.assertRaisesRegex(RuntimeError,'evidence incomplete'):
+                with probe.capture(probe.Stages(),out,'periodic',interval=.01,stack_interval=.01):
+                    self.assertTrue(failed.wait(2))
+            result=json.loads((out/'periodic-progress.json').read_text(encoding='utf-8'))
+            self.assertFalse(result['success']);self.assertEqual(result['writer_error_types'],['RuntimeError'])
+            self.assertNotIn(SECRET,json.dumps(result))
+
     def test_bounds_and_unknown_command_labels(self):
         stages = probe.Stages()
         for _ in range(20):

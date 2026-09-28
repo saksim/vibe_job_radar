@@ -140,6 +140,33 @@ class StartupTests(unittest.TestCase):
         self.assertEqual(backend.startup_report['mode'], 'headed')
         backend.close(); self.runtime.stop.assert_called_once()
 
+    def test_portable_headless_uses_the_same_packaged_regular_browser(self):
+        with patch('vibe_job_radar.guided.browser.is_portable',return_value=True):
+            backend=PlaywrightBackend(builtins().get('boss'),None,threading.Event(),
+                headless=True,transport_factory=lambda *a:MagicMock())
+        options=self.runtime.chromium.launch.call_args.kwargs
+        self.assertTrue(options['headless']);self.assertEqual(options['executable_path'],str(self.exe))
+        self.assertNotIn('channel',options);backend.close()
+
+    def test_missing_portable_regular_browser_cannot_fall_back_to_headless_shell(self):
+        self.exe.unlink()
+        with patch('vibe_job_radar.guided.browser.is_portable',return_value=True),self.assertRaises(BrowserStartupError) as caught:
+            PlaywrightBackend(builtins().get('boss'),None,threading.Event(),
+                headless=True,transport_factory=lambda *a:MagicMock())
+        self.assertEqual(caught.exception.code,'browser_executable_missing')
+        self.runtime.chromium.launch.assert_not_called()
+
+    def test_source_headless_and_explicit_channels_keep_sdk_resolution(self):
+        for portable,channel in [(False,None),(True,'msedge'),(True,'chrome')]:
+            with self.subTest(portable=portable,channel=channel),patch('vibe_job_radar.guided.browser.is_portable',return_value=portable):
+                backend=PlaywrightBackend(builtins().get('boss'),None,threading.Event(),
+                    headless=True,channel=channel,transport_factory=lambda *a:MagicMock())
+                options=self.runtime.chromium.launch.call_args.kwargs
+                self.assertNotIn('executable_path',options)
+                if channel:self.assertEqual(options['channel'],channel)
+                else:self.assertNotIn('channel',options)
+                backend.close()
+
     def test_probe_uses_backend_and_closes_without_site_navigation(self):
         backend = MagicMock(); backend.startup_report = {'ready':True, 'launch_tested':True}
         backend.page.title.return_value = 'Vibe Radar browser check'

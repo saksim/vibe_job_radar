@@ -18,7 +18,8 @@ class PortablePackagingTests(unittest.TestCase):
         (self.bundle/'VibeJobRadar.exe').write_bytes(b'artificial unit fixture, not an executable')
 
     def test_changed_added_and_removed_payload_invalidates_prior_runtime_check(self):
-        proof={'success':True,'verified_browser':'bundled','files':self.builder.inventory(self.bundle)}
+        from test_native_component_portable import good_component
+        proof={'success':True,'verified_browser':'bundled','files':self.builder.inventory(self.bundle),'native_components':{c:good_component(c) for c in ['bundled','chrome']}}
         self.builder.validate_runtime_evidence(self.bundle,proof)
         binary=self.bundle/'VibeJobRadar.exe';original=binary.read_bytes()
         binary.write_bytes(b'different binary')
@@ -30,12 +31,14 @@ class PortablePackagingTests(unittest.TestCase):
 
     def test_failed_or_empty_check_cannot_qualify_even_with_matching_files(self):
         files=self.builder.inventory(self.bundle)
+        from test_native_component_portable import good_component
         for report in (None,{}, {'success':1,'verified_browser':'bundled','files':files},
                        {'success':False,'verified_browser':'bundled','files':files},
                        {'success':True,'verified_browser':'bundled','files':{}},
                        {'success':True,'verified_browser':'bundled','files':[]},
                        {'success':True,'files':files},
                        {'success':True,'verified_browser':'msedge','files':files}):
+            if isinstance(report,dict):report={'native_components':{c:good_component(c) for c in ['bundled','chrome']},**report}
             with self.subTest(report=report),self.assertRaises(ValueError):
                 self.builder.validate_runtime_evidence(self.bundle,report)
 
@@ -89,6 +92,41 @@ class PortablePackagingTests(unittest.TestCase):
         deep=self.bundle/('a'*60)/('b'*60)/('c'*22)
         deep.mkdir(parents=True)
         with self.assertRaises(ValueError):self.builder.check_payload_path_lengths(self.bundle)
+
+    def test_payload_mutation_diagnostic_keeps_failure_and_only_paths_and_hashes(self):
+        from test_native_component_portable import scripts
+        _,verifier=scripts()
+        removed=self.bundle/'removed.dll';removed.write_bytes(b'old fixture')
+        before=self.builder.inventory(self.bundle)
+        removed.unlink();(self.bundle/'VibeJobRadar.exe').write_bytes(b'changed secret fixture')
+        (self.bundle/'added.dll').write_bytes(b'new secret fixture')
+        result={'success':False,'stage':'restart_preserves_report'}
+        with self.assertRaises(AssertionError):verifier.verify_payload_unchanged(self.bundle,before,result)
+        self.assertFalse(result['success']);self.assertNotIn('files',result)
+        self.assertEqual(result['stage'],'payload_immutability')
+        evidence=result['payload_changes'];self.assertEqual(evidence['count'],3);self.assertFalse(evidence['truncated'])
+        rows={row['path']:row for row in evidence['files']}
+        self.assertEqual(set(rows),{'VibeJobRadar.exe','added.dll','removed.dll'})
+        self.assertIsNone(rows['added.dll']['before_sha256']);self.assertIsNone(rows['removed.dll']['after_sha256'])
+        self.assertNotEqual(rows['VibeJobRadar.exe']['before_sha256'],rows['VibeJobRadar.exe']['after_sha256'])
+        self.assertNotIn('secret',json.dumps(result));self.assertNotIn(str(self.bundle),json.dumps(result))
+
+    def test_payload_mutation_diagnostic_is_bounded_without_ignoring_any_changes(self):
+        from test_native_component_portable import scripts
+        _,verifier=scripts();before=self.builder.inventory(self.bundle)
+        for number in range(120):(self.bundle/f'added-{number:03}.dat').write_bytes(b'fixture')
+        result={'success':False}
+        with self.assertRaises(AssertionError):verifier.verify_payload_unchanged(self.bundle,before,result)
+        self.assertEqual(result['payload_changes']['count'],120)
+        self.assertEqual(len(result['payload_changes']['files']),100)
+        self.assertTrue(result['payload_changes']['truncated']);self.assertFalse(result['success'])
+
+    def test_unchanged_payload_does_not_create_failure_or_claim_runtime_success(self):
+        from test_native_component_portable import scripts
+        _,verifier=scripts();before=self.builder.inventory(self.bundle);result={'success':False}
+        verifier.verify_payload_unchanged(self.bundle,before,result)
+        self.assertNotIn('payload_changes',result);self.assertFalse(result['success'])
+        self.assertEqual(self.builder.inventory(self.bundle),before)
 
 
 if __name__=='__main__':unittest.main()

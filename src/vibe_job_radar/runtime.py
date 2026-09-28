@@ -5,7 +5,7 @@ import sys
 
 PORTABLE_GUIDANCE = ('此便携包自带 Python、Playwright、配套 Chromium 和 Windows 证书验证组件。'
     '请完整解压到较短目录，再检查浏览器；组件缺失或需要更新时，先停止任务/计划并关闭工作台，再完整解压已验证的新候选包。'
-    '保留原工作区和备份，不覆盖正在运行的文件；也可明确检查并选择本机已安装的 Edge。')
+    '保留原工作区和备份，不覆盖正在运行的文件；也可明确检查并选择本机已安装的 Edge 或 Chrome。')
 
 
 def is_portable():
