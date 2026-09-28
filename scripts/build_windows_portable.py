@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -105,6 +106,10 @@ def build_candidate(out,evidence_path):
                 target=bundle/'_internal'/'vibe_job_radar'/source.name
                 if not target.is_file() or file_hash(target)!=file_hash(source):
                     raise ValueError(f'packaged application resource absent or changed: {source.name}')
+        bridge=Path('guided/cdp_bridge.js')
+        source=ROOT/'src/vibe_job_radar'/bridge;target=bundle/'_internal/vibe_job_radar'/bridge
+        if not target.is_file() or target.is_symlink() or file_hash(target)!=file_hash(source):
+            raise ValueError('packaged native bridge absent or changed')
         licenses=bundle/'licenses';licenses.mkdir()
         shutil.copyfile(ROOT/'LICENSE',licenses/'VibeJobRadar.txt')
         python_license=Path(sys.base_prefix)/'LICENSE.txt'
@@ -171,9 +176,30 @@ def build_candidate(out,evidence_path):
         return dest
 
 
+def native_component_valid(row,channel):
+    controller='minimal_cdp' if channel=='chrome' else 'playwright_public_cdp'
+    return (channel in {'bundled','chrome'} and isinstance(row,dict)
+        and row.get('success') is True and row.get('runtime')=='portable'
+        and row.get('browser_channel')==channel and row.get('controller')==controller
+        and row.get('minimal_controller') is (channel=='chrome')
+        and row.get('code')=='native_component_ready' and row.get('stage')=='passed'
+        and type(row.get('returncode')) is int and row['returncode']==0
+        and isinstance(row.get('browser_version'),str)
+        and bool(re.fullmatch(r'[0-9]+(?:\.[0-9]+){1,4}',row['browser_version']))
+        and all(row.get(k) is True for k in ('blank_page_check','request_guard_check','cleanup_verified'))
+        and type(row.get('external_connections')) is int and row['external_connections']==0
+        and row.get('live_sites_certified') is False)
+
+
+def native_components_valid(rows):
+    return (isinstance(rows,dict) and set(rows)=={'bundled','chrome'}
+        and all(native_component_valid(rows[channel],channel) for channel in rows))
+
+
 def validate_runtime_evidence(bundle,report):
     if (not isinstance(report,dict) or report.get('success') is not True
             or report.get('verified_browser')!='bundled'
+            or not native_components_valid(report.get('native_components'))
             or not isinstance(report.get('files'),dict) or not report['files']
             or report['files']!=inventory(bundle)):
         raise ValueError('portable runtime evidence does not match payload')

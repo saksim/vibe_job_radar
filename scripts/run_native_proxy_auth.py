@@ -29,7 +29,7 @@ from native_proxy_evidence import update_proxy_evidence
 def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--controlled',action='store_true')
-    parser.add_argument('--channel',choices=['msedge'])
+    parser.add_argument('--channel',choices=['msedge','chrome'])
     parser.add_argument('--headed',action='store_true')
     args=parser.parse_args()
     if not args.controlled:return

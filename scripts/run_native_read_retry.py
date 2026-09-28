@@ -18,7 +18,7 @@ from run_native_browser_acceptance import (ROOT, Fixture, trust_fixture, HOST,
 def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--controlled',action='store_true')
-    parser.add_argument('--channel',choices=['msedge']);parser.add_argument('--headed',action='store_true')
+    parser.add_argument('--channel',choices=['msedge','chrome']);parser.add_argument('--headed',action='store_true')
     args=parser.parse_args()
     if not args.controlled or not os.environ.get('CI') or os.environ.get('GITHUB_ACTIONS')!='true':
         raise SystemExit('No requests or trust changes: run only in an explicitly enabled ephemeral GitHub CI runner.')

@@ -24,7 +24,7 @@ from .browser_health import (BrowserStartupError, HEALTH_MESSAGES, environment_r
 class PlaywrightBackend:
     def __init__(self, adapter, ledger, cancelled, progress=lambda *_: None, *,
                  headless=False, executable_path=None, transport_factory=PinnedTransport, channel=None, storage_state=None):
-        if channel not in (None, 'msedge') or (channel and executable_path):
+        if channel not in (None, 'msedge', 'chrome') or (channel and executable_path):
             raise ValueError('unsupported browser choice')
         self.adapter, self.cancelled = adapter, cancelled
         self.wire = transport_factory(adapter, ledger, cancelled, progress)
@@ -67,8 +67,8 @@ class PlaywrightBackend:
             self.startup_report['stage'] = 'driver'
             self.runtime = sync_playwright().start()
             if channel:
-                # Let the SDK resolve its documented stable Edge channel. The
-                # bundled Chromium path says nothing about installed Edge. Never
+                # Let the SDK resolve its documented stable browser channel. The
+                # bundled Chromium path says nothing about installed browsers. Never
                 # attach to a daily profile or install/overwrite a system browser.
                 self.startup_report.update(stage='executable', executable_path='',
                                            executable_exists=None)
@@ -94,7 +94,7 @@ class PlaywrightBackend:
             if channel:
                 options['channel'] = channel
             self.startup_report.update(stage='launch', launch_tested=True)
-            self.browser = self.runtime.chromium.launch(**self._launch_options(options))
+            self.browser = self._launch_browser(self._launch_options(options))
             self.startup_report.update(stage='context', executable_exists=True)
             if channel:
                 self.startup_report['browser_version'] = self.browser.version
@@ -114,6 +114,9 @@ class PlaywrightBackend:
 
     def _new_page(self):
         return self.context.new_page()
+
+    def _launch_browser(self, options):
+        return self.runtime.chromium.launch(**options)
 
     def _launch_options(self, options):
         return options

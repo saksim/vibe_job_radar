@@ -34,10 +34,10 @@ from vibe_job_radar.workspace import Workspace
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--channel', choices=['msedge'])
+    parser.add_argument('--channel', choices=['msedge','chrome'])
     args = parser.parse_args()
-    out = ROOT/'browser-acceptance'/'policy-binding'; out.mkdir(parents=True, exist_ok=True)
-    result = {'success':False, 'checks':[], 'callback_contexts':[], 'page_errors':[],
+    out = ROOT/'browser-acceptance'/('policy-binding-chrome' if args.channel=='chrome' else 'policy-binding'); out.mkdir(parents=True, exist_ok=True)
+    result = {'channel':args.channel or 'bundled','success':False, 'checks':[], 'callback_contexts':[], 'page_errors':[],
               'header_checks': [], 'stylesheet_rendered': False,
               'scope':'Real collector and callback dispatch, production TLS bridge and report; local artificial DoH/pages only. Not user-network or site certification.'}
     fixture = EncryptedRoundTripTests(); fixture.setUp()
