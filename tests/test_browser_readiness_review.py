@@ -146,7 +146,7 @@ class StartupFactsReviewTests(unittest.TestCase):
         mock.page.set_content.side_effect = RuntimeError('browser crashed')
         with patch('vibe_job_radar.guided.browser.PlaywrightBackend', return_value=mock):
             result = probe_browser()
-        self.assertEqual(result['stage'], 'blank_page')
+        self.assertEqual(result['stage'], 'blank_page_content')
         self.assertEqual(result['code'], 'browser_check_failed')
         self.assertTrue(result['launch_tested'])
         self.assertTrue(result['executable_exists'])
@@ -164,7 +164,7 @@ class StartupFactsReviewTests(unittest.TestCase):
             result = probe_browser()
         self.assertEqual(result['playwright_version'], '1.57.0+conda')
         self.assertTrue(result['launch_tested'])
-        self.assertEqual(result['stage'], 'blank_page')
+        self.assertEqual(result['stage'], 'blank_page_verify')
         self.assertIn('blank page verification failed', result['error_summary'])
         mock.close.assert_called_once()
 
