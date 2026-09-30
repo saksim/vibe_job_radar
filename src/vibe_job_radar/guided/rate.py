@@ -16,6 +16,27 @@ from .contracts import CrawlError
 MAX_PUBLISHER_WINDOW = 366 * 86400
 
 
+# Keep these definitions identical to the existing on-disk schema. The fast
+# path recognizes only these exact definitions; it does not grant quotas or
+# act as an integrity check/migration for unknown database formats.
+_SCHEMA = {
+    'visits': 'CREATE TABLE IF NOT EXISTS visits (site TEXT, kind TEXT, ts REAL)',
+    'visits_scope': 'CREATE INDEX IF NOT EXISTS visits_scope ON visits(site,kind,ts)',
+    'cooldown': 'CREATE TABLE IF NOT EXISTS cooldown (site TEXT PRIMARY KEY, until REAL)',
+    'publisher_policy': 'CREATE TABLE IF NOT EXISTS publisher_policy ('
+                        'site TEXT, origin TEXT, delay REAL NOT NULL, PRIMARY KEY(site,origin))',
+    'publisher_windows': 'CREATE TABLE IF NOT EXISTS publisher_windows ('
+                         'site TEXT, origin TEXT, requests INTEGER, seconds REAL,'
+                         'PRIMARY KEY(site,origin,requests,seconds))',
+    'publisher_visits': 'CREATE TABLE IF NOT EXISTS publisher_visits (site TEXT, origin TEXT, ts REAL)',
+    'publisher_scope': 'CREATE INDEX IF NOT EXISTS publisher_scope ON publisher_visits(site,origin,ts)',
+    'clock_seen': 'CREATE TABLE IF NOT EXISTS clock_seen (site TEXT PRIMARY KEY, ts REAL)',
+}
+# SQLite omits IF NOT EXISTS when recording CREATE statements in sqlite_master.
+_STORED_SCHEMA = {name: sql.replace(' IF NOT EXISTS', '', 1) for name, sql in _SCHEMA.items()}
+
+
+
 @dataclass(frozen=True)
 class Limits:
     page_interval: float = 15
@@ -40,19 +61,24 @@ class RateLedger:
         self.path, self.limits, self.clock = Path(path), limits or Limits(), clock
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         with self._connection(create=True) as conn:
+            if self._schema_ready(conn):
+                return
+            # Missing/legacy/unrecognized definitions retain the original
+            # serialized, atomic initialization. Concurrent initializers can
+            # both observe an old schema; IF NOT EXISTS rechecks under this lock.
             conn.execute('BEGIN IMMEDIATE')
-            conn.execute('CREATE TABLE IF NOT EXISTS visits (site TEXT, kind TEXT, ts REAL)')
-            conn.execute('CREATE INDEX IF NOT EXISTS visits_scope ON visits(site,kind,ts)')
-            conn.execute('CREATE TABLE IF NOT EXISTS cooldown (site TEXT PRIMARY KEY, until REAL)')
-            conn.execute('CREATE TABLE IF NOT EXISTS publisher_policy ('
-                         'site TEXT, origin TEXT, delay REAL NOT NULL, PRIMARY KEY(site,origin))')
-            conn.execute('CREATE TABLE IF NOT EXISTS publisher_windows ('
-                         'site TEXT, origin TEXT, requests INTEGER, seconds REAL,'
-                         'PRIMARY KEY(site,origin,requests,seconds))')
-            conn.execute('CREATE TABLE IF NOT EXISTS publisher_visits (site TEXT, origin TEXT, ts REAL)')
-            conn.execute('CREATE INDEX IF NOT EXISTS publisher_scope ON publisher_visits(site,origin,ts)')
-            conn.execute('CREATE TABLE IF NOT EXISTS clock_seen (site TEXT PRIMARY KEY, ts REAL)')
+            for statement in _SCHEMA.values():
+                conn.execute(statement)
             conn.commit()
+
+    @staticmethod
+    def _schema_ready(conn):
+        # One read obtains one coherent schema snapshot. No durable marker,
+        # cached readiness, version write, or writer-lock upgrade is needed.
+        placeholders = ','.join('?' for _ in _STORED_SCHEMA)
+        rows = conn.execute('SELECT name,sql FROM sqlite_master WHERE name IN ('+
+                            placeholders+')', tuple(_STORED_SCHEMA)).fetchall()
+        return dict(rows) == _STORED_SCHEMA
 
     @contextmanager
     def _connection(self, *, create=False):
