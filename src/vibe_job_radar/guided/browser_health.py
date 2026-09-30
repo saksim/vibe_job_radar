@@ -208,8 +208,12 @@ def probe_browser(*, headless: bool = False, executable_path: str | None = None,
                                     executable_path=executable_path, transport_factory=_OfflineTransport,
                                     **({'channel': channel} if channel else {}))
         # Actual same page/context initialization as collection, no navigation to a site.
-        backend.startup_report['stage'] = 'blank_page'
-        backend.page.set_content('<title>Vibe Radar browser check</title><p>本机浏览器检查成功</p>')
+        backend.startup_report['stage'] = 'blank_page_content'
+        # This fixed, in-memory document has no resources. Verify its DOM,
+        # not an unrelated full-load lifecycle event. Keep the original 6s bound.
+        backend.page.set_content('<title>Vibe Radar browser check</title><p>本机浏览器检查成功</p>',
+                                 wait_until='domcontentloaded', timeout=6000)
+        backend.startup_report['stage'] = 'blank_page_verify'
         if backend.page.title() != 'Vibe Radar browser check':
             raise RuntimeError('blank page verification failed')
         return {**backend.startup_report, 'stage': 'ready', 'code': 'browser_ready', 'ready': True,
