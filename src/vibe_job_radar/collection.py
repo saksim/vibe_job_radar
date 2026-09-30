@@ -24,6 +24,7 @@ from .store import Store
 from .utils import atomic_json, canonical_url, domain_matches, parse_time, utc_now
 from .workspace import InputError, Workspace, text_field
 from .url_safety import credential_query_key
+from .public_category import MODE as CATEGORY_MODE
 
 ID = re.compile(r"[a-f0-9]{32}")
 TERMINAL = {"completed", "needs_attention", "empty"}
@@ -176,7 +177,7 @@ class Collector:
     def start(self, data):
         roles, platforms = self.workspace.filters({**data, "platforms": data.get("platforms", list(self.workspace.config["platforms"]))})
         mode = data.get("mode", "search")
-        if mode not in {"search", "urls", "feed"}:
+        if mode not in {"search", "urls", "feed", CATEGORY_MODE}:
             raise InputError("未知采集模式。")
         rights = text_field(data, "rights_note", required=True)
         permits = data.get("permit_platforms", [])
@@ -186,6 +187,11 @@ class Collector:
             raise InputError("请确认本次采集、保存范围及请求预算。")
         if mode == "search" and data.get("search_storage_rights") is not True:
             raise InputError("请确认搜索 API 套餐允许保存搜索结果。")
+        if mode == CATEGORY_MODE:
+            if set(roles) != {'architect'} or set(platforms) != {'liepin'}:
+                raise InputError("公开分类目前仅支持猎聘架构师；请只选择该岗位和平台。")
+            if 'liepin' not in permits:
+                raise InputError("请先确认本次猎聘分类页和正文访问许可。")
         tasks = [dict(asdict(t), offset=0, attempts=0) for t in build_plan(self.workspace.config, platforms, roles)] if mode == "search" else []
         state = {"id": uuid.uuid4().hex, "schema_version": 1, "mode": mode, "status": "paused", "roles": roles,
             "platforms": platforms, "permit_platforms": permits, "rights_note": rights, "tasks": tasks, "details": [],
@@ -196,6 +202,10 @@ class Collector:
             "phase": "search" if mode == "search" else ("feed" if mode == "feed" else "detail"),
             "feed_done": False, "feed_cursor": "", "seen_cursors": [], "blocked_hosts": [], "warnings": [],
             "feed_outcomes": [], "report_id": "", "complete_market_coverage": False, "created_at": utc_now()}
+        if mode == CATEGORY_MODE:
+            from .public_category import MAX_DETAILS, new_outcome
+            state.update(phase='category', category_attempts=0, category_outcomes=[new_outcome()],
+                         detail_budget=integer(data, 'detail_budget', MAX_DETAILS, 1, MAX_DETAILS))
         if mode == "urls":
             from .public_job_links import prepare_public_job_link, public_detail_parser
             urls = text_field(data, "urls", required=True, limit=100000).splitlines()
@@ -335,6 +345,7 @@ class Collector:
         with Store(self.workspace.db) as store:
             prior = next((r for r in store.records() if r.url == row["url"] and r.evidence_level == "full_text" and not r.is_synthetic
                 and public_detail_cache_matches(row, r)
+                and (not row.get('category_title') or ' '.join(r.title.split()) == row['category_title'])
                 and 0 <= (now - parse_time(r.collected_at)).total_seconds() <= state["fresh_hours"] * 3600
                 and (not r.expires_at or parse_time(r.expires_at) > now)), None)
         if prior:
@@ -357,6 +368,8 @@ class Collector:
                 parsed = parse_prepared_job(row, final_url, markup)
             else:
                 parsed = parse_job_html(markup, source_url=final_url)
+            if row.get('category_title') and ' '.join(parsed['title'].split()) != row['category_title']:
+                raise FetchError('category_job_title_changed')
             record = JobRecord(**parsed, url=final_url, platform=row["platform"], source_mode="public_fetch",
                 rights_note=state["rights_note"], source_ref=f'collection:{state["id"]}', raw_sha256=hashlib.sha256(markup.encode()).hexdigest())
             with Store(self.workspace.db) as store:
@@ -371,6 +384,42 @@ class Collector:
             if isinstance(diagnostic, dict):
                 row["fetch_diagnostic"] = diagnostic
             state.pop("in_flight", None)
+
+    def _category(self, state):
+        from .public_category import URL, parse_category
+        from .public_job_links import public_detail_parser
+        row = state['category_outcomes'][0]
+        if row['status'] != 'pending':
+            state['phase'] = 'detail'
+            return
+        state['category_attempts'] += 1
+        row['status'] = 'requesting'
+        state['in_flight'] = {'queue': 'category_outcomes', 'index': 0}
+        self._save(state)
+        client = self._client((state['id'], 'liepin'), lambda: SiteFetcher({'liepin.com'}), site=True)
+        try:
+            response = client.fetch(URL)
+            candidates = parse_category(response.url or URL, response.text())
+            selected = [c for c in candidates if c['status'] != 'duplicate'][:state['detail_budget']]
+            row.update(status='ok', candidates=candidates, card_count=len(candidates),
+                       selected_positions=[c['position'] for c in selected],
+                       raw_sha256=hashlib.sha256(response.body).hexdigest(),
+                       final_url=URL, selection_rule='first_unique_cards_in_publisher_order')
+            for candidate in selected:
+                detail = dict(url=candidate['url'], platform='liepin', record_id='',
+                              category_position=candidate['position'], category_title=candidate['title'],
+                              status='pending' if candidate['status'] == 'available' else candidate['status'])
+                if detail['status'] == 'pending':
+                    detail['detail_parser'] = public_detail_parser(detail['url'])
+                state['details'].append(detail)
+        except (FetchError, ValueError, TypeError) as exc:
+            row['status'] = exc.code if isinstance(exc, FetchError) else 'category_structure_changed'
+        finally:
+            diagnostic = getattr(client, 'last_diagnostic', None)
+            if isinstance(diagnostic, dict):
+                row['fetch_diagnostic'] = diagnostic
+            state.pop('in_flight', None)
+            state['phase'] = 'detail'
 
     def _feed(self, state, key):
         # Explicit publisher contract: GET endpoint?cursor=opaque -> {jobs:[JobRecord], next_cursor:str|null}.
@@ -440,7 +489,7 @@ class Collector:
         key = text_field(data, "api_key", limit=1000).strip()
         if state["mode"] == "search":
             key = key or os.environ.get("BRAVE_SEARCH_API_KEY", "")
-        if state["phase"] in {"search", "detail", "feed"}:
+        if state["phase"] in {"search", "detail", "feed", "category"}:
             # Read/validate consent before reserving any attempt or saving an
             # in-flight marker. This also covers the CLI, outside HTTP handlers.
             policy = self.workspace.network_policy()
@@ -450,13 +499,15 @@ class Collector:
                     self._search(state, key)
                 elif state["phase"] == "detail":
                     self._detail(state)
+                elif state["phase"] == "category":
+                    self._category(state)
                 else:
                     self._feed(state, key)
         else:
             if self.workspace.db.is_file():
                 from .pipeline import analyze
                 ident = uuid.uuid4().hex
-                if state["mode"] == "urls":
+                if state["mode"] in {"urls", CATEGORY_MODE}:
                     ids = {d["record_id"] for d in state["details"] if d["status"] in {"ok", "fresh_reused"}}
                     # Empty Store creation must not generate a misleading report;
                     # unrelated historical jobs are not results of this URL batch.
@@ -477,7 +528,8 @@ class Collector:
                     state["report_id"] = ident
             problems = any(d["status"] not in {"ok", "fresh_reused"} for d in state["details"]) or any(
                 t["status"] in {"error", "provider_stopped", "budget_skipped", "interrupted_uncertain"} for t in state["tasks"]) or any(
-                f["status"] != "ok" for f in state["feed_outcomes"]) or bool(state["warnings"])
+                f["status"] != "ok" for f in state["feed_outcomes"]) or any(
+                c['status'] != 'ok' for c in state.get('category_outcomes', [])) or bool(state["warnings"])
             obtained = any(d["status"] in {"ok", "fresh_reused"} for d in state["details"]) or any(f.get("records", 0) for f in state["feed_outcomes"])
             state["status"] = "needs_attention" if problems else ("completed" if obtained else "empty")
             if state["report_id"]:

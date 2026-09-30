@@ -9,6 +9,7 @@ from urllib.parse import parse_qsl, urlsplit
 from .config import platform_for_url
 from .discovery import build_plan
 from .workspace import InputError
+from .public_category import MODE as CATEGORY_MODE, URL as CATEGORY_URL, MAX_DETAILS
 
 LABELS = {
     "mode": "采集路线", "roles": "目标岗位", "platforms": "来源平台",
@@ -58,9 +59,9 @@ def preview(workspace, data: dict) -> dict:
         errors.append({"field": field, "label": LABELS.get(field, field), "message": message})
 
     mode = data.get("mode", "search")
-    if not isinstance(mode, str) or mode not in {"search", "urls", "feed"}:
+    if not isinstance(mode, str) or mode not in {"search", "urls", "feed", CATEGORY_MODE}:
         mode = "invalid"
-        fail("mode", "请选择职位 URL、搜索 API 或授权数据源中的一种。")
+        fail("mode", "请选择职位 URL、搜索 API、猎聘公开分类或授权数据源中的一种。")
     selected = {}
     for field, defaults in (("roles", list(workspace.config["roles"])),
                             ("platforms", list(workspace.config["platforms"]))):
@@ -73,9 +74,11 @@ def preview(workspace, data: dict) -> dict:
     limits = {"search_budget": (24, 1, 300), "pages": (1, 1, 10),
               "detail_budget": (20, 0, 300), "feed_budget": (5, 1, 20),
               "fresh_hours": (24, 1, 720)}
+    if mode == CATEGORY_MODE:
+        limits['detail_budget'] = (MAX_DETAILS, 1, MAX_DETAILS)
     relevant = {"urls": {"detail_budget", "fresh_hours"},
                 "search": {"search_budget", "pages", "detail_budget", "fresh_hours"},
-                "feed": {"feed_budget"}}.get(mode, set())
+                "feed": {"feed_budget"}, CATEGORY_MODE: {'detail_budget', 'fresh_hours'}}.get(mode, set())
     budgets = {}
     for field in relevant:
         default, low, high = limits[field]
@@ -100,7 +103,16 @@ def preview(workspace, data: dict) -> dict:
     rows, detected, queries = [], [], []
     query_count, valid_urls, normalized_urls = 0, 0, 0
     credential_configured = False
-    if mode == "urls":
+    if mode == CATEGORY_MODE:
+        if selected['roles'] != ['architect']:
+            fail('roles', '公开分类目前仅支持架构师，请只选择“架构师”。')
+        if selected['platforms'] != ['liepin']:
+            fail('platforms', '公开分类目前仅支持猎聘，请只选择“猎聘”。')
+        if 'liepin' not in permits:
+            fail('permit_platforms', '请确认本次猎聘公开分类页和正文的访问许可。')
+        warnings.append('读取猎聘“架构师”公开分类第一页，按原页面顺序最多选前5个不同职位；失败不会用后续岗位补齐，不翻页。')
+        warnings.append('分类不包含自定义关键词或地区筛选；无需登录或搜索Key，网站仍可能拒绝访问。')
+    elif mode == "urls":
         from .public_job_links import prepare_public_job_link, public_detail_parser
         raw = data.get("urls", "")
         if not isinstance(raw, str) or not raw.strip() or len(raw) > 100000:
@@ -188,6 +200,7 @@ def preview(workspace, data: dict) -> dict:
             "budgets": budgets, "detected_platforms": detected, "url_rows": rows,
             "unique_url_count": valid_urls, "query_count": query_count, "query_preview": queries,
             "normalized_url_count": normalized_urls,
+            "category_url": CATEGORY_URL if mode == CATEGORY_MODE else '',
             "credential_configured": credential_configured, "credential_verified": False,
             "external_network_requests": 0, "task_created": False,
             "message": "填写检查通过，可核对后点击创建执行；未验证实站、凭据或授权。" if not errors else "尚有字段需要处理；下方按字段说明怎么补，不会发起采集。"}
