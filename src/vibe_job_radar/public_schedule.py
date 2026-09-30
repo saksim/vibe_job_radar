@@ -11,7 +11,7 @@ import time
 import uuid
 
 from .collection import writer_lock
-from .public_contract import PublicQuery
+from .public_contract import ContractError, PublicQuery
 from .public_tasks import PublicTaskBusy
 from .workspace import InputError
 
@@ -150,7 +150,9 @@ class PublicSchedule:
         if self.tasks.mode()!='local_direct':raise InputError('定时计划仅用于本机已批准的公开目录查询。')
         request=PublicQuery.from_dict(query)
         if request.cursor:raise InputError('定时计划不能保存游标或自动读取下一页。')
-        self.tasks.hybrid._scope(request)
+        try:self.tasks.hybrid._scope(request)
+        except ContractError:
+            raise InputError('所选来源尚未批准本机公开查询。') from None
         if any(not self.tasks.hybrid.registry[key].local_access_approved for key in request.source_scope):
             raise InputError('所选来源尚未批准本机公开查询。')
         policy=self.workspace.network_policy()

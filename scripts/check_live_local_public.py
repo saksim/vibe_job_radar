@@ -16,19 +16,22 @@ sys.path.insert(0,str(ROOT/'src'))
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--live',action='store_true')
+    parser.add_argument('--source',choices=('anthropic','cloudflare'),default='anthropic')
     args=parser.parse_args()
     if not args.live:
         parser.error('Pass --live to permit one fixed public job-board GET.')
-    from vibe_job_radar.local_public import API_URL, SOURCE, LocalPublicDataClient
+    from vibe_job_radar.local_public import LocalPublicDataClient
+    from vibe_job_radar.public_boards import ANTHROPIC, CLOUDFLARE
     from vibe_job_radar.public_contract import PublicQuery
     from vibe_job_radar.workspace import Workspace
     output=ROOT/'live-evidence';output.mkdir(exist_ok=True)
+    board={'anthropic':ANTHROPIC,'cloudflare':CLOUDFLARE}[args.source]
     result={'success':False,'scope':'one fixed Greenhouse board; not BOSS/Liepin/51job certification',
-            'api':API_URL,'execution_mode':'local_direct','own_service_required':False}
+            'api':board.api_url,'source':board.source.key,'execution_mode':'local_direct','own_service_required':False}
     try:
         with tempfile.TemporaryDirectory() as tmp:
             client=LocalPublicDataClient(Workspace(tmp))
-            batch=client.search(PublicQuery('Anthropic',(SOURCE.key,),limit=1),consent=True)
+            batch=client.search(PublicQuery(board.company,(board.source.key,),limit=1),consent=True)
             if not batch['response']['jobs']:
                 raise ValueError('empty_public_board')
             result.update(success=True,board_jobs=batch['available_jobs'],matching_jobs=batch['matching_jobs'],
@@ -39,7 +42,8 @@ def main():
     except Exception as exc:
         # Provider messages can contain query data. Emit only fixed exception codes.
         result.update(error_type=type(exc).__name__,code=getattr(exc,'code','live_local_public_failed'))
-    (output/'local-public.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
+    filename='local-public.json' if board==ANTHROPIC else 'local-public-cloudflare.json'
+    (output/filename).write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
     print(json.dumps(result,ensure_ascii=True,indent=2))
     return 0 if result['success'] else 1
 
