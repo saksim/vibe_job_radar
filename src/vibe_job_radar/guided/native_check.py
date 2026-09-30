@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import re
+import subprocess
 import tempfile
 import threading
 
@@ -17,18 +18,25 @@ from .native_policy import NativeContract
 from .rate import RateLedger
 
 
-def cleanup_snapshot(browser, tunnel):
-    """Public browser disconnect and fixed tunnel facts, without paths or logs."""
+def cleanup_snapshot(browser, tunnel, *, minimal=False):
+    """Fixed completion facts; unavailable or mistyped observations stay unknown."""
+    def negate(value):
+        return not value if type(value) is bool else None
+
+    def process_exited():
+        code = browser.process.poll()
+        return code is not None if code is None or type(code) is int else None
+
     checks = {
-        'browser_disconnected': lambda: not browser.is_connected(),
+        'browser_disconnected': lambda: negate(browser.is_connected()),
         'tunnel_closed': lambda: tunnel._closed,
-        'tunnel_thread_stopped': lambda: not tunnel.thread.is_alive(),
+        'tunnel_thread_stopped': lambda: negate(tunnel.thread.is_alive()),
     }
-    if getattr(browser, 'minimal_events', False) is True:
+    if minimal or getattr(browser, 'minimal_events', False) is True:
         checks.update({
-            'profile_removed': lambda: not browser.profile.exists(),
-            'profile_cleanup_ok': lambda: browser.cleanup_failed is False,
-            'bridge_exited': lambda: browser.process.poll() is not None,
+            'profile_removed': lambda: negate(browser.profile.exists()),
+            'profile_cleanup_ok': lambda: negate(browser.cleanup_failed),
+            'bridge_exited': process_exited,
         })
     result = {}
     for name, observe in checks.items():
@@ -50,7 +58,8 @@ def check_native_browser(*, channel=None, headless=True):
         blank_page_check=False, request_guard_check=False, external_connections=None,
         cleanup_verified=False, live_sites_certified=False,
         controller=('minimal_cdp' if channel == 'chrome' else 'playwright_public_cdp'),
-        cleanup={'attempted':False, 'close_returned':False, **cleanup_snapshot(None, None)})
+        cleanup={'attempted':False, 'close_returned':False, 'close_error_type':'',
+                 **cleanup_snapshot(None, None, minimal=channel == 'chrome')})
     backend = browser = tunnel = None
     try:
         # The contract has no request rule. A different synthetic hostname is
@@ -100,9 +109,16 @@ def check_native_browser(*, channel=None, headless=True):
                     try:
                         backend.close()
                         result['cleanup']['close_returned'] = True
+                    except Exception as exc:
+                        known = (PermissionError, subprocess.TimeoutExpired, OSError, RuntimeError)
+                        result['cleanup']['close_error_type'] = next(
+                            (kind.__name__ for kind in known if isinstance(exc, kind)), 'other')
+                        raise
                     finally:
-                        result['cleanup'].update(cleanup_snapshot(browser, tunnel))
-                        result['cleanup_verified'] = all(v is True for v in result['cleanup'].values())
+                        cleanup = result['cleanup']
+                        cleanup.update(cleanup_snapshot(browser, tunnel, minimal=channel == 'chrome'))
+                        result['cleanup_verified'] = (cleanup['close_error_type'] == ''
+                            and all(value is True for key, value in cleanup.items() if key != 'close_error_type'))
             if not result['cleanup_verified']:
                 raise RuntimeError('native cleanup could not be confirmed')
         result.update(success=True, code='native_component_ready', stage='passed')
