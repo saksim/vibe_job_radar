@@ -16,7 +16,10 @@ def good_component(channel):
         'minimal_controller':channel=='chrome','code':'native_component_ready','stage':'passed',
         'browser_version':'156.0.0.0','returncode':0,'blank_page_check':True,
         'request_guard_check':True,'cleanup_verified':True,'external_connections':0,
-        'live_sites_certified':False}
+        'live_sites_certified':False,'cleanup':{
+            'attempted':True,'close_returned':True,'close_error_type':'','browser_disconnected':True,
+            'tunnel_closed':True,'tunnel_thread_stopped':True,
+            **({'profile_removed':True,'profile_cleanup_ok':True,'bridge_exited':True} if channel=='chrome' else {})}}
 
 def scripts():
     root=Path(__file__).resolve().parents[1]/'scripts'
@@ -78,3 +81,47 @@ class NativeComponentPortableTests(unittest.TestCase):
                  patch.object(verifier.subprocess,'CREATE_NO_WINDOW',0,create=True), \
                  patch.object(verifier.subprocess,'run',return_value=SimpleNamespace(returncode=code,stdout=json.dumps({**row,**change}).encode())):
                 with self.assertRaises(AssertionError):verifier.verify_native_component(Path('owned.exe'),Path('cwd'),{},'chrome')
+
+    def test_failed_portable_check_retains_typed_cleanup_in_caller_evidence(self):
+        _,verifier=scripts();good=good_component('chrome');cleanup={**good['cleanup'],'profile_removed':False,'tunnel_thread_stopped':None,'private_path':'SECRET'}
+        row={**good,'success':False,'stage':'cleanup','cleanup_verified':False,'cleanup':cleanup};evidence={}
+        with patch.object(verifier.subprocess,'CREATE_NO_WINDOW',0,create=True), \
+             patch.object(verifier.subprocess,'run',return_value=SimpleNamespace(returncode=2,stdout=json.dumps(row).encode(),stderr=b'SECRET')) as run:
+            with self.assertRaises(AssertionError):verifier.verify_native_component(Path('owned.exe'),Path('cwd'),{},'chrome',evidence=evidence)
+        self.assertEqual(evidence['cleanup'],{k:v for k,v in cleanup.items() if k!='private_path'})
+        self.assertEqual(evidence['returncode'],2);self.assertEqual(evidence['stage'],'cleanup')
+        self.assertNotIn('SECRET',str(evidence));run.assert_called_once();self.assertEqual(run.call_args.kwargs['timeout'],60)
+
+    def test_failure_metadata_filters_mistyped_fields_and_raw_error_strings(self):
+        _,verifier=scripts();row={k:'SECRET INPUT' for k in good_component('chrome')}
+        row['cleanup']={'attempted':'SECRET','close_returned':1,'close_error_type':'SECRET PATH','unknown':'SECRET'};evidence={}
+        with patch.object(verifier.subprocess,'CREATE_NO_WINDOW',0,create=True), \
+             patch.object(verifier.subprocess,'run',return_value=SimpleNamespace(returncode=2,stdout=json.dumps(row).encode(),stderr=b'SECRET')):
+            with self.assertRaises(AssertionError):verifier.verify_native_component(Path('owned.exe'),Path('cwd'),{},'chrome',evidence=evidence)
+        self.assertNotIn('SECRET',str(evidence));self.assertIsNone(evidence['success']);self.assertIsNone(evidence['external_connections'])
+        self.assertIsNone(evidence['cleanup']['attempted']);self.assertIsNone(evidence['cleanup']['close_returned'])
+        self.assertEqual(evidence['cleanup']['close_error_type'],'unrecognized');self.assertEqual(evidence['code'],'unrecognized')
+
+    def test_success_flag_cannot_override_missing_unknown_or_failed_cleanup(self):
+        builder,verifier=scripts()
+        for channel in ['bundled','chrome']:
+            good=good_component(channel)
+            cases=[None,{},*({**good['cleanup'],field:value} for field in good['cleanup'] for value in
+                (['PermissionError',None] if field=='close_error_type' else [False,None,1]))]
+            for cleanup in cases:
+                with self.subTest(channel=channel,cleanup=cleanup):
+                    row={**good,'cleanup':cleanup};self.assertFalse(builder.native_component_valid(row,channel))
+                    with patch.object(verifier.subprocess,'CREATE_NO_WINDOW',0,create=True), \
+                         patch.object(verifier.subprocess,'run',return_value=SimpleNamespace(returncode=0,stdout=json.dumps(row).encode())):
+                        with self.assertRaises(AssertionError):verifier.verify_native_component(Path('owned.exe'),Path('cwd'),{},channel)
+
+    def test_portable_parent_report_keeps_failed_second_mode_without_retry(self):
+        _,verifier=scripts();good=good_component('bundled');bad=good_component('chrome')
+        bad={**bad,'success':False,'cleanup_verified':False,'stage':'cleanup','cleanup':{**bad['cleanup'],'bridge_exited':False}}
+        replies=[SimpleNamespace(returncode=0,stdout=json.dumps(good).encode()),SimpleNamespace(returncode=2,stdout=json.dumps(bad).encode())]
+        result={'checks':[]}
+        with patch.object(verifier.subprocess,'CREATE_NO_WINDOW',0,create=True),patch.object(verifier.subprocess,'run',side_effect=replies) as run:
+            with self.assertRaises(AssertionError):verifier.verify_native_components(Path('owned.exe'),Path('cwd'),{},result)
+        self.assertEqual(run.call_count,2);self.assertEqual(result['stage'],'native_component_chrome');self.assertEqual(len(result['checks']),1)
+        self.assertEqual(result['native_components']['bundled'],good)
+        self.assertEqual(result['native_components']['chrome'],{**bad,'returncode':2})

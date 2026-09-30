@@ -15,6 +15,7 @@ import time
 from urllib.parse import urlsplit
 
 from build_windows_portable import inventory, native_component_valid
+from vibe_job_radar.guided.browser_health import HEALTH_MESSAGES
 
 
 class RunningApp:
@@ -72,21 +73,48 @@ def browser_health_summary(health):
     return {key:health[key] for key in fields if key in health}
 
 
-def verify_native_component(exe,cwd,env,channel):
-    """Run the packaged entry point, never substitute checkout code."""
+def verify_native_component(exe,cwd,env,channel,*,evidence=None):
+    """Retain typed facts before rejecting a failed packaged-process check."""
     if channel not in {'bundled','chrome'}:raise ValueError('unsupported component check')
+    if evidence is None:evidence={}
+    if type(evidence) is not dict or evidence:raise ValueError('component evidence must be an empty dict')
     run=subprocess.run([str(exe),'--native-browser-check','--native-browser-channel',channel],
         cwd=cwd,env=env,capture_output=True,timeout=60,creationflags=subprocess.CREATE_NO_WINDOW)
+    evidence['returncode']=run.returncode
     if len(run.stdout)>65536:raise AssertionError('native component output is oversized')
     row=json.loads(run.stdout.decode('utf-8'))
     if not isinstance(row,dict):raise AssertionError('native component output is invalid')
-    # This developer artifact contains fixed component facts, never unknown fields.
-    evidence={k:row.get(k) for k in ('success','runtime','browser_channel','controller','minimal_controller',
-        'code','stage','browser_version','blank_page_check','request_guard_check','cleanup_verified',
-        'external_connections','live_sites_certified')}
-    evidence['returncode']=run.returncode
+    for key in ('success','minimal_controller','blank_page_check','request_guard_check',
+                'cleanup_verified','live_sites_certified'):
+        evidence[key]=row.get(key) if type(row.get(key)) is bool else None
+    choices={'runtime':{'source','portable'},'browser_channel':{'bundled','chrome','msedge'},
+        'controller':{'minimal_cdp','playwright_public_cdp'},
+        'stage':{'launch','blank_page','request_guard','cleanup','passed'},
+        'code':set(HEALTH_MESSAGES)|{'native_check_failed','native_component_ready'}}
+    for key,allowed in choices.items():
+        value=row.get(key);evidence[key]=value if isinstance(value,str) and value in allowed else 'unrecognized'
+    version=row.get('browser_version')
+    evidence['browser_version']=version if isinstance(version,str) and re.fullmatch(r'[0-9]+(?:\.[0-9]+){1,4}',version) else ''
+    count=row.get('external_connections')
+    evidence['external_connections']=count if type(count) is int and 0<=count<=1000000 else None
+    cleanup=row.get('cleanup');cleanup=cleanup if isinstance(cleanup,dict) else {}
+    fields=['attempted','close_returned','browser_disconnected','tunnel_closed','tunnel_thread_stopped']
+    if channel=='chrome':fields+=['profile_removed','profile_cleanup_ok','bridge_exited']
+    evidence['cleanup']={key:cleanup.get(key) if type(cleanup.get(key)) is bool else None for key in fields}
+    error=cleanup.get('close_error_type')
+    evidence['cleanup']['close_error_type']=(error if isinstance(error,str) and error in
+        {'','PermissionError','TimeoutExpired','OSError','RuntimeError','other'} else 'unrecognized')
     if not native_component_valid(evidence,channel):raise AssertionError('native component evidence incomplete')
     return evidence
+
+
+def verify_native_components(exe,cwd,env,result):
+    result['native_components']={}
+    for channel in ['bundled','chrome']:
+        result['stage']='native_component_'+channel
+        evidence={};result['native_components'][channel]=evidence
+        verify_native_component(exe,cwd,env,channel,evidence=evidence)
+        result['checks'].append('actual exe checks native '+channel+' blank page, refused synthetic request, zero external connections and owned-browser cleanup')
 
 
 def verify_store_report_reader(app, workspace, previous):
@@ -149,11 +177,7 @@ def verify(bundle,report_path,*,browser_choice='bundled'):
             if doctor.returncode or json.loads(doctor.stdout.decode('utf-8')).get('workspace_writable') is not True:
                 raise AssertionError('portable doctor failed')
             result['checks'].append('exe runs from a different directory with no Python PATH, Unicode/spaced workspace and working SQLite')
-            result['native_components']={}
-            for channel in ['bundled','chrome']:
-                result['stage']='native_component_'+channel
-                result['native_components'][channel]=verify_native_component(exe,cwd,env,channel)
-                result['checks'].append('actual exe checks native '+channel+' blank page, refused synthetic request, zero external connections and owned-browser cleanup')
+            verify_native_components(exe,cwd,env,result)
             result['stage']='server_start'
             app=RunningApp(exe,workspace,cwd,env)
             try:

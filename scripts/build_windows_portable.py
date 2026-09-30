@@ -176,6 +176,13 @@ def build_candidate(out,evidence_path):
         return dest
 
 
+def native_cleanup_valid(cleanup,channel):
+    if not isinstance(cleanup,dict) or cleanup.get('close_error_type') != '':return False
+    fields=['attempted','close_returned','browser_disconnected','tunnel_closed','tunnel_thread_stopped']
+    if channel=='chrome':fields+=['profile_removed','profile_cleanup_ok','bridge_exited']
+    return all(cleanup.get(key) is True for key in fields)
+
+
 def native_component_valid(row,channel):
     controller='minimal_cdp' if channel=='chrome' else 'playwright_public_cdp'
     return (channel in {'bundled','chrome'} and isinstance(row,dict)
@@ -188,7 +195,8 @@ def native_component_valid(row,channel):
         and bool(re.fullmatch(r'[0-9]+(?:\.[0-9]+){1,4}',row['browser_version']))
         and all(row.get(k) is True for k in ('blank_page_check','request_guard_check','cleanup_verified'))
         and type(row.get('external_connections')) is int and row['external_connections']==0
-        and row.get('live_sites_certified') is False)
+        and row.get('live_sites_certified') is False
+        and native_cleanup_valid(row.get('cleanup'),channel))
 
 
 def native_components_valid(rows):
