@@ -124,6 +124,36 @@ function showCollection(s){
   for(const row of s.category_outcomes||[]){
     root.append(text("p",`${row.status_message||row.status}；主列表卡片 ${row.card_count??"尚未确认"} 条，已选 ${(row.selected_positions||[]).length} 条。`));
   }
+  if(s.mode==="liepin_category"&&["completed","needs_attention","empty"].includes(s.status)){
+    const next=text("div","");next.className="guide-box";root.append(next);
+    next.append(button("预览这份名单的下一批（不联网）",async()=>{
+      const plan=await api("/api/collection/category_next_preview",{id:s.id});
+      next.replaceChildren(text("p",plan.notice));
+      next.append(text("p",plan.source_time_known?"原名单读取时间："+plan.snapshot_observed_at:
+        "旧名单未记录准确读取时刻；来源任务建立于："+plan.source_task_created_at));
+      if(plan.existing_task_id){
+        next.append(button("打开已保存的下一批",async()=>{
+          const saved=await api("/api/collection/status",{id:plan.existing_task_id});
+          collectionGuide.selectMode(saved.mode);showCollection(saved);await refreshCollections();
+        }));return;
+      }
+      if(plan.exhausted){next.append(text("p","这份名单已全部选择完毕；不代表网站或市场上没有其他岗位。"));return;}
+      next.append(text("p",`本批 ${plan.items.length} 项，最多 ${plan.selection_limit} 次正文尝试；不重新读取分类页，原批预算不退款。`));
+      for(const item of plan.items)next.append(text("p",`名单第 ${item.position} 项：${item.title||"无法确认的卡片（会保留失败）"} ${item.url}`));
+      next.append(text("p","沿用原用途与许可范围："+plan.rights_note));
+      const launch=text("button","确认采集这批职位");launch.type="button";
+      launch.onclick=async()=>{
+        let created=false;
+        await act(async()=>{
+          const result=await api("/api/collection/category_next_start",{id:plan.id,fingerprint:plan.fingerprint,consent:true});
+          collectionGuide.selectMode(result.task.mode);showCollection(result.task);
+          await refreshCollections();created=result.created;
+        });
+        if(created)await continueCollection();
+      };
+      next.append(launch);
+    }));
+  }
   for(const row of s.details){
     const card=text("div","");card.className="card";
     card.append(text("strong",row.status_message||row.status),text("p",row.url),text("p",row.next_action||""));
@@ -131,7 +161,7 @@ function showCollection(s){
     if(row.fetch_diagnostic){const detail=document.createElement("details");detail.append(text("summary","本条跳转与请求诊断（已移除目标参数）"),text("pre",JSON.stringify(row.fetch_diagnostic,null,2)));card.append(detail);}
     root.append(card);
   }
-  if(s.details.some(d=>!["ok","fresh_reused","pending","budget_skipped"].includes(d.status))){
+  if(["urls","search"].includes(s.mode)&&s.details.some(d=>!["ok","fresh_reused","pending","budget_skipped"].includes(d.status))){
     const handoff=text("div","");root.append(handoff);
     handoff.append(button("将未完成链接转交浏览器（先预览，不联网）",async()=>{
       const plan=await api("/api/collection/handoff_preview",{id:s.id});handoff.replaceChildren(text("p",plan.notice));
