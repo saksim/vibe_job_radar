@@ -64,7 +64,7 @@ def explain(state: dict) -> dict:
         text += ' 搜索和数据源预算不参与URL路线；报告阶段不代表取得了正文。'
     category_outcomes = []
     for original in state.get('category_outcomes', []):
-        message = ('已读取公开分类主列表' if original['status'] == 'ok' else
+        message = (('使用已保存的公开分类名单' if original.get('snapshot_reused') else '已读取公开分类主列表') if original['status'] == 'ok' else
                    REASONS.get(original['status'], ('分类状态：' + original['status'], ''))[0])
         category_outcomes.append({**original, 'status_message': message})
     if state['mode'] == 'liepin_category':
