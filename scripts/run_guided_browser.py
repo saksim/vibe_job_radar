@@ -324,4 +324,9 @@ def main():
     print(json.dumps(result,ensure_ascii=True,indent=2))
 
 
-if __name__=='__main__':main()
+if __name__=='__main__':
+    main()
+    # Keep related UI checks in the existing browser acceptance entry point.
+    # A failure in either suite must fail this process and the original CI job.
+    from run_login_quota_browser import main as login_quota_main
+    login_quota_main()

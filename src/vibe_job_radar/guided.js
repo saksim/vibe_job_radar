@@ -19,7 +19,9 @@ function actionControls(){
  for(const button of document.querySelectorAll('button'))button.disabled=requesting || (foreign ? !['copy-browser-diagnostic','export'].includes(button.id) : state.busy && !['pause','stop'].includes(button.id));
  const tls=state.tls_environment;
  if(tls)$('repair-tls').disabled=requesting||foreign||state.busy||tls.restart_required||!tls.repair_available;
- for(const input of document.querySelectorAll('#password-login-form input'))input.disabled=foreign;
+ const loginBlocked=current?.login_availability?.available===false;
+ for(const id of ['login','submit-password-login'])$(id).disabled=requesting||foreign||state.busy||loginBlocked;
+ for(const input of document.querySelectorAll('#password-login-form input'))input.disabled=foreign||loginBlocked;
  note([state.ownership_message, state.closure_uncertain?'无法确认上次采集浏览器已关闭，请退出原工作台进程并核对浏览器后重开。':'', sticky || (requesting?'正在处理本次操作，请稍候。':state.busy?(!state.active?state.setup?.message:current?.message)||'正在运行后端操作；可以暂停或停止。':''), ...(state.checkpoint_warnings||[])].filter(Boolean).join('\n'));
 }
 async function act(fn){if(requesting)return;requesting=true;sticky='';actionControls();try{await fn();await refresh();}catch(e){sticky=e.message;note(sticky);}finally{requesting=false;actionControls();}}
@@ -76,6 +78,16 @@ function render(){
  if(requestedTask&&state.jobs.some(j=>j.id===requestedTask)){$('task').value=requestedTask;requestedTask='';}
  current=state.jobs.find(j=>j.id===$('task').value)||null;
  $('password-login').hidden=!current || current.platform!=='liepin';
+ const loginBudget=current?.login_availability;
+ const loginBlocked=loginBudget?.available===false;
+ $('login-availability').hidden=!loginBlocked;
+ if(loginBlocked){
+  const reason={daily_limit:'滚动24小时内打开登录已达上限',hourly_limit:'最近一小时打开登录已达上限',rate_wait:'尚未达到两次打开登录的最小间隔',cooldown:'本站仍在等待期',clock_rollback:'系统时间与已记录时间不一致'}[loginBudget.reason]||'暂时无法确认可用的登录次数';
+  const due=loginBudget.next_allowed_at;
+  const when=typeof due==='number'&&Number.isFinite(due)?`下次允许时间：${new Date(due*1000).toLocaleString()}（本机时区）。`:'请检查本机任务与时间状态。';
+  $('login-availability').textContent=`${reason}。${when}${current.browser_open?'可继续处理已经打开的采集窗口。':'当前没有已打开的采集登录窗口。'}等待期间不必填写账号密码，到时不会自动提交。`;
+  $('password-login-form').reset();
+ }
  if(current&&loadedId!==current.id){selecting=new Set(current.selection||[]);loadedId=current.id;}
  $('login-return-status').textContent=current?({watching:'等待平台返回本任务原检索页或所选完整岗位详情；连续可读后自动继续，最长10分钟。不重复提交登录或绕过验证。',checking_detail:'已观察到所选完整详情，正在重新核对身份和正文；不重复请求该岗位。',resumed_detail:'已从登录返回的所选详情接回原采集和报告；不等于账号认证证明。',resumed:'已识别本任务可读列表，已自动接回任务；不等于账号认证证明。',timed_out:'自动接续等待已结束；会话未删除，可按原按钮继续。',needs_attention:'当前页面或网络需要处理，自动接续已停止。',cancelled:'自动接续已取消。'}[current.login_continuation]||''):'';
  $('saved-session-status').textContent=current?({empty:'本机尚无可用的保存会话；公开可读页面可直接采集，平台要求时再正常登录。',restored_unverified:'已恢复本站 Cookie；仍须由正常页面确认是否有效，未自动填写密码。',saved_unverified:'本站 Cookie 已保存到本机，供下次启动尝试恢复；不等于登录已认证。',expired:'本机快照已过 7 天，未恢复；请按平台正常流程重新登录。',cleared:'此平台保存会话已清除，旧任务不会自动重新启用保存。',save_failed:'本批结果已保留，但会话保存失败：'+(current.saved_session_error||'未知错误')}[current.saved_session_status]||''):'';
@@ -97,6 +109,7 @@ function render(){
  }
  if(current.report_id){for(const [file,label] of [['requirements_zh.csv','下载岗位要求 CSV'],['descriptions.md','下载描述模板'],...(current.outcome ? [['guided_acquisition.json','下载本批采集结果']] : [])]){const b=document.createElement('button');b.className='secondary';b.textContent=label;const id=current.report_id;b.onclick=()=>act(()=>downloadReport(id,file));$('result').append(b);}const view=document.createElement('a');view.href='/#report='+current.report_id;view.textContent=' 查看本批研究结论';const a=document.createElement('a');a.href='/advanced#report='+current.report_id;a.textContent=' 用本批要求进入个人证据中心';$('result').append(view);if(!current.outcome||current.outcome.target_jobs>0)$('result').append(a);}
  }
+ if(current?.code==='login_rate_limited'&&loginBudget?.available===true)$('task-status').textContent='上次登录因次数限制停止；当前已到允许时间，可明确重新操作。程序不会自动提交账号密码。';
  actionControls();
 }
 function renderCards(){const root=$('cards');root.replaceChildren();if(!current.cards.length){root.textContent=current.code==='no_matching_jobs'?current.message:'尚未取得可用岗位清单。请查看上方任务状态；仅在平台明确要求时处理登录，不必先提供密码。';return;}
@@ -106,7 +119,7 @@ $('search-form').addEventListener('submit',e=>{e.preventDefault();const f=e.curr
 $('task').addEventListener('change',()=>{loadedId='';render();});
 $('password-login-form').addEventListener('submit', e=>{
  e.preventDefault();
- if(requesting || state?.busy || state?.owned_elsewhere===true)return;
+ if(requesting || state?.busy || state?.owned_elsewhere===true || current?.login_availability?.available===false)return;
  const form=e.currentTarget;
  const data={id:active(),action:'login_password',username:form.elements.username.value,
   password:form.elements.password.value,credential_consent:form.elements.credential_consent.checked};
