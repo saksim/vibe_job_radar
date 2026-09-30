@@ -102,6 +102,7 @@ def trust_fixture(root, extra_hosts=()):
 class Fixture:
     def __init__(self,root,certificate):
         self.requests=[];self.sni=[];owner=self
+        self.recorded_body=RECORDED_BODY;self.recorded_semantic=False
         class Handler(http.server.BaseHTTPRequestHandler):
             protocol_version='HTTP/1.1'
             def log_message(self,*_):pass
@@ -135,7 +136,9 @@ class Fixture:
                 elif path=='/recorded-search':
                     self.send('<!doctype html><a href="/job/123.shtml">'+RECORDED_TITLE+'</a>')
                 elif path=='/job/123.shtml':
-                    self.send(recorded_markup(recorded_posting(url=URL+'/job/123.shtml')))
+                    body=owner.recorded_body
+                    self.send(('<h1>'+RECORDED_TITLE+'</h1><dl><dt>职位介绍</dt><dd>'+body+'</dd></dl>')
+                        if owner.recorded_semantic else recorded_markup(recorded_posting(url=URL+'/job/123.shtml',description=body),body))
                 elif path=='/job/1':self.send('<h1>时间序列算法工程师</h1><div class="job-description">要求熟练使用 Cursor 进行 AI 辅助编程，编写单元测试与代码审查，负责时间序列预测系统。仅为本地人工测试，不是真实招聘信息。</div>')
                 elif path=='/redirect':self.send('',status=302,extra=[('Location','/search')])
                 elif path=='/cross':self.send('',status=302,extra=[('Location','https://outside.fixture.test/forbidden')])
@@ -300,24 +303,34 @@ def main():
                         'search_base':URL+'/recorded-search',
                         'detail_pattern':r'^/job/[0-9]+\.shtml$',
                         'native_contract':layout_contract})
-                    layout_workspace = Workspace(root/'recorded-layout-workspace')
-                    service = GuidedService(layout_workspace, registry=Registry([layout_adapter]),
-                        ledger=RateLedger(root/'recorded-layout.sqlite',Limits(page_interval=0,request_interval=0)),
-                        native_backend_factory=factory)
-                    services.append(service)
-                    service.create({**query, 'persist_session':False}); task=wait(service)
-                    assert task['status']=='ready' and len(task['cards'])==1, task.get('code')
-                    service.action({'id':task['id'],'action':'collect','selected':[task['cards'][0]['id']]})
-                    task=wait(service)
-                    assert task['status']=='completed' and task['outcome']['saved']==1, task.get('code')
-                    layout_report=layout_workspace.report(task['report_id'])
-                    assert layout_report['manifest']['stats']['full_text_job_groups']==1
-                    with Store(layout_workspace.db) as store:
-                        records=store.records()
-                        assert len(records)==1 and records[0].title==RECORDED_TITLE
-                        assert records[0].text==RECORDED_BODY, 'native JD changed or mixed with recommendations'
-                    result['checks'].append('actual Liepin parser reads artificial no-h1/raw-newline JSON-LD/dd layout through native search, selected full JD, Store and original report; not a live-site claim')
-                    service.close();services.remove(service)
+                    labels_body=('工作职能：与公司信息部协作，负责合成时间序列系统的设计与自动测试。'
+                        '任职资格：熟悉数据库建模和版本管理，使用Cursor辅助开发并审查生成代码。')
+                    for case,body,semantic in [('original',RECORDED_BODY,False),
+                            ('observed-structured',labels_body,False),('observed-semantic',labels_body,True)]:
+                        good.recorded_body=body;good.recorded_semantic=semantic
+                        layout_workspace = Workspace(root/('recorded-layout-'+case+'-workspace'))
+                        service = GuidedService(layout_workspace, registry=Registry([layout_adapter]),
+                            ledger=RateLedger(root/('recorded-layout-'+case+'.sqlite'),Limits(page_interval=0,request_interval=0)),
+                            native_backend_factory=factory)
+                        services.append(service)
+                        service.create({**query, 'persist_session':False}); task=wait(service)
+                        assert task['status']=='ready' and len(task['cards'])==1, task.get('code')
+                        service.action({'id':task['id'],'action':'collect','selected':[task['cards'][0]['id']]})
+                        task=wait(service)
+                        assert task['status']=='completed' and task['outcome']['saved']==1, task.get('code')
+                        layout_report=layout_workspace.report(task['report_id'])
+                        assert layout_report['manifest']['stats']['full_text_job_groups']==1
+                        with Store(layout_workspace.db) as store:
+                            records=store.records()
+                            assert len(records)==1 and records[0].title==RECORDED_TITLE
+                            assert records[0].text==body, 'native JD changed or mixed with recommendations'
+                        if case=='original':
+                            result['checks'].append('actual Liepin parser reads artificial no-h1/raw-newline JSON-LD/dd layout through native search, selected full JD, Store and original report; not a live-site claim')
+                        else:
+                            result['checks'].append('observed headings and IT-department duty survive '+case+' native parser, full Store record and original report')
+                        result.setdefault('recorded_layout_cases',[]).append({'case':case,'full_body_preserved':True,'report_full_text_job_groups':1})
+                        service.close();services.remove(service)
+                    good.recorded_body=RECORDED_BODY;good.recorded_semantic=False
                     checkpoint('native-redirect')
                     b=backend('redirect');b.open(URL+'/redirect');assert b.page.url==URL+'/search'
                     assert b.native_counts['document']==2

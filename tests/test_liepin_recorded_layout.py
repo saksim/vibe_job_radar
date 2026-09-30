@@ -14,7 +14,7 @@ import unittest
 
 from vibe_job_radar.guided.adapters import DOMAdapter, Registry, builtins
 from vibe_job_radar.guided.contracts import CrawlError, PageSnapshot
-from vibe_job_radar.guided.liepin import _jsonld_whitespace
+from vibe_job_radar.guided.liepin import _jsonld_whitespace, semantic_detail
 from vibe_job_radar.guided.service import GuidedService
 from vibe_job_radar.store import Store
 from vibe_job_radar.workspace import Workspace
@@ -188,6 +188,34 @@ class RecordedLayoutTests(unittest.TestCase):
         body='岗位职责：负责时间序列预测模型与离线评估。\n任职要求：熟悉Python、统计学和回归分析，能编写测试和维护实验记录。'
         self.assertEqual(self.parse(markup(posting(description=body),body))['text'],body)
 
+    def test_observed_work_functions_and_qualifications_labels_in_structured_intro(self):
+        for label in ('工作职能', '任职资格'):
+            body=label+'：负责合成系统的模块设计，熟悉数据库建模、软件测试和版本管理，能够维护人工回归项目的技术文档。'
+            with self.subTest(label=label):
+                self.assertEqual(self.parse(markup(posting(description=body),body))['text'],body)
+
+    def test_observed_labels_also_work_in_bounded_semantic_intro(self):
+        body='工作职能：负责合成系统的模块设计和测试。任职资格：熟悉软件建模和版本管理，能够维护人工回归项目的技术文档。'
+        html='<h1>合成架构师</h1><dl><dt>职位介绍</dt><dd>'+body+'</dd></dl>'
+        self.assertEqual(semantic_detail(html)['text'],body)
+
+    def test_generic_qualification_word_does_not_make_promotional_text_a_job(self):
+        body='企业资格认证与品牌推广活动，欢迎了解本公司的发展历史和文化。'*4
+        with self.assertRaises(CrawlError):self.parse(markup(posting(description=body),body))
+        with self.assertRaises(CrawlError):
+            semantic_detail('<h1>合成架构师</h1><dl><dt>职位介绍</dt><dd>'+body+'</dd></dl>')
+
+    def test_company_information_department_is_a_duty_but_information_panel_stays_rejected(self):
+        body='岗位职责：与公司信息部协作，完成合成系统的模块设计和测试。任职要求：熟悉软件建模和版本管理，维护人工项目技术文档。'
+        self.assertEqual(self.parse(markup(posting(description=body),body))['text'],body)
+        self.assertEqual(semantic_detail('<h1>合成架构师</h1><dl><dt>职位介绍</dt><dd>'+body+'</dd></dl>')['text'],body)
+        for extra in ('公司信息：宣传资料', '推荐职位：其他岗位'):
+            other=body+extra
+            with self.subTest(extra=extra), self.assertRaises(CrawlError):
+                self.parse(markup(posting(description=other),other))
+            with self.subTest(extra=extra), self.assertRaises(CrawlError):
+                semantic_detail('<h1>合成架构师</h1><dl><dt>职位介绍</dt><dd>'+other+'</dd></dl>')
+
     def test_missing_title_cannot_be_guessed_from_page_title(self):
         with self.assertRaises(CrawlError): self.parse(markup(posting(title=''))+'<title>伪标题</title>')
 
@@ -240,6 +268,112 @@ class RecordedLayoutPipelineTests(unittest.TestCase):
                 self.assertEqual(item['body_sha256'],hashlib.sha256(BODY.encode()).hexdigest())
                 self.assertEqual(state['certification'],'not_live_verified')
             finally: service.close()
+
+
+    def test_observed_labels_and_department_preserve_full_body_in_original_pipeline(self):
+        body = ('工作职能：与公司信息部协作，负责合成时间序列系统的设计与自动测试。'
+                '任职资格：熟悉数据库建模和版本管理，使用Cursor辅助开发并审查生成代码。')
+        for representation, html, parser in (
+                ('structured', markup(posting(description=body), body), 'liepin:job_intro_jsonld:v1'),
+                ('semantic', '<h1>'+TITLE+'</h1><dl><dt>职位介绍</dt><dd>'+body+'</dd></dl>', 'liepin:semantic_intro:v1')):
+            with self.subTest(representation=representation), tempfile.TemporaryDirectory() as tmp:
+                class Backend:
+                    def __init__(self, *args): self.page = None
+                    def open(self, url, authentication=False):
+                        content = '<a href="/job/123.shtml">'+TITLE+'</a>' if '/zhaopin/' in url else html
+                        self.page = PageSnapshot(url, content)
+                        return self.page
+                    def snapshot(self): return self.page
+                    def next_page(self): return False
+                    def pump(self): pass
+                    def close(self): pass
+                workspace = Workspace(Path(tmp))
+                service = GuidedService(workspace, registry=Registry([builtins().get('liepin')]), backend_factory=Backend)
+                def wait():
+                    deadline = time.monotonic()+10
+                    while service.state()['busy'] and time.monotonic() < deadline: time.sleep(.01)
+                    self.assertFalse(service.state()['busy'])
+                try:
+                    ident = service.create({'platform':'liepin','keyword':TITLE,'roles':['time_series'],
+                        'consent':True,'rights_note':'独立人工正文；不联网、不作实站认证','max_pages':1,'max_jobs':1})['id']
+                    wait(); state = service._load(ident)
+                    service.action({'id':ident,'action':'collect','selected':[state['cards'][0]['id']]})
+                    wait(); state = service._load(ident)
+                    self.assertEqual(state['status'], 'completed')
+                    self.assertEqual(state['cards'][0]['status'], 'ok')
+                    self.assertEqual(state['outcome']['saved'], 1)
+                    self.assertEqual(state['outcome']['failed'], 0)
+                    with Store(workspace.db) as store: records = store.records()
+                    self.assertEqual(len(records), 1)
+                    self.assertEqual(records[0].text, body)
+                    self.assertEqual(records[0].title, TITLE)
+                    report = workspace.report(state['report_id'])
+                    self.assertEqual(report['manifest']['stats']['full_text_job_groups'], 1)
+                    audit = json.loads(workspace.report_file(state['report_id'],'guided_acquisition.json').read_text(encoding='utf-8'))
+                    item = next(x for x in audit['items'] if x['status']=='ok')
+                    self.assertEqual(item['parser'], parser)
+                    self.assertEqual(item['body_sha256'], hashlib.sha256(body.encode()).hexdigest())
+                    self.assertEqual(state['certification'], 'not_live_verified')
+                finally: service.close()
+
+
+
+    def test_observed_labels_continue_saved_category_list_into_separate_original_report(self):
+        from unittest.mock import patch
+        from vibe_job_radar.collection import Collector, TERMINAL
+        from vibe_job_radar.network import SiteFetcher
+        from test_public_category import Wire, card, data, listing, job_url
+        body = ('工作职能：与公司信息部协作，负责软件架构与数据库系统设计和自动测试。'
+                '任职资格：熟悉分布式系统与版本管理，使用Cursor辅助开发并审查生成代码。')
+        title = '软件架构师人工样本2'
+        url = job_url(2)
+        for representation, html, parser in (
+                ('structured', markup(posting(url=url, title=title, description=body), body), 'liepin:job_intro_jsonld:v1'),
+                ('semantic', '<h1>'+title+'</h1><dl><dt>职位介绍</dt><dd>'+body+'</dd></dl>', 'liepin:semantic_intro:v1')):
+            with self.subTest(representation=representation), tempfile.TemporaryDirectory() as tmp:
+                workspace = Workspace(Path(tmp))
+                collector = Collector(workspace)
+                def finish(state, wire):
+                    collector.clients[(state['id'], 'liepin')] = SiteFetcher({'liepin.com'}, transport=wire)
+                    for _ in range(12):
+                        state = collector.step({'id':state['id']})
+                        if state['status'] in TERMINAL:
+                            return state
+                    self.fail('artificial category batch did not reach a terminal state')
+                parent = finish(collector.start(data(detail_budget=1)), Wire(listing(card(1)+card(2))))
+                self.assertEqual(parent['status'], 'completed')
+                parent_bytes = collector._path(parent['id']).read_bytes()
+                original = workspace.root/'reports'/parent['report_id']
+                before = {p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in original.iterdir() if p.is_file()}
+                with patch('vibe_job_radar.collection.SiteFetcher', side_effect=AssertionError('preview/start must not fetch')):
+                    preview = collector.category_next_preview({'id':parent['id']})
+                    self.assertEqual([item['position'] for item in preview['items']], [2])
+                    self.assertEqual(preview['external_network_requests'], 0)
+                    result = collector.category_next_start(dict(id=parent['id'], fingerprint=preview['fingerprint'], consent=True))
+                wire = Wire(details={url:html})
+                child = finish(result['task'], wire)
+                self.assertEqual(child['status'], 'completed')
+                self.assertEqual(child['category_attempts'], 0)
+                self.assertEqual(child['detail_attempts'], 1)
+                self.assertEqual(wire.calls, ['https://www.liepin.com/robots.txt', url])
+                self.assertEqual([item['status'] for item in child['details']], ['ok'])
+                self.assertNotEqual(child['report_id'], parent['report_id'])
+                with Store(workspace.db) as store:
+                    records = store.records()
+                self.assertEqual(len(records), 2)
+                current = next(record for record in records if record.url==url)
+                self.assertEqual(current.title, title)
+                self.assertEqual(current.text, body)
+                self.assertEqual(current.parser, 'liepin_public_detail_v1:'+parser)
+                self.assertEqual(current.record_id, child['details'][0]['record_id'])
+                report = workspace.report(child['report_id'])
+                self.assertEqual(report['manifest']['stats']['full_text_job_groups'], 1)
+                self.assertEqual(report['manifest']['stats']['current_source_records'], 1)
+                audit = json.loads(workspace.report_file(child['report_id'], 'collection_manifest.json').read_text(encoding='utf-8'))
+                self.assertEqual(audit['category_outcomes'][0]['selected_positions'], [2])
+                self.assertEqual(audit['details'][0]['record_id'], current.record_id)
+                self.assertEqual(collector._path(parent['id']).read_bytes(), parent_bytes)
+                self.assertEqual(before, {p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in original.iterdir() if p.is_file()})
 
 
 if __name__=='__main__': unittest.main()
