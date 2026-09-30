@@ -117,6 +117,36 @@ def verify_native_components(exe,cwd,env,result):
         result['checks'].append('actual exe checks native '+channel+' blank page, refused synthetic request, zero external connections and owned-browser cleanup')
 
 
+def verify_public_share_input(app):
+    """The actual packaged API prepares a synthetic share input, never fetches."""
+    clean = 'https://www.liepin.com/job/123.shtml'
+    shared = clean + '?pgRef=portable-artificial&skId=ARTIFICIAL-TRACKING'
+    data = dict(mode='urls', roles=['architect'], platforms=['liepin'], permit_platforms=['liepin'],
+                consent=True, rights_note='Artificial portable input check; no site request.',
+                urls=clean+'\n'+shared, detail_budget=1)
+    preview = app.json('/api/collection/preview', data)
+    if (not preview['ready'] or preview['unique_url_count'] != 1
+            or preview['normalized_url_count'] != 1 or preview['external_network_requests'] != 0):
+        raise AssertionError('frozen share preflight did not prepare/deduplicate the copied URL')
+    unknown = app.json('/api/collection/preview', {**data, 'urls': shared+'&jobId=999'})
+    if unknown['normalized_url_count'] != 0:
+        raise AssertionError('frozen preflight removed an unreviewed identity parameter')
+    state = app.json('/api/collection/start', data)
+    if (state['status'] != 'paused' or state['detail_attempts'] != 0 or state['report_id']
+              or len(state['details']) != 1 or state['details'][0]['url'] != clean
+              or state['details'][0]['detail_parser'] != 'liepin_public_detail_v1'
+              or state['details'][0]['link_normalization']['policy'] != 'liepin_share_v1'
+            or 'ARTIFICIAL-TRACKING' in json.dumps(state)):
+        raise AssertionError('frozen share checkpoint changed scope, fetched or retained tracking values')
+    clean_state = app.json('/api/collection/start', {**data, 'urls': clean})
+    if (clean_state['status'] != 'paused' or clean_state['detail_attempts'] != 0 or clean_state['report_id']
+            or len(clean_state['details']) != 1 or clean_state['details'][0]['url'] != clean
+            or clean_state['details'][0]['detail_parser'] != 'liepin_public_detail_v1'
+            or 'link_normalization' in clean_state['details'][0]):
+        raise AssertionError('frozen clean input lost its strict parser or was incorrectly marked as a share')
+    return [(row['id'], row['details']) for row in (state, clean_state)]
+
+
 def verify_store_report_reader(app, workspace, previous):
     """The actual exe must read an initialized WAL store beside an open writer."""
     from contextlib import closing
@@ -210,6 +240,11 @@ def verify(bundle,report_path,*,browser_choice='bundled'):
                         raise AssertionError('explicit Edge selection was not saved')
                     browser_options={'channel':'msedge'}
                 result['checks'].append('all static resources load; bundled runtime/metadata work; pip/repair mutations refused; explicitly selected browser starts and closes with original offline backend')
+                result['stage']='public_share_input'
+                public_input_checkpoints=verify_public_share_input(app)
+                result['public_share_input_verified']=True
+                result['public_clean_detail_input_verified']=True
+                result['checks'].append('actual frozen API explains and deduplicates synthetic Liepin share inputs, preserves unknown parameters and saves a paused checkpoint without tracking values or any collection step')
                 result['stage']='original_report'
                 app.json('/api/job',{'title':'时间序列算法工程师','company':'便携包人工测试（非招聘事实）',
                     'platform':'manual','source_ref':'portable-acceptance:artificial',
@@ -258,6 +293,12 @@ def verify(bundle,report_path,*,browser_choice='bundled'):
                 if restarted.json('/api/report/'+reader_report['id'])['requirements']!=reader_report['requirements']:
                     raise AssertionError('portable restart changed the report read beside a writer')
                 result['existing_store_report_reader_restart_verified']=True
+                for public_ident,details in public_input_checkpoints:
+                    saved=restarted.json('/api/collection/status', {'id':public_ident})
+                    if saved['details']!=details or saved['detail_attempts']!=0 or saved['report_id']:
+                        raise AssertionError('fresh frozen process changed or executed the paused public input task')
+                result['public_share_restart_verified']=True
+                result['public_clean_detail_restart_verified']=True
                 if restarted.json('/api/public/schedule/state')['status']!='disabled':raise AssertionError('portable restart implicitly scheduled work')
                 if restarted.json('/api/guided/state')['browser_health']['ready']:raise AssertionError('portable restart trusted old browser readiness')
             finally:restarted.close()

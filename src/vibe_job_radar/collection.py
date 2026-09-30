@@ -197,12 +197,26 @@ class Collector:
             "feed_done": False, "feed_cursor": "", "seen_cursors": [], "blocked_hosts": [], "warnings": [],
             "feed_outcomes": [], "report_id": "", "complete_market_coverage": False, "created_at": utc_now()}
         if mode == "urls":
+            from .public_job_links import prepare_public_job_link, public_detail_parser
             urls = text_field(data, "urls", required=True, limit=100000).splitlines()
             if len(urls) > 300:
                 raise InputError("每批最多 300 个链接。")
             for url in urls:
                 if url.strip():
-                    self._enqueue(state, safe_url(url.strip()))
+                    prepared, normalization = prepare_public_job_link(url.strip())
+                    self._enqueue(state, prepared)
+                    row = next((r for r in state['details'] if r['url'] == prepared), None)
+                    if row is not None:
+                        parser = public_detail_parser(prepared)
+                        if parser:
+                            row['detail_parser'] = parser
+                        if normalization:
+                            # Keep all removed field names regardless of paste
+                            # order, without another request. Parser selection
+                            # applies equally to a clean link entered alone.
+                            prior = row.get('link_normalization', {}).get('removed_parameters', [])
+                            row['link_normalization'] = {**normalization,
+                                'removed_parameters': sorted(set(prior) | set(normalization['removed_parameters']))}
             if not state["details"]:
                 raise InputError("没有与所选平台匹配的职位链接。")
         if mode == "feed":
@@ -317,8 +331,10 @@ class Collector:
             row["status"] = "host_stopped"
             return
         now = parse_time(utc_now())
+        from .public_job_links import public_detail_cache_matches
         with Store(self.workspace.db) as store:
             prior = next((r for r in store.records() if r.url == row["url"] and r.evidence_level == "full_text" and not r.is_synthetic
+                and public_detail_cache_matches(row, r)
                 and 0 <= (now - parse_time(r.collected_at)).total_seconds() <= state["fresh_hours"] * 3600
                 and (not r.expires_at or parse_time(r.expires_at) > now)), None)
         if prior:
@@ -336,7 +352,11 @@ class Collector:
             response = client.fetch(row["url"])
             markup = response.text()
             final_url = safe_url(response.url or row["url"])
-            parsed = parse_job_html(markup, source_url=final_url)
+            if row.get('detail_parser') or row.get('link_normalization'):
+                from .public_job_links import parse_prepared_job
+                parsed = parse_prepared_job(row, final_url, markup)
+            else:
+                parsed = parse_job_html(markup, source_url=final_url)
             record = JobRecord(**parsed, url=final_url, platform=row["platform"], source_mode="public_fetch",
                 rights_note=state["rights_note"], source_ref=f'collection:{state["id"]}', raw_sha256=hashlib.sha256(markup.encode()).hexdigest())
             with Store(self.workspace.db) as store:
@@ -344,7 +364,7 @@ class Collector:
             row.update(status="ok", record_id=record.record_id, final_url=record.url)
         except (FetchError, ValueError, TypeError) as exc:
             row["status"] = exc.code if isinstance(exc, FetchError) else "parse_error"
-            if row["status"] in {"http_401", "http_403", "http_429", "login_or_challenge", "host_circuit_open", "redirect_login_required", "redirect_verification_required"}:
+            if row["status"] in {"http_401", "http_403", "http_429", "login_or_challenge", "host_circuit_open", "redirect_login_required", "redirect_verification_required", "manual_required"}:
                 state["blocked_hosts"].append(host)
         finally:
             diagnostic = getattr(client, "last_diagnostic", None)
