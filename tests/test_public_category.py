@@ -37,9 +37,9 @@ def listing(cards=None, *, decoy=''):
             '<div class="left-list-box">' + cards + '</div></div></div>' + decoy + '</div></body></html>')
 
 
-def detail(number, *, title=None):
+def detail(number, *, title=None, source_url=None, body=BODY):
     title = title or f'软件架构师人工样本{number}'
-    posting = dict(title=title, description=BODY, url=job_url(number), **{'@type': 'JobPosting'})
+    posting = dict(title=title, description=body, url=source_url or job_url(number), **{'@type': 'JobPosting'})
     return f'<h1>{title}</h1><script type="application/ld+json">' + json.dumps(posting) + '</script>'
 
 
@@ -59,7 +59,7 @@ class Wire:
         self.calls.append(url)
         if url.endswith('/robots.txt'):
             return Response(200, {'content-type': 'text/plain'}, self.robots.encode(), url)
-        body = self.html if url == URL else self.details.get(url, detail(url.rsplit('/', 1)[1].split('.')[0]))
+        body = self.html if url == URL else self.details.get(url, detail(url.rsplit('/', 1)[1].split('.')[0], source_url=url))
         return Response(self.statuses.get(url, 200), {'content-type': 'text/html'}, body.encode(), url)
 
 
@@ -114,16 +114,60 @@ class PublicCategoryTests(unittest.TestCase):
         self.assertEqual(wire.calls[-2:], [job_url(1), job_url(2)])
         self.assertTrue(state['report_id'])
 
-    def test_duplicate_retained_and_unsupported_or_invalid_card_not_replaced(self):
+    def test_duplicate_retained_a_detail_supported_and_invalid_card_not_replaced(self):
         markup = listing(card(1) + card(1) + card(2, href='https://www.liepin.com/a/2.shtml')
                          + card(3, href=job_url(3)+'?token=PRIVATE-CREDENTIAL') + card(4) + card(5) + card(6))
         state, wire = self.run_batch(wire=Wire(markup))
         self.assertEqual(state['category_outcomes'][0]['selected_positions'], [1, 3, 4, 5, 6])
         self.assertEqual(state['category_outcomes'][0]['candidates'][1]['duplicate_of'], 1)
-        self.assertEqual([d['status'] for d in state['details']], ['ok', 'category_unsupported_detail', 'category_invalid_card', 'ok', 'ok'])
+        self.assertEqual([d['status'] for d in state['details']], ['ok', 'ok', 'category_invalid_card', 'ok', 'ok'])
+        self.assertEqual(state['details'][1]['detail_parser'], 'liepin_public_detail_v1')
         self.assertNotIn('PRIVATE-CREDENTIAL', json.dumps(state))
         self.assertNotIn(job_url(6), wire.calls)
-        self.assertEqual(state['detail_attempts'], 3)
+        self.assertEqual(state['detail_attempts'], 4)
+
+    def test_a_input_rejects_identity_conflict_and_truncated_jd(self):
+        url = 'https://www.liepin.com/a/123.shtml'
+        good = detail(123, source_url=url)
+        for html, expected in ((good+'<link rel="canonical" href="https://www.liepin.com/a/999.shtml">', 'job_identity_mismatch'),
+                               (detail(123, source_url=url, body=BODY+' 展开全部'), 'jd_incomplete')):
+            with self.subTest(expected=expected):
+                state = self.collector.start({**data(), 'mode': 'urls', 'urls': url, 'detail_budget': 1})
+                wire = Wire(details={url: html})
+                self.collector.clients[(state['id'], 'liepin')] = SiteFetcher({'liepin.com'}, transport=wire)
+                state = self.finish(self.collector, state)
+                self.assertEqual(state['details'][0]['status'], expected)
+                self.assertEqual(state['report_id'], '')
+                self.assertEqual(state['detail_attempts'], 1)
+
+    def test_a_input_replaces_generic_cache_then_reuses_strict_cache_after_restart(self):
+        url = 'https://www.liepin.com/a/123.shtml'
+        with Store(self.workspace.db) as store:
+            store.add(JobRecord(title='软件架构师人工样本123', text=BODY, url=url,
+                                platform='liepin', source_mode='public_fetch', parser='jsonld'))
+        for expected in ('ok', 'fresh_reused'):
+            self.collector = Collector(self.workspace)
+            state = self.collector.start({**data(), 'mode': 'urls', 'urls': url, 'detail_budget': 1})
+            self.assertEqual(state['details'][0]['detail_parser'], 'liepin_public_detail_v1')
+            wire = Wire()
+            self.collector.clients[(state['id'], 'liepin')] = SiteFetcher({'liepin.com'}, transport=wire)
+            state = self.finish(self.collector, state)
+            self.assertEqual(state['details'][0]['status'], expected)
+            self.assertEqual(wire.calls, ['https://www.liepin.com/robots.txt', url] if expected == 'ok' else [])
+            self.assertTrue(state['report_id'])
+
+    def test_a_input_does_not_inherit_job_share_parameter_removal(self):
+        url = 'https://www.liepin.com/a/123.shtml?pgRef=artificial&skId=artificial'
+        values = {**data(), 'mode': 'urls', 'urls': url, 'detail_budget': 1}
+        checked = preview(self.workspace, values)
+        self.assertEqual(checked['normalized_url_count'], 0)
+        state = self.collector.start(values)
+        self.assertEqual(state['details'][0]['url'], url)
+        wire = Wire()
+        self.collector.clients[(state['id'], 'liepin')] = SiteFetcher({'liepin.com'}, transport=wire)
+        state = self.finish(self.collector, state)
+        self.assertEqual(state['details'][0]['status'], 'robots_denied')
+        self.assertEqual(wire.calls, ['https://www.liepin.com/robots.txt'])
 
     def test_page_changes_and_missing_list_are_errors_not_zero_jobs(self):
         cases = [listing(''), listing().replace('left-list-box', 'different-layout'),
