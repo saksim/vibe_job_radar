@@ -27,6 +27,19 @@ _INCOMPLETE = re.compile(r'登录后.{0,8}(?:查看|浏览)|查看完整.{0,4}(?
 _JOB_CONTENT = re.compile(r'职责|要求|岗位描述|职位描述|工作内容|工作职能|任职资格')
 
 
+def _numbered_qualifications(body: str) -> bool:
+    """Observed unheaded qualification list, only with full DOM/JSON-LD agreement."""
+    items = list(re.finditer(r'(?m)^[ \t]*([1-9][0-9]?)[.．、][ \t]*', body))
+    if not 3 <= len(items) <= 20 or [int(m[1]) for m in items] != list(range(1, len(items)+1)):
+        return False
+    for index, item in enumerate(items):
+        end = items[index+1].start() if index+1 < len(items) else len(body)
+        clause = body[item.end():end].strip()
+        if not re.match(r'(?:本科|熟练|掌握|了解|具备)[ \t]*\S', clause):
+            return False
+    return True
+
+
 def _hidden(node: Node) -> bool:
     style = re.sub(r'\s+', '', node.attrs.get('style', '')).lower()
     return (node.tag in _OMIT or 'hidden' in node.attrs
@@ -241,8 +254,13 @@ def structured_intro_detail(markup: str, url: str,
             parser = 'liepin:jsonld_string_whitespace:v1'
         if _INCOMPLETE.search(body) or _INCOMPLETE.search(description):
             raise CrawlError('jd_incomplete')
+        # The recorded unheaded form has both a visible introduction and a
+        # complete, identical structured description. A structured prefix or
+        # an uncorroborated DOM list cannot use this additional content check.
+        numbered_intro = (bool(anchors) and compact_body == compact_description
+                          and _numbered_qualifications(body))
         if (len(body) < 40 or len(body) > 150_000 or _FOREIGN.search(body)
-                or not _JOB_CONTENT.search(body)):
+                or not (_JOB_CONTENT.search(body) or numbered_intro)):
             raise CrawlError('structure_changed')
         org = posting.get('hiringOrganization')
         company = org.get('name', '') if isinstance(org, dict) else ''

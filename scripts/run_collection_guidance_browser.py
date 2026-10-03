@@ -195,12 +195,20 @@ def main():
                         f'<div class="job-title-box"><div class="ellipsis-1" title="软件架构师人工样本{i}">软件架构师人工样本{i}</div></div></a></div>' for i in (201, 202, 203))
                     category_html = ('<html><head><title>【架构师招聘_招聘架构师人才】-猎聘</title></head><body><div id="main-container">'
                         '<div class="left-job-box"><div class="job-list-box"><div class="left-list-box">'+cards+'</div></div></div></div></body></html>')
+                    numbered_body = '1.本科及以上，计算机相关专业，能够编写接口和自动测试。\n2.掌握时间序列建模，熟练使用Python和数据库。\n3.了解能源业务，具备模型评估和误差分析经验。'
                     def category_response(url):
                         ident = url.rsplit('/', 1)[-1].split('.')[0]
                         content = category_html if url == category_url else (
                             f'<h1>软件架构师人工样本{ident}</h1><dl><dt>职位介绍</dt><dd>'
                             '工作职能：与公司信息部协作，负责系统架构与数据库设计。任职资格：熟悉软件设计，编写文档与自动测试。人工回归材料。'
                             '</dd></dl>')
+                        if ident == '203':
+                            body = ('1.本科及以上，计算机相关专业，能够编写接口和自动测试。\n'
+                                    '2.掌握时间序列建模，熟练使用Python和数据库。\n'
+                                    '3.了解能源业务，具备模型评估和误差分析经验。')
+                            content = ('<dl><dt>职位介绍</dt><dd data-selector="job-intro-content">'+body+'</dd></dl>'
+                                '<script type="application/ld+json">'+json.dumps(dict(**{'@type':'JobPosting'},
+                                    title='软件架构师人工样本203', description=body, url=url))+'</script>')
                         return Response(200, {'content-type': 'text/html'}, content.encode(), url)
                     with patch('vibe_job_radar.collection.SiteFetcher') as source:
                         source.return_value.fetch.side_effect = category_response
@@ -235,7 +243,16 @@ def main():
                     assert next_state['category_outcomes'][0]['selected_positions'] == [3]
                     assert next_state['report_id'] and next_state['report_id'] != category_state['report_id']
                     assert len(server.collector.list()['runs']) == before_next + 1
-                    result['checks'].append('saved category next-batch preview makes no request; confirmation fetches only the remaining detail with observed role-heading synonyms and creates a separate original report')
+                    from vibe_job_radar.store import Store
+                    with Store(workspace.db) as store:
+                        record = next(r for r in store.records() if r.record_id == next_state['details'][0]['record_id'])
+                    assert record.text == numbered_body and record.title == '软件架构师人工样本203'
+                    assert record.parser == 'liepin_public_detail_v1:liepin:job_intro_jsonld:v1'
+                    manifest = json.loads((workspace.root/'reports'/next_state['report_id']/'run_manifest.json').read_text(encoding='utf-8'))
+                    assert manifest['stats']['full_text_job_groups'] == manifest['stats']['current_source_records'] == 1
+                    result['numbered_detail_full_body_preserved'] = True
+                    result['numbered_detail_separate_report_verified'] = True
+                    result['checks'].append('saved-list batches preserve observed role-heading synonyms and fully corroborated unheaded numbered qualifications in separate original reports')
                     page.get_by_role('button', name='预览这份名单的下一批（不联网）').click()
                     expect(page.locator('#collect-result')).to_contain_text('这份名单已全部选择完毕')
                     page.locator('#collect-history').select_option(category_state['id'])
