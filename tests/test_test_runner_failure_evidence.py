@@ -227,3 +227,33 @@ class RunnerFailureEvidenceTests(unittest.TestCase):
                 self.assertIn(location, original_text)
                 self.assertIn(location, text)
                 self.assertIn('raise ', text)
+
+    def test_diagnostic_clock_or_serializer_fault_keeps_original_result_and_cleanup(self):
+        runner = runner_module()
+        for kind in ('clock', 'serializer'):
+            with self.subTest(kind=kind):
+                cleaned = []
+                stream = io.StringIO()
+                target, name = (runner.time, 'monotonic') if kind == 'clock' else (runner.json, 'dumps')
+                replaced = patch.object(target, name, side_effect=RuntimeError('PRIVATE_DIAGNOSTIC_FAULT'))
+                class Artificial(unittest.TestCase):
+                    def runTest(self):
+                        self.addCleanup(cleaned.append, True)
+                        replaced.start()
+                        self.addCleanup(replaced.stop)
+                        raise AssertionError('original assertion')
+                raised = None
+                result = None
+                try:
+                    result = unittest.TextTestRunner(stream=stream, resultclass=runner.FailureResult).run(
+                        unittest.TestSuite([Artificial()]))
+                except Exception as exc:
+                    raised = type(exc).__name__
+                finally:
+                    replaced.stop()
+                self.assertIsNone(raised)
+                self.assertEqual((len(result.failures), len(result.errors)), (1, 0))
+                self.assertEqual(cleaned, [True])
+                self.assertIn('original assertion', stream.getvalue())
+                self.assertIn('unavailable; original result retained', stream.getvalue())
+                self.assertNotIn('PRIVATE_DIAGNOSTIC_FAULT', stream.getvalue())

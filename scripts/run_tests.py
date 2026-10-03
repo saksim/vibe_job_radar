@@ -100,7 +100,17 @@ class FailureResult(unittest.TextTestResult):
         if any(exc is previous for previous in self._captured):
             return
         self._captured.append(exc)
-        self._failure_evidence(test, kind)
+        try:
+            self._failure_evidence(test, kind)
+        except Exception:
+            # Tests can replace clocks/serializers as well as frame capture.
+            # Evidence must not stop unittest from recording the original
+            # failure and invoking its normal cleanup.
+            try:
+                self.stream.write('FAILURE_EVIDENCE unavailable; original result retained\n')
+                self.stream.flush()
+            except Exception:
+                pass
 
     def _failure_evidence(self, test, kind):
         try:
