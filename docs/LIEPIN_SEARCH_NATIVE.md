@@ -53,3 +53,5 @@ https://chromedevtools.github.io/devtools-protocol/tot/Fetch/
 2026-09-23 的真实搜索入口依赖增量及当前未完成项见 [搜索页依赖验证](LIEPIN_PAGE_DEPENDENCIES.md)。官方当前页面还需要筛选项初始化和共享 UI 静态清单；营销/统计请求在本机终止，不再中止主任务。本节以上搜索路径的实站验收仍未完成。
 
 Playwright Chromium 的请求路由会自动合成部分 OPTIONS 成功响应。当前有CORS规则的原生上下文不使用该路由层，直接用CDP控制；未支持目标先取消并安装只阻断的Fetch控制，再由原工作循环关闭，不发送凭据或继续目标。没有CORS的旧契约保留原归属门。必须实测来源收到OPTIONS、来源拒绝时不发POST，以及弹窗首请求未越界；不能仅以函数单测宣称通过。依据：microsoft/playwright `packages/playwright-core/src/server/chromium/crNetworkManager.ts` 的 `isInterceptedOptionsPreflight` 逻辑。
+
+当前主干对搜索建议、城市目录和登录显示配置的独立整合范围见[读取依赖](NATIVE_SEARCH_READ_DEPENDENCIES.md)；历史观察与当前受控验证分别记载。
