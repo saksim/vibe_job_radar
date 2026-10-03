@@ -197,3 +197,33 @@ class RunnerFailureEvidenceTests(unittest.TestCase):
         self.assertEqual(observed_cleanup, cleaned)
         self.assertEqual(events.getvalue(), '')
         self.assertIs(unittest.case._Outcome.testPartExecutor, original)
+
+    def test_original_assertion_error_and_subtest_source_locations_survive_reporting(self):
+        runner = runner_module()
+        for kind in ('failure', 'error', 'subtest'):
+            with self.subTest(kind=kind):
+                expected = {}
+                class Artificial(unittest.TestCase):
+                    def runTest(self):
+                        if kind == 'error':
+                            expected['line'] = sys._getframe().f_lineno + 1
+                            raise ValueError('original error')
+                        if kind == 'subtest':
+                            with self.subTest(case='fixture'):
+                                expected['line'] = sys._getframe().f_lineno + 1
+                                raise AssertionError('original subtest')
+                        else:
+                            expected['line'] = sys._getframe().f_lineno + 1
+                            raise AssertionError('original assertion')
+                original_result = unittest.TextTestRunner(stream=io.StringIO()).run(
+                    unittest.TestSuite([Artificial()]))
+                result = unittest.TextTestRunner(stream=io.StringIO(), resultclass=runner.FailureResult).run(
+                    unittest.TestSuite([Artificial()]))
+                self.assertEqual((len(result.failures), len(result.errors)),
+                                 (len(original_result.failures), len(original_result.errors)))
+                original_text = (original_result.failures + original_result.errors)[0][1]
+                text = (result.failures + result.errors)[0][1]
+                location = f'File "{__file__}", line {expected["line"]}'
+                self.assertIn(location, original_text)
+                self.assertIn(location, text)
+                self.assertIn('raise ', text)

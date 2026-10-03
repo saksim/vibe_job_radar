@@ -43,21 +43,28 @@ def capture_before_cleanup():
     # at the existing outcome boundary, then let unittest handle it unchanged.
     original = unittest.case._Outcome.testPartExecutor
 
-    @contextmanager
     def observed(outcome, test, *args, **kwargs):
-        with original(outcome, test, *args, **kwargs):
-            try:
-                yield
-            except BaseException as exc:
+        context = original(outcome, test, *args, **kwargs)
+
+        class Observed:
+            def __enter__(self):
+                return context.__enter__()
+
+            def __exit__(self, typ, exc, tb):
                 callback = getattr(outcome.result, '_capture_once', None)
-                if (callback is not None and not outcome.expecting_failure
+                if (exc is not None and callback is not None and not outcome.expecting_failure
                         and not isinstance(exc, (KeyboardInterrupt, unittest.SkipTest,
                                                  unittest.case._ShouldStop))):
                     subtest = isinstance(test, unittest.case._SubTest)
                     parent = test.test_case if subtest else test
                     kind = 'failure' if isinstance(exc, parent.failureException) else 'error'
                     callback(parent, ('subtest_' if subtest else '') + kind, exc)
-                raise
+                # Delegate the original traceback unchanged. An extra generator
+                # yield becomes a user frame that unittest can truncate before
+                # the actual assertion on Python 3.12.
+                return context.__exit__(typ, exc, tb)
+
+        return Observed()
 
     unittest.case._Outcome.testPartExecutor = observed
     try:
