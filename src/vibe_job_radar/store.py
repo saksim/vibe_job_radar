@@ -13,28 +13,42 @@ class Store:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(self.path, timeout=30)
-        self.conn.execute("PRAGMA foreign_keys=ON")
-        self.conn.execute("PRAGMA journal_mode=WAL")
-        version = self.conn.execute("PRAGMA user_version").fetchone()[0]
-        if version not in {0, 1}:
+        try:
+            self.conn.execute("PRAGMA foreign_keys=ON")
+            self.conn.execute("PRAGMA journal_mode=WAL")
+            version = self.conn.execute("PRAGMA user_version").fetchone()[0]
+            if version not in {0, 1}:
+                raise ValueError(f"unsupported database schema: {version}")
+            if version == 0:
+                # Publish a new schema and its version in one durable commit,
+                # rather than flushing every CREATE separately. Recheck after
+                # taking the writer lock in case another initializer ran first.
+                self.conn.execute("BEGIN IMMEDIATE")
+                version = self.conn.execute("PRAGMA user_version").fetchone()[0]
+                if version not in {0, 1}:
+                    raise ValueError(f"unsupported database schema: {version}")
+            for statement in (
+                '''CREATE TABLE IF NOT EXISTS records(
+                    record_id TEXT PRIMARY KEY, identity_key TEXT NOT NULL, fingerprint TEXT NOT NULL,
+                    body TEXT NOT NULL, first_seen TEXT NOT NULL, last_seen TEXT NOT NULL)''',
+                'CREATE INDEX IF NOT EXISTS records_identity ON records(identity_key)',
+                '''CREATE TABLE IF NOT EXISTS observations(
+                    id INTEGER PRIMARY KEY, record_id TEXT NOT NULL REFERENCES records(record_id),
+                    collected_at TEXT NOT NULL, source_ref TEXT NOT NULL, source_mode TEXT NOT NULL)''',
+                '''CREATE TABLE IF NOT EXISTS events(
+                    id INTEGER PRIMARY KEY, created_at TEXT NOT NULL, action TEXT NOT NULL, status TEXT NOT NULL, details TEXT NOT NULL)''',
+            ):
+                self.conn.execute(statement)
+            # A current WAL database still takes no initialization writer lock
+            # or version write merely to read beside an existing writer.
+            if version == 0:
+                self.conn.execute("PRAGMA user_version=1")
+            self.conn.commit()
+        except BaseException:
+            # __enter__ was never reached: close also rolls back a failed or
+            # interrupted initialization and releases Windows file handles.
             self.conn.close()
-            raise ValueError(f"unsupported database schema: {version}")
-        self.conn.executescript('''
-        CREATE TABLE IF NOT EXISTS records(
-            record_id TEXT PRIMARY KEY, identity_key TEXT NOT NULL, fingerprint TEXT NOT NULL,
-            body TEXT NOT NULL, first_seen TEXT NOT NULL, last_seen TEXT NOT NULL);
-        CREATE INDEX IF NOT EXISTS records_identity ON records(identity_key);
-        CREATE TABLE IF NOT EXISTS observations(
-            id INTEGER PRIMARY KEY, record_id TEXT NOT NULL REFERENCES records(record_id),
-            collected_at TEXT NOT NULL, source_ref TEXT NOT NULL, source_mode TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS events(
-            id INTEGER PRIMARY KEY, created_at TEXT NOT NULL, action TEXT NOT NULL, status TEXT NOT NULL, details TEXT NOT NULL);
-        ''')
-        # Rewriting the same version still takes a SQLite write lock. A current
-        # WAL database must remain readable while another connection is writing.
-        if version == 0:
-            self.conn.execute("PRAGMA user_version=1")
-        self.conn.commit()
+            raise
 
     def __enter__(self):
         return self
