@@ -156,3 +156,44 @@ class RunnerFailureEvidenceTests(unittest.TestCase):
         start.assert_called_once()
         self.assertEqual(start.call_args.args, (120,))
         self.assertEqual(cancel.call_count, 2)
+
+    def test_nested_results_restore_outcome_boundary_and_do_not_duplicate_events(self):
+        runner = runner_module()
+        original = unittest.case._Outcome.testPartExecutor
+        outer_events = io.StringIO()
+        inner_events = io.StringIO()
+        class Nested(unittest.TestCase):
+            def runTest(self):
+                def fail(): raise AssertionError('inner original')
+                result = unittest.TextTestRunner(stream=io.StringIO(), resultclass=lambda *a, **kw:
+                    runner.FailureResult(*a, failure_stream=inner_events, **kw)).run(
+                        unittest.TestSuite([unittest.FunctionTestCase(fail)]))
+                self.assertEqual(len(result.failures), 1)
+        result = unittest.TextTestRunner(stream=io.StringIO(), resultclass=lambda *a, **kw:
+            runner.FailureResult(*a, failure_stream=outer_events, **kw)).run(
+                unittest.TestSuite([Nested()]))
+        self.assertTrue(result.wasSuccessful())
+        self.assertEqual(outer_events.getvalue(), '')
+        self.assertEqual(len(inner_events.getvalue().splitlines()), 1)
+        self.assertIs(unittest.case._Outcome.testPartExecutor, original)
+
+    def test_keyboard_interrupt_restores_hook_and_preserves_standard_cleanup(self):
+        runner = runner_module()
+        original = unittest.case._Outcome.testPartExecutor
+        cleaned = []
+        events = io.StringIO()
+        class Interrupt(unittest.TestCase):
+            def setUp(self): self.addCleanup(cleaned.append, True)
+            def runTest(self): raise KeyboardInterrupt()
+        result = unittest.TextTestRunner(stream=io.StringIO(), resultclass=lambda *a, **kw:
+            runner.FailureResult(*a, failure_stream=events, **kw))
+        with self.assertRaises(KeyboardInterrupt):
+            result.run(unittest.TestSuite([Interrupt()]))
+        observed_cleanup = list(cleaned)
+        cleaned.clear()
+        with self.assertRaises(KeyboardInterrupt):
+            unittest.TextTestRunner(stream=io.StringIO()).run(
+                unittest.TestSuite([Interrupt()]))
+        self.assertEqual(observed_cleanup, cleaned)
+        self.assertEqual(events.getvalue(), '')
+        self.assertIs(unittest.case._Outcome.testPartExecutor, original)
