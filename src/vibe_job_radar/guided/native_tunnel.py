@@ -40,6 +40,9 @@ class NativeTunnel:
             def handle(self):
                 owner._handle(self.request)
         class Server(socketserver.ThreadingTCPServer):
+            # Buffer a bounded browser connection burst while accept is being
+            # scheduled. The separate semaphore still caps active handlers.
+            request_queue_size = 16
             daemon_threads = True
             block_on_close = False
             def handle_error(self, *_):
