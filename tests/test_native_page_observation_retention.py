@@ -6,7 +6,7 @@ from collections import deque
 from types import SimpleNamespace
 import threading
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from vibe_job_radar.guided.contracts import CrawlError, PageSnapshot
 from vibe_job_radar.guided.native_browser import NativeBackend
@@ -159,6 +159,17 @@ class ObservationRetentionTests(unittest.TestCase):
             b.next_page()
         b._visible.assert_not_called()
         self.assertEqual(len(current_cards(b)), 1)
+
+    def test_snapshot_requires_current_native_response_even_when_old_dom_has_links(self):
+        b = backend_with_data()
+        old_dom = PageSnapshot(SEARCH, '<a href="https://www.liepin.com/job/999.shtml">旧结果</a>')
+        with patch('vibe_job_radar.guided.browser.PlaywrightBackend.snapshot', return_value=old_dom):
+            self.assertTrue(b.snapshot().business_required)
+            self.assertEqual(len(ADAPTER.cards(b.snapshot())), 1)
+            b._observations.clear()
+            with self.assertRaisesRegex(CrawlError, 'page_not_ready'):
+                ADAPTER.cards(b.snapshot())
+
 
 
 if __name__ == '__main__':

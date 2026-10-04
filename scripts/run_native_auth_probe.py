@@ -15,6 +15,7 @@ from unittest.mock import patch
 
 import run_native_browser_acceptance as acceptance
 from vibe_job_radar.guided.native_tunnel import NativeTunnel
+from native_failure_evidence import loading_failure, fatal_failure
 
 COMMANDS = frozenset({
     'Network.enable', 'Network.setUserAgentOverride', 'Network.setCacheDisabled',
@@ -68,6 +69,7 @@ class ObservedBackend(acceptance.NativeBackend):
         return super()._attached(event)
 
     def _fatal(self, code, error=None):
+        fatal_failure(self, code)
         calls = self.probe.setdefault('fatal_sites', [])
         if len(calls) < 8:
             calls.append({'code': code, 'caller': sys._getframe(1).f_code.co_name})
@@ -86,6 +88,7 @@ class ObservedBackend(acceptance.NativeBackend):
         try:
             message = json.loads(event['message'])
             method = message.get('method')
+            loading_failure(self, event, message)
             if method in EVENTS:
                 self.probe['events'][method] += 1
             if 'error' in message:
