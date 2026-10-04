@@ -9,6 +9,7 @@ import threading
 ROOT=Path(__file__).resolve().parents[1]
 sys.path[:0]=[str(ROOT/'src'),str(ROOT/'tests')]
 from test_windows_startup import fixture
+from vibe_job_radar.windows_startup import command_line
 from vibe_job_radar.workbench import LocalServer
 
 
@@ -33,16 +34,31 @@ def main():
                         if route.request.url.startswith(server.origin+'/'):route.continue_()
                         else:result['external_requests'].append('unexpected_nonlocal');route.abort()
                     context.route('**/*',local_only)
+                    def check_global_refresh(page, label):
+                        before = {name:page.locator('#startup-' + name).is_disabled()
+                                  for name in ('enable','disable')}
+                        writes = len(registry.writes)
+                        page.locator('#refresh').click()
+                        expect(page.locator('#notice')).to_have_text('本地数据已刷新。')
+                        expect(page.locator('#refresh')).to_be_enabled()
+                        for name, disabled in before.items():
+                            control = expect(page.locator('#startup-' + name))
+                            if disabled:control.to_be_disabled()
+                            else:control.to_be_enabled()
+                        assert len(registry.writes) == writes
+                        result.setdefault('global_operation_state_checks', []).append(label)
                     def open_page():
                         page=context.new_page();page.on('pageerror',lambda exc:result['page_errors'].append(type(exc).__name__))
                         page.goto(server.entry_url);page.locator('#windows-startup summary').click()
                         expect(page.locator('#startup-enable')).to_be_enabled()
                         return page
                     first=open_page();second=open_page()
+                    expect(first.locator('#startup-mode')).to_have_value('workbench')
                     expect(first.locator('#startup-consent')).not_to_be_checked()
                     first.locator('#startup-enable').click()
                     expect(first.locator('#startup-message')).to_contain_text('勾选登录启动')
                     assert registry.writes==[] and not manager.root.exists()
+                    check_global_refresh(first, 'default_off')
                     result['checks'].append('two real pages read default-off state; no consent means no registration or metadata')
 
                     first.locator('#startup-consent').check();first.locator('#startup-enable').click()
@@ -55,6 +71,7 @@ def main():
                     first.reload();first.locator('#windows-startup summary').click()
                     expect(first.locator('#startup-disable')).to_be_enabled()
                     expect(first.locator('#startup-consent')).not_to_be_checked()
+                    check_global_refresh(first, 'registered')
                     first.set_viewport_size({'width':390,'height':844})
                     assert first.evaluate('document.documentElement.scrollWidth<=innerWidth')
                     first.locator('#windows-startup').screenshot(path=str(out/'windows-startup-mobile.png'))
@@ -72,6 +89,7 @@ def main():
                     owned=registry.values[manager.name];registry.values[manager.name]=(1,'PRIVATE FOREIGN COMMAND')
                     first.locator('#startup-refresh').click();expect(first.locator('#startup-status')).to_contain_text('不符')
                     expect(first.locator('#startup-disable')).to_be_disabled();expect(first.locator('#startup-enable')).to_be_disabled()
+                    check_global_refresh(first, 'external_conflict')
                     assert 'PRIVATE FOREIGN' not in first.locator('body').inner_text()
                     registry.values[manager.name]=owned
                     first.locator('#startup-refresh').click();expect(first.locator('#startup-disable')).to_be_enabled()
@@ -80,9 +98,33 @@ def main():
                     assert server.public_tasks.snapshot()['status']=='idle'
                     result['checks'].append('write failure stays off, external changes disable actions without exposing command, explicit removal preserves schedule and idle query')
 
+                    first.locator('#startup-consent').check()
+                    first.locator('#startup-mode').select_option('public_worker')
+                    expect(first.locator('#startup-consent')).not_to_be_checked()
+                    writes=len(registry.writes)
+                    first.locator('#startup-enable').click()
+                    expect(first.locator('#startup-message')).to_contain_text('勾选登录启动')
+                    assert len(registry.writes)==writes
+                    first.locator('#startup-consent').check();first.locator('#startup-enable').click()
+                    expect(first.locator('#startup-status')).to_contain_text('只运行已确认公开计划')
+                    assert registry.values[manager.name]==(1,command_line(exe,workspace.root,'public_worker'))
+                    expect(first.locator('#startup-mode')).to_be_disabled()
+                    first.reload();first.locator('#windows-startup summary').click()
+                    expect(first.locator('#startup-mode')).to_have_value('public_worker')
+                    expect(first.locator('#startup-status')).to_contain_text('只运行已确认公开计划')
+                    assert first.evaluate('document.documentElement.scrollWidth<=innerWidth')
+                    first.locator('#windows-startup').screenshot(path=str(out/'windows-worker-startup-mobile.png'))
+                    first.locator('#startup-disable').click();expect(first.locator('#startup-status')).to_contain_text('尚未登记')
+                    expect(first.locator('#startup-mode')).to_have_value('workbench')
+                    assert not registry.values and server.public_tasks.snapshot()['status']=='idle'
+                    assert server.public_schedule.state()['status']=='disabled'
+                    result['checks'].append('changing launch mode revokes consent; fixed worker command persists across reload, cannot switch while registered and explicitly removes without enabling a plan; 390px fits')
+
                     manager.supported=False;first.reload();first.locator('#windows-startup summary').click()
                     expect(first.locator('#startup-status')).to_contain_text('仅支持 Windows 便携包')
                     expect(first.locator('#startup-enable')).to_be_disabled();expect(first.locator('#startup-disable')).to_be_disabled()
+                    check_global_refresh(first, 'unsupported')
+                    first.locator('#windows-startup').screenshot(path=str(out/'windows-startup-after-global-refresh.png'))
                     result['checks'].append('source/unsupported runtime explains manual startup and offers no registry mutation')
                     assert not result['page_errors'] and not result['external_requests']
                     result.update(success=True,fixture_writes=len(registry.writes),real_startup_writes=0)

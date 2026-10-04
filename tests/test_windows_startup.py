@@ -9,7 +9,7 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from vibe_job_radar.windows_startup import CONSENT, WindowsStartup, StartupChanged, command_line
+from vibe_job_radar.windows_startup import CONSENT, MODE_CONSENT, WindowsStartup, StartupChanged, command_line
 from vibe_job_radar.workspace import InputError, Workspace
 from vibe_job_radar.workbench import LocalServer
 
@@ -180,6 +180,63 @@ class StartupTests(unittest.TestCase):
         if os.name == 'nt':
             self._assert_windows_arguments()
 
+    def test_worker_mode_has_versioned_receipt_and_same_owned_value_across_restart(self):
+        state = enable(self.manager, mode='public_worker', consent_version=MODE_CONSENT)
+        self.assertEqual((state['status'], state['mode']), ('registered', 'public_worker'))
+        receipt = json.loads(self.manager.receipt_path.read_text(encoding='utf-8'))
+        self.assertEqual(receipt['schema_version'], 2)
+        self.assertEqual(receipt['command'], command_line(self.executable, self.workspace.root, 'public_worker'))
+        other = WindowsStartup(self.workspace, executable=self.executable, registry=self.registry, portable=True, platform='win32')
+        self.assertEqual(other.state(), state)
+        before = self.manager.receipt_path.read_bytes()
+        with self.assertRaises(InputError):enable(other)
+        self.assertEqual(self.manager.receipt_path.read_bytes(), before)
+        disabled = other.disable({'revision':state['revision']})
+        self.assertEqual((disabled['status'], disabled['mode']), ('disabled', 'workbench'))
+        self.assertFalse((self.workspace.root/'public_schedule').exists())
+        # Fresh legacy consent after disabling remains the old v1 workbench.
+        self.assertEqual(enable(other)['mode'], 'workbench')
+        receipt = json.loads(self.manager.receipt_path.read_text(encoding='utf-8'))
+        self.assertEqual(receipt['schema_version'], 1);self.assertNotIn('mode', receipt)
+
+    def test_worker_requires_new_consent_and_exact_fixed_mode(self):
+        for change in ({'mode':'public_worker'}, {'consent_version':MODE_CONSENT},
+                       {'mode':'workbench'}, {'mode':None}, {'mode':[]},
+                       {'mode':'public_worker --other'}, {'mode':'worker'},
+                       {'mode':'public_worker', 'command':'arbitrary'}):
+            with self.subTest(fields=tuple(change)),self.assertRaises(InputError):
+                enable(self.manager, **change)
+        for mode in (None, [], '--public-worker', 'unknown'):
+            with self.assertRaises(InputError):command_line(self.executable, self.workspace.root, mode)
+        self.assertFalse(self.manager.root.exists());self.assertEqual(self.registry.writes, [])
+        state = enable(self.manager, mode='workbench', consent_version=MODE_CONSENT)
+        self.assertEqual(state['mode'], 'workbench')
+        self.assertNotIn('--public-worker', self.registry.values[self.manager.name][1])
+
+    def test_worker_receipt_mode_or_version_tampering_cannot_remove_registration(self):
+        state = enable(self.manager, mode='public_worker', consent_version=MODE_CONSENT)
+        original = json.loads(self.manager.receipt_path.read_text(encoding='utf-8'))
+        for changes in ({'schema_version':1}, {'mode':'workbench'}, {'mode':None},
+                        {'command':command_line(self.executable,self.workspace.root)},
+                        {'schema_version':3}):
+            self.manager.receipt_path.write_text(json.dumps({**original,**changes}), encoding='utf-8')
+            self.assertEqual(self.manager.state()['status'], 'unavailable')
+            with self.assertRaises(InputError):self.manager.disable({'revision':state['revision']})
+        self.assertEqual(len(self.registry.writes), 1)
+
+    def test_moved_worker_and_failed_registration_remain_recoverable(self):
+        self.registry.fail_create = True
+        with self.assertRaises(InputError):enable(self.manager, mode='public_worker', consent_version=MODE_CONSENT)
+        self.assertEqual(self.manager.state()['status'], 'disabled')
+        self.registry.fail_create = False
+        enable(self.manager, mode='public_worker', consent_version=MODE_CONSENT)
+        new_exe = self.executable.parent.parent/'new'/self.executable.name
+        new_exe.parent.mkdir();new_exe.write_bytes(b'new fixture only')
+        other = WindowsStartup(self.workspace, executable=new_exe, registry=self.registry, portable=True, platform='win32')
+        state = other.state();self.assertEqual((state['status'], state['mode']), ('moved', 'public_worker'))
+        other.disable({'revision':state['revision']})
+        self.assertEqual(enable(other, mode='public_worker', consent_version=MODE_CONSENT)['status'], 'registered')
+
     def _assert_windows_arguments(self):
         from ctypes import wintypes
         shell = ctypes.WinDLL('shell32'); kernel = ctypes.WinDLL('kernel32')
@@ -188,9 +245,11 @@ class StartupTests(unittest.TestCase):
         kernel.LocalFree.argtypes = [wintypes.HLOCAL]; kernel.LocalFree.restype = wintypes.HLOCAL
         for workspace in ('D:\\', r'D:\工作区 & spaces'):
             exe = r'C:\雷达 & app\VibeJobRadar.exe'; count = ctypes.c_int()
-            argv = shell.CommandLineToArgvW(command_line(exe, workspace), ctypes.byref(count))
-            try: self.assertEqual([argv[i] for i in range(count.value)], [exe, '--workspace', workspace])
-            finally: kernel.LocalFree(argv)
+            for mode in ('workbench','public_worker'):
+                argv = shell.CommandLineToArgvW(command_line(exe, workspace, mode), ctypes.byref(count))
+                expected = [exe] + (['--public-worker'] if mode=='public_worker' else []) + ['--workspace',workspace]
+                try: self.assertEqual([argv[i] for i in range(count.value)], expected)
+                finally: kernel.LocalFree(argv)
 
 
 class StartupHTTPTests(unittest.TestCase):
@@ -217,6 +276,13 @@ class StartupHTTPTests(unittest.TestCase):
                 status, changed = call('POST','enable',body); self.assertEqual(status, 200)
                 self.assertEqual(call('POST','disable',{'revision':state['revision']})[0], 409)
                 self.assertEqual(call('POST','disable',{'revision':changed['revision']})[0], 200)
+                _, state = call('GET','state')
+                worker = dict(revision=state['revision'],consent=True,consent_version=MODE_CONSENT,mode='public_worker')
+                self.assertEqual(call('POST','enable',worker,False)[0], 403)
+                self.assertEqual(call('POST','enable',{**worker,'consent_version':CONSENT})[0], 400)
+                status, changed = call('POST','enable',worker)
+                self.assertEqual(status, 200);self.assertEqual(changed['mode'],'public_worker')
+                self.assertEqual(call('POST','disable',{'revision':changed['revision']})[0], 200)
                 self.assertEqual(server.public_schedule.state()['status'], 'disabled')
-                self.assertEqual(len(registry.writes), 2)
+                self.assertEqual(len(registry.writes), 4)
             finally: server.shutdown(); server.server_close(); thread.join(5)

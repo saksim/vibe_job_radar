@@ -146,6 +146,38 @@ class GuidedOwnershipTests(unittest.TestCase):
             # stands for process exit; the separate subprocess test checks OS release.
             backend.close();self.first._ownership.release()
 
+    def test_waiting_observer_enters_before_next_checkpoint_replacement(self):
+        # Synchronize on the existing fair admission queue, then verify the
+        # real service reader/writer order rather than relying on sleeps.
+        from vibe_job_radar.record_lock import _gate
+        from vibe_job_radar.guided import service as module
+        ident=self.start();self.release.set();self.idle(self.first)
+        state=self.first._load(ident);gate=_gate(self.first.root);order=[];errors=[]
+        original_read,original_write=module.decode_checkpoint,module.atomic_json
+        def observed_read(*args,**kwargs):
+            if threading.current_thread() is reader:order.append('observer')
+            return original_read(*args,**kwargs)
+        def observed_write(*args,**kwargs):
+            order.append('writer');return original_write(*args,**kwargs)
+        def poll():
+            try:self.other.state()
+            except BaseException as exc:errors.append(exc)
+        reader=threading.Thread(target=poll)
+        with patch.object(module,'decode_checkpoint',side_effect=observed_read), \
+                patch.object(module,'atomic_json',side_effect=observed_write):
+            try:
+                with self.first._records():
+                    reader.start()
+                    with gate.condition:
+                        self.assertTrue(gate.condition.wait_for(lambda:len(gate.tickets)==2,timeout=2),
+                            'observer was not admitted to the shared checkpoint queue')
+                self.first._save(state,wait_seconds=73)
+            finally:
+                reader.join(5)
+        self.assertFalse(reader.is_alive());self.assertEqual(errors,[])
+        self.assertEqual(order,['observer','writer'])
+        self.assertEqual(self.other._load(ident)['wait_seconds'],73)
+
     def test_two_instances_serialize_checkpoint_polling_and_replacement(self):
         ident=self.start();self.release.set();self.idle(self.first);errors=[]
         state=self.first._load(ident)

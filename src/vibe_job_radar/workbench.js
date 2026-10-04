@@ -23,7 +23,9 @@ async function request(path, data) {
   return result;
 }
 async function operation(action) {
-  const buttons = [...document.querySelectorAll("button")];
+  // Login startup controls maintain their own state and pending requests.
+  const buttons = [...document.querySelectorAll("button")]
+    .filter((button) => !button.closest("#windows-startup"));
   buttons.forEach((button) => { button.disabled = true; });
   notice("正在处理本次操作；请勿重复提交。搜索发现可能需要等待外部服务响应。");
   try { await action(); }
