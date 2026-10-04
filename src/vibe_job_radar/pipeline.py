@@ -84,7 +84,8 @@ def analyze(db: str | Path | Store, output: str | Path, *, config: dict | None =
             if role_filter:
                 roles = [r for r in roles if r in role_filter]
             chosen.append((job, roles))
-        audit.append({"record_id": job.record_id, "title": job.title, "platform": job.platform, "url": job.url,
+        audit.append({"record_id": job.record_id, "job_group_id": "g_" + job.fingerprint[:24] if status == "selected" else "",
+                      "title": job.title, "platform": job.platform, "url": job.url,
                       "roles": roles, "status": status, "evidence_level": job.evidence_level, "is_synthetic": job.is_synthetic,
                       "collected_at": job.collected_at, "published_at": job.published_at,
                       "collection_age_days": round(age, 3), "note": "capture recency is NOT confirmation that hiring is still active"})
@@ -189,7 +190,7 @@ def analyze(db: str | Path | Store, output: str | Path, *, config: dict | None =
             write(write_csv, staging / "hard_constraints.csv", constraints, HARD_FIELDS)
             write(write_csv, staging / "review_queue.csv", [r.to_dict() for r in pending], REQ_FIELDS)
             write(write_csv, staging / "negative_constraints.csv", [r.to_dict() for r in requirements if not r.positive], REQ_FIELDS)
-            write(write_csv, staging / "input_audit.csv", audit, ["record_id", "title", "platform", "url", "roles", "status", "evidence_level", "is_synthetic", "collected_at", "published_at", "collection_age_days", "note"])
+            write(write_csv, staging / "input_audit.csv", audit, ["record_id", "title", "platform", "url", "roles", "status", "evidence_level", "is_synthetic", "collected_at", "published_at", "collection_age_days", "note", "job_group_id"])
             write(write_csv, staging / "duplicate_groups.csv", duplicates, ["job_group_id", "representative_record_id", "source_record_ids", "source_urls", "method"])
             write(write_csv, staging / "analysis_errors.csv", errors, ["record_id", "stage", "error_type", "error"])
             write(write_csv, staging / "audit_events.csv", events, ["event_id", "created_at", "action", "status", "details"])
