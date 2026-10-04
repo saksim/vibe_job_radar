@@ -58,7 +58,7 @@ def main():
                         context.route('**/*',local_only)
                         page=context.new_page();page.on('pageerror',lambda error:result['page_errors'].append(type(error).__name__))
                         page.goto(server.entry_url)
-                        expect(page.locator('#public-source option')).to_have_count(2)
+                        expect(page.locator('#public-source option')).to_have_count(3)
                         expect(page.locator('#public-source')).to_have_value(ANTHROPIC.source.key)
                         assert not calls
                         form=page.locator('#public-search');form.locator('[name=query]').fill('Architect')
@@ -70,7 +70,7 @@ def main():
                         first=server.public_tasks.snapshot()
                         assert first['returned_jobs']==20 and calls==[CLOUDFLARE.api_url]
                         assert workspace.report(first['report_id'])
-                        result['checks'].append('two explicit sources, unchanged default and zero startup requests; selected Cloudflare catalog produces original first-page report')
+                        result['checks'].append('three explicit sources, unchanged default and zero startup requests; selected Cloudflare catalog produces original first-page report')
 
                         # Editing the form does not turn the previous next-page
                         # cursor into the new company's source or another GET.
