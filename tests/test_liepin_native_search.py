@@ -209,6 +209,43 @@ class NativeSearchContractTests(unittest.TestCase):
         for auth in (False, True):
             with self.assertRaises(CrawlError): self.contract.match('https://passport.liepin.com/login','POST','Document',authentication=auth)
 
+    def test_region_catalogue_is_exact_origin_bound_get_with_its_own_preflight_method(self):
+        url = 'https://api-dok.liepin.com/api/com.liepin.bd.p.v4.get-all-dq'
+        rule = self.contract.match(url, 'GET', 'XHR')
+        self.assertEqual(rule.key, 'liepin_regions')
+        rule.validate_headers('GET', {'Origin':'https://www.liepin.com'})
+        preflight = self.contract.match(url, 'OPTIONS', 'XHR')
+        headers = {'Origin':'https://www.liepin.com', 'Access-Control-Request-Method':'GET',
+                   'Access-Control-Request-Headers':'x-client-type,x-requested-with,x-fscp-std-info'}
+        preflight.validate_headers('OPTIONS', headers)
+        for change in ({'Access-Control-Request-Method':'POST'}, {'Origin':'https://other.test'},
+                       {'Access-Control-Request-Headers':'authorization'}):
+            with self.subTest(change=change), self.assertRaises(CrawlError):
+                preflight.validate_headers('OPTIONS', {**headers, **change})
+        for method, path, kind in [('POST', url, 'XHR'), ('GET', url, 'Document'),
+                                  ('GET', url+'/extra', 'XHR'),
+                                  ('GET', url.replace('v4.get-all-dq','suggest-dq'), 'XHR'),
+                                  ('POST', url.replace('p.v4.get-all-dq','v3.batch-lookup-dq'), 'XHR')]:
+            with self.subTest(method=method, path=path, kind=kind), self.assertRaises(CrawlError):
+                self.contract.match(path, method, kind)
+        with self.assertRaises(CrawlError):
+            self.contract.match(API,'OPTIONS','XHR').validate_headers('OPTIONS', headers)
+
+    def test_search_suggestions_only_allow_the_published_read_and_get_preflight(self):
+        url = 'https://api-c.liepin.com/api/com.liepin.searchfront4c.pc-search-suggest-list'
+        self.assertEqual(self.contract.match(url,'GET','XHR').key, 'liepin_search_suggest')
+        headers = {'Origin':'https://www.liepin.com', 'Access-Control-Request-Method':'GET',
+                   'Access-Control-Request-Headers':'x-client-type'}
+        rule = self.contract.match(url,'OPTIONS','XHR')
+        rule.validate_headers('OPTIONS',headers)
+        with self.assertRaises(CrawlError):
+            rule.validate_headers('OPTIONS',{**headers,'Access-Control-Request-Method':'POST'})
+        for target, method, kind in ((url,'POST','XHR'),(url,'GET','Document'),(url+'/extra','GET','XHR'),
+                                     (url.replace('pc-search-suggest-list','pc-hot-search-word-list'),'GET','XHR')):
+            with self.subTest(target=target,method=method),self.assertRaises(CrawlError):
+                self.contract.match(target,method,kind)
+
+
 
 class ObservedBackend:
     data = None
