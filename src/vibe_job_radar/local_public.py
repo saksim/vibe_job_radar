@@ -21,6 +21,7 @@ from .collection import writer_lock
 from .guided.rate import Limits, RateLedger, RateLimit
 from .html_parser import plain_text
 from .public_cache_guard import CacheFailureGuard
+from .public_lifecycle import PublicTaskCancelled
 from .network import FetchError, SafeHTTP, JSONRepresentation, valid_etag
 from .public_revalidation import CatalogValidation
 from .public_contract import ContractError, PublicQuery, validate_batch
@@ -239,7 +240,11 @@ class LocalPublicDataClient:
             return self._select(query, value, now, cached=True,
                                 error=self._guard(board).read(now)) if value else None
 
-    def search(self, query, *, consent=False, network_policy=None):
+    def search(self, query, *, consent=False, network_policy=None, stop_requested=None):
+        def check_stopped():
+            if stop_requested is not None and stop_requested():
+                raise PublicTaskCancelled()
+        check_stopped()
         board = self._scope(query)
         if consent is not True:
             raise InputError('请确认本机获取所选公开来源；不提交申请或上传个人资料。')
@@ -260,6 +265,7 @@ class LocalPublicDataClient:
             checked_at=validation['checked_at'] if validation else cached['observed_at'] if cached else 0
             if cached and now-checked_at < 600 and not hard_failure:
                 return self._select(query, cached, now, cached=True)
+            check_stopped()
             try:
                 self.ledger.reserve(SCOPE, 'request')
             except RateLimit as exc:
@@ -285,6 +291,9 @@ class LocalPublicDataClient:
                 # contract. Require a declared method, not Mock.__getattr__ or
                 # an accidental attribute, to opt into response metadata.
                 conditional=getattr(type(self.client),'conditional_json',None)
+                # Local setup/SQLite can outlive a stop after dispatch. Check
+                # at transport admission too; an already admitted read may finish.
+                check_stopped()
                 response=(self.client.conditional_json(board.api_url,etag=etag) if callable(conditional)
                           else JSONRepresentation(200,self.client.json(board.api_url),None))
                 if not isinstance(response,JSONRepresentation):raise FetchError('invalid_api_shape')
