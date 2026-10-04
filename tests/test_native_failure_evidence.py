@@ -62,6 +62,17 @@ class NativeFailureEvidenceTests(unittest.TestCase):
         self.b._send.assert_not_called()
         self.assertNotIn(SECRET, json.dumps(self.b.probe))
 
+    def test_listener_backlog_fact_is_numeric_and_keeps_failure_unchanged(self):
+        self.b.tunnel.server = SimpleNamespace(request_queue_size=16)
+        self.admit()
+        self.b._received(self.event('net::ERR_PROXY_CONNECTION_FAILED', type='Preflight'))
+        first = self.b.probe['first_fatal']
+        self.assertEqual(first['connection_facts']['guard_listener_backlog'], 16)
+        self.assertEqual(self.b.error, 'local_proxy_connection_failed')
+        self.b.tunnel.server.request_queue_size = SECRET
+        self.assertIsNone(evidence.facts(self.b)['guard_listener_backlog'])
+        self.assertNotIn(SECRET, json.dumps(self.b.probe))
+
     def test_initial_robots_proxy_failure_keeps_zero_connection_facts(self):
         self.admit()
         self.b._requests['session', 'net-1'].update(role='robots', operation='robots')

@@ -77,6 +77,7 @@ def facts(backend):
         'guard_thread_alive': bool(worker and worker.is_alive()),
         'guard_closed': bool(getattr(guard, '_closed', False)),
         'guard_connections': number(getattr(guard, 'connections', None)),
+        'guard_listener_backlog': number(getattr(getattr(guard, 'server', None), 'request_queue_size', None)),
         'guard_active_sockets': len(sockets) if isinstance(sockets, set) else None,
         'guard_error_code': fixed(getattr(guard, 'last_error', ''), STOP_CODES | {''}),
         'backend_error_code': fixed(getattr(backend, 'error', None), STOP_CODES | {''}),
