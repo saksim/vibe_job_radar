@@ -25,6 +25,13 @@ def conditions(adapter, url, keyword):
         except ValueError:
             raise CrawlError('search_scope_changed') from None
     query.pop('init', None)  # The recorded entry marker has no filter semantics.
+    if adapter.key == 'liepin':
+        from .liepin_search import SEARCH_INTERACTION_FIELDS
+        for name in SEARCH_INTERACTION_FIELDS:
+            query.pop(name, None)
+        # Request/response pairing still binds the complete URL and each
+        # pass-through value. Pagination freezes filters and suggestions while
+        # the publisher updates its interaction IDs and event scene.
     return dict(sorted(query.items())), cursor
 
 

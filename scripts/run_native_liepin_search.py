@@ -18,7 +18,7 @@ import tempfile
 import threading
 import time
 from unittest.mock import patch
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 from run_native_browser_acceptance import (ROOT, HOST, URL, NativeBackend, RateLedger,
     Limits, GuidedService, Registry, Store, NetworkPolicy, use_policy, Workspace,
@@ -47,6 +47,7 @@ class SearchFixture:
         self.deny_cors = False
         self.login_late_pacing = False
         self.dependency_mode = False
+        self.binding_mode = ''
         self.denied_dependency = None
         owner = self
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -96,11 +97,14 @@ class SearchFixture:
                     early = ('<script>window.initialPopupBlocked = '
                              '(window.open("/apply") === null);</script>'
                              if parse_qs(urlsplit(self.path).query).get('key') == ['窗口隔离'] else '')
-                    self.send('<!doctype html><meta charset="utf-8">' + early + '<h1>合成搜索页</h1>'
+                    stale = ('<a href="/job/999.shtml">过期推荐职位</a>' if owner.binding_mode else '')
+                    self.send('<!doctype html><meta charset="utf-8">' + early + stale + '<h1>合成搜索页</h1>'
                               '<iframe id="common-footer" src="https://' + CDN_HOST + '/footer"></iframe>'
                               '<div id="loaded"></div><script src="https://' + CDN_HOST + ASSET + '"></script>')
                 elif path in (REGION_PATH, SUGGEST_PATH):
                     self.send(json.dumps({'flag':1,'data':[]}), 'application/json')
+                elif path == ASSET and owner.binding_mode:
+                    self.send(binding_script(owner.binding_mode), 'application/javascript')
                 elif path == ASSET and owner.dependency_mode:
                     self.send(dependency_script(), 'application/javascript')
                 elif path == ASSET:
@@ -251,6 +255,69 @@ def verify_dependency_chain(root, server, local, factory, wait, query, result):
     finally:
         server.dependency_mode=False;server.denied_dependency=None
 
+
+def binding_script(mode):
+    config=json.dumps({'mode':mode,'endpoint':'https://'+API_HOST+PATH})
+    return 'const fixture='+config+';'+r'''
+const q=Object.fromEntries(new URL(location.href).searchParams.entries());
+const fields=['key','city','otherCity','dq','workYearCode','compId','compName','compTag',
+ 'industry','salary','jobKind','compScale','compKind','compStage','eduLevel','suggestTag'];
+const form=Object.fromEntries(fields.filter(k=>k in q).map(k=>[k,q[k]]));
+form.currentPage=Number(q.currentPage);form.pageSize=Number(q.pageSize);
+form.hrActiveTimeCode=q.pubTime;
+const bounds=q.salaryCode.split('$');form.salaryCode='';
+form.salaryLow=bounds[0];form.salaryHigh=bounds[1];
+const through={scene:q.scene,skId:q.skId,fkId:q.fkId,ckId:'b'.repeat(32),suggest:null,sfrom:q.sfrom};
+if(fixture.mode==='mismatch')form.otherCity='different-city';
+if(fixture.mode!=='missing')fetch(fixture.endpoint,{method:'POST',
+ headers:{'Content-Type':'application/json','X-Client-Type':'web'},
+ body:JSON.stringify({data:{mainSearchPcConditionForm:form,passThroughForm:through}})
+}).then(r=>r.json()).then(()=>{document.querySelector('#loaded').textContent='response received';})
+ .catch(()=>{document.querySelector('#loaded').textContent='original request rejected';});
+'''
+
+
+def verify_published_binding(root, server, local, factory, wait, query, result):
+    result['published_binding_results']=[]
+    try:
+        for label in ('matched','empty','mismatch','missing'):
+            server.binding_mode=label;before=len(server.requests)
+            key='明确无结果' if label=='empty' else query['keyword']
+            params=dict(key=key,city='410',otherCity='fixture-other-city',dq='410',pubTime='7',
+                currentPage=0,pageSize=40,workYearCode='',compId='',compName='',compTag='',industry='',
+                salaryCode='20$40',jobKind='',compScale='',compKind='',compStage='',eduLevel='',suggestTag='',
+                scene='fixture-search',skId='',fkId='',ckId='a'*32,suggest='null',suggestId='',sfrom='fixture-field')
+            workspace=Workspace(root/('binding-'+label))
+            ledger=RateLedger(root/('binding-'+label+'.sqlite'),Limits(page_interval=0,request_interval=0))
+            service=GuidedService(workspace,registry=Registry([local]),ledger=ledger,native_backend_factory=factory)
+            try:
+                service.create({**query,'keyword':key,'max_pages':1,'list_url':local.search_base+'?'+urlencode(params)})
+                task=wait(service)
+                posts=sum(r['method']=='POST' and r['path']==PATH for r in server.requests[before:])
+                assert not any(r['path']=='/job/999.shtml' for r in server.requests[before:])
+                assert ledger.summary('liepin')['login']['day']==0
+                if label=='matched':
+                    assert task['status']=='ready' and len(task['cards'])==1 and task['cards'][0]['url']==URL+'/job/123.shtml',task.get('code')
+                    assert posts==1
+                    service.action({'id':task['id'],'action':'collect','selected':[task['cards'][0]['id']]})
+                    task=wait(service);assert task['status']=='completed' and task['outcome']['saved']==1
+                    with Store(workspace.db) as store:
+                        records=store.records();assert len(records)==1 and records[0].text==RECORDED_BODY
+                    assert workspace.report(task['report_id'])['manifest']['stats']['full_text_job_groups']==1
+                    row={'case':label,'search_posts':posts,'full_body_preserved':True,'report_full_text_job_groups':1,'stale_dom_used':False}
+                    result['checks'].append('native publisher date/salary/filter/interaction mapping binds its own response over stale DOM and preserves full JD/original report')
+                else:
+                    expected={'empty':'no_matching_jobs','mismatch':'liepin_search_query_mismatch','missing':'page_not_ready'}[label]
+                    assert task['code']==expected and not task['cards'] and not task['report_id'],task.get('code')
+                    assert posts==(1 if label=='empty' else 0)
+                    assert (task['status']=='ready')==(label=='empty')
+                    row={'case':label,'search_posts':posts,'code':expected,'stale_dom_used':False,'report_created':False}
+                    result['checks'].append(label+': current empty/mismatched/missing response cannot fall back to stale DOM, unrelated request, login or report')
+                row['login_attempts']=0;result['published_binding_results'].append(row)
+            finally:
+                service.close()
+    finally:
+        server.binding_mode=''
 
 def main():
     parser = argparse.ArgumentParser()
@@ -499,6 +566,7 @@ def main():
                     finally: b.close()
                     result['checks'].append('a published main document leaving for blank stops with an explicit cause, discards old results and never retries')
                     verify_dependency_chain(root,server,local,factory,wait,query,result)
+                    verify_published_binding(root,server,local,factory,wait,query,result)
                     result['success']=True
     finally:
         for service in services: service.close()

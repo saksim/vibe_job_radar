@@ -756,7 +756,8 @@ class NativeBackend(PlaywrightBackend):
 
     def snapshot(self):
         self._check_error()
-        return replace(super().snapshot(), business=self.observations())
+        return replace(super().snapshot(), business=self.observations(),
+                       business_required=self.adapter.key == 'liepin')
 
     def observations(self):
         """Private local payloads for a reviewed site adapter, never diagnostic API."""
