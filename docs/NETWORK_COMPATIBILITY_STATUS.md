@@ -18,6 +18,8 @@ PR66 接通高级采集/CLI的DoH偏好，PR82已合入三个工作台共享的�
 
 PR76 已合入 #75 的显式本机HTTP Basic/SOCKS5认证，凭据只在指定代理握手中发送。缺失入口/凭据在目标DNS前失败，原生并发连接不会重复已被拒绝或结果不明的认证。仍有ASCII、环境变量输入和认证代理下跨进程Cookie恢复限制，详见 [本机代理认证](LOCAL_PROXY_AUTH.md)。该实现已按准确主干验收，不等于N5全范围完成。
 
+#109增加默认关闭的[Windows明确导入域名PAC](WINDOWS_DOMAIN_PAC.md)，限定匿名本机HTTP、明确SOCKS5或DIRECT，完整验证原始顺序，仅使用第一项且失败不继续直连；接通共享策略及三页面许可和撤销。系统PAC自动消费、其他系统、路径规则与真实企业/VPN现场仍另验。
+
 ## 仍待实现或现场验收
 
 其他 Fake-IP 网段、PAC、其他代理认证/代理DNS、VM实际环境、企业分流/浏览器扩展网络和实际 VPN/TUN 产品矩阵仍未全部覆盖。SOCKS5 CONNECT 不是 socks5h、SOCKS4 或 UDP。

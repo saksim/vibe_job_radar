@@ -2,7 +2,7 @@
 
 Static loopback HTTP and SOCKS5 share one immutable policy. Optional credentials
 require explicit application endpoints. Workspace-consented Fake-IP DoH repair
-is opt-in; PAC remains separate.
+is opt-in; explicitly imported Windows PAC selects bounded domain routes.
 No settings are written to the OS, no endpoints scanned, no TLS checks removed.
 """
 from __future__ import annotations
@@ -78,6 +78,9 @@ class NetworkPolicy:
     error: str | None = None
     encrypted_dns: bool = False
     resolver: object | None = field(default=None, repr=False, compare=False)
+    pac: object | None = field(default=None, repr=False, compare=False)
+    pac_id: str = ''
+    pac_route_host: str = field(default='', repr=False)
 
     @classmethod
     def capture(cls, *, discover=None) -> NetworkPolicy:
@@ -127,7 +130,13 @@ class NetworkPolicy:
             return None
         if self.error:
             raise LocalProxyError(self.error)
+        if self.pac is not None:
+            return self.pac.for_host(self.pac_route_host or host)
         return self.proxy
+
+    def ensure_active(self):
+        if self.pac is not None:
+            self.pac.ensure_active()
 
     @staticmethod
     def transport_name(proxy: LoopbackProxy | None) -> str:
@@ -145,13 +154,17 @@ class NetworkPolicy:
                  self.proxy.port if self.proxy else None, self.bypass, self.error, self.encrypted_dns]
         if self.proxy and self.proxy.credentials is not None:
             value.append(self.proxy.credentials.binding)
+        if self.pac is not None:
+            value.extend((self.pac.sha256, self.pac_id, self.pac_route_host))
         return hashlib.sha256(json.dumps(value, separators=(',', ':')).encode()).hexdigest()[:16]
 
     def describe(self, host: str | None = None) -> dict:
         result = {'mode': 'auto', 'source': self.source, 'policy_id': self.fingerprint,
                   'resolution': 'system_then_opt_in_doh' if self.encrypted_dns else 'local_validated_public_ip', 'direct_fallback': False,
                   'automatic_static_http': True, 'automatic_static_socks5': True,
-                  'pac_supported': False, 'socks_supported': True, 'fake_ip_supported': self.encrypted_dns,
+                  'pac_supported': self.pac is not None and self.error is None,
+                  'pac_scope': 'explicit_windows_trusted_domain_script',
+                  'socks_supported': True, 'fake_ip_supported': self.encrypted_dns,
                   'fake_ip_scope': 'opt_in_198.18.0.0/15_only',
                   'encrypted_dns_provider': 'Cloudflare' if self.encrypted_dns else None,
                   'proxy_credentials_supported': True,
@@ -160,6 +173,11 @@ class NetworkPolicy:
                   'vm_host_proxy_scope': 'explicit_workspace_anonymous_rfc1918_ipv4',
                   'proxy_authentication_configured': bool(self.proxy and self.proxy.credentials is not None),
                   'network_tested': False}
+        if self.pac is not None:
+            # Status reads must never execute PAC helpers, including DNS.
+            result.update(transport='unavailable' if self.error else 'pac_by_host',
+                          code=self.error or 'pac_not_evaluated', pac_sha256=self.pac.sha256)
+            return result
         try:
             selected = self.for_host(host or '')
             result.update(transport=self.transport_name(selected), code='policy_selected')

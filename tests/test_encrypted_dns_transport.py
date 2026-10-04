@@ -152,6 +152,22 @@ class EncryptedRoundTripTests(unittest.TestCase):
         self.assertTrue(all(line.startswith('SOCKS5 ') for line in self.connects))
         self.assertEqual(self.sni,[DOH_HOST,DOH_HOST,HOST])
 
+    def test_pac_cannot_choose_another_route_for_encrypted_dns(self):
+        from vibe_job_radar.pac import PacSnapshot
+        from vibe_job_radar import pac_native
+        raw=f'PROXY 127.0.0.1:{self.proxy.server_address[1]}; DIRECT'
+        script='function FindProxyForURL(url,host){return "DIRECT";}'
+        seen=[]
+        def evaluate(source,url,permission):
+            seen.append(url)
+            return raw if url=='https://'+HOST+'/' else 'DIRECT'
+        self.policy=replace(self.policy,source='explicit_workspace',pac=PacSnapshot(script,lambda:True),pac_id='fixture')
+        with patch.object(pac_native,'evaluate',side_effect=evaluate):
+            self.assertEqual(self.get(proxy=True)['fixture'],'verified-target')
+        self.assertEqual(seen,['https://'+HOST+'/'])
+        self.assertEqual(self.dials,[self.proxy.server_address]*3)
+        self.assertEqual(self.sni,[DOH_HOST,DOH_HOST,HOST])
+
     def test_socks5_refusal_never_falls_back_to_direct(self):
         self.socks=True;self.denied=True
         with self.assertRaisesRegex(FetchError,'encrypted_dns_route_failed'):self.get(proxy=True)

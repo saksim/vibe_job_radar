@@ -201,7 +201,8 @@ class PublicResolver:
         # Resolver traffic uses the SAME target route. A resolver NO_PROXY rule
         # cannot accidentally bypass the proxy selected for the job hostname.
         route = replace(policy, source='explicit_application', proxy=selected, bypass=(),
-                        encrypted_dns=False, resolver=None)
+                        encrypted_dns=False, resolver=None,
+                        pac_route_host=host if policy.pac is not None else '')
         conn = None
         phase = 'tls_context'
         try:
