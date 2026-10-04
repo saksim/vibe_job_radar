@@ -1,6 +1,7 @@
 """Run all tests without installing the package; optionally save machine-readable evidence."""
 from __future__ import annotations
 import argparse
+import builtins
 from contextlib import ExitStack, contextmanager
 import faulthandler
 from functools import partial
@@ -11,11 +12,13 @@ import sys
 import time
 import threading
 import unittest
+from unittest.mock import patch
 from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
+LEGACY_DEFERRED_RESULTS = sys.version_info[:2] == (3, 10)
 
 
 def failure_threads():
@@ -35,7 +38,6 @@ def failure_threads():
         threads.append({'current': identity == current, 'stack': stack,
                         'frames_truncated': frame is not None})
     return {'threads': threads, 'threads_omitted': max(0, len(identities) - 16)}
-
 
 @contextmanager
 def capture_before_cleanup():
@@ -71,7 +73,6 @@ def capture_before_cleanup():
         yield
     finally:
         unittest.case._Outcome.testPartExecutor = original
-
 
 class FailureResult(unittest.TextTestResult):
     """Save failure-time evidence before tearDown/addCleanup can release workers."""
@@ -149,23 +150,114 @@ class FailureResult(unittest.TextTestResult):
 
 
 class ProgressResult(FailureResult):
-    """Identify a stalled test without dumping inputs, locals or process secrets."""
+    """Capture a failed or stalled test without inputs, locals or exception text."""
     def __init__(self,*args,progress,**kwargs):
         super().__init__(*args,**kwargs);self.progress=progress;self.started=0
+        self.failure_dumped = False
     def startTest(self,test):
         super().startTest(test);self.started=time.monotonic()
+        self.failure_dumped = False
+        self.test_cleanup = ExitStack()
+        if LEGACY_DEFERRED_RESULTS:
+            # Python 3.10 feeds outcome.errors to the result only after cleanup.
+            # Observe that stored outcome before the original cleanup, without
+            # changing it, replacing TestCase.run, or intercepting exceptions.
+            for name in ('_callTearDown', 'doCleanups'):
+                original = getattr(test, name)
+                def observed(*args, _original=original, **kwargs):
+                    self._observe_deferred_outcome(test)
+                    return _original(*args, **kwargs)
+                self.test_cleanup.enter_context(patch.object(test, name, observed))
         self.progress.write('START '+test.id()+'\n');self.progress.flush()
         faulthandler.dump_traceback_later(120,file=self.progress)
+
+    def _observe_deferred_outcome(self, test):
+        try:
+            errors = getattr(getattr(test, '_outcome', None), 'errors', ())
+            for _, err in errors:
+                if err is not None:
+                    self._failure_stack('PENDING_FAILURE', test, err)
+                    break
+        except Exception:
+            pass
+
+    def _failure_location(self, err):
+        # Only static source paths/line numbers and canonical built-in types.
+        # Exception messages, source lines, locals and subtest inputs stay out.
+        name = getattr(err[0], '__name__', '')
+        exception = name if getattr(builtins, name, None) is err[0] else 'Exception'
+        frames, external, count = [], 0, 0
+        current = err[2]
+        root = ROOT.resolve()
+        while current is not None and count < 256:
+            count += 1
+            try:
+                path = Path(current.tb_frame.f_code.co_filename).resolve().relative_to(root)
+                if path.parts[0] not in {'src', 'scripts', 'tests'} or path.suffix != '.py':
+                    raise ValueError('not a project source frame')
+                frames.append({'file': path.as_posix(), 'line': current.tb_lineno})
+            except (ValueError, OSError):
+                external += 1
+            current = current.tb_next
+        row = dict(exception=exception, frames=frames[-24:], external_frames=external,
+                   omitted_source_frames=max(0, len(frames)-24), traceback_truncated=current is not None)
+        self.progress.write('FAILURE_LOCATION '+json.dumps(row, ensure_ascii=True)+'\n')
+        self.progress.flush()
+
+    def _failure_stack(self, kind, test, err):
+        # The result or legacy outcome is already recorded. Before cleanup can
+        # release a still-working thread; repeated subtest failures stay bounded.
+        if self.failure_dumped:
+            return
+        self.failure_dumped = True
+        try:
+            self._failure_location(err)
+        except Exception:
+            # A missing location must not suppress the independent live stack.
+            try:
+                self.progress.write('FAILURE_LOCATION_UNAVAILABLE\n')
+                self.progress.flush()
+            except Exception:
+                pass
+        try:
+            self.progress.write(f'{kind} {test.id()}\n')
+            self.progress.flush()
+            faulthandler.dump_traceback(file=self.progress, all_threads=True)
+        except Exception:
+            # Diagnostics must not turn an original assertion into another error.
+            try:
+                self.progress.write('STACK_UNAVAILABLE\n')
+                self.progress.flush()
+            except Exception:
+                pass
+
+    def addFailure(self, test, err):
+        super().addFailure(test, err)
+        self._failure_stack('FAILURE', test, err)
+
+    def addError(self, test, err):
+        super().addError(test, err)
+        self._failure_stack('ERROR', test, err)
+
+    def addSubTest(self, test, subtest, err):
+        super().addSubTest(test, subtest, err)
+        if err is not None:
+            # A subtest ID can contain parameter values; use only its parent ID.
+            self._failure_stack('SUBTEST_FAILURE', test, err)
+
     def stopTest(self,test):
-        faulthandler.cancel_dump_traceback_later()
-        self.progress.write(f'END {test.id()} {time.monotonic()-self.started:.3f}s\n');self.progress.flush()
-        super().stopTest(test)
+        try:
+            faulthandler.cancel_dump_traceback_later()
+            self.progress.write(f'END {test.id()} {time.monotonic()-self.started:.3f}s\n');self.progress.flush()
+        finally:
+            self.test_cleanup.close()
+            super().stopTest(test)
 
 
 def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--report", type=Path)
-    p.add_argument("--progress",action='store_true',help='Retain test IDs/timings and a stack trace if one test exceeds 120s; requires --report')
+    p.add_argument("--progress",action='store_true',help='Retain test IDs/timings, failure code locations and live thread stacks at the first failure/error or after 120s; requires --report')
     args = p.parse_args()
     if args.progress and args.report is None:p.error('--progress requires --report')
     stream = io.StringIO()
