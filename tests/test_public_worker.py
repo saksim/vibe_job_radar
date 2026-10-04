@@ -1,0 +1,434 @@
+"""Independent worker lifecycle and real process ownership, artificial source."""
+import json
+import os
+from pathlib import Path
+import signal
+import socket
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import unittest
+from unittest.mock import Mock, patch
+
+ROOT=Path(__file__).resolve().parents[1]
+sys.path.insert(0,str(ROOT/'src'))
+from test_local_public import payload,query
+from vibe_job_radar.local_public import API_URL,LocalPublicDataClient
+from vibe_job_radar.public_schedule import DAY,PublicSchedule
+from vibe_job_radar.public_tasks import PublicTasks
+from vibe_job_radar.public_worker import PublicWorker
+from vibe_job_radar import public_worker
+from vibe_job_radar.workspace import Workspace
+from vibe_job_radar.utils import atomic_json
+
+
+def wait_for(condition, timeout=20):
+    deadline=time.monotonic()+timeout
+    while time.monotonic()<deadline:
+        try:
+            value=condition()
+            if value:return value
+        except (FileNotFoundError,PermissionError,json.JSONDecodeError):pass
+        time.sleep(.05)
+    raise AssertionError('controlled worker did not reach expected state')
+
+
+def seed(workspace):
+    tasks=PublicTasks(workspace,hybrid_client=LocalPublicDataClient(workspace))
+    schedule=PublicSchedule(workspace,tasks,clock=lambda:time.time()-DAY-10)
+    try:
+        schedule.configure({'query':query().payload(),'consent':True,'revision':0})
+    finally:schedule.close();tasks.close()
+
+
+def fixture_child(root,label,mode):
+    """Test-only child: no listening socket, real scheduler/task/storage/report."""
+    class Wire:
+        def json(self,url):
+            assert url==API_URL
+            with (root/'fixture-requests.txt').open('a',encoding='utf-8') as stream:stream.write('request\n')
+            if mode=='hold':wait_for(lambda:(root/'release-fixture').exists(),30)
+            return payload()
+    with patch('urllib.request.getproxies',return_value={}),patch.object(socket.socket,'bind',side_effect=AssertionError('unexpected listening socket')):
+        workspace=Workspace(root)
+        worker=PublicWorker(workspace,client=LocalPublicDataClient(workspace,transport=Wire()))
+        def stopper():
+            wait_for(lambda:(root/('stop-'+label)).exists(),60)
+            worker.request_stop()
+        threading.Thread(target=stopper,daemon=True).start()
+        def emit(value):
+            if value['event']=='worker_started':(root/('ready-'+label)).write_text('ready',encoding='utf-8')
+            if value['event']=='worker_state':atomic_json(root/('state-'+label+'.json'),value)
+            print(json.dumps(value),flush=True)
+        return worker.run(emit=emit)
+
+
+def signal_child(root):
+    numbers=[getattr(signal,name) for name in ('SIGINT','SIGTERM','SIGBREAK') if hasattr(signal,name)]
+    original={number:signal.getsignal(number) for number in numbers}
+    for number in numbers:
+        worker=PublicWorker(Workspace(root))
+        events=[]
+        def emit(value):
+            events.append(value)
+            if value['event']=='worker_started':
+                # A direct Event.set() from the signal handler would re-enter
+                # this non-reentrant lock and hang the isolated test child.
+                with worker.stop._cond:signal.raise_signal(number)
+        with patch.object(public_worker,'PublicWorker',return_value=worker):
+            assert public_worker.run_cli(root,emit=emit)==0
+        assert events[-1]=={'event':'worker_stopped'}
+        assert all(signal.getsignal(n)==handler for n,handler in original.items())
+        assert not worker.schedule.is_running() and not worker.tasks.is_running()
+    print(json.dumps({'success':True,'signals_checked':len(numbers)}))
+    return 0
+
+
+def startup_stop_child(root, stop_kind, phase):
+    """An actual CLI signal or concurrent stop before startup can dispatch."""
+    with patch('urllib.request.getproxies',return_value={}):
+        workspace=Workspace(root);seed(workspace)
+        wire=Mock();wire.json.return_value=payload()
+        worker=PublicWorker(workspace,client=LocalPublicDataClient(workspace,transport=wire))
+        cycle=threading.Event();stop_observed=[]
+        real_start=worker.schedule.start;real_clear=worker.schedule._stop.clear
+        real_thread_start=threading.Thread.start;real_tick=worker.schedule.tick
+        def stop_now():
+            if stop_kind=='request':
+                thread=threading.Thread(target=worker.request_stop)
+                thread.start();thread.join(5)
+                assert not thread.is_alive() and worker.stop.is_set()
+            else:
+                signal.raise_signal(getattr(signal,stop_kind))
+                assert worker._signalled
+            stop_observed.append(phase)
+        def clear():
+            if phase=='before_clear':stop_now()
+            real_clear()
+            if phase=='after_clear':stop_now()
+        def thread_start(thread):
+            if phase=='before_thread' and thread.name=='radar-public-schedule':stop_now()
+            real_thread_start(thread)
+        def tick():
+            try:real_tick()
+            finally:cycle.set()
+        def start():
+            if phase=='before_start':stop_now()
+            real_start()
+            # Let the old implementation reach its first real scheduling
+            # decision while the CLI cannot yet run its shutdown loop.
+            thread=worker.schedule._thread
+            if thread:
+                thread.join(.5)
+                if thread.is_alive():assert cycle.wait(5)
+            if worker.tasks._thread:worker.tasks._thread.join(10)
+        with patch.object(worker.schedule,'start',side_effect=start), \
+                patch.object(worker.schedule._stop,'clear',side_effect=clear), \
+                patch.object(threading.Thread,'start',new=thread_start), \
+                patch.object(worker.schedule,'tick',side_effect=tick), \
+                patch.object(public_worker,'PublicWorker',return_value=worker):
+            code=public_worker.run_cli(root,emit=lambda value:None)
+        assert code==0,code
+        assert stop_observed==[phase],stop_observed
+        assert wire.json.call_count==0,('unexpected source request',wire.json.call_count)
+        assert not worker.schedule.state()['history']
+        assert not worker.schedule.is_running() and not worker.tasks.is_running()
+        print(json.dumps({'success':True,'stop_kind':stop_kind,'phase':phase,'source_requests':0}))
+        return 0
+
+
+
+def dispatch_stop_child(root, stop_kind, phase):
+    """Hold real dispatch/acquisition while the CLI receives an actual stop."""
+    with patch('urllib.request.getproxies',return_value={}):
+        workspace=Workspace(root);seed(workspace)
+        wire=Mock();wire.json.return_value=payload()
+        client=LocalPublicDataClient(workspace,transport=wire)
+        worker=PublicWorker(workspace,client=client)
+        entered,release,cycle=threading.Event(),threading.Event(),threading.Event()
+        real_start=worker.schedule.start;real_write=worker.schedule._write
+        real_tick=worker.schedule.tick;real_prepare=client._prepare
+        real_thread_start=threading.Thread.start
+        from vibe_job_radar.guided.rate import RateLedger
+        real_reserve=RateLedger.reserve
+        def hold(at):
+            if phase==at:
+                entered.set()
+                assert release.wait(8),'controlled dispatch was not released'
+        def write(value,**kw):
+            result=real_write(value,**kw)
+            if value['status']=='dispatching':hold('after_decision')
+            return result
+        def thread_start(thread):
+            if thread.name=='radar-public-data':hold('before_task_start')
+            return real_thread_start(thread)
+        def prepare():
+            result=real_prepare();hold('during_preparation');return result
+        def reserve(ledger,*args,**kw):
+            result=real_reserve(ledger,*args,**kw)
+            if ledger is client.ledger:hold('after_rate_reserve')
+            return result
+        def tick():
+            try:return real_tick()
+            finally:cycle.set()
+        def start():
+            real_start()
+            try:
+                assert entered.wait(8),'dispatch did not reach controlled phase'
+                if stop_kind=='request':
+                    thread=threading.Thread(target=worker.request_stop)
+                    thread.start();thread.join(5)
+                    assert not thread.is_alive() and worker.stop.is_set()
+                else:
+                    signal.raise_signal(getattr(signal,stop_kind))
+                    assert worker._signalled
+            finally:release.set()
+            assert cycle.wait(8),'dispatch did not finish'
+            # Prevent main-loop cleanup from hiding a late dispatched request.
+            if worker.tasks._thread:
+                worker.tasks._thread.join(10)
+                assert not worker.tasks._thread.is_alive()
+        with patch.object(worker.schedule,'start',side_effect=start),                 patch.object(worker.schedule,'_write',side_effect=write),                 patch.object(worker.schedule,'tick',side_effect=tick),                 patch.object(threading.Thread,'start',new=thread_start),                 patch.object(client,'_prepare',side_effect=prepare),                 patch.object(RateLedger,'reserve',new=reserve),                 patch.object(public_worker,'PublicWorker',return_value=worker):
+            code=public_worker.run_cli(root,emit=lambda value:None)
+        assert code==0,code
+        assert wire.json.call_count==0,('unexpected source request',wire.json.call_count)
+        assert not worker.schedule.is_running() and not worker.tasks.is_running()
+        assert not (workspace.root/'jobs.sqlite').exists()
+        print(json.dumps({'success':True,'stop_kind':stop_kind,'phase':phase,'source_requests':0}))
+        return 0
+
+
+class WorkerTests(unittest.TestCase):
+    def setUp(self):
+        tmp=tempfile.TemporaryDirectory();self.addCleanup(tmp.cleanup)
+        self.workspace=Workspace(tmp.name)
+        clean={k:v for k,v in os.environ.items() if not k.startswith('VIBE_RADAR_')}
+        env=patch.dict(os.environ,clean,clear=True);env.start();self.addCleanup(env.stop)
+        proxy=patch('urllib.request.getproxies',return_value={});proxy.start();self.addCleanup(proxy.stop)
+        self.wire=Mock();self.wire.json.return_value=payload()
+        self.worker=PublicWorker(self.workspace,client=LocalPublicDataClient(self.workspace,transport=self.wire))
+        self.events=[];self.results=[];self.thread=None
+        self.addCleanup(self.stop)
+
+    def start(self):
+        self.thread=threading.Thread(target=lambda:self.results.append(self.worker.run(emit=self.events.append)),daemon=True)
+        self.thread.start();wait_for(lambda:self.events)
+
+    def stop(self):
+        self.worker.request_stop()
+        if self.thread:
+            self.thread.join(25)
+            self.assertFalse(self.thread.is_alive())
+        else:self.worker.tasks.close()
+
+    def test_default_worker_listens_nowhere_and_does_not_enable_a_plan(self):
+        with patch.object(socket.socket,'bind',side_effect=AssertionError('must not bind')):
+            self.start();wait_for(lambda:any(e['event']=='worker_state' for e in self.events));self.stop()
+        self.assertEqual(self.results,[0]);self.wire.json.assert_not_called()
+        self.assertEqual(self.worker.schedule.state()['status'],'disabled')
+        self.assertFalse(self.worker.schedule.path.exists())
+        self.assertFalse((self.workspace.root/'jobs.sqlite').exists())
+        self.assertFalse(self.worker.schedule.is_running());self.assertFalse(self.worker.tasks.is_running())
+        self.assertEqual(self.events[0],{'event':'worker_started','http_server':False,'browser':False})
+
+    def test_due_confirmed_query_reuses_original_report_and_logs_no_query(self):
+        seed(self.workspace);self.start()
+        wait_for(lambda:len(self.worker.schedule.state()['history'])==1)
+        self.stop();state=self.worker.schedule.state()
+        self.assertEqual(self.results,[0]);self.wire.json.assert_called_once_with(API_URL)
+        self.assertEqual(state['status'],'scheduled')
+        report=self.workspace.report(state['history'][0]['report_id'])
+        self.assertEqual(report['manifest']['stats']['selected_source_records'],2)
+        # The two authored records deliberately share identical JD text.
+        self.assertEqual(report['manifest']['stats']['full_text_job_groups'],1)
+        text=json.dumps(self.events)
+        for private in ('Architect','Cursor','http://','https://',str(self.workspace.root),'query'):
+            self.assertNotIn(private,text)
+        self.assertTrue((self.workspace.root/'public_examples/rates.sqlite').exists())
+
+    def test_stop_before_start_does_not_dispatch_due_query(self):
+        seed(self.workspace);self.worker.request_stop()
+        self.assertEqual(self.worker.run(emit=self.events.append),0)
+        self.wire.json.assert_not_called()
+        self.assertFalse(self.worker.schedule.state()['history'])
+
+    def test_requested_stop_after_state_read_is_not_a_scheduler_failure(self):
+        def stop_at_observation(value):
+            self.events.append(value)
+            if value['event']=='worker_state':
+                self.worker.request_stop()
+                self.worker.schedule._thread.join(5)
+                self.assertFalse(self.worker.schedule.is_running())
+        self.assertEqual(self.worker.run(emit=stop_at_observation),0)
+        self.assertNotIn('worker_failed',[event['event'] for event in self.events])
+        self.wire.json.assert_not_called()
+
+    def test_scheduler_exit_without_worker_stop_is_still_a_failure(self):
+        def stop_only_scheduler(value):
+            self.events.append(value)
+            if value['event']=='worker_state':self.worker.schedule.close()
+        self.assertEqual(self.worker.run(emit=stop_only_scheduler),2)
+        self.assertIn({'event':'worker_failed','code':'scheduler_unavailable'},self.events)
+        self.wire.json.assert_not_called()
+
+    def test_shutdown_during_read_preserves_checkpoint_without_replaying(self):
+        seed(self.workspace);entered=threading.Event();release=threading.Event()
+        self.addCleanup(release.set)
+        def hold(url):entered.set();release.wait(10);return payload()
+        self.wire.json.side_effect=hold;self.start();self.assertTrue(entered.wait(5))
+        self.worker.request_stop();self.assertTrue(self.worker.tasks._cancel.wait(5));release.set();self.stop()
+        self.assertEqual(self.results,[0]);self.assertEqual(self.wire.json.call_count,1)
+        self.assertTrue(self.worker.tasks.path.exists());self.assertTrue(self.worker.schedule.path.exists())
+        resumed=PublicWorker(self.workspace,client=LocalPublicDataClient(self.workspace,transport=self.wire))
+        resumed.schedule.recover()
+        self.assertEqual(resumed.schedule.state()['status'],'paused')
+        resumed.schedule.tick();self.assertEqual(self.wire.json.call_count,1);resumed.tasks.close()
+
+    def test_corrupt_record_exits_nonzero_without_overwrite_or_raw_error(self):
+        self.worker.schedule.root.mkdir()
+        self.worker.schedule.path.write_bytes(b'PRIVATE SECRET NOT SQLITE')
+        original=self.worker.schedule.path.read_bytes()
+        self.assertEqual(self.worker.run(emit=self.events.append),2)
+        self.assertEqual(self.worker.schedule.path.read_bytes(),original)
+        self.wire.json.assert_not_called();self.assertNotIn('SECRET',json.dumps(self.events))
+
+
+class ProcessWorkerTests(unittest.TestCase):
+    def setUp(self):
+        tmp=tempfile.TemporaryDirectory();self.addCleanup(tmp.cleanup)
+        self.root=Path(tmp.name);self.workspace=Workspace(self.root);self.processes=[];self.outcomes={}
+        self.addCleanup(self.cleanup)
+        with patch('urllib.request.getproxies',return_value={}):seed(self.workspace)
+
+    def launch(self,label,mode='normal'):
+        env={k:v for k,v in os.environ.items() if not k.startswith('VIBE_RADAR_')}
+        env['PYTHONUTF8']='1'
+        process=subprocess.Popen([sys.executable,str(Path(__file__).resolve()),'--fixture-worker',str(self.root),label,mode],
+            stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,encoding='utf-8',env=env)
+        self.processes.append((label,process))
+        wait_for(lambda:(self.root/('ready-'+label)).exists())
+        return process
+
+    def cleanup(self):
+        (self.root/'release-fixture').write_text('release',encoding='utf-8')
+        for label,process in self.processes:
+            (self.root/('stop-'+label)).write_text('stop',encoding='utf-8')
+        for label,process in self.processes:
+            try:output,_=process.communicate(timeout=30)
+            except subprocess.TimeoutExpired:process.kill();output,_=process.communicate(timeout=5)
+            facts=[]
+            for line in output.splitlines():
+                try:value=json.loads(line)
+                except ValueError:continue
+                if isinstance(value,dict):
+                    facts.append({k:value[k] for k in ('event','code','plan_status') if k in value})
+            self.outcomes[label]=facts[-12:]
+
+    def request_count(self):
+        path=self.root/'fixture-requests.txt'
+        return len(path.read_text(encoding='utf-8').splitlines()) if path.exists() else 0
+
+    def schedule_state(self):
+        tasks=PublicTasks(self.workspace,hybrid_client=LocalPublicDataClient(self.workspace))
+        try:return PublicSchedule(self.workspace,tasks).state()
+        finally:tasks.close()
+
+    def test_two_independent_processes_acquire_only_once_and_keep_report(self):
+        first=self.launch('first','hold');wait_for(lambda:self.request_count()==1)
+        second=self.launch('second')
+        wait_for(lambda:json.loads((self.root/'state-second.json').read_text(encoding='utf-8'))['code']=='owner_busy')
+        self.assertEqual(self.request_count(),1)
+        (self.root/'release-fixture').write_text('release',encoding='utf-8')
+        state=wait_for(lambda:(s if (s:=self.schedule_state())['history'] else None))
+        self.assertEqual(state['status'],'scheduled');self.assertEqual(self.request_count(),1)
+        self.assertTrue(self.workspace.report(state['history'][0]['report_id']))
+        self.cleanup()
+        self.assertEqual(first.returncode,0,self.outcomes['first'])
+        self.assertEqual(second.returncode,0,self.outcomes['second'])
+
+    def test_killed_owner_leaves_uncertainty_paused_without_second_request(self):
+        first=self.launch('first','hold');wait_for(lambda:self.request_count()==1)
+        rate=self.root/'public_examples/rates.sqlite';self.assertTrue(rate.exists())
+        first.kill();first.communicate(timeout=5)
+        original=rate.read_bytes()
+        second=self.launch('second')
+        wait_for(lambda:self.schedule_state()['status']=='paused')
+        self.assertEqual(self.request_count(),1);self.assertEqual(rate.read_bytes(),original)
+        self.cleanup();self.assertEqual(second.returncode,0)
+
+    def test_cli_and_workbench_entry_reject_corrupt_plan_without_starting_server(self):
+        path=self.root/'public_schedule/schedule.sqlite';path.write_bytes(b'PRIVATE SECRET')
+        env=dict(os.environ);env['PYTHONPATH']=os.pathsep.join((str(ROOT/'src'),str(ROOT/'tests')))
+        for command in ([sys.executable,str(ROOT/'scripts/run_public_worker.py'),'--workspace',str(self.root)],
+                        [sys.executable,str(ROOT/'scripts/start_workbench.py'),'--workspace',str(self.root),'--public-worker'],
+                        [sys.executable,'-m','vibe_job_radar','public-worker','--workspace',str(self.root)]):
+            run=subprocess.run(command,cwd=ROOT,capture_output=True,text=True,encoding='utf-8',timeout=15,env=env)
+            self.assertEqual(run.returncode,2)
+            self.assertNotIn('SECRET',run.stdout+run.stderr)
+            self.assertNotIn('http://',run.stdout+run.stderr)
+            self.assertEqual(path.read_bytes(),b'PRIVATE SECRET')
+
+    def test_real_signals_do_not_reenter_event_locks_and_handlers_are_restored(self):
+        with tempfile.TemporaryDirectory(prefix='radar-signal-fixture-') as temp:
+            run=subprocess.run([sys.executable,str(Path(__file__).resolve()),'--signal-worker',temp],
+                capture_output=True,text=True,encoding='utf-8',timeout=12)
+        self.assertEqual(run.returncode,0,run.stderr)
+        self.assertTrue(json.loads(run.stdout)['success'])
+        self.assertGreaterEqual(json.loads(run.stdout)['signals_checked'],2)
+
+
+    def startup_stop_cases(self, stop_kinds):
+        for stop_kind in stop_kinds:
+            for phase in ('before_start','before_clear','after_clear','before_thread'):
+                with self.subTest(stop_kind=stop_kind,phase=phase):
+                    root=self.root/(stop_kind+'-'+phase)
+                    env={k:v for k,v in os.environ.items() if not k.startswith('VIBE_RADAR_')}
+                    env['PYTHONUTF8']='1'
+                    result=subprocess.run([sys.executable,str(Path(__file__).resolve()),
+                        '--startup-stop-worker',str(root),stop_kind,phase],
+                        capture_output=True,text=True,encoding='utf8',timeout=20,env=env)
+                    self.assertEqual(result.returncode,0,result.stderr)
+                    self.assertEqual(json.loads(result.stdout),{'success':True,
+                        'stop_kind':stop_kind,'phase':phase,'source_requests':0})
+
+    def test_concurrent_stop_during_startup_does_not_dispatch(self):
+        self.startup_stop_cases(['request'])
+
+    def test_real_signals_during_startup_do_not_dispatch(self):
+        self.startup_stop_cases([name for name in ('SIGINT','SIGTERM','SIGBREAK') if hasattr(signal,name)])
+
+
+
+    def dispatch_stop_cases(self, stop_kinds):
+        for stop_kind in stop_kinds:
+            for phase in ('after_decision','before_task_start','during_preparation','after_rate_reserve'):
+                with self.subTest(stop_kind=stop_kind,phase=phase):
+                    root=self.root/('dispatch-'+stop_kind+'-'+phase)
+                    env={k:v for k,v in os.environ.items() if not k.startswith('VIBE_RADAR_')}
+                    env['PYTHONUTF8']='1'
+                    result=subprocess.run([sys.executable,str(Path(__file__).resolve()),
+                        '--dispatch-stop-worker',str(root),stop_kind,phase],
+                        capture_output=True,text=True,encoding='utf8',timeout=30,env=env)
+                    self.assertEqual(result.returncode,0,result.stderr)
+                    self.assertEqual(json.loads(result.stdout),{'success':True,
+                        'stop_kind':stop_kind,'phase':phase,'source_requests':0})
+
+    def test_concurrent_stop_after_dispatch_decision_does_not_acquire(self):
+        self.dispatch_stop_cases(['request'])
+
+    def test_real_signals_after_dispatch_decision_do_not_acquire(self):
+        self.dispatch_stop_cases([name for name in ('SIGINT','SIGTERM','SIGBREAK') if hasattr(signal,name)])
+
+
+if __name__=='__main__':
+    if len(sys.argv)>1 and sys.argv[1]=='--dispatch-stop-worker':
+        raise SystemExit(dispatch_stop_child(Path(sys.argv[2]),sys.argv[3],sys.argv[4]))
+    if len(sys.argv)>1 and sys.argv[1]=='--startup-stop-worker':
+        raise SystemExit(startup_stop_child(Path(sys.argv[2]),sys.argv[3],sys.argv[4]))
+    if len(sys.argv)>1 and sys.argv[1]=='--fixture-worker':
+        raise SystemExit(fixture_child(Path(sys.argv[2]),sys.argv[3],sys.argv[4]))
+    if len(sys.argv)>1 and sys.argv[1]=='--signal-worker':
+        raise SystemExit(signal_child(Path(sys.argv[2])))
+    unittest.main()

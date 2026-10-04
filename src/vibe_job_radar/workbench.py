@@ -307,6 +307,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-browser", action="store_true")
     modes=parser.add_mutually_exclusive_group()
     modes.add_argument("--doctor", action="store_true", help="离线检查 Python、SQLite 和目录写入能力")
+    modes.add_argument('--public-worker',action='store_true',help='仅运行已确认的公开查询计划，不启动网页服务器或浏览器')
     modes.add_argument('--native-browser-check',action='store_true',help='检查新临时原生浏览器的空白页、请求拒绝与退出；不连接招聘网站')
     parser.add_argument('--native-browser-channel',choices=['bundled','msedge','chrome'],help='仅用于原生组件检查，默认配套Chromium')
     args = parser.parse_args(argv)
@@ -317,6 +318,10 @@ def main(argv: list[str] | None = None) -> int:
         from .guided.native_check import run_cli
         return run_cli(channel=args.native_browser_channel)
     if args.native_browser_channel:parser.error('--native-browser-channel 仅配合 --native-browser-check')
+    if args.public_worker:
+        if args.port:parser.error('独立worker不监听端口，请移除--port')
+        from .public_worker import run_cli
+        return run_cli(args.workspace)
     try:
         workspace = Workspace(args.workspace)
         diagnostic = workspace.doctor()

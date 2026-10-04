@@ -32,9 +32,10 @@ class PublicTaskBusy(InputError):
 
 
 class PublicTasks:
-    def __init__(self, workspace, *, hybrid_client=None, example_factory=PublicExample):
+    def __init__(self, workspace, *, hybrid_client=None, example_factory=PublicExample, stop_requested=None):
         self.workspace, self.hybrid = workspace, hybrid_client
         self.factory=example_factory
+        self._stop_requested=stop_requested
         self.root=workspace.root/'public_tasks'
         self.root.mkdir(exist_ok=True,mode=0o700)
         self.path=self.root/'state.json'
@@ -162,6 +163,11 @@ class PublicTasks:
             raise InputError('原任务的来源或执行方式不可用，请重新核对来源后建立任务。')
         return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 
+    def _check_cancelled(self):
+        check_cancelled(self._cancel)
+        if self._stop_requested is not None and self._stop_requested():
+            raise PublicTaskCancelled()
+
     def scheduled_search(self, query, *, binding, policy_id):
         """Internal dispatch from a previously confirmed durable local plan.
 
@@ -174,6 +180,9 @@ class PublicTasks:
             if (self.mode()!='local_direct' or policy.error or policy.fingerprint!=policy_id
                     or self._binding('search',query)!=binding):
                 raise InputError('计划来源或网络条件已变化，请重新确认。')
+            # A process stop can arrive while validating the saved route.
+            if self._stop_requested is not None and self._stop_requested():
+                raise PublicTaskCancelled()
             return self._submit('search',query,network_policy=policy)
 
     def _can_resume(self):
@@ -255,13 +264,13 @@ class PublicTasks:
         # Cancellation before this point prevents persistence. Once the local
         # commit starts, finish it and retain/report the result atomically.
         with self._lock:
-            check_cancelled(self._cancel)
+            self._check_cancelled()
             self._save(phase='saving', message='正在保存本批公开结果；完成后保留报告，不再启动后续查询。')
 
     def _run(self, kind, value, network_policy=None):
         try:
             with self._lock:
-                check_cancelled(self._cancel)
+                self._check_cancelled()
                 self._save(status='running',message='正在获取公开数据并生成本地报告；不读取个人证据或登录态。')
             if kind=='example':
                 example = self.factory(self.workspace)
@@ -269,8 +278,10 @@ class PublicTasks:
                 result=example.run({'consent':True})
             else:
                 query=PublicQuery.from_dict(value)
-                check_cancelled(self._cancel)
+                self._check_cancelled()
                 options={} if network_policy is None else {'network_policy':network_policy}
+                if self.mode()=='local_direct' and self._stop_requested is not None:
+                    options['stop_requested']=self._stop_requested
                 response=self.hybrid.search(query,consent=True,**options)
                 self._begin_commit()
                 result=self._import(response,query)
@@ -358,6 +369,10 @@ class PublicTasks:
         if result['stale']:
             message+=' 刷新暂不可用，当前是过期缓存，不是实时结果。'
         return {**summary,'report_id':report_id,'code':'public_results_received','message':message}
+
+    def is_running(self):
+        with self._lock:
+            return bool(self._thread and self._thread.is_alive())
 
     def close(self):
         with self._lock:
