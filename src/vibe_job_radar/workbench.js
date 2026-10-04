@@ -82,7 +82,13 @@ async function refresh() {
       $("job-platform").append(option);
     });
   }
-  table($("sources"), ["平台", "授权文本导入", "自动登录", "实站验收"], Object.values(state.platforms).map((p) => [p.label, "可用", "未实现", "未验证"]));
+  table($("sources"), ["平台", "授权文本导入", "登录方式", "采集验证状态"], Object.entries(state.platforms).map(([key, platform]) => {
+    const site = state.acquisition_sites?.find(item => item.key === key);
+    const capability = site?.acquisition?.backends.find(item => item.default);
+    const login = !site ? '仅导入材料' : site.password_login === 'controlled_test_only'
+      ? '采集浏览器人工登录；可选单次密码提交（受控验证）' : '在采集浏览器人工登录';
+    return [platform.label, '可用', login, capability?.message || '暂无已记录的浏览器采集验证'];
+  }));
   table($("records"), ["职位", "平台", "证据", "匹配岗位", "来源链接"], state.records.map((j) => [j.title, state.platforms[j.platform]?.label || j.platform,
     j.evidence_level === "full_text" ? "完整正文" : "摘要线索", j.roles.map((r) => state.roles[r]).join("、") || "未匹配", j.url]));
   $("runs").replaceChildren();
