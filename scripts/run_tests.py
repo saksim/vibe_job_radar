@@ -8,6 +8,7 @@ from functools import partial
 import io
 import json
 import platform
+import math
 import sys
 import time
 import threading
@@ -254,14 +255,78 @@ class ProgressResult(FailureResult):
             super().stopTest(test)
 
 
+def _suite_diagnostic_error(progress):
+    try:
+        progress.write("SUITE_BUDGET_STACK_UNAVAILABLE\n")
+        progress.flush()
+    except Exception:
+        pass
+
+
+@contextmanager
+def suite_budget_snapshot(progress, after_seconds):
+    """One best-effort checkpoint, independent of per-test alarm resets."""
+    stopped = None
+    # perf_counter is monotonic and has finer resolution than GetTickCount64
+    # on supported older Windows/Python combinations.
+    # Tests may temporarily patch these module attributes after discovery.
+    # Keep this suite observer independent of the code being exercised.
+    clock = time.perf_counter
+    dump_traceback = faulthandler.dump_traceback
+    serialize = json.dumps
+    started = clock()
+    deadline = started + after_seconds
+
+    def capture():
+        try:
+            while True:
+                if stopped.wait(max(0, deadline - clock())):
+                    return
+                if clock() >= deadline:
+                    break
+            marker = {"target_seconds": after_seconds,
+                      "elapsed_seconds": round(clock() - started, 6),
+                      "clock": "perf_counter",
+                      "scope": "budget_checkpoint_not_timeout_or_root_cause"}
+            progress.write("SUITE_BUDGET_SNAPSHOT " + serialize(marker) + "\n")
+            progress.flush()
+            dump_traceback(file=progress, all_threads=True)
+        except Exception:
+            _suite_diagnostic_error(progress)
+
+    worker = None
+    running = False
+    try:
+        try:
+            stopped = threading.Event()
+            worker = threading.Thread(target=capture, name="radar-suite-budget-snapshot", daemon=True)
+            worker.start()
+            running = True
+        except Exception:
+            _suite_diagnostic_error(progress)
+        yield
+    finally:
+        if stopped is not None:
+            stopped.set()
+        if running:
+            # Finish any in-flight dump before the progress file can be closed.
+            worker.join()
+
+
 def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--report", type=Path)
     p.add_argument("--progress",action='store_true',help='Retain test IDs/timings, failure code locations and live thread stacks at the first failure/error or after 120s; requires --report')
+    p.add_argument("--suite-snapshot-after", type=float,
+                   help="One thread checkpoint after this many suite seconds; requires --progress/--report, does not change timeouts")
     args = p.parse_args()
     if args.progress and args.report is None:p.error('--progress requires --report')
+    if args.suite_snapshot_after is not None:
+        if not args.progress or args.report is None:
+            p.error("--suite-snapshot-after requires --progress and --report")
+        if not math.isfinite(args.suite_snapshot_after) or args.suite_snapshot_after <= 0:
+            p.error("--suite-snapshot-after must be finite and positive")
     stream = io.StringIO()
-    suite = unittest.defaultTestLoader.discover(str(ROOT / "tests"))
     with ExitStack() as cleanup:
         failure_stream = None
         if args.report:
@@ -274,6 +339,10 @@ def main() -> int:
             progress=cleanup.enter_context(args.report.with_suffix('.progress.log').open('w',encoding='utf-8'))
             cleanup.callback(faulthandler.cancel_dump_traceback_later)
             resultclass=partial(ProgressResult,progress=progress,failure_stream=failure_stream)
+            if args.suite_snapshot_after is not None:
+                cleanup.enter_context(suite_budget_snapshot(progress, args.suite_snapshot_after))
+        # Discovery can also consume the suite budget; include it in this clock.
+        suite = unittest.defaultTestLoader.discover(str(ROOT / "tests"))
         result = unittest.TextTestRunner(stream=stream, verbosity=2,resultclass=resultclass).run(suite)
     if args.report:
         args.report.parent.mkdir(parents=True, exist_ok=True)

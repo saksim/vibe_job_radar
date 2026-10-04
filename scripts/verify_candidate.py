@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+UNIT_SNAPSHOT_SECONDS = 570
 sys.path.insert(0, str(ROOT/'src'))
 from vibe_job_radar.qualification import check_source, fingerprint, output_directory, require_local_evidence
 from vibe_job_radar.guided.browser_health import safe_text
@@ -39,13 +40,16 @@ def verify(out: Path) -> dict:
         with tempfile.TemporaryDirectory(prefix='radar-qualification-') as temp:
             run_root = Path(temp)
             unit_file = run_root/'unit-tests.json'
-            tasks = [('unit-tests',['scripts/run_tests.py','--report',str(unit_file),'--progress']),
+            tasks = [('unit-tests',['scripts/run_tests.py','--report',str(unit_file),'--progress',
+                                    '--suite-snapshot-after',str(UNIT_SNAPSHOT_SECONDS)]),
                      ('user-guide',['scripts/build_user_guide.py','--check']),
                      ('offline-demo',['scripts/run_demo.py','--out',str(run_root/'demo')]),
                      ('source-doctor',['scripts/start_workbench.py','--doctor','--workspace',str(run_root/'workspace')])]
             for name, args in tasks:
                 print('Running:', name, flush=True)
                 entry = {'name':name,'returncode':None}
+                if name == 'unit-tests':
+                    entry['suite_snapshot_after_seconds'] = UNIT_SNAPSHOT_SECONDS
                 report['steps'].append(entry)
                 timeout = 600 if name == 'unit-tests' else 180
                 try:
