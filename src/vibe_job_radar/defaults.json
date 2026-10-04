@@ -312,6 +312,9 @@
         "密钥",
         "权限",
         "客户数据",
+        "\\bcustomer\\s+(?:data|secrets)\\b",
+        "\\b(?:sensitive|confidential)\\s+(?:data|source(?:\\s+code)?|code)\\b",
+        "\\bAPI\\s+keys?\\b",
         "源代码.{0,6}(?:外传|上传)",
         "合规"
       ],

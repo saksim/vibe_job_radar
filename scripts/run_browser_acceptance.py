@@ -160,4 +160,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    exit_code = main()
+    if exit_code == 0:
+        from run_english_obligation_browser import main as english_obligation_main
+        english_obligation_main()
+    raise SystemExit(exit_code)

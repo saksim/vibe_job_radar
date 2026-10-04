@@ -16,14 +16,39 @@ class Span:
     vibe_section: bool
 
 
+_HEADINGS = (
+    ('responsibilities', r'岗位职责|工作职责|职位描述|responsibilities|(?:job|role)\s+description|what\s+you(?:\s+will|[\'’]ll)\s+do|about\s+(?:the|this)\s+role'),
+    ('company', r'公司介绍|关于我们|about\s+(?:us|the\s+company|[a-z][a-z0-9 &.-]{0,40})|who\s+we\s+are|company(?:\s+(?:overview|description))?'),
+    ('benefits', r'福利待遇|薪酬福利|benefits(?:\s+and\s+perks)?|perks(?:\s+and\s+benefits)?|compensation(?:\s+and\s+benefits)?|what\s+we\s+offer'),
+    ('preferred', r'加分项|优先条件|nice\s+to\s+have|(?:preferred|desired|bonus)\s+(?:qualifications|skills)|bonus\s+points'),
+    ('requirements', r'任职要求|岗位要求|基本要求|招聘要求|(?:minimum\s+|basic\s+|required\s+)?qualifications|(?:job\s+)?requirements|required\s+skills|what\s+you\s+bring|you\s+(?:may\s+be\s+)?(?:a\s+)?(?:good\s+)?fit\s+if'),
+    ('ai', r'AI\s*编程要求|Vibe\s*Coding要求|(?:AI[ -]coding|vibe\s+coding)\s+(?:requirements|skills)'),
+)
+
+
+def _heading_kind(text: str) -> str:
+    heading = re.sub(r'^#{1,4}\s+', '', text).rstrip('：:。!?？ ')
+    if len(heading) > 80:
+        return ''
+    if re.fullmatch(r'about\s+you', heading, re.I):
+        return 'requirements'
+    return next((kind for kind, pattern in _HEADINGS if re.fullmatch(pattern, heading, re.I)), '')
+
+
 def spans(text: str):
     section = ""
     vibe_section = False
     pattern = r"[^\n。！？；;]+(?:[。！？；;]|(?=\n|$))"
     # Split a comma only where a new obligation/negation begins, not arbitrary noun lists.
-    contrast = re.compile(r"[，,](?=\s*(?:但(?:是)?|然而|不过|同时|且|并)?\s*(?:必须|需要|应当|禁止|不得|严禁|不能|不允许|不要求|不必|不强制|无需))")
+    contrast = re.compile(r"[，,](?=\s*(?:(?:但(?:是)?|然而|不过|同时|且|并)?\s*(?:必须|需要|应当|禁止|不得|严禁|不能|不允许|不要求|不必|不强制|无需)|(?:(?:but|however|and|also)\s+)?(?:you\s+)?(?:must\b|need\s+to\b|should\b|do\s+not\b|don['’]t\b)))", re.I)
+    # Only clear new English clauses. Decimal/version dots, initials and
+    # abbreviations such as e.g. / U.S. are not arbitrary sentence boundaries.
+    english = re.compile(r'[.!?](?=[ \t]+(?:You|We|The|Our|This|Must|Do|Use|Build|Write|Review|Maintain|Experience|Knowledge|Proficiency|No|Please|Candidates?|Applicants?)\b)')
     for match in re.finditer(pattern, text):
-        bounds = [0, *(m.end() for m in contrast.finditer(match.group())), len(match.group())]
+        raw_match = match.group()
+        endings = [m.end() for m in english.finditer(raw_match)
+                   if not re.search(r'(?:\b(?:e\.g|i\.e|vs|Dr|Mr|Ms|Prof|Inc|Ltd|No)|(?:\b[A-Z]\.)+[A-Z])\.$', raw_match[:m.end()], re.I)]
+        bounds = sorted({0, *(m.end() for m in contrast.finditer(raw_match)), *endings, len(raw_match)})
         for lo, hi in zip(bounds, bounds[1:]):
             raw = match.group()[lo:hi]
             left = len(raw) - len(raw.lstrip())
@@ -35,30 +60,43 @@ def spans(text: str):
             quote = text[start:end]
             if not quote:
                 continue
-            heading = quote.rstrip("：:。 ")
-            if len(heading) <= 30 and re.fullmatch(r"(?:岗位职责|工作职责|职位描述|任职要求|岗位要求|基本要求|加分项|优先条件|福利待遇|公司介绍|招聘要求|AI\s*编程要求|Vibe\s*Coding要求)", heading, re.I):
-                section = heading
-                vibe_section = bool(re.search(r"AI|Vibe", heading, re.I))
+            kind = _heading_kind(quote)
+            if kind:
+                section = quote.rstrip('：:。!?？ ')
+                vibe_section = kind == 'ai'
                 continue
+            inline = re.match(r'([^：:\n]{1,80})[：:]\s*', quote)
+            if inline and (kind := _heading_kind(inline.group(1))):
+                section = inline.group(1)
+                vibe_section = kind == 'ai'
+                start += inline.end()
+                quote = text[start:end]
+                if not quote:
+                    continue
             yield Span(start, end, quote, text.count("\n", 0, start), section, vibe_section)
 
 
 def strength(text: str, section: str = "") -> str:
     if re.search(r"禁止|严禁|不得|不允许|不能(?:使用|上传|发送)|must not|do not (?:use|upload|send)", text, re.I):
         return "prohibited"
-    if re.search(r"无需|不要求|不需要|不必|不强制|not required|no .{0,40}experience.{0,20}required", text, re.I):
+    if re.search(r"无需|不要求|不需要|不必|不强制|not (?:required|necessary|mandatory)|no .{0,40}experience.{0,20}required|\b(?:do not|don['’]t) (?:need|have to)\b|\bneed not\b", text, re.I):
         return "not_required"
-    if re.search(r"优先|加分|有更好|更佳|nice.to.have|preferred", text + section, re.I):
+    if _heading_kind(section) == 'preferred' or re.search(r"优先|加分|有更好|更佳|nice.to.have|preferred|\ba plus\b", text + section, re.I):
         return "preferred"
     if re.search(r"必须|必备|要求|至少|精通|熟练|具备|能够|独立|熟悉|掌握|\bmust\b|\brequired\b", text, re.I):
         return "required"
     if re.search(r"负责|使用|应用|推动|参与|建立|构建|维护|设计|完成|开发", text):
         return "expected"
+    if _heading_kind(section) == 'requirements' or re.match(
+            r'(?:hands-on\s+)?(?:experience|proficiency|expertise|familiarity)\s+(?:with|in|using)\b|(?:proficient|comfortable)\s+(?:with|in)\b|ability\s+to\b', text, re.I):
+        return "required"
+    if re.match(r"(?:(?:you(?:\s+will|['’]ll)?|candidates?\s+will)\s+)?(?:use|apply|employ|adopt|integrate)\b", text, re.I):
+        return "expected"
     return "unspecified"
 
 
 class RuleExtractor:
-    version = "rules-0.1.0"
+    version = "rules-0.2.0"
 
     def __init__(self, config: dict):
         self.config = config
@@ -88,12 +126,12 @@ class RuleExtractor:
 
     def extract(self, job: JobRecord, roles: list[str], *, group_id: str | None = None) -> list[Requirement]:
         units = list(spans(job.text))
-        anchors = [s for s in units if self.direct(s.text) and strength(s.text, s.section) not in {"not_required", "prohibited"}
-                   and s.section not in {"福利待遇", "公司介绍"}]
+        anchors = [s for s in units if self.direct(s.text) and strength(s.text, s.section) in {"required", "expected", "preferred"}
+                   and _heading_kind(s.section) not in {'benefits', 'company'}]
         group_id = group_id or "g_" + job.fingerprint[:24]
         rows = []
         for s in units:
-            if s.section in {"福利待遇", "公司介绍"}:
+            if _heading_kind(s.section) in {'benefits', 'company'}:
                 continue
             tools = self.tools_in(s.text)
             is_direct = self.direct(s.text)
@@ -115,15 +153,25 @@ class RuleExtractor:
                 continue
             priority = strength(s.text, s.section)
             mixed = bool(re.search(r"(?:无需|不要求|禁止|不得).{0,100}(?:但|同时|不过).{0,100}(?:必须|要求|熟练|需要)", s.text))
-            ambiguous = bool(re.search(r"不接受只会|不能只|不依赖|不能依赖", s.text))
+            ambiguous = bool(re.search(r"不接受只会|不能只|不依赖|不能依赖|\bnot (?:just|only)\b|\b(?:cannot|can't|must not) rely\b", s.text, re.I))
+            # Building/selling the named product is not proof of using it as
+            # a coding tool. Keep the original clause for explicit review.
+            product_mention = any(re.search(
+                r'\b(?:build|develop|design|sell|market|maintain|support)(?:ing|s)?\s+(?:the\s+)?$',
+                s.text[:match.start()], re.I)
+                for tool in tools for match in self.tool_patterns[tool].finditer(s.text))
             for cap in sorted(capabilities):
                 rid = "r_" + digest(group_id + f"|{s.start}|{s.end}|{cap}")[:24]
-                review = "needs_review" if job.evidence_level == "snippet" or mixed or ambiguous or relation != "direct" else "rule_accepted"
+                review = "needs_review" if job.evidence_level == "snippet" or mixed or ambiguous or product_mention or relation != "direct" or priority == "unspecified" else "rule_accepted"
                 notes = []
                 if relation == "role_related":
                     notes.append("same-JD supporting capability; NOT evidence that this is a Vibe Coding requirement")
                 if mixed or ambiguous:
                     notes.append("mixed/ambiguous polarity; human review required")
+                if priority == "unspecified":
+                    notes.append("tool/topic mention without a clear candidate obligation; human review required")
+                if product_mention:
+                    notes.append("named product work is not proof of coding-tool use; human review required")
                 if job.evidence_level == "snippet":
                     notes.append("search snippet; excluded from full-text statistics even if approved")
                 rows.append(Requirement(
