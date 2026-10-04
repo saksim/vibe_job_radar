@@ -1,9 +1,9 @@
 """OS ownership for a live collector; a lock file is never a PID/liveness claim."""
-from contextlib import contextmanager,ExitStack
+from contextlib import contextmanager
 from functools import wraps
-import time
 
 from ..collection import writer_lock
+from ..record_lock import record_lock
 from ..workspace import InputError
 
 MESSAGE='另一个本机工作台正在操作此工作区的采集任务或保留浏览器会话；此处只查看进度，请回到原工作台暂停或停止并关闭会话。'
@@ -69,12 +69,6 @@ def mutation(service,*,allow_shutdown=False):
 
 @contextmanager
 def checkpoint_lock(root):
-    """Short shared reader/writer lease, including Windows metadata handles."""
-    deadline=time.monotonic()+5
-    with ExitStack() as stack:
-        while True:
-            try:stack.enter_context(writer_lock(root));break
-            except InputError as exc:
-                if not isinstance(exc.__cause__,OSError) or time.monotonic()>=deadline:raise
-                time.sleep(.01)
+    """Fair local admission plus the existing cross-process checkpoint lock."""
+    with record_lock(root):
         yield

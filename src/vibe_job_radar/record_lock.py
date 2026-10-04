@@ -22,7 +22,7 @@ class _Gate:
             with self.condition:
                 while self.tickets[0] is not ticket:
                     remaining=deadline-time.monotonic()
-                    if remaining<=0:raise InputError('公开任务状态正在更新，请稍后重试。')
+                    if remaining<=0:raise InputError('任务状态正在更新，请稍后重试。')
                     self.condition.wait(remaining)
             yield
         finally:
@@ -44,7 +44,7 @@ def _gate(root):
 
 @contextmanager
 def record_lock(root,*,timeout=5):
-    if root.is_symlink():raise InputError('公开任务记录不能使用符号链接。')
+    if root.is_symlink():raise InputError('任务记录不能使用符号链接。')
     deadline=time.monotonic()+timeout
     # FIFO applies only to this process. The original OS lock still decides
     # cross-process exclusion and releases when a process exits. A returning
