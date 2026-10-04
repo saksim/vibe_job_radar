@@ -128,7 +128,7 @@ class EnglishObligationTests(unittest.TestCase):
             with Store(db) as store: store.add(job(text))
             first = root/'first'; result = analyze(db, first, config=CONF, as_of=NOW)
             old = {p.name:p.read_bytes() for p in first.iterdir() if p.is_file()}
-            self.assertEqual(result['rule_engine'], 'rules-0.2.0')
+            self.assertEqual(result['rule_engine'], RuleExtractor.version)
             rows = [json.loads(line) for line in (first/'requirements.jsonl').read_text(encoding='utf-8').splitlines()]
             self.assertTrue(rows)
             self.assertFalse(any('software teams' in row['quote'] or 'subscription' in row['quote'] for row in rows))

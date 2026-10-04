@@ -1,4 +1,4 @@
-"""Authored English JD through the original form, reports, CSV and history."""
+"""Authored clause boundaries through the original form, reports, CSV and history."""
 import json
 import os
 from pathlib import Path
@@ -52,7 +52,7 @@ def main():
                     expect(page.locator('#requirements')).to_contain_text('You must not upload customer secrets.')
                     expect(page.locator('#requirements')).not_to_contain_text('subscription')
                     expect(page.locator('#requirements')).not_to_contain_text('software teams')
-                    expect(page.locator('#manifest')).to_contain_text('rules-0.2.0')
+                    expect(page.locator('#manifest')).to_contain_text('rules-0.2.1')
                     first=next((workspace.root/'reports').iterdir())
                     original={p.name:p.read_bytes() for p in first.iterdir() if p.is_file()}
                     with page.expect_download() as pending:page.get_by_role('button',name='requirements_zh.csv',exact=True).click()
@@ -76,6 +76,24 @@ def main():
                     assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
                     page.locator('#research-brief').screenshot(path=str(out/'english-report-mobile.png'))
                     result['checks'].append('ambiguous product mention remains review-only without inflating positive count; old report bytes/history survive reload and 390px layout')
+                    page.set_viewport_size({'width':1280,'height':900})
+                    quote='推动AI编程在研发小组中\n的应用，提升交付效率。'
+                    add('【岗位职责】\n1、'+quote+'\n2、禁止使用 Codex。\n【福利待遇】\n公司提供 Cursor 会员。',
+                        'numbered-wrap-fixture','FICTIONAL WRAP FIXTURE')
+                    expect(page.locator('#counts')).to_contain_text('真实记录 3');page.locator('#analyze').click()
+                    expect(page.locator('#report-stats')).to_contain_text('已接受正向要求 4')
+                    expect(page.locator('#requirements')).to_contain_text(quote.replace('\n',' '))
+                    expect(page.locator('#requirements')).to_contain_text('禁止使用 Codex。')
+                    expect(page.locator('#requirements')).not_to_contain_text('会员')
+                    with page.expect_download() as pending:page.get_by_role('button',name='requirements_zh.csv',exact=True).click()
+                    pending.value.save_as(str(out/'authored-numbered-wrap.csv'))
+                    csv=(out/'authored-numbered-wrap.csv').read_text(encoding='utf-8-sig')
+                    assert quote in csv and '禁止使用 Codex。' in csv and '会员' not in csv
+                    assert original=={p.name:p.read_bytes() for p in first.iterdir() if p.is_file()}
+                    page.reload();expect(page.locator('#runs button')).to_have_count(3)
+                    page.locator('#runs button').first.click()
+                    expect(page.locator('#requirements')).to_contain_text(quote.replace('\n',' '))
+                    result['checks'].append('numbered Chinese continuation reaches original form/report/CSV with its exact newline; next prohibition and wrapped benefits heading stay separate, old report unchanged and new history reloads')
                     assert server.public_tasks.snapshot()['status']=='idle'
                     assert not result['page_errors'] and not result['external_requests']
                     result.update(success=True,source_requests=0)
