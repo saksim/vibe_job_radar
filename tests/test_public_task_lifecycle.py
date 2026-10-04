@@ -18,6 +18,7 @@ from vibe_job_radar.public_example import PublicExample
 from vibe_job_radar.public_tasks import PublicTasks
 from vibe_job_radar.store import Store
 from vibe_job_radar.workspace import InputError, Workspace
+from public_task_wait_diagnostics import join_observed
 
 
 class PublicLifecycleTests(unittest.TestCase):
@@ -36,8 +37,8 @@ class PublicLifecycleTests(unittest.TestCase):
 
     def wait(self, tasks=None):
         tasks = tasks or self.tasks
-        tasks._thread.join(timeout=10)
-        self.assertFalse(tasks._thread.is_alive(), 'worker did not finish')
+        alive, diagnostic = join_observed(tasks, timeout=10)
+        self.assertFalse(alive, 'worker did not finish' + diagnostic)
         return tasks.state()['task']
 
     def hold_request(self, url):
