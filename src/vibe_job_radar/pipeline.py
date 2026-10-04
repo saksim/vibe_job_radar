@@ -6,6 +6,7 @@ import shutil
 import tempfile
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import nullcontext
 from pathlib import Path
 import threading
 from . import config as cfg
@@ -28,10 +29,11 @@ COVERAGE_FIELDS = ["job_group_id", "title", "url", "eligible_weight", "user_atte
 HARD_FIELDS = ["constraint_id", "job_group_id", "record_id", "roles", "category", "quote", "start", "end", "strength", "url", "evidence_level", "is_synthetic", "note"]
 
 
-def analyze(db: str | Path, output: str | Path, *, config: dict | None = None,
+def analyze(db: str | Path | Store, output: str | Path, *, config: dict | None = None,
             role_filter: list[str] | None = None, platform_filter: list[str] | None = None,
             candidate_path: str | Path | None = None, reviews_path: str | Path | None = None,
             demo_mode: bool = False, max_age_days: int = 90, as_of: str | None = None, llm=None) -> dict:
+    """Analyze a database path or borrow an open Store without closing it."""
     conf = config or cfg.load_config()
     if max_age_days < 1:
         raise ValueError("max_age_days must be positive")
@@ -39,7 +41,7 @@ def analyze(db: str | Path, output: str | Path, *, config: dict | None = None,
         raise ValueError("unknown role filter")
     if platform_filter and set(platform_filter) - set(conf["platforms"]):
         raise ValueError("unknown platform filter")
-    if not Path(db).is_file():
+    if not isinstance(db, Store) and not Path(db).is_file():
         raise ValueError("database does not exist; ingest/discover first")
     output = Path(output)
     if output.exists() and (not output.is_dir() or any(output.iterdir())):
@@ -49,7 +51,7 @@ def analyze(db: str | Path, output: str | Path, *, config: dict | None = None,
     reviews = load_json(reviews_path) if reviews_path else {}
     if not isinstance(reviews, dict):
         raise ValueError("reviews must be an object keyed by requirement_id")
-    with Store(db) as store:
+    with (nullcontext(db) if isinstance(db, Store) else Store(db)) as store:
         current = store.records()
         historical = store.records(latest_only=False)
         events = store.events()
