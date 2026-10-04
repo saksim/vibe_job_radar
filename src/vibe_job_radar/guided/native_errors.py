@@ -4,6 +4,20 @@ from __future__ import annotations
 import re
 
 
+def target_closed_by_driver(error: Exception) -> bool:
+    """Exact optional Playwright type; never infer closure from message text.
+
+    The driver may terminate a popup before its public page/frame close event
+    is observable. This helper only classifies an already refused route abort.
+    If the optional package/type is unavailable, the original error is retained.
+    """
+    try:
+        from playwright._impl._errors import TargetClosedError
+    except ImportError:
+        return False
+    return isinstance(error, TargetClosedError)
+
+
 def native_failure_code(error: object) -> str:
     """Return a fixed code from the browser's leading net error, or unknown.
 

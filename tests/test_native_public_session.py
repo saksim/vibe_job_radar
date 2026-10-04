@@ -1,7 +1,8 @@
 """Public page CDP transport and owned-blank-tab boundary, without networking."""
-from types import MethodType
+from types import MethodType, ModuleType
+import sys
 from unittest import TestCase
-from unittest.mock import Mock
+from unittest.mock import Mock, PropertyMock, patch
 
 import test_native_acquisition as fixture
 from vibe_job_radar.guided.contracts import CrawlError
@@ -214,6 +215,98 @@ class NativePublicSessionTests(TestCase):
         route.abort.assert_called_once_with('blockedbyclient')
         route.continue_.assert_not_called()
         self.assertTrue(self.b.cancelled.is_set())
+
+    def test_rejected_page_closing_during_abort_preserves_refusal_without_callback_error(self):
+        page,frame,route=Mock(),Mock(),Mock()
+        frame.page=page;route.request.frame=frame;page.is_closed.return_value=False
+        error=RuntimeError('authored closed-page failure')
+        def closed(_code):
+            page.is_closed.return_value=True
+            raise error
+        route.abort.side_effect=closed
+        self.b._ownership_route(route)
+        self.assertEqual(self.b.error,'native_surface_unsupported')
+        self.assertTrue(self.b.cancelled.is_set());self.assertTrue(self.b._halted)
+        route.abort.assert_called_once_with('blockedbyclient')
+        route.continue_.assert_not_called();route.fetch.assert_not_called();route.fulfill.assert_not_called()
+        self.b._cdp.send.assert_not_called()
+
+    def test_rejected_live_or_unknown_page_abort_failure_is_not_swallowed(self):
+        for closed in (False,None):
+            with self.subTest(closed=closed):
+                page,frame,route=Mock(),Mock(),Mock()
+                frame.page=page;route.request.frame=frame;page.is_closed.return_value=closed
+                error=RuntimeError('authored abort failure');route.abort.side_effect=error
+                with self.assertRaises(RuntimeError) as caught:self.b._ownership_route(route)
+                self.assertIs(caught.exception,error)
+                self.assertEqual(self.b.error,'native_surface_unsupported')
+                self.assertTrue(self.b.cancelled.is_set());route.continue_.assert_not_called()
+
+    def test_typed_driver_closed_result_precedes_local_page_close_event(self):
+        class DriverClosed(Exception):pass
+        errors=ModuleType('playwright._impl._errors');errors.TargetClosedError=DriverClosed
+        page,frame,route=Mock(),Mock(),Mock()
+        frame.page=page;route.request.frame=frame;page.is_closed.return_value=False
+        route.abort.side_effect=DriverClosed('actual type contract, not text matching')
+        with patch.dict(sys.modules,{'playwright._impl._errors':errors}):
+            self.b._ownership_route(route)
+        self.assertEqual(self.b.error,'native_surface_unsupported')
+        self.assertTrue(self.b.cancelled.is_set());self.assertTrue(self.b._halted)
+        route.continue_.assert_not_called();route.fetch.assert_not_called();route.fulfill.assert_not_called()
+        self.assertEqual(self.b._ownership_abort_counts,{'closed_target':1})
+
+    def test_typed_driver_closed_result_handles_unobservable_popup_frame(self):
+        class DriverClosed(Exception):pass
+        errors=ModuleType('playwright._impl._errors');errors.TargetClosedError=DriverClosed
+        route=Mock();request=Mock();route.request=request
+        type(request).frame=PropertyMock(side_effect=RuntimeError('frame not yet observable'))
+        route.abort.side_effect=DriverClosed()
+        with patch.dict(sys.modules,{'playwright._impl._errors':errors}):
+            self.b._ownership_route(route)
+        self.assertEqual(self.b.error,'native_surface_unsupported')
+        self.assertTrue(self.b.cancelled.is_set());route.continue_.assert_not_called()
+        self.assertEqual(self.b._ownership_abort_counts,{'closed_target':1})
+
+    def test_error_name_or_message_cannot_impersonate_driver_closed_type(self):
+        class DriverClosed(Exception):pass
+        errors=ModuleType('playwright._impl._errors');errors.TargetClosedError=DriverClosed
+        fake=type('TargetClosedError',(RuntimeError,),{})('Target page, context or browser has been closed')
+        fake.name='TargetClosedError'
+        page,frame,route=Mock(),Mock(),Mock()
+        frame.page=page;route.request.frame=frame;page.is_closed.return_value=False
+        route.abort.side_effect=fake
+        with patch.dict(sys.modules,{'playwright._impl._errors':errors}), self.assertRaises(RuntimeError) as caught:
+            self.b._ownership_route(route)
+        self.assertIs(caught.exception,fake)
+        route.continue_.assert_not_called()
+
+    def test_missing_optional_error_type_keeps_the_original_unknown_abort_failure(self):
+        page,frame,route=Mock(),Mock(),Mock()
+        frame.page=page;route.request.frame=frame;page.is_closed.return_value=False
+        error=RuntimeError('Target page, context or browser has been closed')
+        route.abort.side_effect=error
+        with patch.dict(sys.modules,{'playwright._impl._errors':None}), self.assertRaises(RuntimeError) as caught:
+            self.b._ownership_route(route)
+        self.assertIs(caught.exception,error)
+        route.continue_.assert_not_called()
+
+    def test_unreadable_page_close_state_keeps_original_abort_error(self):
+        page,frame,route=Mock(),Mock(),Mock()
+        frame.page=page;route.request.frame=frame
+        page.is_closed.side_effect=ValueError('authored observation failure')
+        error=RuntimeError('authored abort failure');route.abort.side_effect=error
+        with self.assertRaises(RuntimeError) as caught:self.b._ownership_route(route)
+        self.assertIs(caught.exception,error);route.continue_.assert_not_called()
+
+    def test_owned_page_cancelled_then_closed_retains_original_hard_error(self):
+        page,frame,route=Mock(),Mock(),Mock()
+        page.main_frame=frame;frame.page=page;route.request.frame=frame
+        self.b._bound_pages[page]='page:owned';self.b._page_sessions['page:owned']=Mock()
+        self.b.error='http_429';self.b.cancelled.set()
+        page.is_closed.return_value=True;route.abort.side_effect=RuntimeError('closed')
+        self.b._ownership_route(route)
+        self.assertEqual(self.b.error,'http_429');self.assertTrue(self.b.cancelled.is_set())
+        route.continue_.assert_not_called()
 
     def test_owned_page_subframe_is_not_admitted(self):
         page, frame, route = Mock(), Mock(), Mock()
