@@ -321,6 +321,37 @@ def verify_explicit_ai_application_report(app, previous):
     return report
 
 
+def verify_model_code_review_report(app, previous):
+    """Verify explicit model-assisted review with authored positive and negative clauses."""
+    quote = '利用大语言模型辅助完成代码审查与缺陷定位。'
+    text = '任职要求\n1、' + quote + '\n2、不要求' + quote
+    products = ('使用大语言模型进行代码审查工作台开发。',
+                '利用大语言模型进行代码审查流程设计与产品实现。',
+                '使用Claude开展代码审查工作流开发，构建自动审查工具。')
+    text += ''.join(f'\n{i}、{clause}' for i, clause in enumerate(products, 3))
+    app.json('/api/job', {'title':'软件架构师', 'company':'ARTIFICIAL MODEL REVIEW',
+        'platform':'manual', 'source_ref':'portable-acceptance:authored-model-review', 'text':text,
+        'rights_note':'Independently authored review fixture, not a real job.',
+        'evidence_level':'full_text', 'full_text_confirmed':True})
+    report = app.json('/api/analyze', {'dataset':'real', 'roles':['architect']})
+    rows = [r for r in report['requirements'] if r['company']=='ARTIFICIAL MODEL REVIEW']
+    positive = [r for r in rows if r['quote']==quote]
+    negative = [r for r in rows if r['quote']=='不要求'+quote]
+    if (report['id']==previous['id'] or len(rows)!=4
+            or {r['capability'] for r in positive}!={'ai_coding','testing_review'}
+            or len(negative)!=2 or any(r['strength']!='not_required' for r in negative)
+            or any(r['relation']!='direct' or r['review_status']!='rule_accepted' for r in rows)
+            or any(r['strength']!='expected' for r in positive)
+            or any(r['tools'] or text[r['start']:r['end']]!=r['quote'] for r in rows)):
+        raise AssertionError('frozen model code-review meaning or original offsets are incorrect')
+    status,data=app.call(f"/api/download/{report['id']}/requirements_zh.csv")
+    if status!=200 or quote.encode('utf-8') not in data:
+        raise AssertionError('frozen model code-review CSV is incomplete')
+    if app.json('/api/report/'+previous['id'])['requirements']!=previous['requirements']:
+        raise AssertionError('model code-review analysis changed prior evidence')
+    return report
+
+
 def verify(bundle,report_path,*,browser_choice='bundled'):
     if browser_choice not in ('bundled','msedge'):raise ValueError('unsupported verification browser')
     if sys.platform!='win32':raise ValueError('portable executable verification requires Windows')
@@ -418,6 +449,10 @@ def verify(bundle,report_path,*,browser_choice='bundled'):
                 application=verify_explicit_ai_application_report(app,wrapped)
                 result['explicit_ai_application_report_verified']=True
                 result['checks'].append('frozen explicit model application keeps exact code-review quotes, separates not-required clauses and does not invent named coding tools')
+                result['stage']='model_code_review_report'
+                model_review=verify_model_code_review_report(app,application)
+                result['model_code_review_report_verified']=True
+                result['checks'].append('frozen explicit model-assisted review preserves original positive/negative clauses, CSV and earlier reports')
                 result['stage']='real_browser_ui'
                 from playwright.sync_api import sync_playwright,expect
                 with sync_playwright() as pw:
@@ -461,6 +496,9 @@ def verify(bundle,report_path,*,browser_choice='bundled'):
                 if restarted.json('/api/report/'+application['id'])['requirements']!=application['requirements']:
                     raise AssertionError('portable restart changed explicit AI application evidence')
                 result['explicit_ai_application_restart_verified']=True
+                if restarted.json('/api/report/'+model_review['id'])['requirements']!=model_review['requirements']:
+                    raise AssertionError('portable restart changed model code-review evidence')
+                result['model_code_review_restart_verified']=True
                 if inventory(workspace/'reports'/ident)!=previous_files:
                     raise AssertionError('portable restart changed an existing report file')
                 result['english_obligation_restart_verified']=True
