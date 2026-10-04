@@ -21,7 +21,8 @@ from .collection import writer_lock
 from .guided.rate import Limits, RateLedger, RateLimit
 from .html_parser import plain_text
 from .public_cache_guard import CacheFailureGuard
-from .network import FetchError, SafeHTTP
+from .network import FetchError, SafeHTTP, JSONRepresentation, valid_etag
+from .public_revalidation import CatalogValidation
 from .public_contract import ContractError, PublicQuery, validate_batch
 from .public_boards import ANTHROPIC, BOARDS
 from .utils import atomic_json
@@ -142,6 +143,9 @@ class LocalPublicDataClient:
     def _guard(self, board):
         return self.failure_guard if board == ANTHROPIC else CacheFailureGuard(self.root, board.api_url)
 
+    def _validation(self,board):
+        return CatalogValidation(self.root,board)
+
     def _validate_snapshot(self, value, now, board=ANTHROPIC):
         if (not isinstance(value, dict) or set(value) not in ({'observed_at', 'api', 'revision', 'jobs'},
                                   {'observed_at', 'api', 'revision', 'jobs', 'catalog_change'})
@@ -191,6 +195,9 @@ class LocalPublicDataClient:
         return body + '.' + hmac.new(self.secret, body.encode(), hashlib.sha256).hexdigest()
 
     def _select(self, query, snapshot, now, *, cached, requests=0, error=None):
+        validation=self._validation(BOARDS[query.source_scope[0]]).read(snapshot,now)
+        checked_at=validation['checked_at'] if validation else snapshot['observed_at']
+        not_modified=checked_at>snapshot['observed_at']
         terms = query.query.casefold().split()
         jobs = [j for j in snapshot['jobs']
                 if all(term in (j['title']+' '+j['company']+' '+j['text']).casefold() for term in terms)
@@ -215,11 +222,14 @@ class LocalPublicDataClient:
         next_cursor = self._cursor(following, query, snapshot) if following < len(jobs) else ''
         batch = validate_batch({'schema_version': 1, 'jobs': jobs[offset:following],
             'next_cursor': next_cursor, 'generated_at': timestamp(now)}, query, self.registry, access_mode='local')
-        return {'response': batch, 'cache_reused': cached, 'stale': now-snapshot['observed_at'] >= 600,
+        return {'response': batch, 'cache_reused': cached, 'stale': now-checked_at >= 600,
+                'checked_at':checked_at,'not_modified':not_modified,
                 'observed_at': snapshot['observed_at'], 'network_requests': requests, 'refresh_error': error,
                 'execution_mode': self.execution_mode, 'available_jobs': len(snapshot['jobs']),
                 'matching_jobs': len(jobs), 'returned_jobs': len(batch['jobs']),
-                'catalog_change': copy.deepcopy(snapshot.get('catalog_change'))}
+                # A 304 confirms the same representation; it is not another
+                # complete snapshot comparison. Preserve that old audit on disk.
+                'catalog_change': None if not_modified else copy.deepcopy(snapshot.get('catalog_change'))}
 
     def cached(self, query):
         board = self._scope(query)
@@ -236,6 +246,8 @@ class LocalPublicDataClient:
         with writer_lock(self.workspace.root):
             self._prepare()
             now = self.clock(); cached = self._cached(now, board)
+            validator=self._validation(board)
+            validation=validator.read(cached,now)
             guard = self._guard(board)
             hard_failure = guard.read(now)
             if query.cursor:
@@ -245,7 +257,8 @@ class LocalPublicDataClient:
                 if hard_failure:
                     raise FetchError(hard_failure)
                 return self._select(query, cached, now, cached=True)
-            if cached and now-cached['observed_at'] < 600 and not hard_failure:
+            checked_at=validation['checked_at'] if validation else cached['observed_at'] if cached else 0
+            if cached and now-checked_at < 600 and not hard_failure:
                 return self._select(query, cached, now, cached=True)
             try:
                 self.ledger.reserve(SCOPE, 'request')
@@ -267,7 +280,23 @@ class LocalPublicDataClient:
                     self.client.resolver = self.workspace.dns_resolver
                 # This constant GET carries no user query, region, files, cookies,
                 # passwords, application API key or Authorization header.
-                payload = self.client.json(board.api_url)
+                etag=validation['etag'] if validation and not hard_failure else None
+                # Legacy injected JSON-only transports keep their original
+                # contract. Require a declared method, not Mock.__getattr__ or
+                # an accidental attribute, to opt into response metadata.
+                conditional=getattr(type(self.client),'conditional_json',None)
+                response=(self.client.conditional_json(board.api_url,etag=etag) if callable(conditional)
+                          else JSONRepresentation(200,self.client.json(board.api_url),None))
+                if not isinstance(response,JSONRepresentation):raise FetchError('invalid_api_shape')
+                if response.status==304:
+                    if (cached is None or not valid_etag(etag) or not valid_etag(response.etag)
+                            or response.etag.removeprefix('W/')!=etag.removeprefix('W/')
+                            or response.payload is not None):
+                        raise FetchError('invalid_not_modified')
+                    validator.save(cached,response.etag,now)
+                    return self._select(query,cached,now,cached=True,requests=1)
+                if response.status!=200:raise FetchError(f'http_{response.status}')
+                payload=response.payload
             except FetchError as exc:
                 if exc.code == 'http_429':
                     self._rate_blocked = True
@@ -297,5 +326,6 @@ class LocalPublicDataClient:
             if path.is_symlink():
                 raise InputError('缓存文件不能使用符号链接。')
             atomic_json(path, value)
+            validator.save(value,response.etag if valid_etag(response.etag) else None,now)
             guard.clear()
             return self._select(query, value, now, cached=False, requests=1)
