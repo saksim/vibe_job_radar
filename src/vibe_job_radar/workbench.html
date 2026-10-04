@@ -38,7 +38,7 @@ body{overflow-wrap:anywhere}
 <button id="public-resume" type="button" hidden>确认继续已保存的公开查询</button>
 <p id="public-saved-query" class="muted"></p>
 <details id="public-schedule"><summary>每24小时自动更新这组公开查询</summary>
-<p>默认关闭。沿用上方查询词、地区与来源，每次最多20条首屏结果，不自动翻页。保存后首次在24小时后运行；关闭网页不影响，但本机工作台服务必须保持运行。服务重启后只补一次到期查询。</p>
+<p>默认关闭。沿用上方查询词、地区与来源，每次最多20条首屏结果，不自动翻页。保存后首次在24小时后运行；关闭网页不影响，工作台或独立后台进程需保持运行。重启后只补一次到期查询。</p>
 <p>来源或网络路线变化、失败或过期缓存会暂停计划，需要重新确认。停止会取消后续步骤；已经开始的只读请求或本地保存结束后停止，已有报告保留。</p>
 <fieldset id="schedule-controls" disabled><legend>本机执行计划</legend>
 <label class="check"><input id="schedule-consent" type="checkbox">我同意按上方当前来源与查询每24小时执行一次，并把计划保存在此工作区</label>
