@@ -59,6 +59,24 @@ def dashboard(path: Path, manifest: dict, summary: list[dict], rows: list[dict],
                     [r["platform"], r["title"], config["capabilities"][r["capability"]]["label"], r["quote"],
                      LABELS.get(r["strength"], r["strength"]), LABELS.get(r["review_status"], r["review_status"])])
                     + f'<td>{link}<br><small>{esc(r["requirement_id"])}</small></td></tr>')
+    role_rows = []
+    brief = manifest.get("research_brief", {})
+    for role in brief.get("roles", []):
+        counts = role.get("sample_counts")
+        if counts is None:
+            values = [role["label"], *["未记录"] * 6, "本报告未记录方向样本计数。"]
+        else:
+            values = [role["label"], counts["selected_source_records"], counts["full_text_job_groups"],
+                      counts["vibe_evidence_job_groups"], counts["requirement_rows"], counts["review_queue_rows"],
+                      str(counts["rule_accepted_positive_rows"]) + " / " + str(counts["human_approved_positive_rows"]),
+                      role["sample_note"]]
+        role_rows.append("<tr>" + "".join("<td>" + esc(v) + "</td>" for v in values) + "</tr>")
+    role_coverage = ('<section><h2>各方向样本覆盖</h2><p class="note">' +
+                     esc(brief.get("role_sample_note", "旧报告没有记录方向样本计数。")) +
+                     '</p><div class="scroll"><table id="role-sample-coverage"><thead><tr><th>方向</th>'
+                     '<th>纳入来源记录</th><th>完整正文岗位（去重）</th><th>含AI证据岗位</th>'
+                     '<th>要求行</th><th>待复核行</th><th>正向AI要求：规则接收 / 人工确认</th><th>下一步</th>'
+                     '</tr></thead><tbody>' + "".join(role_rows) + '</tbody></table></div></section>') if role_rows else ""
     document = '''<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
@@ -79,7 +97,7 @@ pre{white-space:pre-wrap;word-break:break-word;font:14px/1.9 system-ui,"Microsof
 @media(max-width:800px){.cards{grid-template-columns:repeat(2,1fr)}main{padding:16px}header{padding:26px}.card{padding:15px}}
 </style></head><body><header><div class="brand">WEIYU AI STUDIO / VIBE JOB RADAR</div>
 <h1>从招聘要求，到可举证的能力表达</h1><p>逐条证据 · 能力并集与共同项 · 分岗位措辞 · 指标口径 · 缺口复核</p>
-<div class="banner">__BANNER__</div></header><main><div class="cards">__CARDS__</div>
+<div class="banner">__BANNER__</div></header><main><div class="cards">__CARDS__</div>__ROLE_COVERAGE__
 <section><h2>样本内能力频次</h2><p class="note">分母为当前样本内含已接收正向 AI 编程正文证据的去重职位数，不代表市场需求比例。规则接收不等于人工验真。普通岗位能力、摘要与待复核项不计入。</p>
 <div class="scroll"><table><thead><tr><th>能力</th><th>职位数 / 分母</th><th>样本频次</th><th>归纳层次</th></tr></thead><tbody>__SUMMARY__</tbody></table></div></section>
 <section><h2>逐条招聘要求与证据</h2><input id="query" placeholder="筛选岗位、工具、原文、状态……" aria-label="筛选要求">
@@ -91,6 +109,6 @@ pre{white-space:pre-wrap;word-break:break-word;font:14px/1.9 system-ui,"Microsof
     # Replace in one pass: source text cannot introduce a second-stage template placeholder.
     import re
     values = {"BANNER": esc(banner), "CARDS": cards_html, "SUMMARY": summ, "ROWS": "".join(body),
-              "CLAIMS": esc(claims), "TIME": esc(manifest["created_at"])}
-    document = re.sub(r"__(BANNER|CARDS|SUMMARY|ROWS|CLAIMS|TIME)__", lambda m: values[m.group(1)], document)
+              "CLAIMS": esc(claims), "TIME": esc(manifest["created_at"]), "ROLE_COVERAGE": role_coverage}
+    document = re.sub(r"__(BANNER|CARDS|SUMMARY|ROWS|CLAIMS|TIME|ROLE_COVERAGE)__", lambda m: values[m.group(1)], document)
     atomic_text(path, document)
