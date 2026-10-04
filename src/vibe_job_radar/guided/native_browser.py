@@ -19,7 +19,8 @@ import time
 from urllib.parse import urljoin, urlsplit
 
 from .browser import PlaywrightBackend
-from .contracts import CrawlError
+from .contracts import CrawlError, PageSnapshotChanged
+from .native_navigation import observe_document
 from .diagnostic_trace import notify, observe, observe_robots, traced
 from .native_policy import NativeRobots, contract_for
 from .native_tunnel import NativeTunnel
@@ -90,6 +91,7 @@ class NativeBackend(PlaywrightBackend):
         self._adopting = set()
         self._page_sessions, self._bound_pages = {}, {}
         self._committed_pages = set()
+        self._page_documents = {}
         self._page_creation = 0
         self._rejected_targets = set()
         self._pending_rejected_targets = []
@@ -275,7 +277,8 @@ class NativeBackend(PlaywrightBackend):
         session = 'page:' + target
         self._page_sessions[session] = client
         self._bound_pages[page] = session
-        for method in ('Fetch.requestPaused', 'Fetch.authRequired',
+        for method in ('Page.frameNavigated', 'Page.navigatedWithinDocument',
+                       'Fetch.requestPaused', 'Fetch.authRequired',
                        'Network.dataReceived', 'Network.loadingFinished',
                        'Network.loadingFailed', 'Target.attachedToTarget'):
             client.on(method, lambda data, name=method: self._received({
@@ -402,6 +405,7 @@ class NativeBackend(PlaywrightBackend):
                 # no document is navigated before _bind_page configures Fetch.
                 self._send(session, 'Runtime.runIfWaitingForDebugger')
                 return
+            self._send(session, 'Page.enable')
             self._send(session, 'Network.enable', {'maxTotalBufferSize':5_000_000,'maxResourceBufferSize':1_000_000})
             self._send(session, 'Network.setUserAgentOverride', {'userAgent':self._native_user_agent})
             self._send(session, 'Network.setCacheDisabled', {'cacheDisabled':True})
@@ -421,6 +425,7 @@ class NativeBackend(PlaywrightBackend):
             pacer.retire(session)
         self._sessions.pop(session, None)
         self._page_sessions.pop(session, None)
+        self.__dict__.get('_page_documents', {}).pop(session, None)
         for page, bound in tuple(self._bound_pages.items()):
             if bound == session:
                 self._bound_pages.pop(page, None)
@@ -474,7 +479,12 @@ class NativeBackend(PlaywrightBackend):
                         entry[1](message.get('result', {}))
                 return
             method, data = message.get('method'), message.get('params', {})
-            if method == 'Target.attachedToTarget':
+            if method in {'Page.frameNavigated', 'Page.navigatedWithinDocument'}:
+                documents = self.__dict__.setdefault('_page_documents', {})
+                observed = observe_document(documents.get(session), self._sessions[session], method, data)
+                if observed is not None:
+                    documents[session] = observed
+            elif method == 'Target.attachedToTarget':
                 if self._browser_chrome_ui(data['targetInfo']):
                     self._send(session, 'Target.detachFromTarget', {'sessionId': data['sessionId']})
                 else:
@@ -754,6 +764,68 @@ class NativeBackend(PlaywrightBackend):
             self._observed_bytes+=len(raw)
         self._send(session,'Network.getResponseBody',{'requestId':event['requestId']},store)
 
+    def document_identity(self):
+        """Return a stable owned-page token without controller-specific fields."""
+        self._check_error()
+        page = self.page
+        if not page or page.is_closed():
+            raise CrawlError('browser_closed')
+        session = self._bound_pages.get(page)
+        client = self._page_sessions.get(session)
+        document = self.__dict__.get('_page_documents', {}).get(session)
+        url = page.url
+        if (client is None or document is None or self._sessions.get(session) != document.target
+                or page is not self.page or self._bound_pages.get(page) != session
+                or self._page_sessions.get(session) is not client
+                or self.__dict__.get('_page_documents', {}).get(session) is not document
+                or url != document.url):
+            raise PageSnapshotChanged()
+        return (session, id(page), id(client), document)
+
+    def search_entry_url(self, url, *, keyword):
+        # Only the default keyword-only request has an implemented form route.
+        # An explicit seed with extra conditions keeps its checked navigation;
+        # those conditions must never disappear when switching to the form.
+        if (self.adapter.key != 'liepin'
+                or self.adapter.accept_url(url) != self.adapter.search_url(keyword)):
+            return url
+        return self.adapter.search_base
+
+
+    def open_search(self, url, *, keyword, authentication=False):
+        entry = self.search_entry_url(url, keyword=keyword)
+        if entry == url:
+            return self.open(url, authentication=authentication)
+        opened = self.open(entry, authentication=authentication)
+        if authentication:
+            # Login controls must remain reachable even if a login overlay
+            # obscures the search field. The user's later resume searches with
+            # that same session; a login action does not submit a keyword first.
+            return opened
+        from .liepin_form import submit_search
+        return submit_search(self, keyword)
+
+
+    def ensure_page_access(self, url):
+        identity = self.document_identity()
+        document = identity[-1]
+        if document.url != url:
+            raise PageSnapshotChanged()
+        accepted = self.adapter.accept_url(url)
+        base = self.adapter.search_base
+        checked = url
+        # A history update is not a document fetch. Only this owned browser's
+        # committed query-free entry can supply its own permission; all actual
+        # document and API requests still pass their independent request rules.
+        if self.adapter.key == 'liepin' and document.document_url == base:
+            current, entry = urlsplit(accepted), urlsplit(base)
+            if ((current.scheme, current.netloc, current.path) ==
+                    (entry.scheme, entry.netloc, entry.path) and not entry.query):
+                checked = base
+        self.wire.ensure_robots(checked)
+        if self.document_identity() != identity:
+            raise PageSnapshotChanged()
+
     def snapshot(self):
         self._check_error()
         return replace(super().snapshot(), business=self.observations(),
@@ -821,39 +893,47 @@ class NativeBackend(PlaywrightBackend):
         except Exception as exc:
             raise self.wait_error or CrawlError(self.error or native_transport_failure(exc, self.tunnel.last_error) or 'page_not_ready') from exc
 
-    def _settle(self):
+    def _settle(self, *, search=False):
         deadline=time.monotonic()+15
         while time.monotonic()<deadline:
             self._check_error()
             # Readiness is site content/response/challenge, not network-idle or a
             # fixed sleep. The existing parser still determines usable job data.
-            body = self.page.locator('body')
-            if not body.count():
-                # A navigation can replace the document after DOMContentLoaded.
-                # Stay within the existing overall deadline instead of failing
-                # the entire login after a one-second locator timeout.
-                self.page.wait_for_timeout(100)
-                continue
-            text=body.inner_text(timeout=1000)
-            if self.adapter.challenged(text,self.page.url):
-                raise CrawlError('manual_required')
-            if self.auth_mode and text.strip():
-                return
-            ready = getattr(self.adapter, 'native_ready', None)
-            if callable(ready) and ready(self.observations()):
-                return
-            snap=self.snapshot()
             try:
-                if self.adapter.cards(snap):
+                body = self.page.locator('body')
+                if not body.count():
+                    # A navigation can replace the document after DOMContentLoaded.
+                    self.page.wait_for_timeout(100)
+                    continue
+                text=body.inner_text(timeout=1000)
+                if self.adapter.challenged(text,self.page.url):
+                    raise CrawlError('manual_required')
+                if self.auth_mode and text.strip() and not search:
                     return
-            except CrawlError:
+                ready = getattr(self.adapter, 'native_ready', None)
+                if callable(ready) and ready(self.observations()):
+                    return
+                snap=self.snapshot()
                 try:
-                    self.adapter.detail(snap); return
+                    if self.adapter.cards(snap):
+                        return
                 except CrawlError:
-                    pass
+                    try:
+                        self.adapter.detail(snap); return
+                    except CrawlError as exc:
+                        if exc.code == 'job_unavailable':
+                            raise  # A closed job is final; its recommendations are not its JD.
+                        pass
+            except PageSnapshotChanged:
+                # Discard this read if a normal navigation/history update ran
+                # while CDP was answering it. Reobserve inside the same deadline;
+                # never navigate, resubmit input, or turn another error into a retry.
+                pass
             self.page.wait_for_timeout(100)
+        # Pumping browser callbacks can consume the remaining deadline. Preserve
+        # a native refusal delivered there instead of replacing it with timeout.
+        self._check_error()
         raise CrawlError('page_not_ready')
-
     def next_page(self):
         self._check_error()
         return super().next_page()
@@ -896,5 +976,6 @@ class NativeBackend(PlaywrightBackend):
         self._observations.clear()
         self.__dict__.get('_latest_business', {}).clear(); self._auth_attempts.clear()
         self._page_sessions.clear(); self._bound_pages.clear()
+        self.__dict__.get('_page_documents', {}).clear()
         self.__dict__.get('_committed_pages', set()).clear()
         self._rejected_targets.clear(); self._pending_rejected_targets.clear(); self._rejected_pages.clear()

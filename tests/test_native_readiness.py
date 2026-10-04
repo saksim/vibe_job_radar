@@ -39,3 +39,13 @@ class NativeReadinessTests(unittest.TestCase):
             self.backend._settle()
         self.assertEqual(self.backend.page.wait_for_timeout.call_count, 1)
         self.backend.page.locator.return_value.inner_text.assert_not_called()
+
+    def test_native_refusal_at_deadline_keeps_its_reason_without_another_read(self):
+        self.backend.page.locator.return_value.count.return_value = 0
+        self.backend._check_error.side_effect = [None, CrawlError('resource_domain_blocked')]
+        with patch('vibe_job_radar.guided.native_browser.time.monotonic', side_effect=[100, 100, 116]):
+            with self.assertRaisesRegex(CrawlError, 'resource_domain_blocked'):
+                self.backend._settle()
+        self.assertEqual(self.backend.page.wait_for_timeout.call_count, 1)
+        self.backend.page.locator.return_value.inner_text.assert_not_called()
+        self.backend.page.goto.assert_not_called()

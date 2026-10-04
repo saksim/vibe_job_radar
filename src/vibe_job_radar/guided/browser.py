@@ -354,6 +354,9 @@ class PlaywrightBackend:
     def _before_pagination_click(self) -> None:
         """Backend state transition after permission/quota checks, before clicking."""
 
+    def ensure_page_access(self, url: str) -> None:
+        self.wire.ensure_robots(url)
+
     @traced('pagination', 'browser')
     def next_page(self) -> bool:
         self.auth_mode, self.error, self.redirects = False, None, 0
@@ -361,7 +364,7 @@ class PlaywrightBackend:
         button = self._visible(self.adapter.next_selectors)
         if not button or button.get_attribute('aria-disabled') == 'true' or 'disabled' in (button.get_attribute('class') or '').split():
             return False
-        self.wire.ensure_robots(self.page.url)
+        self.ensure_page_access(self.page.url)
         self.wire.reserve('page')  # Reserve once, before either a document or SPA action.
         self._pagination_page = self.page
         try:
@@ -372,7 +375,6 @@ class PlaywrightBackend:
         finally:
             # Never leak a SPA/no-navigation credit to an unrelated later visit.
             self._pagination_page = None
-
     def collection_mode(self):
         self.auth_mode = False
         # Reading an existing DOM must not erase a failed required request.
