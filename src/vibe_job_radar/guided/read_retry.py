@@ -86,7 +86,7 @@ def retry_delay(used, retry_after, now, *, random=None):
     return max(base * (1 + sample / 2), after)
 
 
-def action_for(state, failure):
+def action_for(state, failure, *, search_entry=None):
     if type(failure.status) is not int or failure.status not in STATUSES:
         raise CrawlError('read_retry_unavailable')
     if state.get('phase') == 'collect':
@@ -94,6 +94,10 @@ def action_for(state, failure):
         pending = next((c for c in state['cards'] if c['id'] in selected and c['status'] != 'ok'), None)
         if pending and pending['url'] == failure.url:
             return 'resume'
-    elif failure.url == state['search_url']:
+    elif failure.url == state['search_url'] or (search_entry is not None and failure.url == search_entry):
+        # The native form path explicitly reads its query-free entry before
+        # any input. Only the backend's exact entry mapping may alias the saved
+        # search URL; the typed failure still requires that main GET, not a
+        # form submission, redirect, later navigation or authentication action.
         return 'search'
     raise CrawlError('read_retry_unavailable')

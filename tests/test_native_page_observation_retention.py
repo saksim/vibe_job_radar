@@ -10,6 +10,7 @@ from unittest.mock import Mock, patch
 
 from vibe_job_radar.guided.contracts import CrawlError, PageSnapshot
 from vibe_job_radar.guided.native_browser import NativeBackend
+from vibe_job_radar.guided.native_navigation import NativeDocument
 from vibe_job_radar.guided.rate import RateLimit
 from test_liepin_native_search import ADAPTER, SEARCH, snapshot, payload
 
@@ -19,6 +20,8 @@ def backend_with_data(*, empty=False):
     observed = snapshot(payload([]) if empty else None)
     b.adapter = ADAPTER
     b.page = SimpleNamespace(url=SEARCH)
+    b.document_identity = Mock(return_value=('session',id(b.page),7,
+        NativeDocument('frame','frame',1,SEARCH,SEARCH)))
     b._epoch = 1
     b._observations = deque(observed.business, maxlen=20)
     b._latest_business = {'liepin_search': 1}

@@ -48,18 +48,21 @@ class SearchFixture:
         self.login_late_pacing = False
         self.dependency_mode = False
         self.binding_mode = ''
+        self.form_mode = ''
+        self.search_shapes = []
         self.denied_dependency = None
         owner = self
         class Handler(http.server.BaseHTTPRequestHandler):
             protocol_version = 'HTTP/1.1'
             def log_message(self, *_): pass
             def send(self, content, mime='text/html; charset=utf-8', status=200, extra=()):
-                raw = content.encode('utf-8')
-                compressed = mime.startswith('text/html')
+                no_body = status in {204,205}
+                raw = b'' if no_body else content.encode('utf-8')
+                compressed = mime.startswith('text/html') and not no_body
                 if compressed: raw = gzip.compress(raw)
                 self.send_response(status)
                 self.send_header('Content-Type', mime)
-                self.send_header('Content-Length', str(len(raw)))
+                if status != 204: self.send_header('Content-Length', str(len(raw)))
                 if compressed: self.send_header('Content-Encoding', 'gzip')
                 for key, value in extra: self.send_header(key, value)
                 if mime.startswith('text/html'):
@@ -79,6 +82,7 @@ class SearchFixture:
             def record(self):
                 owner.requests.append({'method': self.command, 'host': self.headers.get('Host'),
                     'path': urlsplit(self.path).path, 'anonymous': not self.headers.get('Cookie'),
+                    'query_keys':sorted(parse_qs(urlsplit(self.path).query,keep_blank_values=True)),
                     'no_credentials': not self.headers.get('Authorization') and not self.headers.get('Proxy-Authorization'),
                     'identified': 'VibeJobRadar/0.1' in self.headers.get('User-Agent', '')})
             def do_GET(self):
@@ -90,19 +94,25 @@ class SearchFixture:
                         self.send('<script>fetch("/robots-error-must-not-run")</script>'
                                   '<img src="/robots-error-must-not-run">Not Found', status=404)
                     else:
-                        self.send('User-agent: *\nAllow: /\n', 'text/plain')
+                        rule='Disallow: /*?*' if owner.form_mode and self.headers.get('Host')==HOST else 'Allow: /'
+                        self.send('User-agent: *\n'+rule+'\n', 'text/plain')
                 elif path == '/zhaopin/':
                     # Intentionally no anchors: only the browser response can
                     # produce the candidate; a DOM-only implementation fails.
                     early = ('<script>window.initialPopupBlocked = '
                              '(window.open("/apply") === null);</script>'
                              if parse_qs(urlsplit(self.path).query).get('key') == ['窗口隔离'] else '')
-                    stale = ('<a href="/job/999.shtml">过期推荐职位</a>' if owner.binding_mode else '')
+                    stale = ('<a href="/job/999.shtml">过期推荐职位</a>' if owner.binding_mode or owner.form_mode else '')
+                    if owner.form_mode:
+                        stale += '<div id="header-quick-menu-user-info">合成账号区域</div>' if 'local_login_fixture=valid' in self.headers.get('Cookie','') else ''
+                        if owner.form_mode=='challenge':stale += '<p>请完成安全验证</p>'
                     self.send('<!doctype html><meta charset="utf-8">' + early + stale + '<h1>合成搜索页</h1>'
                               '<iframe id="common-footer" src="https://' + CDN_HOST + '/footer"></iframe>'
                               '<div id="loaded"></div><script src="https://' + CDN_HOST + ASSET + '"></script>')
                 elif path in (REGION_PATH, SUGGEST_PATH):
                     self.send(json.dumps({'flag':1,'data':[]}), 'application/json')
+                elif path == ASSET and owner.form_mode:
+                    self.send(visible_form_script(owner.form_mode), 'application/javascript')
                 elif path == ASSET and owner.binding_mode:
                     self.send(binding_script(owner.binding_mode), 'application/javascript')
                 elif path == ASSET and owner.dependency_mode:
@@ -151,7 +161,11 @@ fetch('https://""" + API_HOST + PATH + """', {
                     return
                 if self.path != PATH: self.send('unknown', status=405); return
                 raw = self.rfile.read(int(self.headers.get('Content-Length', '0')))
-                form = json.loads(raw)['data']['mainSearchPcConditionForm']
+                data = json.loads(raw)['data'];form = data['mainSearchPcConditionForm']
+                owner.search_shapes.append({'keyword_empty':form['key']=='',
+                    'date_alias':'pubTime' not in form and form.get('hrActiveTimeCode')=='7',
+                    'salary_split':form.get('salaryCode')=='' and form.get('salaryLow')=='20' and form.get('salaryHigh')=='40',
+                    'rotated_id':data.get('passThroughForm',{}).get('ckId')=='b'*32})
                 jobs = [] if form['key'] == '明确无结果' else [
                     {'job': {'jobId': 'internal-not-url', 'title': RECORDED_TITLE, 'link': URL + '/job/123.shtml'}}]
                 self.send(json.dumps({'flag':1,'data':{'data':{'jobCardList':jobs},
@@ -219,7 +233,7 @@ def verify_dependency_chain(root, server, local, factory, wait, query, result):
             ledger=RateLedger(root/('dependency-'+label+'.sqlite'),Limits(page_interval=0,request_interval=0))
             service=GuidedService(workspace,registry=Registry([local]),ledger=ledger,native_backend_factory=factory)
             try:
-                service.create({**query,'max_pages':1})
+                service.create(explicit_seed({**query,'max_pages':1},local))
                 task=wait(service)
                 actual=[(r['method'],r['path']) for r in server.requests[before:] if r['path'] in (*DEPENDENCY_PATHS,PATH)]
                 assert not any(r['path'] in (HOTWORDS_PATH,TLOG_PATH) for r in server.requests[before:])
@@ -319,6 +333,157 @@ def verify_published_binding(root, server, local, factory, wait, query, result):
     finally:
         server.binding_mode=''
 
+def explicit_seed(query, local):
+    # Preserve the earlier exact-navigation cases. Default keyword-only form
+    # submission is exercised separately below through real browser controls.
+    if 'list_url' in query:
+        return query
+    return {**query,'list_url':local.search_url(query['keyword'])+'&currentPage=0'}
+
+
+def visible_form_script(mode):
+    config=json.dumps({'mode':mode,'endpoint':'https://'+API_HOST+PATH})
+    return 'const fixture='+config+';'+r'''
+window.searchSubmissions=0;window.initializationResponses=0;
+const field=document.createElement('input');field.type='text';
+field.placeholder='搜索职位、公司';document.body.append(field);
+function search(keyword) {
+ const main={key:keyword,city:'410',otherCity:'fixture-other-city',dq:'410',pubTime:'7',
+  currentPage:0,pageSize:40,workYearCode:'',compId:'',compName:'',compTag:'',industry:'',
+  salaryCode:'20$40',jobKind:'',compScale:'',compKind:'',compStage:'',eduLevel:'',suggestTag:''};
+ const through={scene:'fixture-form',skId:'',fkId:'',ckId:'a'.repeat(32),suggest:null,sfrom:'fixture-field'};
+ const form={...main,salaryCode:'',salaryLow:'20',salaryHigh:'40'};
+ let passThroughForm=through;
+ if(keyword) {
+  history.replaceState({},'',location.pathname+'?'+new URLSearchParams({...main,...through,suggest:'null',suggestId:''}));
+  delete form.pubTime;form.hrActiveTimeCode=main.pubTime;
+  passThroughForm={...through,ckId:'b'.repeat(32)};
+  if(fixture.mode==='missing')return Promise.resolve();
+ }
+ return fetch(fixture.endpoint,{method:'POST',headers:{'Content-Type':'application/json','X-Client-Type':'web'},
+  body:JSON.stringify({data:{mainSearchPcConditionForm:form,passThroughForm}})
+ }).then(r=>r.json()).then(()=>{
+  document.querySelector('#loaded').textContent='response received';
+  if(!keyword)window.initializationResponses++;
+ });
+}
+field.addEventListener('keydown',event=>{
+ if(event.key==='Enter') {event.preventDefault();window.searchSubmissions++;search(field.value);}
+});
+search('');
+'''
+
+
+def verify_visible_forms(root, server, local, factory, wait, query, result):
+    result['visible_form_results']=[]
+    def observed_factory(*args,**kwargs):
+        backend=factory(*args,**kwargs);settle=backend._settle
+        def observed_settle(*a,**kw):
+            answer=settle(*a,**kw)
+            if kw.get('search'):
+                backend.fixture_form_observation=backend.page.evaluate('''() => ({
+                    submissions:window.searchSubmissions,initializations:window.initializationResponses})''')
+            return answer
+        backend._settle=observed_settle
+        return backend
+    try:
+        for label in ('matched','empty','missing','challenge','query-document-refused'):
+            server.form_mode=label;before=len(server.requests);shape_before=len(server.search_shapes)
+            key='明确无结果' if label=='empty' else query['keyword']
+            workspace=Workspace(root/('visible-form-'+label))
+            ledger=RateLedger(root/('visible-form-'+label+'.sqlite'),Limits(page_interval=0,request_interval=0))
+            service=GuidedService(workspace,registry=Registry([local]),ledger=ledger,native_backend_factory=observed_factory)
+            try:
+                requested={**query,'keyword':key,'max_pages':1}
+                if label=='query-document-refused':requested=explicit_seed(requested,local)
+                service.create(requested);task=wait(service)
+                requests=server.requests[before:];shapes=server.search_shapes[shape_before:]
+                posts=sum(not row['keyword_empty'] for row in shapes)
+                assert not any(r['path']=='/job/999.shtml' for r in requests)
+                assert not any(r['path']=='/zhaopin/' and r['query_keys'] for r in requests)
+                assert ledger.summary('liepin')['login']['day']==0
+                row={'case':label,'keyword_posts':posts,'query_document_requests':0,'stale_recommendation_used':False,'login_attempts':0}
+                if label in ('matched','empty'):
+                    native=service._backends[task['id']]
+                    observed=native.fixture_form_observation
+                    assert observed=={'submissions':1,'initializations':1},observed
+                    assert posts==1 and len(shapes)==2 and shapes[0]['keyword_empty']
+                    assert all(shapes[1][k] for k in ('date_alias','salary_split','rotated_id'))
+                    row.update(visible_submissions=1,initializations=1)
+                    if label=='matched':
+                        assert task['status']=='ready' and len(task['cards'])==1,task.get('code')
+                        assert task['cards'][0]['url']==URL+'/job/123.shtml'
+                        service.action({'id':task['id'],'action':'collect','selected':[task['cards'][0]['id']]})
+                        task=wait(service);assert task['status']=='completed' and task['outcome']['saved']==1
+                        with Store(workspace.db) as store:
+                            records=store.records();assert len(records)==1 and records[0].text==RECORDED_BODY
+                        assert workspace.report(task['report_id'])['manifest']['stats']['full_text_job_groups']==1
+                        row.update(full_body_preserved=True,report_full_text_job_groups=1)
+                    else:
+                        assert task['status']=='ready' and task['code']=='no_matching_jobs' and not task['cards'] and not task['report_id'],task.get('code')
+                        row.update(code=task['code'],report_created=False)
+                else:
+                    expected={'missing':'page_not_ready','challenge':'manual_required','query-document-refused':'robots_denied'}[label]
+                    assert task['code']==expected and task['status']!='ready' and not task['cards'] and not task['report_id'],task.get('code')
+                    assert posts==0
+                    if label=='query-document-refused':assert not shapes and not any(r['path']=='/zhaopin/' for r in requests)
+                    row.update(code=task['code'],report_created=False)
+                result['visible_form_results'].append(row)
+                result['checks'].append('visible form '+label+': exact owned keyword input and current response; no query document, stale recommendation or login request')
+            finally:service.close()
+    finally:server.form_mode=''
+
+
+def verify_visible_login_return(root, server, local, factory, query, result):
+    from types import SimpleNamespace
+    from vibe_job_radar.guided.login_return import LoginReturnManager
+    from vibe_job_radar.guided.liepin_form import matching_search_entry_signature, submit_search
+    server.form_mode='login'
+    contract=local.native_contract
+    rules=(*contract.rules,
+        NativeRule('fixture_login_page',HOST,r'/fixture-login',resources=('Document',),role='document'),
+        NativeRule('fixture_login_submit',HOST,r'/fixture-login',methods=('POST',),resources=('Document',),role='login',authentication=True))
+    adapter=replace(local,native_contract=replace(contract,rules=rules))
+    b=None
+    try:
+        b=factory(adapter,RateLedger(root/'visible-login-return.sqlite',Limits(page_interval=0,request_interval=0)),threading.Event(),lambda *_:None)
+        b.open(URL+'/fixture-login',authentication=True)
+        with b.page.expect_navigation(wait_until='domcontentloaded'):
+            b.page.get_by_role('button',name='人工确认').click()
+        b._check_error()
+        assert b.page.locator('h1').inner_text()=='人工登录完成'
+        cookie=next(c for c in b.context.cookies([URL]) if c['name']=='local_login_fixture')
+        assert cookie['value']=='valid' and cookie['httpOnly'] and cookie['secure']
+        state=dict(id='form-return',platform='liepin',backend='native',keyword=query['keyword'],
+            search_url=local.search_url(query['keyword']),query_scope_version=1,status='waiting_manual',
+            authentication='manual_pending',phase='search',cards=[],selection=[],auto_continue_after_login=True)
+        b.open_search(state['search_url'],keyword=state['keyword'],authentication=True)
+        b.page.wait_for_function('window.initializationResponses === 1',timeout=15000)
+        now=[0];queued=[];watcher=LoginReturnManager(clock=lambda:now[0])
+        owner=SimpleNamespace(_lock=threading.RLock(),_busy=False,_shutdown=threading.Event(),_cancel=threading.Event(),
+            _backends={state['id']:b},registry=Registry([adapter]),_load=lambda _:state,
+            _save=lambda value,**kw:value.update(kw),_submit=lambda *args:queued.append(args))
+        before=len(server.requests);shape_before=len(server.search_shapes)
+        watcher.arm(state,b);watcher.tick(owner);assert not queued
+        now[0]=1;watcher.tick(owner);now[0]=2;watcher.tick(owner)
+        assert len(queued)==1 and queued[0][:2]==('resume_returned_search',state['id'])
+        assert len(server.requests)==before and state['authentication']=='manual_pending'
+        returned=queued[0][2];assert returned.backend is b and returned.keyword==state['keyword']
+        assert matching_search_entry_signature(b,state,b.snapshot())==returned.signature
+        b.collection_mode();submit_search(b,returned.keyword)
+        assert b.page.evaluate('window.searchSubmissions')==1
+        cards=b.adapter.cards(b.snapshot());assert len(cards)==1 and cards[0].url==URL+'/job/123.shtml'
+        assert len(server.search_shapes[shape_before:])==1 and not server.search_shapes[-1]['keyword_empty']
+        assert not any(r['path'] in ('/fixture-login','/zhaopin/') for r in server.requests[before:])
+        result['visible_login_return']={'artificial_login_only':True,'queued_actions':1,'visible_submissions':1,
+            'keyword_posts':1,'new_login_requests':0,'new_document_requests':0,'authentication':'manual_pending',
+            'third_owner_observation_matched':True,'current_response_bound':True}
+        result['checks'].append('artificial login returns to the owned query-free entry; two stable reads and a third owner check submit the original visible keyword once without another document or login')
+    finally:
+        if b is not None:b.close()
+        server.form_mode=''
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--controlled', action='store_true')
@@ -374,7 +539,7 @@ def main():
                     services.append(service)
                     query={'platform':'liepin','keyword':'时间序列','roles':['time_series'],'max_pages':2,'max_jobs':1,
                            'consent':True,'rights_note':'仅合成测试','backend':'native','native_consent':True,'diagnostics':True}
-                    service.create(query); task=wait(service)
+                    service.create(explicit_seed(query,local)); task=wait(service)
                     result['first_task_code'] = task['code']
                     if task['status'] != 'ready':
                         result['diagnostics'] = service.diagnostics({'id':task['id']})
@@ -418,7 +583,7 @@ def main():
                     assert workspace.report(task['report_id'])['manifest']['stats']['full_text_job_groups']==1
                     result['checks'].append('actual Liepin parser, Store and original report preserve the selected full JD')
                     previous_report=task['report_id']
-                    service.create({**query,'keyword':'明确无结果'}); empty=wait(service)
+                    service.create(explicit_seed({**query,'keyword':'明确无结果'},local)); empty=wait(service)
                     assert empty['status']=='ready' and empty['code']=='no_matching_jobs' and not empty['cards'],empty.get('code')
                     assert workspace.report(previous_report)
                     result['checks'].append('valid empty response means no matches, not required login; previous report preserved')
@@ -427,7 +592,7 @@ def main():
                     result['checks'].append('anonymous read sends no login request or credentials; application identity retained')
                     # Explicit query-order opt-in must complete the same
                     # pipeline with no UI/manual collect action or login request.
-                    service.create({**query, 'auto_collect': True})
+                    service.create(explicit_seed({**query, 'auto_collect': True},local))
                     automatic = wait(service)
                     assert automatic['status'] == 'completed', automatic.get('code')
                     assert automatic['selection_source'] == 'query_order'
@@ -439,7 +604,7 @@ def main():
                     assert workspace.report(previous_report)
                     assert not any('login' in r['path'] or 'apply' in r['path'] for r in server.requests)
                     result['checks'].append('one opted-in create action performs native API-only search, bounded selection, complete JD and original report without login or manual Collect')
-                    service.create({**query, 'keyword': '明确无结果', 'auto_collect': True})
+                    service.create(explicit_seed({**query, 'keyword': '明确无结果', 'auto_collect': True},local))
                     automatic_empty = wait(service)
                     assert automatic_empty['code'] == 'no_matching_jobs'
                     assert not automatic_empty['selection'] and not automatic_empty['report_id']
@@ -506,7 +671,7 @@ def main():
                         native_backend_factory=factory)
                     services.append(manual)
                     try:
-                        manual.create({**query, 'max_pages':1})
+                        manual.create(explicit_seed({**query, 'max_pages':1},local))
                         manual_task = wait(manual)
                         assert manual_task['status']=='ready', manual_task.get('code')
                         selected = [manual_task['cards'][0]['id']]
@@ -567,6 +732,8 @@ def main():
                     result['checks'].append('a published main document leaving for blank stops with an explicit cause, discards old results and never retries')
                     verify_dependency_chain(root,server,local,factory,wait,query,result)
                     verify_published_binding(root,server,local,factory,wait,query,result)
+                    verify_visible_forms(root, server, local, factory, wait, query, result)
+                    verify_visible_login_return(root, server, local, factory, query, result)
                     result['success']=True
     finally:
         for service in services: service.close()

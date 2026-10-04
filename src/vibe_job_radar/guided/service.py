@@ -40,7 +40,7 @@ from .batch_identity import batch_cards, page_signature, strategy as identity_st
 from .checkpoint import decode as decode_checkpoint, binding as checkpoint_binding, ensure_compatible
 from .acquisition_results import analysis_by_record, audit_items
 from .search_scope import conditions as search_conditions, check_scope
-from .login_return import (LoginReturnManager, ReturnedDetail,
+from .login_return import (LoginReturnManager, ReturnedDetail, ReturnedSearch,
                            matching_detail_signature, pending_detail_target)
 from .session_reuse import reuse_current_session
 from .saved_session import SavedSession
@@ -823,7 +823,10 @@ class GuidedService:
     @traced('listing', 'service', state_index=0)
     def _gather(self, state, backend, adapter, *, navigate=False, more=False):
         if navigate:
-            backend.open(state['search_url'])
+            if callable(getattr(backend, 'open_search', None)):
+                backend.open_search(state['search_url'], keyword=state['keyword'])
+            else:
+                backend.open(state['search_url'])
         if hasattr(backend, 'collection_mode'):
             backend.collection_mode()
         if more and len(state['pages_seen']) >= state['max_pages']:
@@ -839,7 +842,9 @@ class GuidedService:
             if self._cancel.is_set():
                 raise CrawlError('paused')
             page = backend.snapshot()
-            if hasattr(backend, 'wire'):
+            if callable(getattr(backend, 'ensure_page_access', None)):
+                backend.ensure_page_access(page.url)
+            elif hasattr(backend, 'wire'):
                 backend.wire.ensure_robots(page.url)
             with observe(self._trace_for(state), 'list_parse', url=page.url):
                 cards = batch_cards(state, adapter, adapter.cards(page))
@@ -887,7 +892,6 @@ class GuidedService:
                 self._save(state, list_end='no_next_button')
                 break
         self._save(state, 'ready' if state['cards'] else 'empty_list', status='ready' if state['cards'] else 'waiting_manual', phase='select')
-
     @traced('collection', 'service', state_index=0)
     def _collect(self, state, backend, adapter, *, returned_detail=None):
         self._save(state, 'collecting', status='running', phase='collect')
@@ -1076,13 +1080,18 @@ class GuidedService:
             except RateLimit as exc:
                 self._save(state, wait_seconds=round(exc.wait, 1))
                 raise CrawlError('login_rate_limited') from exc
-        if action == 'resume_returned_detail':
+        if action in {'resume_returned_detail', 'resume_returned_search'}:
             # This internal action cannot be submitted by the HTTP/UI API. A
             # replaced browser must never inherit or replay another page's handoff.
-            if (not isinstance(secret, ReturnedDetail)
+            valid_target = (isinstance(secret, ReturnedDetail)
+                and action == 'resume_returned_detail' and pending_detail_target(state) == secret.target)
+            valid_search = (isinstance(secret, ReturnedSearch)
+                and action == 'resume_returned_search' and state.get('search_url') == secret.expected_url
+                and state.get('keyword') == secret.keyword
+                and isinstance(secret.signature, str) and bool(secret.signature))
+            if (not (valid_target or valid_search)
                     or self._backends.get(state['id']) is not secret.backend
-                    or state.get('authentication') != 'manual_pending'
-                    or pending_detail_target(state) != secret.target):
+                    or state.get('authentication') != 'manual_pending'):
                 raise CrawlError('login_return_changed')
             backend = secret.backend
             # A returned snapshot can only be consumed by its living owner.
@@ -1110,7 +1119,10 @@ class GuidedService:
                             and adapter.login_url == 'https://www.liepin.com/')
             url = target.expected_url if target else (state['search_url'] if inline_login else adapter.login_url)
             try:
-                backend.open(url, authentication=True)
+                if inline_login and not target and callable(getattr(backend, 'open_search', None)):
+                    backend.open_search(url, keyword=state['keyword'], authentication=True)
+                else:
+                    backend.open(url, authentication=True)
             except CrawlError as exc:
                 if action != 'login_password' or exc.code != 'manual_required':
                     raise
@@ -1123,6 +1135,19 @@ class GuidedService:
             else:
                 login_code = 'manual_detail_open' if target else 'manual_browser_open'
             self._save(state, login_code, status='waiting_manual', authentication='manual_pending')
+        elif action == 'resume_returned_search':
+            from .liepin_form import matching_search_entry_signature, submit_search
+            if self._cancel.is_set():
+                raise CrawlError('paused')
+            # Third fresh read on the original owner. A changed UI/session or
+            # query never falls back to navigation or a replacement browser.
+            if matching_search_entry_signature(backend, state, backend.snapshot()) != secret.signature:
+                raise CrawlError('login_return_changed')
+            if hasattr(backend, 'collection_mode'):
+                backend.collection_mode()
+            submit_search(backend, secret.keyword)
+            self._gather(state, backend, adapter)
+            self._save(state, login_continuation='resumed_search')
         elif action == 'resume_returned_detail':
             if self._cancel.is_set():
                 raise CrawlError('paused')
@@ -1133,7 +1158,9 @@ class GuidedService:
             # Third, fresh read: reject navigation/body/identity changes between
             # observation and execution, with no automatic refetch fallback.
             page = backend.snapshot()
-            if hasattr(backend, 'wire'):
+            if callable(getattr(backend, 'ensure_page_access', None)):
+                backend.ensure_page_access(page.url)
+            elif hasattr(backend, 'wire'):
                 backend.wire.ensure_robots(page.url)
             if (pending_detail_target(state) != secret.target
                     or matching_detail_signature(adapter, secret.target.expected_url, page) != secret.signature):
@@ -1147,13 +1174,12 @@ class GuidedService:
                 self._collect(state,backend,adapter)
             else:
                 self._gather(state,backend,adapter,navigate=action=='resume')
-        if action in {'search', 'capture', 'resume'}:
+        if action in {'search', 'capture', 'resume', 'resume_returned_search'}:
             self._auto_collect_ready(state, backend, adapter)
-        if (pending_login and action in {'capture', 'search', 'resume', 'collect', 'resume_returned_detail'}
+        if (pending_login and action in {'capture', 'search', 'resume', 'collect', 'resume_returned_detail', 'resume_returned_search'}
                 and state['status'] in {'ready', 'completed'}):
             # This is task progress after a user action, not login certification.
             self._save(state, authentication='user_resumed')
-
     def _auto_collect_ready(self, state, backend, adapter):
         """Apply the user's bounded query-order selection once, never on a gate.
 
@@ -1177,7 +1203,9 @@ class GuidedService:
                 or getattr(backend, 'wait_error', None) is not failure
                 or not can_resume(backend)):
             raise CrawlError('read_retry_unavailable')
-        retry = retry_action_for(state, failure)
+        entry = getattr(backend, 'search_entry_url', None)
+        search_entry = entry(state['search_url'], keyword=state['keyword']) if callable(entry) else None
+        retry = retry_action_for(state, failure, search_entry=search_entry)
         saved = retry_budget(state)
         publisher_wait = retry_after_seconds(failure.retry_after, self.ledger.clock())
         if publisher_wait:
@@ -1192,7 +1220,6 @@ class GuidedService:
         self._save(state, 'read_retry_wait', status='waiting_rate',
                    wait_seconds=round(max(0, due-self.ledger.clock()), 1),
                    next_allowed_at=due, retry_action=retry, auto_resume=True)
-
     def _resume_due(self):
         """Resume only safe read actions in a still-owned browser session.
 
