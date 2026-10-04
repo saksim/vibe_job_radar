@@ -24,6 +24,7 @@ from vibe_job_radar.guided.transport import WireResponse
 from vibe_job_radar.workspace import Workspace
 from guided_wait_diagnostic import wait_diagnostic
 from worker_fsync_probe import WorkerFsyncProbe
+from worker_sqlite_probe import WorkerSqliteProbe
 
 URL = 'https://jobs.fixture.test/search?q=test'
 
@@ -154,10 +155,13 @@ class ReadRetryWorkerTests(unittest.TestCase):
         self.factory=Backend
         self.service=GuidedService(self.workspace,registry=Registry([fixture_adapter()]),backend_factory=Backend,ledger=self.ledger)
         self.write_probe=WorkerFsyncProbe(lambda:self.service._thread)
+        self.sqlite_probe=WorkerSqliteProbe(lambda:self.service._thread)
         # LIFO: close the service before removing observation, then the workspace.
+        self.addCleanup(self.sqlite_probe.stop)
         self.addCleanup(self.write_probe.stop)
         self.addCleanup(self.service.close)
         self.write_probe.start()
+        self.sqlite_probe.start()
 
     def create(self):
         self.ident=self.service.create({'platform':'fixture','keyword':'时间序列','roles':['time_series'],
@@ -165,6 +169,7 @@ class ReadRetryWorkerTests(unittest.TestCase):
 
     def wait(self,code):
         before=self.write_probe.snapshot()
+        sqlite_before=self.sqlite_probe.snapshot()
         deadline=time.monotonic()+5
         while time.monotonic()<deadline:
             state=self.service._load(self.ident)
@@ -176,6 +181,8 @@ class ReadRetryWorkerTests(unittest.TestCase):
             {'jobs':[state],'active':self.ident,'busy':self.service._busy})
         diagnostic['worker_fsync']={'before_wait':before,
                                     'at_timeout':self.write_probe.snapshot()}
+        diagnostic['worker_sqlite']={'before_wait':sqlite_before,
+                                     'at_timeout':self.sqlite_probe.snapshot()}
         self.fail('worker did not reach '+code+' after 5s: '+json.dumps(diagnostic))
 
     def test_worker_recovers_once_preserving_budget_and_accounting(self):

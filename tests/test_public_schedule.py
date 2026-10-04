@@ -204,11 +204,79 @@ class ScheduleTests(unittest.TestCase):
         self.assertEqual(state['history'][0]['report_id'],task['report_id'])
         self.assertEqual(self.transport.json.call_count,1)
 
-    def test_replaced_task_pauses_instead_of_cancelling_manual_work(self):
+    def test_replaced_completed_task_uses_original_receipt_and_preserves_manual_work(self):
+        self.configure();self.now[0]+=DAY;self.schedule.tick();original=self.wait()
+        manual=self.tasks.search({'consent':True,'query':query(query='Engineer').payload()})
+        self.schedule.tick();self.assertEqual(self.schedule.state()['status'],'scheduled')
+        self.assertEqual(self.schedule.state()['history'][0]['report_id'],original['report_id'])
+        self.assertEqual(self.tasks._state['id'],manual['id']);self.assertFalse(self.tasks._cancel.is_set());self.wait()
+
+    def test_missing_outcome_still_pauses_without_cancelling_manual_work(self):
         self.configure();self.now[0]+=DAY;self.schedule.tick();self.wait()
         manual=self.tasks.search({'consent':True,'query':query(query='Engineer').payload()})
+        (self.tasks.root/'outcomes-v1.sqlite').unlink()
         self.schedule.tick();self.assertEqual(self.schedule.state()['code'],'interrupted')
         self.assertEqual(self.tasks._state['id'],manual['id']);self.assertFalse(self.tasks._cancel.is_set());self.wait()
+
+    def test_receipt_write_failure_refuses_new_query_and_preserves_original_record_report_and_budget(self):
+        self.configure();self.now[0]+=DAY;self.schedule.tick();original=self.wait()
+        before=self.tasks.path.read_bytes()
+        report=self.workspace.root/'reports'/original['report_id']/'requirements.csv';csv=report.read_bytes()
+        with patch('vibe_job_radar.public_tasks.PublicOutcomes.remember',side_effect=InputError('fixture failure')):
+            with self.assertRaises(InputError):self.tasks.search({'consent':True,'query':query(query='Engineer').payload()})
+        self.assertEqual(self.tasks.path.read_bytes(),before);self.assertEqual(report.read_bytes(),csv)
+        self.assertEqual(self.transport.json.call_count,1);self.assertIsNone(self.tasks._lease)
+        self.schedule.tick();self.assertEqual(self.schedule.state()['status'],'scheduled')
+
+    def test_manual_resume_is_a_different_attempt_and_disabling_plan_does_not_cancel_it(self):
+        self.configure();self.now[0]+=DAY;self.transport.json.side_effect=self.hold
+        self.schedule.tick();self.assertTrue(self.entered.wait(5))
+        original=self.tasks.snapshot();self.tasks.cancel({'id':original['id']})
+        self.release.set();self.assertEqual(self.wait()['status'],'cancelled')
+        self.entered.clear();self.release.clear();original_import=self.tasks._import
+        def held(*args):
+            self.entered.set();self.release.wait(15);return original_import(*args)
+        with patch.object(self.tasks,'_import',side_effect=held):
+            self.tasks.resume({'id':original['id'],'consent':True});self.assertTrue(self.entered.wait(5))
+            self.schedule.disable({'revision':self.schedule.state()['revision']})
+            self.assertFalse(self.tasks._cancel.is_set())
+            self.release.set();manual=self.wait();self.schedule.tick()
+        self.assertEqual((manual['id'],manual['attempt'],manual['status']),(original['id'],2,'completed'))
+        state=self.schedule.state();self.assertEqual(state['status'],'disabled')
+        self.assertEqual(state['history'][0]['status'],'cancelled');self.assertEqual(state['history'][0]['report_id'],'')
+        self.assertTrue(self.workspace.report(manual['report_id']));self.assertEqual(self.transport.json.call_count,1)
+
+    def test_another_process_replaces_completed_slot_and_restart_finds_original_report(self):
+        self.now[0]-=DAY;self.configure();self.now[0]+=DAY;self.schedule.tick();original=self.wait()
+        report=self.workspace.root/'reports'/original['report_id']/'requirements.csv';before=report.read_bytes()
+        code="""import json,sys
+from unittest.mock import Mock,patch
+from test_local_public import query
+from vibe_job_radar.workspace import Workspace
+from vibe_job_radar.local_public import LocalPublicDataClient
+from vibe_job_radar.public_tasks import PublicTasks
+wire=Mock();wire.json.side_effect=AssertionError('cached result expected')
+with patch('urllib.request.getproxies',return_value={}):
+ tasks=PublicTasks(Workspace(sys.argv[1]),hybrid_client=LocalPublicDataClient(Workspace(sys.argv[1]),transport=wire))
+ try:
+  tasks.search({'consent':True,'query':query(query='Engineer').payload()})
+  tasks._thread.join(15);state=tasks.snapshot()
+  assert state['status']=='completed' and wire.json.call_count==0
+  print(json.dumps({'id':state['id'],'report_id':state['report_id']}))
+ finally:tasks.close()
+"""
+        checkout=Path(__file__).resolve().parents[1]
+        env={**os.environ,'PYTHONPATH':os.pathsep.join([str(checkout/'src'),str(checkout/'tests')])}
+        child=subprocess.run([sys.executable,'-c',code,str(self.workspace.root)],capture_output=True,text=True,
+            env=env,timeout=25,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+        self.assertEqual(child.returncode,0,child.stderr);manual=json.loads(child.stdout)
+        self.assertNotEqual(manual['id'],original['id'])
+        restarted_tasks=PublicTasks(self.workspace,hybrid_client=self.client);self.addCleanup(restarted_tasks.close)
+        restarted=PublicSchedule(self.workspace,restarted_tasks,clock=lambda:self.now[0])
+        restarted.recover();state=restarted.state()
+        self.assertEqual(state['status'],'scheduled');self.assertEqual(state['history'][0]['report_id'],original['report_id'])
+        self.assertEqual(report.read_bytes(),before);self.assertTrue(self.workspace.report(manual['report_id']))
+        self.assertEqual(self.transport.json.call_count,1)
 
     def test_storage_failure_after_submit_stops_owner_without_retry(self):
         self.configure();self.now[0]+=DAY;original=self.schedule._write
