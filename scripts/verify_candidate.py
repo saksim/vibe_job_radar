@@ -78,8 +78,15 @@ def verify(out: Path) -> dict:
             require_local_evidence(ROOT, {**report, 'success': True})
             report['success'] = True
     except Exception as exc:
-        report['error_type'] = type(exc).__name__
-        report['error'] = safe_text(exc)
+        if report.get('error') == 'local_check_timeout':
+            # Preserve the earlier timeout if retaining its evidence also fails.
+            # Export fixed types, never a custom class name or exception text.
+            kinds = (json.JSONDecodeError, UnicodeError, OSError, ValueError)
+            report['post_timeout_error_type'] = next(
+                (kind.__name__ for kind in kinds if isinstance(exc, kind)), 'Exception')
+        else:
+            report['error_type'] = type(exc).__name__
+            report['error'] = safe_text(exc)
     finally:
         atomic_json(out/'result.json', report)
     return report
@@ -96,7 +103,7 @@ def main() -> int:
         return 2
     summary = {k:result[k] for k in ('success','source_unchanged','remote_ci','live_sites')}
     if not result['success']:
-        summary.update({k:result[k] for k in ('error_type','error','failed_check','timeout_seconds') if k in result})
+        summary.update({k:result[k] for k in ('error_type','error','failed_check','timeout_seconds','post_timeout_error_type') if k in result})
     print(json.dumps(summary,ensure_ascii=True))
     print('Evidence:', (args.out/'result.json').resolve())
     return 0 if result['success'] else 1

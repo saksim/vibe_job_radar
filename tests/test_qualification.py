@@ -281,4 +281,56 @@ class QualificationTests(unittest.TestCase):
         self.assertEqual(json.loads(output.getvalue().splitlines()[0]),failure)
 
 
+    def test_timeout_survives_incomplete_or_unreadable_unit_report(self):
+        from unittest.mock import patch
+        import subprocess
+        for raw, expected in [(b'{', 'JSONDecodeError'), (b'\xff', 'UnicodeError')]:
+            with self.subTest(secondary=expected):
+                module=self.load_script('verify_candidate')
+                def timeout(args, **kwargs):
+                    self.assertEqual(kwargs['timeout'],600)
+                    Path(args[args.index('--report')+1]).write_bytes(raw)
+                    raise subprocess.TimeoutExpired('PRIVATE_COMMAND',600)
+                with patch.object(module.platform,'platform',return_value='fixture'),patch.object(module.subprocess,'run',side_effect=timeout) as child:
+                    result=module.verify(self.root/'out')
+                child.assert_called_once()
+                self.assertFalse(result['success'])
+                self.assertEqual(result['error_type'],'TimeoutExpired')
+                self.assertEqual(result['error'],'local_check_timeout')
+                self.assertEqual(result['failed_check'],'unit-tests')
+                self.assertEqual(result['timeout_seconds'],600)
+                self.assertEqual(result.get('post_timeout_error_type'),expected)
+                self.assertEqual(result['tests'],{})
+                self.assertEqual(json.loads((self.root/'out/result.json').read_text(encoding='utf-8')),result)
+                self.assertNotIn('PRIVATE',json.dumps(result))
+                with self.assertRaises(ValueError):require_local_evidence(self.root,result)
+
+    def test_timeout_survives_progress_copy_error_and_cli_keeps_it_separate(self):
+        from unittest.mock import patch
+        import io,subprocess,sys
+        class PRIVATE_EXCEPTION_NAME(OSError):pass
+        module=self.load_script('verify_candidate')
+        def timeout(args, **kwargs):
+            path=Path(args[args.index('--report')+1])
+            path.with_suffix('.progress.log').write_text('START fixture_test\n',encoding='utf-8')
+            raise subprocess.TimeoutExpired('PRIVATE_COMMAND',kwargs['timeout'])
+        with patch.object(module.platform,'platform',return_value='fixture'),patch.object(module.subprocess,'run',side_effect=timeout) as child,patch.object(module.shutil,'copyfile',side_effect=PRIVATE_EXCEPTION_NAME('PRIVATE_PATH')):
+            result=module.verify(self.root/'out')
+        child.assert_called_once()
+        self.assertFalse(result['success'])
+        self.assertEqual(result['error_type'],'TimeoutExpired')
+        self.assertEqual(result['error'],'local_check_timeout')
+        self.assertEqual(result['failed_check'],'unit-tests')
+        self.assertEqual(result['timeout_seconds'],600)
+        self.assertEqual(result.get('post_timeout_error_type'),'OSError')
+        self.assertNotIn('PRIVATE',json.dumps(result))
+        with self.assertRaises(ValueError):require_local_evidence(self.root,result)
+        output=io.StringIO()
+        with patch.object(sys,'argv',['verify_candidate.py','--out',str(self.root/'out')]),patch.object(sys,'stdout',output),patch.object(module,'verify',return_value=result):
+            self.assertEqual(module.main(),1)
+        summary=json.loads(output.getvalue().splitlines()[0])
+        self.assertEqual(summary['error_type'],'TimeoutExpired')
+        self.assertEqual(summary['post_timeout_error_type'],'OSError')
+
+
 if __name__=='__main__':unittest.main()
