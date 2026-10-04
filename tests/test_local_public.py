@@ -12,7 +12,7 @@ from vibe_job_radar.public_contract import ContractError, PublicQuery, PublicSou
 from vibe_job_radar.public_data import PublicDataClient
 from vibe_job_radar.public_example import PublicExample
 from vibe_job_radar.public_gateway import PublicGateway
-from vibe_job_radar.network import FetchError, SafeHTTP
+from vibe_job_radar.network import FetchError, SafeHTTP, JSONRepresentation
 from vibe_job_radar.guided.rate import RateLimit
 from vibe_job_radar.workspace import InputError, Workspace
 from vibe_job_radar.utils import atomic_json
@@ -214,7 +214,7 @@ class LocalPublicHTTPTests(unittest.TestCase):
         return state
 
     def test_default_local_provider_needs_no_server_or_config_and_is_offline_until_consent(self):
-        with patch.object(SafeHTTP,'json') as network:
+        with patch.object(SafeHTTP,'conditional_json') as network:
             code,_,body=self.call('/api/public/state')
             state=json.loads(body);self.assertEqual(code,200)
             self.assertTrue(state['query_available']);self.assertFalse(state['hybrid_service_configured'])
@@ -228,7 +228,7 @@ class LocalPublicHTTPTests(unittest.TestCase):
 
     def test_local_query_flows_to_isolated_report_with_provenance_and_paging(self):
         self.server.workspace.add_job(http_fixtures.capture())
-        with patch.object(SafeHTTP,'json',return_value=payload()) as network:
+        with patch.object(SafeHTTP,'conditional_json',return_value=JSONRepresentation(200,payload(),None)) as network:
             self.assertEqual(self.call('/api/public/search',{'consent':True,'query':query(limit=1).payload()})[0],200)
             first=self.wait();self.assertEqual(first['status'],'completed',first)
             self.assertEqual(first['matching_jobs'],2);self.assertEqual(first['returned_jobs'],1)
@@ -242,5 +242,5 @@ class LocalPublicHTTPTests(unittest.TestCase):
             second=self.wait();self.assertEqual(second['status'],'completed',second)
             self.assertTrue(second['cache_reused']);self.assertEqual(second['next_cursor'],'')
             self.assertNotEqual(second['report_id'],first['report_id'])
-            network.assert_called_once_with(API_URL)
+            network.assert_called_once_with(API_URL,etag=None)
         with Store(self.server.workspace.db) as store:self.assertEqual(len(store.records()),3)
