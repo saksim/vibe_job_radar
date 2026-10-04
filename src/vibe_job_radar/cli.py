@@ -74,6 +74,8 @@ def parser() -> argparse.ArgumentParser:
     s.add_argument("--packet", type=Path, required=True)
     s.add_argument("--annotations", type=Path)
     s.add_argument("--out", type=Path, required=True)
+    s = sub.add_parser('public-worker',help='独立执行工作区已确认的公开查询计划；无网页服务器/浏览器')
+    s.add_argument('--workspace',type=Path,required=True)
     return p
 
 
@@ -90,6 +92,9 @@ def main(argv: list[str] | None = None) -> int:
             print(json_text({"packet_id": result["packet_id"], "coverage": result["coverage"],
                              "source_mode": result["source_mode"], "out": str(args.out)}))
             return 0
+        if args.command == 'public-worker':
+            from .public_worker import run_cli
+            return run_cli(args.workspace)
         conf = load_config(args.config)
         if args.command == "plan":
             tasks = build_plan(conf, args.platforms, args.roles)

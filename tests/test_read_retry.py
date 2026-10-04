@@ -22,6 +22,8 @@ from vibe_job_radar.guided.read_retry import (TransientReadFailure, document_fai
 from vibe_job_radar.guided.service import GuidedService
 from vibe_job_radar.guided.transport import WireResponse
 from vibe_job_radar.workspace import Workspace
+from guided_wait_diagnostic import wait_diagnostic
+from worker_fsync_probe import WorkerFsyncProbe
 
 URL = 'https://jobs.fixture.test/search?q=test'
 
@@ -151,19 +153,30 @@ class ReadRetryWorkerTests(unittest.TestCase):
                 return self.page
         self.factory=Backend
         self.service=GuidedService(self.workspace,registry=Registry([fixture_adapter()]),backend_factory=Backend,ledger=self.ledger)
+        self.write_probe=WorkerFsyncProbe(lambda:self.service._thread)
+        # LIFO: close the service before removing observation, then the workspace.
+        self.addCleanup(self.write_probe.stop)
         self.addCleanup(self.service.close)
+        self.write_probe.start()
 
     def create(self):
         self.ident=self.service.create({'platform':'fixture','keyword':'时间序列','roles':['time_series'],
             'max_pages':1,'max_jobs':1,'consent':True,'rights_note':'ARTIFICIAL RETRY TEST'})['id']
 
     def wait(self,code):
+        before=self.write_probe.snapshot()
         deadline=time.monotonic()+5
         while time.monotonic()<deadline:
             state=self.service._load(self.ident)
             if not self.service.state()['busy'] and state['code']==code:return state
             time.sleep(.01)
-        self.fail('worker did not reach '+code+': '+str(state))
+        # Keep the last completed poll. A fresh state() can block on the same
+        # writer and hide the failure-time stack before cleanup releases it.
+        diagnostic=wait_diagnostic(self.service,
+            {'jobs':[state],'active':self.ident,'busy':self.service._busy})
+        diagnostic['worker_fsync']={'before_wait':before,
+                                    'at_timeout':self.write_probe.snapshot()}
+        self.fail('worker did not reach '+code+' after 5s: '+json.dumps(diagnostic))
 
     def test_worker_recovers_once_preserving_budget_and_accounting(self):
         self.failures=1;self.create();state=self.wait('read_retry_wait')
