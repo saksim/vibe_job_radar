@@ -11,6 +11,10 @@ class BlankPage:
         self.content_error, self.title_error, self.value = content_error, title_error, title
         self.calls = []
         self.dom_written = False
+    def on(self, event, callback):
+        pass
+    def is_closed(self):
+        return False
     def set_content(self, html, **options):
         self.calls.append(('content', options))
         self.dom_written = True
@@ -26,7 +30,8 @@ class BlankPage:
 class BlankReadinessTests(unittest.TestCase):
     def check(self, page):
         closed = []
-        backend = SimpleNamespace(page=page, close=lambda: closed.append(True), startup_report={
+        browser = SimpleNamespace(on=lambda event, callback: None, is_connected=lambda: True)
+        backend = SimpleNamespace(page=page, browser=browser, close=lambda: closed.append(True), startup_report={
             'stage':'ready','ready':True,'launch_tested':True,'executable_exists':True,
             'mode':'headed','playwright_version':'1.63.0','browser_channel':'bundled'})
         with patch('vibe_job_radar.guided.browser.PlaywrightBackend', return_value=backend) as factory:
