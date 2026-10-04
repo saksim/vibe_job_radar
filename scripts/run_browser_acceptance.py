@@ -42,7 +42,9 @@ def main() -> int:
             thread.start()
             try:
                 with sync_playwright() as playwright:
-                    browser = playwright.chromium.launch(headless=True)
+                    browser_options = {'headless': True}
+                    if os.environ.get('RADAR_TEST_CHROMIUM'): browser_options['executable_path'] = os.environ['RADAR_TEST_CHROMIUM']
+                    browser = playwright.chromium.launch(**browser_options)
                     result["browser_version"] = browser.version
                     context = browser.new_context(viewport={"width": 1440, "height": 1000}, accept_downloads=True)
 
@@ -60,6 +62,31 @@ def main() -> int:
                         page.goto(server.entry_url)
                         expect(page.locator("#counts")).to_contain_text("真实记录 0")
                         result["checks"].append("authenticated shell loads with zero real records")
+                        page.locator('summary').filter(has_text='平台接入状态与账号说明').click()
+                        liepin=page.locator('#sources tbody tr').filter(has_text='猎聘')
+                        expect(liepin).to_contain_text('可选单次密码提交（受控验证）')
+                        expect(liepin).to_contain_text('正常登录和完整 JD 尚未验通')
+                        expect(page.locator('#sources tbody tr').filter(has_text='BOSS直聘')).to_contain_text('在采集浏览器人工登录')
+                        expect(page.locator('#sources')).not_to_contain_text('自动登录')
+                        assert server.guided.state()['jobs']==[] and not server.workspace.db.exists()
+                        page.set_viewport_size({"width":390,"height":844})
+                        page.locator('section').filter(has=page.locator('#sources')).screenshot(path=str(output/'homepage-login-mobile.png'))
+                        assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')
+                        page.set_viewport_size({"width":1440,"height":1000})
+                        page.locator('summary').filter(has_text='平台接入状态与账号说明').click()
+                        result["checks"].append("homepage uses the registered login capability and live-verification message without creating jobs")
+                        page.goto(server.origin+'/guided')
+                        expect(page.locator('#environment')).to_contain_text('Playwright')
+                        expect(page.locator('p.notice').filter(has_text='猎聘任务可选用上方单次密码表单')).to_contain_text('实站正常登录尚未验通')
+                        expect(page.get_by_text('本次版本不接收或自动填写账号密码',exact=False)).to_have_count(0)
+                        page.set_viewport_size({"width":390,"height":844})
+                        page.locator('section').filter(has=page.locator('#login')).screenshot(path=str(output/'guided-login-mobile.png'))
+                        assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')
+                        page.set_viewport_size({"width":1440,"height":1000})
+                        assert server.guided.state()['jobs']==[]
+                        page.goto(server.entry_url)
+                        expect(page.locator('#counts')).to_contain_text('真实记录 0')
+                        result["checks"].append("guided explanation matches the optional one-shot form and does not claim live login certification")
                         page.locator("#doctor").click()
                         expect(page.locator("#notice")).to_contain_text("workspace_writable")
                         result["checks"].append("offline doctor works from browser")

@@ -259,7 +259,11 @@ class HTTPTests(unittest.TestCase):
     def test_static_shell_is_public_but_data_is_not(self):
         self.assertEqual(self.call("/", authorized=False)[0], 200)
         self.assertEqual(self.call("/api/status", authorized=False)[0], 403)
-        self.assertEqual(self.call("/api/status")[0], 200)
+        with patch.object(self.server.guided,'state',side_effect=AssertionError('status must not load private task state')):
+            code, _, body = self.call("/api/status")
+        self.assertEqual(code, 200)
+        self.assertEqual(json.loads(body)['acquisition_sites'],self.server.guided.registry.describe())
+        self.assertEqual(json.loads(body)['counts']['records'],0)
         self.assertIn("/app.js", self.call("/")[2].decode())
         self.assertNotIn("innerHTML", self.call("/app.js")[2].decode())
 
