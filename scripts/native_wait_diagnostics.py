@@ -47,6 +47,10 @@ class Stages:
         self.history = deque(maxlen=128)
         self.started = time.monotonic()
         self.next_token = 0
+        self.next_backend = 0
+        self.closed_backends = 0
+        self.after_close_calls = 0
+        self.retiring = set()
         self.dropped = 0
         self.result = {'success': False, 'scope':
             'Ephemeral artificial fixture; fixed method/command names and stacks without locals. Original waits and traffic decisions unchanged.'}
@@ -56,13 +60,22 @@ class Stages:
             if len(self.pending) >= 16:
                 self.dropped += 1
                 return None
-            ident = len(self.pending) + 1
+            self.next_backend += 1
+            ident = self.next_backend
             self.pending[ident] = []
             return ident
 
     def enter(self, ident, name):
         with self.lock:
-            if ident is None or len(self.pending[ident]) >= 32:
+            if ident not in self.pending:
+                if type(ident) is int and 0 < ident <= self.next_backend:
+                    # A late call on a closed instance still reaches the real
+                    # backend. It cannot alias another instance's diagnostic slot.
+                    self.after_close_calls += 1
+                else:
+                    self.dropped += 1
+                return None
+            if len(self.pending[ident]) >= 32:
                 self.dropped += 1
                 return None
             name = name if name in LABELS else 'cdp.other'
@@ -77,11 +90,25 @@ class Stages:
         if token is None:
             return
         with self.lock:
-            for i, (current, name) in enumerate(self.pending[ident]):
+            for i, (current, name) in enumerate(self.pending.get(ident, [])):
                 if current == token:
                     self.pending[ident].pop(i)
                     self._event(ident, name, 'leave')
                     break
+            self._retire_if_finished(ident)
+
+    def closed(self, ident):
+        """Release a successful close only after its outer calls also finish."""
+        with self.lock:
+            if ident in self.pending:
+                self.retiring.add(ident)
+                self._retire_if_finished(ident)
+
+    def _retire_if_finished(self, ident):
+        if ident in self.retiring and not self.pending[ident]:
+            del self.pending[ident]
+            self.retiring.remove(ident)
+            self.closed_backends += 1
 
     def _event(self, ident, name, phase):
         self.history.append({'backend': ident, 'method': name, 'phase': phase,
@@ -92,6 +119,9 @@ class Stages:
             return {**self.result, 'calls': dict(self.calls),
                     'pending': {str(k): [name for _, name in v] for k, v in self.pending.items()},
                     'history': list(self.history), 'dropped': self.dropped,
+                    'allocated_backends': self.next_backend,
+                    'closed_backends': self.closed_backends,
+                    'after_close_calls': self.after_close_calls,
                     'elapsed': round(time.monotonic() - self.started, 3)}
 
 
@@ -118,7 +148,10 @@ def observed_backend(base, stages):
         def recorded(self, *args, **kwargs):
             token = stages.enter(self._wait_probe_id, name)
             try:
-                return function(self, *args, **kwargs)
+                value = function(self, *args, **kwargs)
+                if name == 'close':
+                    stages.closed(self._wait_probe_id)
+                return value
             finally:
                 stages.leave(self._wait_probe_id, token)
         return recorded
@@ -178,7 +211,7 @@ def capture(stages, out, prefix, *, interval=5, stack_interval=35):
             stop.set(); watcher.join(timeout=2)
             stages.result['watchdog_stopped'] = not watcher.is_alive()
             stages.result['writer_error_types'] = writer_errors[:8]
-            incomplete = bool(writer_errors or watcher.is_alive())
+            incomplete = bool(writer_errors or watcher.is_alive() or stages.snapshot()['dropped'])
             if incomplete:
                 stages.result['success'] = False
             try:

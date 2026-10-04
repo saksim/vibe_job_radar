@@ -79,7 +79,7 @@ class NativeWaitDiagnosticsTests(unittest.TestCase):
                 release.set(); worker.join(timeout=2)
             backend.close()
             self.assertFalse(worker.is_alive())
-            self.assertEqual(stages.snapshot()['pending'], {'1': []})
+            self.assertEqual(stages.snapshot()['pending'], {})
             snapshots = [json.loads(x) for x in (out/'wait-checkpoints.jsonl').read_text(encoding='utf-8').splitlines()]
             self.assertTrue(any(x['pending']['1'] == ['open', 'cdp.Fetch.getResponseBody'] for x in snapshots))
             final = json.loads((out/'wait-progress.json').read_text(encoding='utf-8'))
@@ -176,3 +176,122 @@ class NativeWaitDiagnosticsTests(unittest.TestCase):
         with patch.object(probe.sys, 'argv', ['probe','--controlled']), \
                 patch.dict(probe.os.environ, {'CI':'true','GITHUB_ACTIONS':'true'}):
             probe.require_ci()
+
+
+class NativeWaitLifetimeTests(unittest.TestCase):
+    def test_forty_closed_instances_leave_capacity_for_later_failure_evidence(self):
+        stages = probe.Stages(); Backend = probe.observed_backend(FakeBackend, stages)
+        marker = object()
+        for _ in range(40):
+            backend = Backend(lambda *args: marker)
+            self.assertIs(backend.open({'password': SECRET}), marker)
+            backend.close()
+        report = stages.snapshot()
+        self.assertEqual(report['dropped'], 0)
+        self.assertEqual(report['pending'], {})
+        self.assertEqual(report['allocated_backends'], 40)
+        self.assertEqual(report['closed_backends'], 40)
+        self.assertEqual(report['calls']['initialize'], 40)
+        self.assertEqual(report['calls']['open'], 40)
+        self.assertEqual(report['calls']['close'], 40)
+        self.assertEqual(len(report['history']), 128)
+        self.assertNotIn(SECRET, json.dumps(report))
+
+    def test_sixteen_simultaneous_limit_retained_and_new_id_never_reused(self):
+        stages = probe.Stages(); Backend = probe.observed_backend(FakeBackend, stages)
+        backends = [Backend(None) for _ in range(16)]
+        overflow = Backend(None)
+        self.assertIsNone(overflow._wait_probe_id)
+        self.assertEqual(len(stages.snapshot()['pending']), 16)
+        self.assertGreater(stages.snapshot()['dropped'], 0)
+        backends[0].close()
+        latest = Backend(None)
+        self.assertEqual(latest._wait_probe_id, 17)
+        self.assertEqual(len(stages.snapshot()['pending']), 16)
+        self.assertNotIn('1', stages.snapshot()['pending'])
+        self.assertEqual(stages.snapshot()['closed_backends'], 1)
+        for backend in backends[1:] + [latest, overflow]: backend.close()
+        self.assertEqual(stages.snapshot()['pending'], {})
+
+    def test_late_closed_calls_preserve_return_and_exception_without_aliasing(self):
+        stages = probe.Stages(); Backend = probe.observed_backend(FakeBackend, stages)
+        marker = object(); old = Backend(marker); old.close(); current = Backend(None)
+        self.assertIs(old.snapshot(), marker)
+        failure = ValueError(SECRET)
+        def fail(*args): raise failure
+        old.received = fail
+        with self.assertRaises(ValueError) as caught: old.open({})
+        self.assertIs(caught.exception, failure)
+        old.close()
+        report = stages.snapshot()
+        self.assertEqual(report['pending'], {'2': []})
+        self.assertEqual(report['closed_backends'], 1)
+        self.assertEqual(report['dropped'], 0)
+        self.assertGreater(report['after_close_calls'], 0)
+        self.assertNotIn(SECRET, json.dumps(report))
+        current.close()
+
+    def test_constructor_cleanup_retires_after_outer_initialize_finishes(self):
+        stages = probe.Stages(); failure = RuntimeError(SECRET)
+        class FailedConstructor(FakeBackend):
+            def __init__(self):
+                self.close()
+                raise failure
+        with self.assertRaises(RuntimeError) as caught:
+            probe.observed_backend(FailedConstructor, stages)()
+        self.assertIs(caught.exception, failure)
+        report = stages.snapshot()
+        self.assertEqual(report['pending'], {})
+        self.assertEqual(report['closed_backends'], 1)
+        self.assertEqual(report['dropped'], 0)
+        self.assertEqual(report['calls']['initialize'], 1)
+        self.assertEqual(report['calls']['close'], 1)
+
+    def test_close_keeps_inflight_worker_visible_until_its_original_return(self):
+        stages = probe.Stages(); entered = threading.Event(); release = threading.Event()
+        marker = object(); results = []
+        def blocked(*args):
+            entered.set()
+            if not release.wait(5): raise AssertionError('worker was not released')
+            return marker
+        backend = probe.observed_backend(FakeBackend, stages)(blocked)
+        worker = threading.Thread(target=lambda: results.append(backend.open({})))
+        try:
+            worker.start(); self.assertTrue(entered.wait(2)); backend.close()
+            self.assertEqual(stages.snapshot()['pending'], {'1': ['open', 'cdp.Fetch.getResponseBody']})
+            self.assertEqual(stages.snapshot()['closed_backends'], 0)
+        finally:
+            release.set(); worker.join(timeout=2)
+        self.assertFalse(worker.is_alive()); self.assertEqual(results, [marker])
+        self.assertEqual(stages.snapshot()['pending'], {})
+        self.assertEqual(stages.snapshot()['closed_backends'], 1)
+        self.assertEqual(stages.snapshot()['dropped'], 0)
+
+    def test_failed_close_keeps_slot_and_original_exception(self):
+        stages = probe.Stages(); failure = OSError(SECRET)
+        class FailedClose(FakeBackend):
+            def close(self): raise failure
+        backend = probe.observed_backend(FailedClose, stages)(None)
+        with self.assertRaises(OSError) as caught: backend.close()
+        self.assertIs(caught.exception, failure)
+        report = stages.snapshot()
+        self.assertEqual(report['pending'], {'1': []})
+        self.assertEqual(report['closed_backends'], 0)
+        self.assertEqual(report['dropped'], 0)
+        self.assertNotIn(SECRET, json.dumps(report))
+
+    def test_dropped_evidence_refuses_success_without_overwriting_original_error(self):
+        for original_error in [None, ValueError(SECRET)]:
+            with self.subTest(original_failure=original_error is not None), tempfile.TemporaryDirectory() as temp:
+                stages = probe.Stages()
+                for _ in range(17): stages.backend()
+                expected = RuntimeError if original_error is None else ValueError
+                with self.assertRaises(expected) as caught:
+                    with probe.capture(stages, Path(temp), 'dropped'):
+                        if original_error is not None: raise original_error
+                if original_error is not None: self.assertIs(caught.exception, original_error)
+                else: self.assertIn('evidence incomplete', str(caught.exception))
+                result = json.loads((Path(temp)/'dropped-progress.json').read_text(encoding='utf-8'))
+                self.assertFalse(result['success']); self.assertGreater(result['dropped'], 0)
+                self.assertTrue(result['watchdog_stopped'])
+                self.assertNotIn(SECRET, json.dumps(result))
