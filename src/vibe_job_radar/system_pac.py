@@ -154,8 +154,8 @@ def _download(url):
         response = conn.getresponse()
         if response.status != 200: raise LocalProxyError('system_pac_http_rejected')
         lengths = response.headers.get_all('Content-Length', [])
-        encoding = response.headers.get_all('Content-Encoding', [])
-        transfer = response.headers.get_all('Transfer-Encoding', [])
+        encoding = [value.lower() for value in response.headers.get_all('Content-Encoding', [])]
+        transfer = [value.lower() for value in response.headers.get_all('Transfer-Encoding', [])]
         if (len(lengths) > 1 or (lengths and (not re.fullmatch('[0-9]{1,6}', lengths[0]) or not 1 <= int(lengths[0]) <= MAX_SCRIPT))
                 or (encoding and encoding != ['identity']) or (transfer and transfer != ['chunked']) or (transfer and lengths)):
             raise LocalProxyError('system_pac_content_invalid')

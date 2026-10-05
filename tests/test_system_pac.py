@@ -121,6 +121,36 @@ class SourceTests(unittest.TestCase):
         self.fixture.body = f'{len(body):x}\r\n'.encode()+body+b'\r\n0\r\n\r\n'
         self.assertEqual(pac.fetch(self.fixture.source, lambda:True), SCRIPT)
 
+    def test_identity_content_coding_is_case_insensitive(self):
+        for coding in ('Identity', 'IDENTITY', 'iDeNtItY'):
+            self.fixture.headers = [('Content-Encoding', coding), ('Content-Length', str(len(self.fixture.body)))]
+            with self.subTest(coding=coding):
+                self.assertEqual(pac.fetch(self.fixture.source, lambda:True), SCRIPT)
+        self.assertEqual(len(self.fixture.requests), 3)
+
+    def test_chunked_transfer_coding_is_case_insensitive(self):
+        body = SCRIPT.encode()
+        self.fixture.body = f'{len(body):x}\r\n'.encode()+body+b'\r\n0\r\n\r\n'
+        for coding in ('Chunked', 'CHUNKED', 'cHuNkEd'):
+            self.fixture.headers = [('Transfer-Encoding', coding)]
+            with self.subTest(coding=coding):
+                self.assertEqual(pac.fetch(self.fixture.source, lambda:True), SCRIPT)
+        self.assertEqual(len(self.fixture.requests), 3)
+
+    def test_case_insensitive_codings_keep_unsupported_and_ambiguous_headers_rejected(self):
+        for headers in (
+                [('Content-Encoding', 'GZIP')],
+                [('Content-Encoding', 'Identity, GZIP')],
+                [('Content-Encoding', 'Identity'), ('Content-Encoding', 'IDENTITY')],
+                [('Transfer-Encoding', 'Chunked, GZIP')],
+                [('Transfer-Encoding', 'Chunked'), ('Transfer-Encoding', 'CHUNKED')],
+                [('Transfer-Encoding', 'Chunked'), ('Content-Length', str(len(self.fixture.body)))],
+        ):
+            self.fixture.headers = headers
+            with self.subTest(headers=headers), self.assertRaisesRegex(LocalProxyError, 'system_pac_content_invalid'):
+                pac._download(self.fixture.url)
+        self.assertEqual(len(self.fixture.requests), 6)
+
     def test_source_address_rule_is_separate_from_business_target_rule(self):
         for value in ('127.0.0.1','::1','10.0.0.1','172.16.0.1','192.168.4.1','fd01::1','8.8.8.8'):
             self.assertTrue(pac._source_address(value), value)
