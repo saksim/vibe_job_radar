@@ -211,9 +211,22 @@ def capture(stages, out, prefix, *, interval=5, stack_interval=35):
             stop.set(); watcher.join(timeout=2)
             stages.result['watchdog_stopped'] = not watcher.is_alive()
             stages.result['writer_error_types'] = writer_errors[:8]
-            incomplete = bool(writer_errors or watcher.is_alive() or stages.snapshot()['dropped'])
+            final = stages.snapshot()
+            # A returned acceptance call does not prove its worker has finished
+            # closing. Preserve the original service deadline and report this
+            # unfinished cleanup at the same boundary, without waiting again.
+            incomplete = bool(writer_errors or watcher.is_alive() or final['dropped']
+                              or final['pending']
+                              or final['allocated_backends'] != final['closed_backends'])
             if incomplete:
                 stages.result['success'] = False
+                if not failed and (final['pending']
+                                   or final['allocated_backends'] != final['closed_backends']):
+                    try:
+                        faulthandler.dump_traceback(file=stacks, all_threads=True)
+                    except (OSError, RuntimeError) as error:
+                        writer_errors.extend(error_chain(error))
+                        stages.result['writer_error_types'] = writer_errors[:8]
             try:
                 save()
                 if not failed and incomplete:

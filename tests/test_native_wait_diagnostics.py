@@ -295,3 +295,70 @@ class NativeWaitLifetimeTests(unittest.TestCase):
                 self.assertFalse(result['success']); self.assertGreater(result['dropped'], 0)
                 self.assertTrue(result['watchdog_stopped'])
                 self.assertNotIn(SECRET, json.dumps(result))
+
+
+class NativeWaitCompletionTests(unittest.TestCase):
+    def test_inflight_close_fails_at_capture_boundary_and_keeps_worker_stack(self):
+        stages = probe.Stages(); entered = threading.Event(); release = threading.Event()
+        class BlockingClose(FakeBackend):
+            def close(self):
+                entered.set()
+                if not release.wait(5):
+                    raise AssertionError('test close was not released')
+        backend = probe.observed_backend(BlockingClose, stages)(None)
+        worker = threading.Thread(target=backend.close)
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                out = Path(temp)
+                with self.assertRaisesRegex(RuntimeError, 'evidence incomplete'):
+                    with probe.capture(stages, out, 'closing'):
+                        worker.start(); self.assertTrue(entered.wait(2))
+                self.assertTrue(worker.is_alive())
+                result = json.loads((out/'closing-progress.json').read_text(encoding='utf-8'))
+                self.assertFalse(result['success'])
+                self.assertEqual(result['pending'], {'1': ['close']})
+                self.assertEqual((result['allocated_backends'], result['closed_backends']), (1, 0))
+                self.assertTrue(result['watchdog_stopped'])
+                self.assertIn('close', (out/'closing-threads.log').read_text(encoding='utf-8'))
+                self.assertTrue(all(SECRET not in p.read_text(encoding='utf-8') for p in out.iterdir()))
+                release.set(); worker.join(timeout=2)
+                self.assertFalse(worker.is_alive())
+                self.assertEqual(stages.snapshot()['pending'], {})
+                # Later cleanup must not turn the frozen first result into success.
+                self.assertEqual(json.loads((out/'closing-progress.json').read_text(encoding='utf-8')), result)
+        finally:
+            release.set(); worker.join(timeout=2)
+
+    def test_unclosed_idle_backend_fails_without_replacing_original_error(self):
+        for original in (None, ValueError(SECRET)):
+            with self.subTest(original_failure=original is not None), tempfile.TemporaryDirectory() as temp:
+                stages = probe.Stages()
+                backend = probe.observed_backend(FakeBackend, stages)(None)
+                expected = RuntimeError if original is None else ValueError
+                try:
+                    with self.assertRaises(expected) as caught:
+                        with probe.capture(stages, Path(temp), 'idle'):
+                            if original is not None:
+                                raise original
+                    if original is not None:
+                        self.assertIs(caught.exception, original)
+                    result = json.loads((Path(temp)/'idle-progress.json').read_text(encoding='utf-8'))
+                    self.assertFalse(result['success'])
+                    self.assertEqual(result['pending'], {'1': []})
+                    self.assertEqual(result['closed_backends'], 0)
+                    self.assertTrue((Path(temp)/'idle-threads.log').stat().st_size)
+                    self.assertTrue(all(SECRET not in p.read_text(encoding='utf-8') for p in Path(temp).iterdir()))
+                finally:
+                    backend.close()
+
+    def test_closed_backends_complete_without_extra_stack_dump_or_wait(self):
+        stages = probe.Stages()
+        with tempfile.TemporaryDirectory() as temp, patch.object(probe.faulthandler, 'dump_traceback') as dump:
+            with probe.capture(stages, Path(temp), 'closed'):
+                backend = probe.observed_backend(FakeBackend, stages)(None)
+                backend.close()
+            result = json.loads((Path(temp)/'closed-progress.json').read_text(encoding='utf-8'))
+            self.assertTrue(result['success'])
+            self.assertEqual(result['pending'], {})
+            self.assertEqual((result['allocated_backends'], result['closed_backends']), (1, 1))
+            dump.assert_not_called()
