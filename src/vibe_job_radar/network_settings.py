@@ -18,6 +18,7 @@ from .utils import atomic_json, atomic_text, utc_now
 from .workspace import InputError
 from .pac import PacSnapshot, CONSENT as PAC_CONSENT, MESSAGES as PAC_MESSAGES, validate_script
 from . import pac_native
+from . import system_pac
 
 CONSENT = 'cloudflare-doh-v1'
 MODES = {'system', 'fake_ip_doh'}
@@ -28,6 +29,8 @@ PROXY_PARSERS = {'http': LoopbackProxy, 'socks5': LoopbackSocks5,
 PROXY_MODES = {'auto', *PROXY_PARSERS}
 PROXY_DEFAULT = {'proxy_mode': 'auto', 'proxy_endpoint': '', 'proxy_consent_version': ''}
 PAC_FIELDS = {'pac_name', 'pac_sha256', 'pac_id'}
+SYSTEM_PAC_FIELDS = {'system_pac_config_id', 'pac_id'}
+ALL_PAC_FIELDS = PAC_FIELDS | SYSTEM_PAC_FIELDS
 PAC_DISCLOSURE = ('只导入你信任的本地PAC文件（UTF-8，最多64KiB）。Windows会执行脚本，原生DNS函数可能解析域名。'
     '脚本只收到HTTPS根地址和域名，不含职位路径、关键词、Cookie或密码。仅接受DIRECT、匿名本机PROXY和明确SOCKS5；'
     '完整检查返回项，只采用第一项，失败不自动直连。不会自动读取系统PAC、发现WPAD或修改系统代理。')
@@ -77,11 +80,13 @@ def read_settings(workspace):
         if path.stat().st_size > 4096:
             raise ValueError
         value = json.loads(path.read_text(encoding='utf-8'), object_pairs_hook=_unique_object)
-        if not isinstance(value, dict) or type(value.get('schema_version')) is not int or value['schema_version'] not in (1, 2, 3):
+        if not isinstance(value, dict) or type(value.get('schema_version')) is not int or value['schema_version'] not in (1, 2, 3, 4):
             raise ValueError
         expected = set(default) | (set(PROXY_DEFAULT) if value['schema_version'] >= 2 else set())
         if value['schema_version'] == 3:
             expected |= PAC_FIELDS
+        if value['schema_version'] == 4:
+            expected |= SYSTEM_PAC_FIELDS
         if (set(value) != expected
                 or value['mode'] not in MODES or type(value['revision']) is not int
                 or not 1 <= value['revision'] < 2**31 or not isinstance(value['updated_at'], str)
@@ -99,6 +104,13 @@ def read_settings(workspace):
                     or not isinstance(value['pac_sha256'], str) or not re.fullmatch('[0-9a-f]{64}', value['pac_sha256'])
                     or not isinstance(value['pac_id'], str) or not re.fullmatch('[0-9a-f]{32}', value['pac_id'])):
                 raise ValueError
+        elif value['schema_version'] == 4:
+            if (value['proxy_mode'] != 'system_pac' or value['proxy_endpoint'] != ''
+                    or value['proxy_consent_version'] != system_pac.CONSENT
+                    or not isinstance(value['system_pac_config_id'], str)
+                    or not re.fullmatch('[0-9a-f]{64}', value['system_pac_config_id'])
+                    or not isinstance(value['pac_id'], str) or not re.fullmatch('[0-9a-f]{32}', value['pac_id'])):
+                raise ValueError
         return value
     except (ValueError, TypeError, OSError, InputError):
         raise InputError('网络偏好文件无效或版本不兼容；已停止联网，离线数据不受影响。') from None
@@ -108,7 +120,23 @@ def capture_policy(workspace, *, settings=None):
     if settings is None:
         settings = read_settings(workspace)
     mode = settings.get('proxy_mode', 'auto')
-    if mode == 'pac':
+    if mode == 'system_pac':
+        def permitted():
+            current = read_settings(workspace)
+            return (current.get('pac_id') == settings['pac_id']
+                    and current.get('system_pac_config_id') == settings['system_pac_config_id']
+                    and current.get('proxy_mode') == 'system_pac' and not _environment_conflict())
+        try:
+            source = system_pac.current_source()
+            if source.config_id != settings['system_pac_config_id']:
+                raise LocalProxyError('system_pac_changed')
+            policy = NetworkPolicy('explicit_workspace',
+                pac=system_pac.SystemPacSnapshot(source, permitted), pac_id=settings['pac_id'],
+                error='workspace_proxy_environment_conflict' if _environment_conflict() else
+                    None if pac_native.available() else 'pac_unavailable')
+        except LocalProxyError as exc:
+            policy = NetworkPolicy('explicit_workspace', error=exc.code, pac_id=settings['pac_id'])
+    elif mode == 'pac':
         try:
             source = _pac_source(workspace, settings)
         except InputError:
@@ -137,6 +165,7 @@ def state(workspace):
     settings = read_settings(workspace)
     return {**PROXY_DEFAULT, **settings, 'disclosure': DISCLOSURE, 'provider': 'Cloudflare',
             'pac_available': pac_native.available(), 'pac_disclosure': PAC_DISCLOSURE,
+            'system_pac': system_pac.preview(), 'system_pac_disclosure': system_pac.DISCLOSURE,
             'network_tested': False, 'policy': capture_policy(workspace, settings=settings).describe()}
 
 
@@ -173,7 +202,7 @@ def save_proxy(workspace, data):
         previous = read_settings(workspace)
         if previous['revision'] >= 2**31-1 or previous['revision'] != data['revision']:
             raise InputError('网络偏好已更新或修订号达到上限，请刷新后重试；原设置保留。')
-        value = {**{k:v for k,v in previous.items() if k not in PAC_FIELDS},
+        value = {**{k:v for k,v in previous.items() if k not in ALL_PAC_FIELDS},
                  'schema_version': 2, 'revision': previous['revision'] + 1,
                  'updated_at': utc_now(), 'proxy_mode': data['mode'],
                  'proxy_endpoint': _endpoint(data['mode'], proxy),
@@ -232,7 +261,8 @@ def save_pac(workspace, data):
                 raise InputError('PAC副本冲突；原设置保留。')
         else:
             atomic_text(path, data['script'])
-        value = {**previous, 'schema_version': 3, 'revision': previous['revision']+1,
+        value = {**{k:v for k,v in previous.items() if k not in ALL_PAC_FIELDS},
+            'schema_version': 3, 'revision': previous['revision']+1,
             'updated_at': utc_now(), 'proxy_mode': 'pac', 'proxy_endpoint': '',
             'proxy_consent_version': PAC_CONSENT, 'pac_name': data['name'],
             'pac_sha256': sha, 'pac_id': secrets.token_hex(16)}
@@ -241,18 +271,43 @@ def save_pac(workspace, data):
     return {**state(workspace), 'message': '已保存PAC副本及许可；尚未执行或联网测试。新会话采用此脚本，已有会话请停止并重开。'}
 
 
+def save_system_pac(workspace, data):
+    if (not isinstance(data, dict) or set(data) != {'config_id', 'revision', 'consent'}
+            or type(data['revision']) is not int or data['consent'] is not True
+            or not isinstance(data['config_id'], str) or not re.fullmatch('[0-9a-f]{64}', data['config_id'])):
+        raise InputError('请核对当前系统PAC来源并单独同意；不接受地址、凭据或额外参数。')
+    if not pac_native.available(): raise InputError(PAC_MESSAGES['pac_unavailable'])
+    if _environment_conflict(): raise InputError(PROXY_CONFLICT)
+    from .collection import writer_lock
+    with writer_lock(workspace.root):
+        previous = read_settings(workspace)
+        if previous['revision'] >= 2**31-1 or previous['revision'] != data['revision']:
+            raise InputError('网络偏好已更新或修订号达到上限，请刷新后重试；原设置保留。')
+        try: source = system_pac.current_source()
+        except LocalProxyError as exc: raise InputError(system_pac.MESSAGES[exc.code]) from None
+        if source.config_id != data['config_id']:
+            raise InputError(system_pac.MESSAGES['system_pac_changed'])
+        value = {**{k:v for k,v in previous.items() if k not in ALL_PAC_FIELDS},
+            'schema_version': 4, 'revision': previous['revision']+1, 'updated_at': utc_now(),
+            'proxy_mode': 'system_pac', 'proxy_endpoint': '', 'proxy_consent_version': system_pac.CONSENT,
+            'system_pac_config_id': source.config_id, 'pac_id': secrets.token_hex(16)}
+        atomic_json(workspace.root/'network-preferences.json', value)
+    workspace.dns_resolver.clear()
+    return {**state(workspace), 'message': '已许可当前系统PAC来源；未下载或执行。实际新会话会读取一次。撤销时选择自动发现并保存。'}
+
+
 def check_pac(workspace, data):
     if not isinstance(data, dict) or set(data) != {'revision'} or type(data['revision']) is not int:
         raise InputError('仅接受当前网络偏好修订号。')
     settings = read_settings(workspace)
-    if settings['revision'] != data['revision'] or settings.get('proxy_mode') != 'pac':
+    if settings['revision'] != data['revision'] or settings.get('proxy_mode') not in {'pac', 'system_pac'}:
         raise InputError('PAC设置已改变或尚未导入，请刷新后重试。')
     policy = capture_policy(workspace, settings=settings)
     try:
         selected = policy.for_host('pac-check.invalid')
     except LocalProxyError as exc:
         return {'passed': False, 'code': exc.code, 'target_requested': False,
-                'message': PAC_MESSAGES.get(exc.code, PROXY_CONFLICT)}
+                'message': {**PAC_MESSAGES, **system_pac.MESSAGES}.get(exc.code, PROXY_CONFLICT)}
     return {'passed': True, 'code': 'pac_evaluated', 'transport': policy.transport_name(selected),
             'target_requested': False,
             'message': '脚本对内置检查域名返回了有效路线；未连接代理或目标。不代表招聘域名的选路、登录或取数已通过。'}
@@ -261,6 +316,7 @@ def check_pac(workspace, data):
 DNS_MESSAGES = {
     **VM_MESSAGES,
     **PAC_MESSAGES,
+    **system_pac.MESSAGES,
     'workspace_proxy_environment_conflict': PROXY_CONFLICT,
     'non_public_address': '系统返回非公网地址。若网络检查显示映射地址，可在“网络自动适配”阅读说明并启用加密解析；无需改系统DNS或关闭VPN。其他私网地址仍会拒绝。',
     'encrypted_dns_disabled': '加密解析的许可已撤销；未发起新的解析。已有任务与数据保留。',

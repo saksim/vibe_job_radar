@@ -27,6 +27,7 @@ class NativeTunnel:
         self.username, self.password = 'radar', secrets.token_urlsafe(32)
         self._authorization = 'Basic ' + base64.b64encode((self.username + ':' + self.password).encode()).decode()
         self._lock, self._stop = threading.RLock(), threading.Event()
+        self.policy.bind_cancellation(self.cancelled).bind_cancellation(self._stop)
         self._proxy_auth_lock = threading.Lock()
         self._proxy_auth_error = None
         self._sockets = set()

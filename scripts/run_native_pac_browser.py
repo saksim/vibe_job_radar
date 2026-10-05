@@ -20,17 +20,22 @@ from vibe_job_radar.guided.contracts import CrawlError
 from vibe_job_radar.guided.rate import RateLedger,Limits
 from vibe_job_radar.network_policy import NetworkPolicy,use_policy
 from vibe_job_radar.pac import PacSnapshot
+from vibe_job_radar import system_pac
+from vibe_job_radar.workspace import Workspace
+from test_system_pac import SourceServer
 
 
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('--controlled',action='store_true')
-    parser.add_argument('--headed',action='store_true');args=parser.parse_args()
+    parser.add_argument('--headed',action='store_true');parser.add_argument('--system',action='store_true');args=parser.parse_args()
     if not args.controlled:return
     if os.name!='nt' or os.environ.get('CI')!='true':
         raise SystemExit('Native PAC trust-store acceptance requires ephemeral Windows CI.')
-    out=ROOT/'browser-acceptance'/'native-pac';out.mkdir(parents=True,exist_ok=True)
+    out=ROOT/'browser-acceptance'/('native-system-pac' if args.system else 'native-pac');out.mkdir(parents=True,exist_ok=True)
     result={'success':False,'checks':[],
-        'scope':'Ephemeral Windows CI only; authored PAC, actual Edge and temporary artificial TLS source. No real PAC, accounts or recruiting requests.'}
+        'scope':'Ephemeral Windows CI only; authored PAC, actual Edge and temporary artificial TLS source. System mode fakes only OS configuration and performs real source downloads. No personal PAC, accounts or recruiting requests.'}
+    pac_server=SourceServer()
+    clean={k:v for k,v in os.environ.items() if not k.startswith('VIBE_RADAR_')}
     def checkpoint(stage):
         result['stage']=stage
         (out/'results.json').write_text(json.dumps(result,indent=2),encoding='utf-8')
@@ -38,7 +43,7 @@ def main():
     try:
         with tempfile.TemporaryDirectory(prefix='radar-native-pac-') as temp:
             root=Path(temp)
-            with trust_fixture(root):
+            with trust_fixture(root),patch.object(system_pac,'current_source',return_value=pac_server.source),patch.dict(os.environ,clean,clear=True):
                 source=Fixture(root,'good.pem')
                 try:
                     for keyword,cls in (('PROXY',RealProxyTests),('SOCKS5',RealSocksTests)):
@@ -50,14 +55,20 @@ def main():
                             raise AssertionError('external DNS forbidden')
                         raw=keyword+' '+fixture.setting.split('://',1)[1]+'; DIRECT'
                         script='function FindProxyForURL(url,host){return '+json.dumps(raw)+';}'
+                        pac_server.body=script.encode()
+                        workspace=Workspace(root/('workspace-'+keyword))
+                        if args.system:
+                            workspace.network_system_pac_preferences(dict(config_id=pac_server.source.config_id,revision=0,consent=True))
+                        before_sources=len(pac_server.requests)
                         def browser(name):
-                            policy=NetworkPolicy('explicit_workspace',pac=PacSnapshot(script,lambda:True),pac_id='fixture')
+                            policy=(workspace.network_policy() if args.system else
+                                NetworkPolicy('explicit_workspace',pac=PacSnapshot(script,lambda:True),pac_id='fixture'))
                             with use_policy(policy):
                                 return NativeBackend(adapter(),RateLedger(root/(keyword+name+'.sqlite'),
                                     Limits(page_interval=0,request_interval=0)),threading.Event(),lambda *_:None,
                                     headless=not args.headed,channel='msedge')
                         def exercise():
-                            with patch('socket.getaddrinfo',side_effect=dns):
+                            with patch.dict(os.environ,clean,clear=True),patch('socket.getaddrinfo',side_effect=dns):
                                 checkpoint(keyword+'-normal');backend=browser('normal')
                                 try:
                                     page=backend.open(adapter().search_url('人工'))
@@ -80,14 +91,17 @@ def main():
                                 assert len(fixture.dials)>before
                                 assert all(address==fixture.proxy.server_address for address in fixture.dials)
                                 assert all(name==HOST for name in source.sni)
+                                downloads=len(pac_server.requests)-before_sources
+                                assert downloads==(2 if args.system else 0),downloads
                                 result['checks'].append(dict(protocol=keyword,browser_version=version,
                                     original_list_and_full_artificial_detail=True,refused_target_requests=0,
-                                    direct_fallback=False,pac_return_preserved=True))
+                                    direct_fallback=False,pac_return_preserved=True,system_source_downloads=downloads))
                         try:fixture.perform(exercise)
                         finally:fixture.tearDown();fixture.doCleanups()
                 finally:source.close()
         result['success']=True
-    finally:checkpoint('finished' if result['success'] else 'failed')
+    finally:
+        pac_server.close();checkpoint('finished' if result['success'] else 'failed')
 
 
 if __name__=='__main__':main()

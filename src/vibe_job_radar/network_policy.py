@@ -138,6 +138,15 @@ class NetworkPolicy:
         if self.pac is not None:
             self.pac.ensure_active()
 
+    def bind_cancellation(self, event):
+        bind = getattr(self.pac, 'bind_cancellation', None)
+        if bind is not None: bind(event)
+        return self
+
+    def close(self):
+        close = getattr(self.pac, 'close', None)
+        if close is not None: close()
+
     @staticmethod
     def transport_name(proxy: LoopbackProxy | None) -> str:
         if isinstance(proxy, VmSocks5Proxy):
@@ -155,7 +164,7 @@ class NetworkPolicy:
         if self.proxy and self.proxy.credentials is not None:
             value.append(self.proxy.credentials.binding)
         if self.pac is not None:
-            value.extend((self.pac.sha256, self.pac_id, self.pac_route_host))
+            value.extend((self.pac.binding, self.pac_id, self.pac_route_host))
         return hashlib.sha256(json.dumps(value, separators=(',', ':')).encode()).hexdigest()[:16]
 
     def describe(self, host: str | None = None) -> dict:
@@ -176,7 +185,12 @@ class NetworkPolicy:
         if self.pac is not None:
             # Status reads must never execute PAC helpers, including DNS.
             result.update(transport='unavailable' if self.error else 'pac_by_host',
-                          code=self.error or 'pac_not_evaluated', pac_sha256=self.pac.sha256)
+                          code=self.error or 'pac_not_evaluated')
+            if hasattr(self.pac, 'sha256'):
+                result['pac_sha256'] = self.pac.sha256
+            else:
+                result.update(pac_scope='explicit_windows_configured_pac_url',
+                              system_pac_config_id=self.pac.binding, pac_content_frozen_per_session=True)
             return result
         try:
             selected = self.for_host(host or '')
