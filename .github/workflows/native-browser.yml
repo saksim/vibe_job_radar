@@ -82,6 +82,13 @@ jobs:
       - name: Verify PAC import and rollback in actual Edge
         if: runner.os == 'Windows' && matrix.mode == 'headless'
         run: python scripts/run_pac_browser.py --edge
+      - name: Verify configured PAC with native full artificial job acquisition
+        if: runner.os == 'Windows'
+        timeout-minutes: 3
+        run: python scripts/run_native_pac_browser.py --controlled --system ${{ matrix.mode == 'headed' && '--headed' || '' }}
+      - name: Verify configured PAC URL in actual Edge
+        if: runner.os == 'Windows' && matrix.mode == 'headless'
+        run: python scripts/run_system_pac_browser.py --edge
       - name: Preserve native evidence including failures
         if: always()
         uses: actions/upload-artifact@v4
@@ -93,7 +100,9 @@ jobs:
             browser-acceptance/native-read-retry/
             browser-acceptance/native-proxy-auth/
             browser-acceptance/native-pac/
+            browser-acceptance/native-system-pac/
             browser-acceptance/windows-pac/
+            browser-acceptance/system-pac/
 
   native-chrome:
     strategy:
