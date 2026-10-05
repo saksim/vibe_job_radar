@@ -23,9 +23,9 @@ async function request(path, data) {
   return result;
 }
 async function operation(action) {
-  // Login startup controls maintain their own state and pending requests.
+  // Startup and queue controls maintain their own state and pending requests.
   const buttons = [...document.querySelectorAll("button")]
-    .filter((button) => !button.closest("#windows-startup"));
+    .filter((button) => !button.closest("#windows-startup, #public-queue"));
   buttons.forEach((button) => { button.disabled = true; });
   notice("正在处理本次操作；请勿重复提交。搜索发现可能需要等待外部服务响应。");
   try { await action(); }

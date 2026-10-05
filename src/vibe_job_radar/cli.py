@@ -74,7 +74,7 @@ def parser() -> argparse.ArgumentParser:
     s.add_argument("--packet", type=Path, required=True)
     s.add_argument("--annotations", type=Path)
     s.add_argument("--out", type=Path, required=True)
-    s = sub.add_parser('public-worker',help='独立执行工作区已确认的公开查询计划；无网页服务器/浏览器')
+    s = sub.add_parser('public-worker',help='独立执行工作区已确认的公开查询计划和待办；无网页服务器/浏览器')
     s.add_argument('--workspace',type=Path,required=True)
     return p
 

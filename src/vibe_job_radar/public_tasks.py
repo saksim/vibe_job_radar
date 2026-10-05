@@ -19,7 +19,7 @@ from .catalog_changes import compact_change
 from .collection import writer_lock
 from .record_lock import record_lock
 from .network_policy import current_policy
-from .public_contract import PublicQuery, as_record
+from .public_contract import ContractError, PublicQuery, as_record
 from .public_example import PublicExample
 from .public_lifecycle import PublicTaskCancelled, check_cancelled
 from .public_outcomes import PublicOutcomes
@@ -30,6 +30,10 @@ from .workspace import InputError
 
 class PublicTaskBusy(InputError):
     """No task was submitted and no new source request was started."""
+
+
+class PublicTaskConditionsChanged(InputError):
+    """Saved conditions rejected before any task or source request was created."""
 
 
 class PublicTasks:
@@ -181,10 +185,14 @@ class PublicTasks:
         No policy object or credential is persisted in the task record.
         """
         with self._lock:
-            policy=self.workspace.network_policy()
-            if (self.mode()!='local_direct' or policy.error or policy.fingerprint!=policy_id
-                    or self._binding('search',query)!=binding):
-                raise InputError('计划来源或网络条件已变化，请重新确认。')
+            try:
+                policy=self.workspace.network_policy()
+                unchanged=(self.mode()=='local_direct' and not policy.error and policy.fingerprint==policy_id
+                           and self._binding('search',query)==binding)
+            except (InputError,ContractError):
+                unchanged=False
+            if not unchanged:
+                raise PublicTaskConditionsChanged('计划来源或网络条件已变化，请重新确认。')
             # A process stop can arrive while validating the saved route.
             if self._stop_requested is not None and self._stop_requested():
                 raise PublicTaskCancelled()
