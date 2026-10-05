@@ -9,7 +9,7 @@ import uuid
 
 from .public_contract import PublicQuery, ContractError
 from .public_schedule import DAY, _finite, _held, _unique, ScheduleBusy
-from .public_tasks import PublicTaskBusy
+from .public_tasks import PublicTaskBusy,PublicTaskConditionsChanged
 from .public_lifecycle import PublicTaskCancelled
 from .workspace import InputError
 
@@ -289,6 +289,9 @@ class PublicQueue:
                 except (PublicTaskBusy,PublicTaskCancelled):
                     # No task was created: keep the confirmed entry for restart.
                     item['phase']='pending';value.update(status='queued',code='queued');self._write(value);return
+                except PublicTaskConditionsChanged:
+                    # Revalidation rejected the call before task creation.
+                    item['phase']='pending';value.update(status='paused',code='conditions_changed');self._write(value);return
                 except Exception:self._finish(value,{},now);return
                 item.update(phase='running',task_id=started['id']);value.update(status='running',code='running')
                 try:self._write(value)

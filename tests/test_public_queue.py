@@ -212,6 +212,64 @@ with patch('urllib.request.getproxies',return_value={}):
         self.assertEqual(state['items'][0]['expires_at'],self.now[0]+DAY)
         self.now[0]+=GAP;self.queue.tick();self.finish();self.assertEqual(self.wire.json.call_count,1)
 
+    def test_network_change_during_dispatch_keeps_pending_entry_until_reconfirmed(self):
+        from dataclasses import replace
+        self.enqueue();original_items=self.enqueue('Engineer')['items']
+        real=self.tasks.scheduled_search
+        changed=replace(self.workspace.network_policy(),encrypted_dns=True)
+        def reject(*args,**kwargs):
+            with patch.object(self.workspace,'network_policy',return_value=changed):
+                return real(*args,**kwargs)
+        with patch.object(self.tasks,'scheduled_search',side_effect=reject):self.queue.tick()
+        state=self.queue.state()
+        self.assertEqual((state['status'],state['code']),('paused','conditions_changed'))
+        self.assertEqual(state['items'],original_items);self.assertEqual(state['history'],[])
+        self.assertIsNone(self.tasks._thread);self.assertFalse(self.tasks.path.exists())
+        self.wire.json.assert_not_called();before=self.queue.path.read_bytes()
+        restarted=PublicQueue(self.workspace,self.tasks,clock=lambda:self.now[0]);self.addCleanup(restarted.close)
+        restarted.recover();restarted.tick()
+        self.assertEqual(self.queue.path.read_bytes(),before);self.wire.json.assert_not_called()
+        self.now[0]+=5;self.queue=restarted
+        self.queue.resume({'revision':state['revision'],'consent':True})
+        self.queue.tick();first=self.finish();state=self.queue.state()
+        self.assertEqual(state['history'][0]['id'],original_items[0]['id'])
+        self.assertEqual(state['items'][0]['id'],original_items[1]['id'])
+        self.assertTrue(self.workspace.report(first['report_id']))
+        self.now[0]+=GAP;self.queue.tick();self.finish()
+        self.assertEqual([r['id'] for r in self.queue.state()['history']],[r['id'] for r in original_items])
+        self.assertEqual(self.wire.json.call_count,1)
+
+    def test_source_rejection_during_dispatch_keeps_unstarted_entry_removable(self):
+        from vibe_job_radar.public_contract import ContractError
+        self.enqueue();original_items=self.enqueue('Engineer')['items'];real=self.tasks.scheduled_search
+        def reject(*args,**kwargs):
+            with patch.object(self.client,'_scope',side_effect=ContractError('public_source_unavailable')):
+                return real(*args,**kwargs)
+        with patch.object(self.tasks,'scheduled_search',side_effect=reject):self.queue.tick()
+        state=self.queue.state()
+        self.assertEqual((state['status'],state['code']),('paused','conditions_changed'))
+        self.assertEqual(state['items'],original_items);self.assertEqual(state['history'],[])
+        self.assertIsNone(self.tasks._thread);self.assertFalse(self.tasks.path.exists())
+        self.wire.json.assert_not_called()
+        self.queue.remove({'revision':state['revision'],'id':original_items[0]['id']})
+        self.assertEqual(self.queue.state()['items'],original_items[1:])
+
+    def test_input_error_after_real_dispatch_remains_uncertain_without_replay(self):
+        self.enqueue();first=self.queue.state()['items'][0]['id'];self.enqueue('Engineer')
+        real=self.tasks.scheduled_search;self.wire.json.side_effect=self.hold
+        def uncertain(*args,**kwargs):
+            real(*args,**kwargs)
+            raise InputError('fixture rejection after task creation')
+        with patch.object(self.tasks,'scheduled_search',side_effect=uncertain):self.queue.tick()
+        self.assertTrue(self.entered.wait(5));state=self.queue.state()
+        self.assertEqual((state['status'],state['code']),('paused','interrupted'))
+        self.assertEqual((state['history'][0]['id'],state['history'][0]['status']),(first,'interrupted'))
+        self.assertEqual(len(state['items']),1);self.assertFalse(self.tasks._cancel.is_set())
+        self.release.set();task=self.wait();self.assertTrue(self.workspace.report(task['report_id']))
+        self.queue.recover();self.now[0]+=GAP;self.queue.tick()
+        self.assertEqual(self.tasks.snapshot()['id'],task['id'])
+        self.assertEqual(len(self.queue.state()['history']),1);self.assertEqual(self.wire.json.call_count,1)
+
     def test_changed_conditions_and_clock_rollback_pause_without_dispatch(self):
         self.enqueue();original=self.queue._conditions
         def changed(value):
