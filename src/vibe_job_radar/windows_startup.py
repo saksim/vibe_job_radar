@@ -31,7 +31,7 @@ def _digest(value):
 def command_line(executable, workspace, mode='workbench'):
     """Quote both fixed arguments for Windows; never invoke a command shell."""
     if type(mode) is not str or mode not in MODES:
-        raise InputError('登录启动方式无效；仅支持工作台或已确认公开计划进程。')
+        raise InputError('登录启动方式无效；仅支持工作台或已确认公开查询进程。')
     def quoted(value):
         text = str(value)
         if not text or text.startswith('\\\\') or any(ord(c) < 32 or c in '\"%' for c in text):
@@ -158,7 +158,7 @@ class WindowsStartup:
             state = {**base, 'status': 'registered' if same else 'moved',
                      'registered': True, 'can_disable': True,
                      'mode': receipt.get('mode', 'workbench'),
-                     'message': ('已登记登录启动：' + ('只运行已确认公开计划。' if receipt.get('mode') == 'public_worker' else '打开工作台。')
+                     'message': ('已登记登录启动：' + ('只运行已确认公开查询。' if receipt.get('mode') == 'public_worker' else '打开工作台。')
                                  + 'Windows 可能延迟或禁用启动，请同时核对系统的启动应用设置。'
                                  if same else '已登记的是旧程序位置；请先关闭旧登记，再从当前便携包明确启用。')}
         return state, receipt, actual, command

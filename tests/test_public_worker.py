@@ -17,6 +17,7 @@ sys.path.insert(0,str(ROOT/'src'))
 from test_local_public import payload,query
 from vibe_job_radar.local_public import API_URL,LocalPublicDataClient
 from vibe_job_radar.public_schedule import DAY,PublicSchedule
+from vibe_job_radar.public_queue import PublicQueue
 from vibe_job_radar.public_tasks import PublicTasks
 from vibe_job_radar.public_worker import PublicWorker
 from vibe_job_radar import public_worker
@@ -81,20 +82,23 @@ def signal_child(root):
             assert public_worker.run_cli(root,emit=emit)==0
         assert events[-1]=={'event':'worker_stopped'}
         assert all(signal.getsignal(n)==handler for n,handler in original.items())
-        assert not worker.schedule.is_running() and not worker.tasks.is_running()
+        assert not worker.schedule.is_running() and not worker.queue.is_running() and not worker.tasks.is_running()
     print(json.dumps({'success':True,'signals_checked':len(numbers)}))
     return 0
 
 
-def startup_stop_child(root, stop_kind, phase):
+def startup_stop_child(root, stop_kind, phase, *, queue_mode=False):
     """An actual CLI signal or concurrent stop before startup can dispatch."""
     with patch('urllib.request.getproxies',return_value={}):
-        workspace=Workspace(root);seed(workspace)
+        workspace=Workspace(root)
+        if not queue_mode:seed(workspace)
         wire=Mock();wire.json.return_value=payload()
         worker=PublicWorker(workspace,client=LocalPublicDataClient(workspace,transport=wire))
+        target=worker.queue if queue_mode else worker.schedule
+        if queue_mode:target.enqueue({'revision':0,'consent':True,'query':query().payload()})
         cycle=threading.Event();stop_observed=[]
-        real_start=worker.schedule.start;real_clear=worker.schedule._stop.clear
-        real_thread_start=threading.Thread.start;real_tick=worker.schedule.tick
+        real_start=target.start;real_clear=target._stop.clear
+        real_thread_start=threading.Thread.start;real_tick=target.tick
         def stop_now():
             if stop_kind=='request':
                 thread=threading.Thread(target=worker.request_stop)
@@ -109,7 +113,7 @@ def startup_stop_child(root, stop_kind, phase):
             real_clear()
             if phase=='after_clear':stop_now()
         def thread_start(thread):
-            if phase=='before_thread' and thread.name=='radar-public-schedule':stop_now()
+            if phase=='before_thread' and thread.name==('radar-public-queue' if queue_mode else 'radar-public-schedule'):stop_now()
             real_thread_start(thread)
         def tick():
             try:real_tick()
@@ -119,37 +123,44 @@ def startup_stop_child(root, stop_kind, phase):
             real_start()
             # Let the old implementation reach its first real scheduling
             # decision while the CLI cannot yet run its shutdown loop.
-            thread=worker.schedule._thread
+            thread=target._thread
             if thread:
                 thread.join(.5)
                 if thread.is_alive():assert cycle.wait(5)
             if worker.tasks._thread:worker.tasks._thread.join(10)
-        with patch.object(worker.schedule,'start',side_effect=start), \
-                patch.object(worker.schedule._stop,'clear',side_effect=clear), \
+        with patch.object(target,'start',side_effect=start), \
+                patch.object(target._stop,'clear',side_effect=clear), \
                 patch.object(threading.Thread,'start',new=thread_start), \
-                patch.object(worker.schedule,'tick',side_effect=tick), \
+                patch.object(target,'tick',side_effect=tick), \
                 patch.object(public_worker,'PublicWorker',return_value=worker):
             code=public_worker.run_cli(root,emit=lambda value:None)
         assert code==0,code
         assert stop_observed==[phase],stop_observed
         assert wire.json.call_count==0,('unexpected source request',wire.json.call_count)
-        assert not worker.schedule.state()['history']
-        assert not worker.schedule.is_running() and not worker.tasks.is_running()
+        assert not target.state()['history']
+        if queue_mode:
+            state=target.state()
+            assert state['status']=='queued' and len(state['items'])==1,state
+            assert state['items'][0]['phase']=='pending'
+        assert not target.is_running() and not worker.tasks.is_running()
         print(json.dumps({'success':True,'stop_kind':stop_kind,'phase':phase,'source_requests':0}))
         return 0
 
 
 
-def dispatch_stop_child(root, stop_kind, phase, *, preserve_schedule=False):
+def dispatch_stop_child(root, stop_kind, phase, *, preserve_schedule=False, preserve_queue=False):
     """Hold real dispatch/acquisition while the CLI receives an actual stop."""
     with patch('urllib.request.getproxies',return_value={}):
-        workspace=Workspace(root);seed(workspace)
+        workspace=Workspace(root)
+        if not preserve_queue:seed(workspace)
         wire=Mock();wire.json.return_value=payload()
         client=LocalPublicDataClient(workspace,transport=wire)
         worker=PublicWorker(workspace,client=client)
+        target=worker.queue if preserve_queue else worker.schedule
+        if preserve_queue:initial_queue=target.enqueue({'revision':0,'consent':True,'query':query().payload()})
         entered,release,cycle=threading.Event(),threading.Event(),threading.Event()
-        real_start=worker.schedule.start;real_write=worker.schedule._write
-        real_tick=worker.schedule.tick;real_prepare=client._prepare
+        real_start=target.start;real_write=target._write
+        real_tick=target.tick;real_prepare=client._prepare
         real_thread_start=threading.Thread.start
         from vibe_job_radar.guided.rate import RateLedger
         real_reserve=RateLedger.reserve
@@ -190,15 +201,15 @@ def dispatch_stop_child(root, stop_kind, phase, *, preserve_schedule=False):
             if worker.tasks._thread:
                 worker.tasks._thread.join(10)
                 assert not worker.tasks._thread.is_alive()
-        with patch.object(worker.schedule,'start',side_effect=start),                 patch.object(worker.schedule,'_write',side_effect=write),                 patch.object(worker.schedule,'tick',side_effect=tick),                 patch.object(threading.Thread,'start',new=thread_start),                 patch.object(client,'_prepare',side_effect=prepare),                 patch.object(RateLedger,'reserve',new=reserve),                 patch.object(public_worker,'PublicWorker',return_value=worker):
+        with patch.object(target,'start',side_effect=start),                 patch.object(target,'_write',side_effect=write),                 patch.object(target,'tick',side_effect=tick),                 patch.object(threading.Thread,'start',new=thread_start),                 patch.object(client,'_prepare',side_effect=prepare),                 patch.object(RateLedger,'reserve',new=reserve),                 patch.object(public_worker,'PublicWorker',return_value=worker):
             code=public_worker.run_cli(root,emit=lambda value:None)
         assert code==0,code
         assert wire.json.call_count==0,('unexpected source request',wire.json.call_count)
-        assert not worker.schedule.is_running() and not worker.tasks.is_running()
+        assert not target.is_running() and not worker.tasks.is_running()
         assert not (workspace.root/'jobs.sqlite').exists()
         result={'success':True,'stop_kind':stop_kind,'phase':phase,'source_requests':0}
         if preserve_schedule:
-            state=worker.schedule.state()
+            state=target.state()
             assert state['status']=='scheduled',('unexpected plan state',state['status'])
             assert state['history']==[] and not state['active_task_id']
             assert state['next_due'] is not None and state['next_due']<=time.time()
@@ -216,6 +227,26 @@ def dispatch_stop_child(root, stop_kind, phase, *, preserve_schedule=False):
                 assert wire.json.call_count==1
                 result['resumed_source_requests']=1
             finally:resumed.request_stop();resumed.schedule.close();resumed.tasks.close()
+        if preserve_queue:
+            state=target.state()
+            assert state['status']=='queued',('unexpected queue state',state['status'])
+            assert not state['history'] and state['items']==initial_queue['items']
+            assert state['next_due']==initial_queue['next_due']
+            resumed=PublicWorker(workspace,client=LocalPublicDataClient(workspace,transport=wire))
+            try:
+                resumed.queue.tick()
+                assert resumed.tasks._thread is not None
+                resumed.tasks._thread.join(10)
+                assert not resumed.tasks._thread.is_alive()
+                resumed.queue.tick();restored=resumed.queue.state()
+                assert restored['status']=='idle' and not restored['items'] and len(restored['history'])==1
+                assert restored['history'][0]['status']=='completed'
+                assert restored['history'][0]['id']==initial_queue['items'][0]['id']
+                report=workspace.report(restored['history'][0]['report_id'])
+                assert report['manifest']['stats']['full_text_job_groups']==1 and wire.json.call_count==1
+                assert not resumed.schedule.path.exists()
+                result['resumed_source_requests']=1
+            finally:resumed.request_stop();resumed.queue.close();resumed.schedule.close();resumed.tasks.close()
         print(json.dumps(result))
         return 0
 
@@ -249,8 +280,10 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(self.results,[0]);self.wire.json.assert_not_called()
         self.assertEqual(self.worker.schedule.state()['status'],'disabled')
         self.assertFalse(self.worker.schedule.path.exists())
+        self.assertEqual(self.worker.queue.state()['status'],'idle');self.assertFalse(self.worker.queue.root.exists())
         self.assertFalse((self.workspace.root/'jobs.sqlite').exists())
         self.assertFalse(self.worker.schedule.is_running());self.assertFalse(self.worker.tasks.is_running())
+        self.assertFalse(self.worker.queue.is_running())
         self.assertEqual(self.events[0],{'event':'worker_started','http_server':False,'browser':False})
 
     def test_due_confirmed_query_reuses_original_report_and_logs_no_query(self):
@@ -292,6 +325,33 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(self.worker.run(emit=stop_only_scheduler),2)
         self.assertIn({'event':'worker_failed','code':'scheduler_unavailable'},self.events)
         self.wire.json.assert_not_called()
+
+    def test_queue_exit_without_worker_stop_is_reported_and_closes_all_workers(self):
+        def stop_only_queue(value):
+            self.events.append(value)
+            if value['event']=='worker_state':self.worker.queue.close()
+        self.assertEqual(self.worker.run(emit=stop_only_queue),2)
+        self.assertIn({'event':'worker_failed','code':'queue_unavailable'},self.events)
+        self.assertFalse(self.worker.schedule.is_running());self.assertFalse(self.worker.tasks.is_running())
+        self.wire.json.assert_not_called()
+
+    def test_confirmed_queue_runs_without_plan_or_http_and_logs_only_fixed_fields(self):
+        self.worker.queue.enqueue({'revision':0,'consent':True,'query':query().payload()})
+        with patch.object(socket.socket,'bind',side_effect=AssertionError('must not bind')):
+            self.start();wait_for(lambda:len(self.worker.queue.state()['history'])==1);self.stop()
+        self.assertEqual(self.results,[0]);self.wire.json.assert_called_once_with(API_URL)
+        state=self.worker.queue.state();self.assertEqual(state['status'],'idle')
+        self.assertTrue(self.workspace.report(state['history'][0]['report_id']))
+        self.assertFalse(self.worker.schedule.path.exists())
+        for private in ('Architect','https://',str(self.workspace.root),'source_scope'):
+            self.assertNotIn(private,json.dumps(self.events))
+
+    def test_corrupt_queue_is_preserved_and_prevents_due_plan_from_starting(self):
+        seed(self.workspace);self.worker.queue.root.mkdir();self.worker.queue.path.write_bytes(b'PRIVATE QUEUE RECORD')
+        self.assertEqual(self.worker.run(emit=self.events.append),2)
+        self.assertEqual(self.worker.queue.path.read_bytes(),b'PRIVATE QUEUE RECORD')
+        self.assertFalse(self.worker.schedule.is_running());self.wire.json.assert_not_called()
+        self.assertNotIn('PRIVATE',json.dumps(self.events))
 
     def test_shutdown_during_read_preserves_checkpoint_without_replaying(self):
         seed(self.workspace);entered=threading.Event();release=threading.Event()
@@ -457,7 +517,89 @@ class ProcessWorkerTests(unittest.TestCase):
                     'phase':'after_decision','source_requests':0,'resumed_source_requests':1})
 
 
+    def test_queue_stop_during_startup_keeps_unstarted_entry(self):
+        for stop_kind in ['request']+[name for name in ('SIGINT','SIGTERM','SIGBREAK') if hasattr(signal,name)]:
+            for phase in ('before_start','before_clear','after_clear','before_thread'):
+                with self.subTest(stop_kind=stop_kind,phase=phase):
+                    root=self.root/('queue-start-'+stop_kind+'-'+phase)
+                    env={k:v for k,v in os.environ.items() if not k.startswith('VIBE_RADAR_')};env['PYTHONUTF8']='1'
+                    result=subprocess.run([sys.executable,str(Path(__file__).resolve()),
+                        '--queue-startup-stop-worker',str(root),stop_kind,phase],
+                        capture_output=True,text=True,encoding='utf8',timeout=20,env=env)
+                    self.assertEqual(result.returncode,0,result.stderr)
+                    self.assertEqual(json.loads(result.stdout),{'success':True,'stop_kind':stop_kind,'phase':phase,'source_requests':0})
+
+    def test_queue_pre_submit_shutdown_keeps_entry_and_restarts_once(self):
+        for stop_kind in ['request']+[name for name in ('SIGINT','SIGTERM','SIGBREAK') if hasattr(signal,name)]:
+            with self.subTest(stop_kind=stop_kind):
+                root=self.root/('queue-presubmit-'+stop_kind)
+                env={k:v for k,v in os.environ.items() if not k.startswith('VIBE_RADAR_')};env['PYTHONUTF8']='1'
+                result=subprocess.run([sys.executable,str(Path(__file__).resolve()),
+                    '--queue-presubmit-stop-worker',str(root),stop_kind],
+                    capture_output=True,text=True,encoding='utf8',timeout=30,env=env)
+                self.assertEqual(result.returncode,0,result.stderr)
+                self.assertEqual(json.loads(result.stdout),{'success':True,'stop_kind':stop_kind,
+                    'phase':'after_decision','source_requests':0,'resumed_source_requests':1})
+
+
+class ProcessQueueWorkerTests(unittest.TestCase):
+    launch=ProcessWorkerTests.launch
+    cleanup=ProcessWorkerTests.cleanup
+    request_count=ProcessWorkerTests.request_count
+
+    def setUp(self):
+        tmp=tempfile.TemporaryDirectory();self.addCleanup(tmp.cleanup)
+        self.root=Path(tmp.name);self.workspace=Workspace(self.root);self.processes=[];self.outcomes={}
+        self.addCleanup(self.cleanup)
+        env=patch.dict(os.environ,{k:v for k,v in os.environ.items() if not k.startswith('VIBE_RADAR_')},clear=True)
+        env.start();self.addCleanup(env.stop)
+        with patch('urllib.request.getproxies',return_value={}):
+            worker=PublicWorker(self.workspace)
+            try:worker.queue.enqueue({'revision':0,'consent':True,'query':query().payload()})
+            finally:worker.tasks.close()
+
+    def queue_state(self):
+        tasks=PublicTasks(self.workspace,hybrid_client=LocalPublicDataClient(self.workspace))
+        try:return PublicQueue(self.workspace,tasks).state()
+        finally:tasks.close()
+
+    def test_two_real_workers_only_dispatch_once_and_observer_can_pause_owner(self):
+        first=self.launch('queue-first','hold');wait_for(lambda:self.request_count()==1)
+        second=self.launch('queue-second')
+        wait_for(lambda:json.loads((self.root/'state-queue-second.json').read_text(encoding='utf-8'))['queue_code']=='owner_busy')
+        observer=PublicWorker(self.workspace)
+        try:observer.queue.pause({'revision':observer.queue.state()['revision']})
+        finally:observer.tasks.close()
+        def cancelled():
+            tasks=PublicTasks(self.workspace,hybrid_client=LocalPublicDataClient(self.workspace))
+            try:return tasks.snapshot()['status']=='cancelling'
+            finally:tasks.close()
+        wait_for(cancelled);self.assertEqual(self.request_count(),1)
+        (self.root/'release-fixture').write_text('release',encoding='utf-8')
+        state=wait_for(lambda:(s if (s:=self.queue_state())['history'] else None))
+        self.assertEqual(state['status'],'paused');self.assertEqual(state['history'][0]['status'],'cancelled')
+        self.cleanup();self.assertEqual(first.returncode,0,self.outcomes['queue-first']);self.assertEqual(second.returncode,0,self.outcomes['queue-second'])
+        self.assertFalse((self.root/'public_schedule').exists());self.assertEqual(self.request_count(),1)
+
+    def test_killed_queue_owner_never_replays_and_keeps_unstarted_entry_paused(self):
+        with patch('urllib.request.getproxies',return_value={}):
+            seed_worker=PublicWorker(self.workspace)
+            try:seed_worker.queue.enqueue({'revision':seed_worker.queue.state()['revision'],'consent':True,'query':query(query='Engineer').payload()})
+            finally:seed_worker.tasks.close()
+        first=self.launch('queue-first','hold');wait_for(lambda:self.request_count()==1)
+        rate=self.root/'public_examples/rates.sqlite';first.kill();first.communicate(timeout=5);original=rate.read_bytes()
+        second=self.launch('queue-second');wait_for(lambda:self.queue_state()['status']=='paused')
+        state=self.queue_state();self.assertEqual(state['history'][0]['status'],'interrupted')
+        self.assertEqual(len(state['items']),1);self.assertEqual(state['items'][0]['phase'],'pending')
+        self.assertEqual(self.request_count(),1);self.assertEqual(rate.read_bytes(),original)
+        self.cleanup();self.assertEqual(second.returncode,0,self.outcomes['queue-second'])
+
+
 if __name__=='__main__':
+    if len(sys.argv)>1 and sys.argv[1]=='--queue-startup-stop-worker':
+        raise SystemExit(startup_stop_child(Path(sys.argv[2]),sys.argv[3],sys.argv[4],queue_mode=True))
+    if len(sys.argv)>1 and sys.argv[1]=='--queue-presubmit-stop-worker':
+        raise SystemExit(dispatch_stop_child(Path(sys.argv[2]),sys.argv[3],'after_decision',preserve_queue=True))
     if len(sys.argv)>1 and sys.argv[1]=='--presubmit-stop-worker':
         raise SystemExit(dispatch_stop_child(Path(sys.argv[2]),sys.argv[3],'after_decision',preserve_schedule=True))
     if len(sys.argv)>1 and sys.argv[1]=='--dispatch-stop-worker':
