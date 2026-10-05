@@ -211,6 +211,56 @@ class ScheduleTests(unittest.TestCase):
         self.assertEqual(self.schedule.state()['history'][0]['report_id'],original['report_id'])
         self.assertEqual(self.tasks._state['id'],manual['id']);self.assertFalse(self.tasks._cancel.is_set());self.wait()
 
+
+    def test_empty_manual_search_allows_next_matching_query_and_preserves_receipt(self):
+        self.tasks.search({'consent':True,'query':query(query='absentwordfixture').payload()})
+        empty=self.wait()
+        self.assertEqual((empty['status'],empty['code'],empty['report_id']),('completed','public_empty',''))
+        self.assertEqual(empty['returned_jobs'],0)
+        self.tasks.search({'consent':True,'query':query().payload()})
+        matching=self.wait()
+        self.assertEqual(matching['status'],'completed')
+        self.assertNotEqual(matching['id'],empty['id'])
+        self.assertTrue(self.workspace.report(matching['report_id']))
+        receipt=self.tasks.previous_outcome(empty['id'],1)
+        self.assertEqual((receipt['status'],receipt['report_id']),('completed',''))
+        self.assertEqual(self.transport.json.call_count,1)
+        self.assertTrue(matching['cache_reused'])
+
+    def test_empty_scheduled_search_dispatches_again_on_next_due_day(self):
+        self.configure(query=query(query='absentwordfixture').payload())
+        self.now[0]+=DAY;self.schedule.tick();first=self.finish()
+        self.assertEqual((first['status'],first['code'],first['report_id']),('completed','public_empty',''))
+        self.assertEqual(self.schedule.state()['status'],'scheduled')
+        self.now[0]+=DAY;self.schedule.tick()
+        self.assertEqual(self.schedule.state()['status'],'running')
+        second=self.finish()
+        self.assertNotEqual(second['id'],first['id'])
+        self.assertEqual((second['status'],second['code'],second['report_id']),('completed','public_empty',''))
+        state=self.schedule.state()
+        self.assertEqual((state['status'],state['next_due']),('scheduled',self.now[0]+DAY))
+        self.assertEqual([(r['task_id'],r['status'],r['report_id']) for r in state['history']],
+                         [(first['id'],'completed',''),(second['id'],'completed','')])
+        self.assertEqual(self.transport.json.call_count,2)
+
+    def test_replaced_empty_plan_recovers_without_replaying_or_losing_manual_report(self):
+        self.configure(query=query(query='absentwordfixture').payload())
+        self.now[0]+=DAY;self.schedule.tick();original=self.wait()
+        self.assertEqual((original['status'],original['code'],original['report_id']),('completed','public_empty',''))
+        self.tasks.search({'consent':True,'query':query().payload()});manual=self.wait()
+        report=self.workspace.root/'reports'/manual['report_id']/'requirements.csv';before=report.read_bytes()
+        restarted_tasks=PublicTasks(self.workspace,hybrid_client=self.client);self.addCleanup(restarted_tasks.close)
+        restarted=PublicSchedule(self.workspace,restarted_tasks,clock=lambda:self.now[0]);self.addCleanup(restarted.close)
+        restarted.recover();state=restarted.state()
+        self.assertEqual(state['status'],'scheduled')
+        self.assertEqual((state['history'][0]['task_id'],state['history'][0]['status'],state['history'][0]['report_id']),
+                         (original['id'],'completed',''))
+        self.assertEqual(restarted_tasks.snapshot()['id'],manual['id'])
+        self.assertFalse(restarted_tasks._cancel.is_set())
+        self.assertEqual(report.read_bytes(),before)
+        self.assertTrue(self.workspace.report(manual['report_id']))
+        self.assertEqual(self.transport.json.call_count,1)
+
     def test_missing_outcome_still_pauses_without_cancelling_manual_work(self):
         self.configure();self.now[0]+=DAY;self.schedule.tick();self.wait()
         manual=self.tasks.search({'consent':True,'query':query(query='Engineer').payload()})

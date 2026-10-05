@@ -68,6 +68,19 @@ class OutcomeTests(unittest.TestCase):
         with self.assertRaises(InputError):self.outcomes.remember({**terminal(),'id':'d'*32})
         self.assertEqual(self.outcomes.path.read_bytes(),before)
 
+
+    def test_completed_empty_search_receipt_roundtrips_without_a_report(self):
+        self.root.mkdir();empty={**terminal(),'report_id':''}
+        self.outcomes.remember(empty)
+        restarted=PublicOutcomes(self.root);receipt=restarted.get(empty['id'])
+        self.assertEqual(receipt,{key:empty[key] for key in FIELDS-{'schema_version'}}|{'schema_version':1})
+        restarted.remember(empty)
+        with self.assertRaises(InputError):
+            restarted.remember({**terminal(),'id':'d'*32,'kind':'example','report_id':''})
+        self.assertIsNone(restarted.get('d'*32))
+        restarted.remember({**terminal(),'id':'e'*32})
+        self.assertEqual(restarted.get('e'*32)['report_id'],'c'*32)
+
     def test_oversized_receipt_database_is_not_replaced(self):
         self.root.mkdir();self.outcomes.path.write_bytes(b'X'*(1024*1024+1))
         with self.assertRaises(InputError):self.outcomes.get('a'*32)

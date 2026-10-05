@@ -19,13 +19,15 @@ def _hex(value, length, *, empty=False):
 
 
 def _validate(value):
+    # A successful search may match no records and therefore have no report.
     if (not isinstance(value,dict) or set(value)!=FIELDS
             or type(value['schema_version']) is not int or value['schema_version']!=1
             or not _hex(value['id'],32) or type(value['attempt']) is not int or not 1<=value['attempt']<2**31
             or value['kind'] not in ('example','search')
             or not _hex(value['resume_binding'],64,empty=True)
             or value['status'] not in ('completed','failed','cancelled')
-            or not _hex(value['report_id'],32,empty=value['status']!='completed') or type(value['stale']) is not bool):
+            or not _hex(value['report_id'],32,empty=value['status']!='completed' or value['kind']=='search')
+            or type(value['stale']) is not bool):
         raise ValueError('invalid outcome')
     return value
 
