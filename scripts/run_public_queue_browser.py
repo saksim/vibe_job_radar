@@ -64,6 +64,8 @@ def main():
                         context.route('**/*',local_only)
                         return context
                     def check_global_refresh(page,label):
+                        # The POST updates items before its follow-up state refresh finishes.
+                        expect(page.locator('#queue-controls')).to_have_js_property('disabled',False)
                         names=['add','pause','resume']
                         before={n:page.locator('#queue-'+n).is_disabled() for n in names}
                         requests=wire.json.call_count
