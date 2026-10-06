@@ -362,3 +362,160 @@ class NativeWaitCompletionTests(unittest.TestCase):
             self.assertEqual(result['pending'], {})
             self.assertEqual((result['allocated_backends'], result['closed_backends']), (1, 1))
             dump.assert_not_called()
+
+
+class NativeCallTimingTests(unittest.TestCase):
+    def test_browser_totals_survive_history_rollover_and_pending_calls_have_age(self):
+        now = [10.0]
+        stages = probe.Stages()
+        stages.timings = probe.CallTimings(probe.LABELS, capacity=512, clock=lambda: now[0])
+        ident = stages.backend()
+        for _ in range(200):
+            token = stages.enter(ident, 'open')
+            now[0] += .125
+            stages.leave(ident, token)
+        token = stages.enter(ident, 'open')
+        now[0] += 2
+        report = stages.snapshot()
+        self.assertEqual(len(report['history']), 128)
+        self.assertEqual(report['timings']['completed']['open'],
+            {'count': 200, 'total_ms': 25000.0, 'max_ms': 125.0})
+        self.assertEqual(report['timings']['pending'],
+            [{'operation': 'open', 'started_ms': 25000.0, 'elapsed_ms': 2000.0}])
+        stages.leave(ident, token)
+        stages.closed(ident)
+        self.assertEqual(stages.snapshot()['pending'], {})
+        self.assertEqual(stages.snapshot()['timings']['completed']['open']['max_ms'], 2000.0)
+
+    def test_overlapping_calls_complete_out_of_order_without_double_matching(self):
+        now = [0]
+        timing = probe.CallTimings({'file.fsync'}, clock=lambda: now[0])
+        first = timing.enter('file.fsync')
+        now[0] = 1
+        second = timing.enter('file.fsync')
+        now[0] = 3
+        timing.leave(first)
+        self.assertEqual(timing.snapshot()['pending'][0]['elapsed_ms'], 2000)
+        now[0] = 5
+        timing.leave(second)
+        timing.leave(first)
+        self.assertEqual(timing.snapshot()['completed']['file.fsync'],
+            {'count': 2, 'total_ms': 7000, 'max_ms': 4000})
+        self.assertEqual(timing.snapshot()['pending'], [])
+
+    def test_wrapper_preserves_arguments_return_and_original_exception(self):
+        now = [0]
+        timing = probe.CallTimings({'sqlite.connect'}, clock=lambda: now[0])
+        marker, payload, calls = object(), {'password': SECRET}, []
+        def original(*args, **kwargs):
+            calls.append((args, kwargs)); now[0] += 1
+            return marker
+        timed = timing.observe('sqlite.connect', original)
+        self.assertIs(timed(payload, credential=SECRET), marker)
+        self.assertIs(calls[0][0][0], payload)
+        self.assertEqual(calls[0][1], {'credential': SECRET})
+        failure = KeyboardInterrupt(SECRET)
+        def failed():
+            now[0] += 2
+            raise failure
+        with self.assertRaises(KeyboardInterrupt) as caught:
+            timing.observe('sqlite.connect', failed)()
+        self.assertIs(caught.exception, failure)
+        report = timing.snapshot()
+        self.assertEqual(report['completed']['sqlite.connect'],
+            {'count': 2, 'total_ms': 3000, 'max_ms': 2000})
+        self.assertEqual(report['pending'], [])
+        self.assertNotIn(SECRET, json.dumps(report))
+
+    def test_unknown_labels_capacity_and_pending_storage_are_bounded(self):
+        timing = probe.CallTimings({'sqlite.connect'}, capacity=2)
+        tokens = [timing.enter(SECRET) for _ in range(6)]
+        report = timing.snapshot()
+        self.assertEqual(report['dropped'], 4)
+        self.assertEqual(len(report['pending']), 2)
+        self.assertTrue(all(item['operation'] == 'other' for item in report['pending']))
+        for token in tokens: timing.leave(token)
+        self.assertEqual(timing.snapshot()['completed']['other']['count'], 2)
+        self.assertNotIn(SECRET, json.dumps(timing.snapshot()))
+
+    def test_real_sqlite_and_atomic_file_calls_still_persist_and_hooks_restore(self):
+        import os
+        import sqlite3
+        from vibe_job_radar.guided.rate import Limits, RateLedger
+        from vibe_job_radar.utils import atomic_text
+        original = (os.fsync, os.replace, sqlite3.connect, RateLedger.reserve)
+        stages = probe.Stages()
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with probe.capture(stages, root/'evidence', 'io'), probe.observe_io(stages):
+                ledger = RateLedger(root/'rate.sqlite', Limits(page_interval=0, request_interval=0))
+                ledger.reserve('liepin', 'page')
+                ledger.login_availability('liepin')
+                atomic_text(root/'result.txt', SECRET)
+            self.assertEqual(ledger.summary('liepin')['page']['day'], 1)
+            self.assertEqual((root/'result.txt').read_text(encoding='utf-8'), SECRET)
+            final = json.loads((root/'evidence/io-progress.json').read_text(encoding='utf-8'))
+        self.assertEqual((os.fsync, os.replace, sqlite3.connect, RateLedger.reserve), original)
+        self.assertTrue(final['success'])
+        self.assertEqual(final['io_timings']['pending'], [])
+        for label in ('sqlite.connect', 'rate.initialize', 'rate.reserve',
+                      'rate.login_availability', 'file.fsync', 'file.replace'):
+            self.assertGreater(final['io_timings']['completed'][label]['count'], 0, label)
+        self.assertNotIn(SECRET, json.dumps(final))
+
+    def test_inflight_real_writer_keeps_timing_at_failure_without_changing_fsync(self):
+        import os
+        from vibe_job_radar.utils import atomic_text
+        entered, release = threading.Event(), threading.Event()
+        original, calls, errors = os.fsync, [], []
+        def blocked(fd):
+            entered.set()
+            if not release.wait(5): raise AssertionError('writer not released')
+            calls.append(fd)
+            return original(fd)
+        stages = probe.Stages()
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            def write():
+                try: atomic_text(root/(SECRET+'.txt'), SECRET)
+                except BaseException as error: errors.append(error)
+            worker = threading.Thread(target=write)
+            failure = TimeoutError(SECRET)
+            try:
+                with patch.object(os, 'fsync', blocked):
+                    with self.assertRaises(TimeoutError) as caught:
+                        with probe.capture(stages, root/'evidence', 'io'), probe.observe_io(stages):
+                            worker.start(); self.assertTrue(entered.wait(2))
+                            raise failure
+                    self.assertIs(caught.exception, failure)
+                    final = json.loads((root/'evidence/io-progress.json').read_text(encoding='utf-8'))
+                    self.assertFalse(final['success'])
+                    self.assertEqual(final['error_types'], ['TimeoutError'])
+                    pending = final['io_timings']['pending']
+                    self.assertTrue(any(item['operation'] == 'file.fsync' for item in pending))
+                    self.assertTrue(all(item['elapsed_ms'] >= 0 for item in pending))
+                    self.assertNotIn(SECRET, json.dumps(final))
+            finally:
+                release.set(); worker.join(timeout=2)
+            self.assertFalse(worker.is_alive()); self.assertEqual(errors, [])
+            self.assertEqual(len(calls), 1)
+            self.assertEqual((root/(SECRET+'.txt')).read_text(encoding='utf-8'), SECRET)
+            self.assertEqual(json.loads((root/'evidence/io-progress.json').read_text(encoding='utf-8')), final)
+
+    def test_unfinished_or_dropped_io_cannot_be_marked_success(self):
+        for incomplete in ('pending', 'dropped'):
+            for original in (None, ValueError(SECRET)):
+                with self.subTest(incomplete=incomplete, original=original is not None), tempfile.TemporaryDirectory() as temp:
+                    stages = probe.Stages()
+                    stages.io_timings = probe.CallTimings(probe.IO_LABELS, capacity=1)
+                    token = stages.io_timings.enter('file.fsync')
+                    if incomplete == 'dropped':
+                        stages.io_timings.enter('file.fsync')
+                        stages.io_timings.leave(token)
+                    with self.assertRaises(RuntimeError if original is None else ValueError) as caught:
+                        with probe.capture(stages, Path(temp), 'io'):
+                            if original is not None: raise original
+                    if original is not None: self.assertIs(caught.exception, original)
+                    final = json.loads((Path(temp)/'io-progress.json').read_text(encoding='utf-8'))
+                    self.assertFalse(final['success'])
+                    self.assertNotIn(SECRET, json.dumps(final))

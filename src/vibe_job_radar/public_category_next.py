@@ -6,7 +6,7 @@ import hashlib
 import json
 import re
 
-from .public_category import MODE, PARSER, URL, MAX_DETAILS
+from .public_category import MODE, MAX_DETAILS, category_for_state
 from .public_job_links import public_detail_parser
 from .utils import utc_now
 from .workspace import InputError
@@ -33,8 +33,8 @@ def _snapshot(collector, ident):
     if (state.get('mode') != MODE or state.get('in_flight')
             or state.get('status') not in {'completed', 'needs_attention', 'empty'}):
         raise InputError('请先让公开分类的当前批次结束；其他来源或仍在运行的任务不能续取名单。')
-    if (state.get('roles') != ['architect'] or state.get('platforms') != ['liepin']
-            or state.get('permit_platforms') != ['liepin'] or not state.get('rights_note')):
+    category = category_for_state(state)
+    if (state.get('permit_platforms') != ['liepin'] or not state.get('rights_note')):
         raise InputError('原分类任务的岗位、来源或许可范围不完整，不能自动扩大范围。')
     details = state.get('details')
     if not isinstance(details, list) or any(not isinstance(row, dict) for row in details):
@@ -45,7 +45,7 @@ def _snapshot(collector, ident):
     if not isinstance(outcomes, list) or len(outcomes) != 1 or not isinstance(outcomes[0], dict):
         raise InputError('没有唯一已确认的分类名单。')
     source = outcomes[0]
-    if (source.get('status') != 'ok' or source.get('url') != URL or source.get('parser') != PARSER
+    if (source.get('status') != 'ok'
             or not isinstance(source.get('raw_sha256'), str)
             or not re.fullmatch('[a-f0-9]{64}', source['raw_sha256'])):
         raise InputError('分类快照未成功读取或缺少来源摘要，不能续取。')
@@ -101,7 +101,8 @@ def _snapshot(collector, ident):
         if (relation.get('parent_id') != state['id'] or relation.get('parent_fingerprint') != fingerprint
                 or existing.get('mode') != MODE):
             raise InputError('既有下一批与原预览不一致，不会覆盖已保存任务。')
-    plan = dict(id=state['id'], fingerprint=fingerprint, source_url=URL,
+    plan = dict(id=state['id'], fingerprint=fingerprint, source_url=category.url,
+                category_id=category.key, category_label=category.label,
                 source_collection_id=source.get('source_collection_id', state['id']),
                 snapshot_sha256=source['raw_sha256'], snapshot_observed_at=source.get('capture_finished_at'),
                 source_task_created_at=source.get('source_task_created_at', state['created_at']),
