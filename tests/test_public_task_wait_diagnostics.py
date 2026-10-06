@@ -135,6 +135,20 @@ class PublicWaitDiagnosticTests(unittest.TestCase):
         self.assertEqual(row['task']['status'], 'running')
         self.assertNotIn('PRIVATE_RACE', json.dumps(row))
 
+    def test_process_worker_wait_captures_the_child_before_its_cleanup(self):
+        import test_public_worker as process
+        worker = Mock();worker.ident = None;worker.is_alive.return_value = True
+        task = SimpleNamespace(_thread=worker, _state={
+            'status':'running', 'phase':'saving', 'query':'PRIVATE', 'message':'PRIVATE'})
+        with self.assertRaises(AssertionError) as caught:
+            process.wait_public_task(task)
+        worker.join.assert_called_once_with(timeout=10)
+        row = json.loads(str(caught.exception).split('PUBLIC_TASK_WAIT ', 1)[1])
+        self.assertEqual(row['task'], {'status':'running', 'phase':'saving'})
+        self.assertIn('worker_stack', row)
+        self.assertIn('report_writers', row)
+        self.assertNotIn('PRIVATE', str(caught.exception))
+
     def test_optional_observation_errors_preserve_io_and_failed_wait(self):
         with patch.object(os, 'fsync', return_value=7) as original:
             probe = diagnostics.WaitFsyncProbe(threading.current_thread, clock=Mock(side_effect=RuntimeError('PRIVATE')))

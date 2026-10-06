@@ -1,8 +1,8 @@
 "use strict";
 // Local field guidance only. Presets never supply URLs, credentials or authorization.
 window.CollectionGuide = class {
-  constructor({api, note, act, chosen, setChecks, platforms, keyConfigured}) {
-    Object.assign(this, {api, note, act, chosen, setChecks, platforms, keyConfigured});
+  constructor({api, note, act, actPreset = act, chosen, setChecks, platforms, keyConfigured}) {
+    Object.assign(this, {api, note, act, actPreset, chosen, setChecks, platforms, keyConfigured});
     this.form = document.getElementById("collect-form");
     this.mode = this.form.elements.mode.value;
     this.locked = false;
@@ -34,18 +34,19 @@ window.CollectionGuide = class {
     if (href.startsWith("https://")) { a.target = "_blank"; a.rel = "noopener noreferrer"; }
     return a;
   }
-  action(parent, label, fn) {
+  action(parent, label, fn, preset = false) {
     const b = this.node("button", label, parent); b.type = "button";
-    b.addEventListener("click", () => this.act(fn)); return b;
+    if (preset) b.dataset.collectionPreset = "true";
+    b.addEventListener("click", () => (preset ? this.actPreset : this.act)(fn)); return b;
   }
   build() {
     const root = document.getElementById("collection-guide"); root.className = "guide-box";
     this.node("h3", "不知道从哪里填？先选你手里有什么", root);
     this.node("p", "有具体职位链接 → URL 路线；希望程序帮你找链接 → 搜索路线；数据供应方已经给了接口 → 数据源路线。不是所有字段都要填。", root);
-    this.action(root, "我有职位链接：套用 URL 入门参数", () => this.preset("urls"));
-    this.action(root, "我想先搜索：套用搜索入门参数", () => this.preset("search"));
-    this.action(root, "自动读取猎聘架构师公开分类", () => this.preset("liepin_category"));
-    this.action(root, "自动读取猎聘算法工程师公开分类", () => this.preset("liepin_category", "algorithm"));
+    this.action(root, "我有职位链接：套用 URL 入门参数", () => this.preset("urls"), true);
+    this.action(root, "我想先搜索：套用搜索入门参数", () => this.preset("search"), true);
+    this.action(root, "自动读取猎聘架构师公开分类", () => this.preset("liepin_category"), true);
+    this.action(root, "自动读取猎聘算法工程师公开分类", () => this.preset("liepin_category", "algorithm"), true);
     this.link(root, "没有链接也没有 Key：返回基础页粘贴 JD", "/#job-form");
     this.node("p", "入门按钮只调整岗位、平台和小预算，不联网，不填假链接或密钥，不替你勾选授权。原有 URL、用途说明会保留；跨路线切换会清空服务 Key。", root);
     this.panels = {};
