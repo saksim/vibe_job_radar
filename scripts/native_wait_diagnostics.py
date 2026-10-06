@@ -4,7 +4,7 @@ Callbacks only update memory. The watchdog never calls browser/service methods.
 """
 from __future__ import annotations
 from collections import Counter, deque
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 import faulthandler
 from functools import wraps
 import json
@@ -39,10 +39,108 @@ def error_chain(error):
     return names
 
 
+class CallTimings:
+    """Bounded elapsed times; nested/parallel totals are not wall time."""
+
+    def __init__(self, labels, *, capacity=64, clock=time.perf_counter):
+        self.labels = frozenset(labels) | {'other'}
+        self.capacity, self.clock = capacity, clock
+        self.lock = threading.RLock()
+        self.started = clock()
+        self.next_token = self.dropped = 0
+        self.active, self.completed = {}, {}
+
+    def enter(self, label):
+        with self.lock:
+            if len(self.active) >= self.capacity:
+                self.dropped += 1
+                return None
+            label = label if label in self.labels else 'other'
+            self.next_token += 1
+            self.active[self.next_token] = (label, self.clock())
+            return self.next_token
+
+    def leave(self, token):
+        if token is None:
+            return
+        with self.lock:
+            call = self.active.pop(token, None)
+            if call is None:
+                return
+            label, began = call
+            elapsed = self.clock() - began
+            stats = self.completed.setdefault(label, [0, 0.0, 0.0])
+            stats[0] += 1
+            stats[1] += elapsed
+            stats[2] = max(stats[2], elapsed)
+
+    def observe(self, label, function):
+        @wraps(function)
+        def timed(*args, **kwargs):
+            token = self.enter(label)
+            try:
+                return function(*args, **kwargs)
+            finally:
+                self.leave(token)
+        return timed
+
+    def snapshot(self):
+        with self.lock:
+            now = self.clock()
+            return {
+                'scope': 'Elapsed calls including failures; nested and concurrent totals overlap.',
+                'completed': {label: {'count': stats[0],
+                    'total_ms': round(stats[1] * 1000, 3),
+                    'max_ms': round(stats[2] * 1000, 3)}
+                    for label, stats in self.completed.items()},
+                'pending': [{'operation': label,
+                    'started_ms': round((began - self.started) * 1000, 3),
+                    'elapsed_ms': round((now - began) * 1000, 3)}
+                    for label, began in self.active.values()],
+                'dropped': self.dropped,
+            }
+
+
+IO_LABELS = frozenset({
+    'sqlite.connect', 'rate.initialize', 'rate.reserve', 'rate.publisher',
+    'rate.login_availability', 'service.state', 'service.checkpoint',
+    'service.report', 'file.fsync', 'file.replace',
+})
+
+
+@contextmanager
+def observe_io(stages):
+    """CI probe only: same calls/arguments/results/errors; no payload capture."""
+    import sqlite3
+    from unittest.mock import patch
+    from vibe_job_radar.guided.rate import RateLedger
+    from vibe_job_radar.guided.service import GuidedService
+
+    targets = (
+        (sqlite3, 'connect', 'sqlite.connect'),
+        (RateLedger, '__init__', 'rate.initialize'),
+        (RateLedger, 'reserve', 'rate.reserve'),
+        (RateLedger, 'set_publisher', 'rate.publisher'),
+        (RateLedger, 'login_availability', 'rate.login_availability'),
+        (GuidedService, 'state', 'service.state'),
+        (GuidedService, '_save', 'service.checkpoint'),
+        (GuidedService, '_finalize_report', 'service.report'),
+        (os, 'fsync', 'file.fsync'),
+        (os, 'replace', 'file.replace'),
+    )
+    with ExitStack() as stack:
+        for owner, attribute, label in targets:
+            stack.enter_context(patch.object(owner, attribute,
+                stages.io_timings.observe(label, getattr(owner, attribute))))
+        yield
+
+
 class Stages:
     def __init__(self):
         self.lock = threading.RLock()
         self.calls = Counter()
+        self.timings = CallTimings(LABELS, capacity=512)
+        self.io_timings = CallTimings(IO_LABELS)
         self.pending = {}
         self.history = deque(maxlen=128)
         self.started = time.monotonic()
@@ -81,7 +179,7 @@ class Stages:
             name = name if name in LABELS else 'cdp.other'
             self.next_token += 1
             token = self.next_token
-            self.pending[ident].append((token, name))
+            self.pending[ident].append((token, name, self.timings.enter(name)))
             self.calls[name] += 1
             self._event(ident, name, 'enter')
             return token
@@ -90,9 +188,10 @@ class Stages:
         if token is None:
             return
         with self.lock:
-            for i, (current, name) in enumerate(self.pending.get(ident, [])):
+            for i, (current, name, timing_token) in enumerate(self.pending.get(ident, [])):
                 if current == token:
                     self.pending[ident].pop(i)
+                    self.timings.leave(timing_token)
                     self._event(ident, name, 'leave')
                     break
             self._retire_if_finished(ident)
@@ -117,8 +216,10 @@ class Stages:
     def snapshot(self):
         with self.lock:
             return {**self.result, 'calls': dict(self.calls),
-                    'pending': {str(k): [name for _, name in v] for k, v in self.pending.items()},
+                    'pending': {str(k): [name for _, name, _ in v] for k, v in self.pending.items()},
                     'history': list(self.history), 'dropped': self.dropped,
+                    'timings': self.timings.snapshot(),
+                    'io_timings': self.io_timings.snapshot(),
                     'allocated_backends': self.next_backend,
                     'closed_backends': self.closed_backends,
                     'after_close_calls': self.after_close_calls,
@@ -217,10 +318,14 @@ def capture(stages, out, prefix, *, interval=5, stack_interval=35):
             # unfinished cleanup at the same boundary, without waiting again.
             incomplete = bool(writer_errors or watcher.is_alive() or final['dropped']
                               or final['pending']
+                              or final['timings']['dropped']
+                              or final['io_timings']['dropped']
+                              or final['io_timings']['pending']
                               or final['allocated_backends'] != final['closed_backends'])
             if incomplete:
                 stages.result['success'] = False
                 if not failed and (final['pending']
+                                   or final['io_timings']['pending']
                                    or final['allocated_backends'] != final['closed_backends']):
                     try:
                         faulthandler.dump_traceback(file=stacks, all_threads=True)
