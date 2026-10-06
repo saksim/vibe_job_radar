@@ -534,6 +534,13 @@ def main():
                         expect(page.locator('#collect-result')).to_contain_text('工作区共享冷却')
                         blocked_page=json.loads(page.locator('#collect-json').text_content())
                         assert blocked_page['category_outcomes'][0]['status']=='cooldown' and not blocked_page['report_id']
+                        expect(page.locator('#collect-background-note')).to_contain_text('未生成报告')
+                        terminal_message=page.locator('#collect-background-note').inner_text()
+                        assert '正文和报告已保存' not in terminal_message
+                        result['background_terminal_message']=dict(text=terminal_message,
+                            report_created=bool(blocked_page['report_id']),status=blocked_page['status'],
+                            saved_detail_count=blocked_page['saved_detail_count'])
+                        result['checks'].append('a completed zero-body cooldown batch explicitly says no report was generated')
                         assert server.guided.ledger.summary('liepin')==before_rate
                         upstream.assert_not_called()
                     result['checks'].append('reloading and creating a category task retains the same shared cooldown and consumes no HTTP reservation or source request')
@@ -553,4 +560,9 @@ def main():
 
 
 if __name__ == '__main__':
-    raise SystemExit(main())
+    code = main()
+    if code:
+        raise SystemExit(code)
+    # Keep the existing CI entry point and its independent background artifact.
+    from run_category_background_browser import main as background_main
+    raise SystemExit(background_main())

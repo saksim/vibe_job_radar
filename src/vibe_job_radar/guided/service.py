@@ -291,6 +291,9 @@ class GuidedService:
                 raise
 
     def state(self, data=None):
+        # Package metadata can touch the filesystem. Read it once per view,
+        # outside the task lock needed by the worker to finish its action.
+        package = self._package()
         with self._records():
             foreign=self._ownership.foreign()
             jobs = []
@@ -331,12 +334,12 @@ class GuidedService:
                     'checkpoint_warnings': list(dict.fromkeys(checkpoint_warnings)),
                     'sites': [{**site, 'native': native_capability(self.registry.get(site['key']))}
                               for site in self.registry.describe()], 'limits': asdict(self.ledger.limits),
-                    'browser_package': self._package(), 'installation': self._last_install,
+                    'browser_package': package, 'installation': self._last_install,
                     'installation_scope': 'current_process_actions_only_not_component_readiness',
                     'tls_environment': {**tls_context.status(), 'restart_required': self._tls_restart_required},
                     'browser_choice': {'selected': self._selected_browser, 'options': CHOICES,
                                        'error': self._choice_error,
-                                       'last_check': self._choice.historical_view(self._choice_data, self._package())},
+                                       'last_check': self._choice.historical_view(self._choice_data, package)},
                     'browser_health': copy.deepcopy(self._browser_health), 'setup': copy.deepcopy(self._setup),
                     'python': sys.executable, 'runtime':runtime_description(), 'roles': {k: v['label'] for k,v in self.workspace.config['roles'].items()},
                     'sessions_persisted': any(j.get('saved_session_status') == 'saved_unverified' for j in jobs),

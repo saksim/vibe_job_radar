@@ -11,6 +11,7 @@ import threading
 import time
 import unittest
 from unittest.mock import Mock, patch
+from public_task_wait_diagnostics import join_observed
 
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'src'))
@@ -34,6 +35,13 @@ def wait_for(condition, timeout=20):
         except (FileNotFoundError,PermissionError,json.JSONDecodeError):pass
         time.sleep(.05)
     raise AssertionError('controlled worker did not reach expected state')
+
+
+def wait_public_task(tasks):
+    # Keep the original child-process 10-second bound and failure result;
+    # capture this process's worker before shutdown destroys the live frames.
+    alive, evidence = join_observed(tasks, timeout=10)
+    assert not alive, evidence
 
 
 def seed(workspace):
@@ -199,8 +207,7 @@ def dispatch_stop_child(root, stop_kind, phase, *, preserve_schedule=False, pres
             assert cycle.wait(8),'dispatch did not finish'
             # Prevent main-loop cleanup from hiding a late dispatched request.
             if worker.tasks._thread:
-                worker.tasks._thread.join(10)
-                assert not worker.tasks._thread.is_alive()
+                wait_public_task(worker.tasks)
         with patch.object(target,'start',side_effect=start),                 patch.object(target,'_write',side_effect=write),                 patch.object(target,'tick',side_effect=tick),                 patch.object(threading.Thread,'start',new=thread_start),                 patch.object(client,'_prepare',side_effect=prepare),                 patch.object(RateLedger,'reserve',new=reserve),                 patch.object(public_worker,'PublicWorker',return_value=worker):
             code=public_worker.run_cli(root,emit=lambda value:None)
         assert code==0,code
@@ -217,8 +224,7 @@ def dispatch_stop_child(root, stop_kind, phase, *, preserve_schedule=False, pres
             try:
                 resumed.schedule.tick()
                 assert resumed.tasks._thread is not None
-                resumed.tasks._thread.join(10)
-                assert not resumed.tasks._thread.is_alive()
+                wait_public_task(resumed.tasks)
                 resumed.schedule.tick();restored=resumed.schedule.state()
                 assert restored['status']=='scheduled' and len(restored['history'])==1
                 assert restored['history'][0]['status']=='completed'
@@ -236,8 +242,7 @@ def dispatch_stop_child(root, stop_kind, phase, *, preserve_schedule=False, pres
             try:
                 resumed.queue.tick()
                 assert resumed.tasks._thread is not None
-                resumed.tasks._thread.join(10)
-                assert not resumed.tasks._thread.is_alive()
+                wait_public_task(resumed.tasks)
                 resumed.queue.tick();restored=resumed.queue.state()
                 assert restored['status']=='idle' and not restored['items'] and len(restored['history'])==1
                 assert restored['history'][0]['status']=='completed'

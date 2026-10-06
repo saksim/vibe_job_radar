@@ -7,6 +7,7 @@ import json
 import os
 import re
 import tempfile
+import threading
 import uuid
 from dataclasses import asdict
 from contextlib import contextmanager
@@ -83,7 +84,15 @@ def writer_lock(root):
 def serialized(method):
     @wraps(method)
     def wrapped(self, *args, **kwargs):
-        with writer_lock(self.root):
+        from .collection_runtime import operation, fingerprint, validate_scope
+        with operation(self), writer_lock(self.root):
+            expected = getattr(self._execution, 'expected', None)
+            if expected is not None:
+                data = args[0] if args else kwargs.get('data', {})
+                if (method.__name__ != 'step' or data.get('id') != expected[0]
+                        or fingerprint(self._load(expected[0])) != expected[1]):
+                    raise InputError('后台批次的任务条件已变化，未继续访问。')
+                validate_scope(self, self._load(expected[0]))
             return method(self, *args, **kwargs)
     return wrapped
 
@@ -101,7 +110,16 @@ class Collector:
         if self.platform_config.exists():
             workspace.config = load_config(self.platform_config)
         self.clients = {}
-        self._recover()
+        self._execution = threading.local()
+        self._records = self.root/'records-lock'
+        if self._records.is_symlink():
+            raise InputError('采集状态锁不能使用符号链接。')
+        self._records.mkdir(exist_ok=True, mode=0o700)
+        from .collection_runtime import CollectionBusy
+        try:
+            self._recover()
+        except CollectionBusy:
+            pass  # An active owner, not this observing instance, owns recovery.
 
     def _client(self, key, factory, *, site=False):
         if key not in self.clients:
@@ -127,7 +145,7 @@ class Collector:
         # Its reserved budget is not refunded and it is never retried automatically.
         for path in self.root.glob("*.json"):
             if ID.fullmatch(path.stem) and not path.is_symlink():
-                state = json.loads(path.read_text(encoding="utf-8"))
+                state = self._load(path.stem)
                 if state.get("in_flight"):
                     flight = state.pop("in_flight")
                     state[flight["queue"]][flight["index"]]["status"] = "interrupted_uncertain"
@@ -146,14 +164,21 @@ class Collector:
         return path
 
     def _load(self, ident):
-        path = self._path(ident)
-        if not path.is_file():
-            raise InputError("采集任务不存在。")
-        return json.loads(path.read_text(encoding="utf-8"))
+        from .record_lock import record_lock
+        with record_lock(self._records):
+            path = self._path(ident)
+            if not path.is_file():
+                raise InputError("采集任务不存在。")
+            return json.loads(path.read_text(encoding="utf-8"))
 
     def _save(self, state):
+        from .record_lock import record_lock
+        from .collection_runtime import fingerprint
         state["updated_at"] = utc_now()
-        atomic_json(self._path(state["id"]), state)
+        with record_lock(self._records):
+            atomic_json(self._path(state["id"]), state)
+        if getattr(self._execution, 'owned', False):
+            self._execution.expected = (state['id'], fingerprint(state))
 
     def _view(self, state):
         summary = {}
@@ -557,6 +582,9 @@ class Collector:
             # Read/validate consent before reserving any attempt or saving an
             # in-flight marker. This also covers the CLI, outside HTTP handlers.
             policy = self.workspace.network_policy()
+            expected_policy = getattr(self._execution, 'policy_id', None)
+            if expected_policy is not None and policy.fingerprint != expected_policy:
+                raise InputError('后台采集期间网络设置已变化，未继续访问。')
             with use_policy(policy):
                 state["status"] = "running"
                 if state["phase"] == "search":
