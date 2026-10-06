@@ -6,7 +6,12 @@ window.CollectionGuide = class {
     this.form = document.getElementById("collect-form");
     this.mode = this.form.elements.mode.value;
     this.locked = false;
+    this.categories = {
+      architect: {name: "架构师", roles: ["architect"], url: "https://www.liepin.com/career/360321/"},
+      algorithm: {name: "算法工程师", roles: ["domain_algorithm", "time_series"], url: "https://www.liepin.com/career/suanfakaifa/"}
+    };
     this.fieldModes = {
+      category_id: ["liepin_category"],
       api_key: ["search", "feed"], urls: ["urls"], endpoint: ["feed"], contract_ref: ["feed"],
       search_budget: ["search"], pages: ["search"], detail_budget: ["urls", "search", "liepin_category"],
       feed_budget: ["feed"], fresh_hours: ["urls", "search", "liepin_category"], search_storage_rights: ["search"]
@@ -14,6 +19,10 @@ window.CollectionGuide = class {
     this.build(); this.sync();
     this.form.elements.mode.addEventListener("change", () => this.changeMode());
     this.form.elements.detail_budget.addEventListener("input", () => this.sync());
+    this.form.elements.category_id.addEventListener("change", () => {
+      this.selectCategory(); this.sync(); this.result.replaceChildren();
+      this.note("分类已切换，请重新核对用途、许可和本批预算；尚未执行。");
+    });
     document.getElementById("collect-check").onclick = () => this.act(() => this.inspect());
   }
   node(tag, value, parent) {
@@ -36,12 +45,13 @@ window.CollectionGuide = class {
     this.action(root, "我有职位链接：套用 URL 入门参数", () => this.preset("urls"));
     this.action(root, "我想先搜索：套用搜索入门参数", () => this.preset("search"));
     this.action(root, "自动读取猎聘架构师公开分类", () => this.preset("liepin_category"));
+    this.action(root, "自动读取猎聘算法工程师公开分类", () => this.preset("liepin_category", "algorithm"));
     this.link(root, "没有链接也没有 Key：返回基础页粘贴 JD", "/#job-form");
     this.node("p", "入门按钮只调整岗位、平台和小预算，不联网，不填假链接或密钥，不替你勾选授权。原有 URL、用途说明会保留；跨路线切换会清空服务 Key。", root);
     this.panels = {};
     for (const [mode, heading] of [["urls", "案例 A｜我有一个职位链接，无需任何 API Key"],
                                   ["search", "案例 B｜让程序找职位，先只取搜索摘要"],
-                                  ["liepin_category", "猎聘架构师公开分类｜无需 Key，最多5个职位"],
+                                  ["liepin_category", "猎聘公开分类｜无需 Key，最多5个职位"],
                                   ["feed", "案例 C｜仅限已经有数据提供方接口的用户"]]) {
       const panel = this.node("div", "", root); panel.id = `guide-${mode}`;
       this.panels[mode] = panel; this.node("h3", heading, panel);
@@ -78,9 +88,9 @@ window.CollectionGuide = class {
     this.link(p, "官方创建 Key 步骤（2026-09-14核对）", "https://api-dashboard.search.brave.com/documentation/quickstart");
 
     p = this.panels.liepin_category;
-    this.link(p, "查看猎聘原始架构师分类", "https://www.liepin.com/career/360321/");
+    this.categoryLink = this.link(p, "查看猎聘原始架构师分类", "https://www.liepin.com/career/360321/");
     this.node("p", "自动读取该分类第一页，按发布方顺序选择前1～5个不同职位，再取得完整正文并生成本批报告。失败项保留，不以后面的职位补齐。", p);
-    this.node("p", "范围固定为猎聘架构师分类，不含自定义关键词、地区筛选或翻页。列表卡片不作为完整JD；只显示本次实得结果。", p);
+    this.categoryScope = this.node("p", "", p);
     this.node("p", "核对分类页及正文的实际访问依据，勾选猎聘许可和执行确认后开始。无需账号、搜索Key或手工收集职位链接。", p);
 
     p = this.panels.feed;
@@ -129,9 +139,7 @@ window.CollectionGuide = class {
       this.form.elements.consent.checked = false;
       this.form.elements.search_storage_rights.checked = false;
       if (next === "liepin_category") {
-        this.setChecks("collect-roles", ["architect"]);
-        this.setChecks("collect-platforms", ["liepin"]);
-        this.setChecks("collect-permits", []);
+        this.selectCategory();
         this.form.elements.detail_budget.value = "5";
       }
       this.mode = next;
@@ -139,9 +147,21 @@ window.CollectionGuide = class {
     this.sync();
   }
   selectMode(mode) { this.form.elements.mode.value = mode; this.changeMode(); }
+  selectCategory() {
+    const category = this.categories[this.form.elements.category_id.value];
+    this.setChecks("collect-roles", category.roles);
+    this.setChecks("collect-platforms", ["liepin"]);
+    this.setChecks("collect-permits", []);
+    this.form.elements.consent.checked = false;
+  }
   sync(locked = this.locked) {
     this.locked = locked;
     const mode = this.form.elements.mode.value;
+    const category = this.categories[this.form.elements.category_id.value];
+    this.categoryLink.textContent = `查看猎聘原始${category.name}分类`;
+    this.categoryLink.href = category.url;
+    this.categoryScope.textContent = `范围为猎聘${category.name}分类，不含自定义关键词、地区筛选或翻页。` +
+      (category.name === "算法工程师" ? "算法工程师是宽分类；报告按垂直领域与时间序列规则筛选，不匹配正文单独说明。" : "列表卡片不作为完整JD；只显示本次实得结果。");
     const noDetail = mode === "search" && Number(this.form.elements.detail_budget.value) === 0;
     for (const [name, modes] of Object.entries(this.fieldModes)) {
       const input = this.form.elements[name];
@@ -159,10 +179,11 @@ window.CollectionGuide = class {
     for (const [key, panel] of Object.entries(this.panels)) panel.hidden = key !== mode;
     this.keyNote.textContent = this.keyConfigured ? "启动环境中已发现 BRAVE_SEARCH_API_KEY，可将输入框留空使用它；尚未验证Key有效性。" : "当前启动环境未配置搜索Key：在输入框粘贴即可，无需重启、改代码或配置环境变量。";
   }
-  preset(mode) {
+  preset(mode, categoryId = "architect") {
+    this.form.elements.category_id.value = categoryId;
     this.selectMode(mode);
     const f = this.form.elements;
-    this.setChecks("collect-roles", [mode === "liepin_category" ? "architect" : "time_series"]);
+    this.setChecks("collect-roles", mode === "liepin_category" ? this.categories[categoryId].roles : ["time_series"]);
     this.setChecks("collect-platforms", [mode === "liepin_category" ? "liepin" : "boss"]);
     this.setChecks("collect-permits", []);
     Object.assign(f.search_budget, {value: "1"}); f.pages.value = "1";
@@ -170,7 +191,7 @@ window.CollectionGuide = class {
     f.fresh_hours.value = "24"; f.feed_budget.value = "1";
     f.consent.checked = false; f.search_storage_rights.checked = false;
     this.sync(); this.result.replaceChildren();
-    this.note(mode === "liepin_category" ? "已选择猎聘架构师公开分类，最多5个职位。请核对用途与许可；尚未联网或创建任务。" : (mode === "urls" ? "已套用URL入门参数。接下来只需粘贴1条真实职位链接、识别来源、核对许可与用途；没有填入假链接，也没有发请求。" : "已套用搜索入门参数：1岗位/1平台/1请求，只取摘要。接下来去Brave控制台取得Key并核对保存权限；未开始搜索。"));
+    this.note(mode === "liepin_category" ? `已选择猎聘${this.categories[categoryId].name}公开分类，最多5个职位。请核对用途与许可；尚未联网或创建任务。` : (mode === "urls" ? "已套用URL入门参数。接下来只需粘贴1条真实职位链接、识别来源、核对许可与用途；没有填入假链接，也没有发请求。" : "已套用搜索入门参数：1岗位/1平台/1请求，只取摘要。接下来去Brave控制台取得Key并核对保存权限；未开始搜索。"));
   }
   data() {
     // Explicit construction: disabled/hidden fields must not become NaN or leak a different provider key.
