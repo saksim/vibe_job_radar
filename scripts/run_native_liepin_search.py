@@ -24,6 +24,7 @@ from run_native_browser_acceptance import (ROOT, HOST, URL, NativeBackend, RateL
     Limits, GuidedService, Registry, Store, NetworkPolicy, use_policy, Workspace,
     trust_fixture, RECORDED_BODY, RECORDED_TITLE, recorded_markup, recorded_posting)
 from vibe_job_radar.guided.adapters import builtins
+from native_service_wait import wait_for_guided_job as wait
 from vibe_job_radar.guided.native_policy import contract_for, NativeRule
 
 API_HOST = 'api.' + HOST
@@ -526,12 +527,6 @@ def main():
                 def factory(a,l,c,p,**saved):
                     with use_policy(NetworkPolicy()):
                         return NativeBackend(a,l,c,p,headless=not args.headed,channel=args.channel,executable_path=args.executable,**saved)
-                def wait(service):
-                    until=time.monotonic()+45
-                    while service.state()['busy']:
-                        if time.monotonic()>until: raise TimeoutError('native search did not finish')
-                        time.sleep(.05)
-                    return service.state()['jobs'][0]
                 with patch('socket.getaddrinfo', side_effect=dns), patch('socket.create_connection', side_effect=dial), patch.object(NetworkPolicy,'capture',return_value=NetworkPolicy()):
                     workspace = Workspace(root/'workspace')
                     service = GuidedService(workspace,registry=Registry([local]),
