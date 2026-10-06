@@ -208,7 +208,10 @@ class LiveAcceptanceTests(unittest.TestCase):
         self.assertEqual(list((self.workspace.root/ROOT_NAME/self.plan['id']).glob('capture-*.json')),[])
 
     def test_missing_selected_card_fails_without_partial_snapshot(self):
-        state=self.batch();state['selection'].append('missing');self.service._save(state)
+        state=self.batch();state['selection'].append('missing')
+        # The newer writer also rejects this state. Author the corrupt legacy
+        # input directly to keep testing the independent offline reader.
+        atomic_json(self.service._path(state['id']), state)
         with self.assertRaises(InputError):self.capture()
 
     def test_modified_plan_or_removed_capture_tail_is_detected(self):
