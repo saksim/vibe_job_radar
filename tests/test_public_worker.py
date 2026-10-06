@@ -354,10 +354,13 @@ class WorkerTests(unittest.TestCase):
         self.assertNotIn('PRIVATE',json.dumps(self.events))
 
     def test_shutdown_during_read_preserves_checkpoint_without_replaying(self):
+        from worker_sqlite_probe import WorkerSqliteProbe
+        probe=WorkerSqliteProbe(lambda:self.worker.tasks._thread)
+        probe.start();self.addCleanup(probe.stop)
         seed(self.workspace);entered=threading.Event();release=threading.Event()
         self.addCleanup(release.set)
         def hold(url):entered.set();release.wait(10);return payload()
-        self.wire.json.side_effect=hold;self.start();self.assertTrue(entered.wait(5))
+        self.wire.json.side_effect=hold;self.start();self.assertTrue(entered.wait(5),json.dumps(probe.snapshot(),sort_keys=True))
         self.worker.request_stop();self.assertTrue(self.worker.tasks._cancel.wait(5));release.set();self.stop()
         self.assertEqual(self.results,[0]);self.assertEqual(self.wire.json.call_count,1)
         self.assertTrue(self.worker.tasks.path.exists());self.assertTrue(self.worker.schedule.path.exists())
