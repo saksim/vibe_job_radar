@@ -16,6 +16,56 @@ from vibe_job_radar.network import Response
 from vibe_job_radar.utils import utc_now
 
 
+def verify_entry_preset_initialization(browser, server, result, *, include_algorithm=False):
+    """Delay the original initial list request, then preserve an explicit choice."""
+    from playwright.sync_api import expect
+    cases = [('architect', '进入猎聘架构师公开分类采集', '我有职位链接：套用 URL 入门参数', 'urls')]
+    if include_algorithm:
+        cases.append(('algorithm', '进入猎聘算法工程师公开分类采集', '自动读取猎聘架构师公开分类', 'liepin_category'))
+    result['entry_initialization_results'] = []
+    for category, entry, choice, mode in cases:
+        context = browser.new_context()
+        state = {'released': False, 'held': [], 'external': [], 'errors': []}
+        def local_only(route):
+            if not route.request.url.startswith(server.origin + '/'):
+                state['external'].append(route.request.url); route.abort()
+            elif route.request.url == server.origin + '/api/collection/list' and not state['released']:
+                state['held'].append(route)
+            else:
+                route.continue_()
+        context.route('**/*', local_only)
+        page = context.new_page(); page.on('pageerror', lambda error: state['errors'].append(str(error)))
+        try:
+            page.goto(server.entry_url)
+            expect(page.locator('#counts')).to_contain_text('真实记录 0')
+            page.get_by_role('link', name=entry, exact=True).click()
+            page.get_by_role('button', name=choice, exact=True).click()
+            form = page.locator('#collect-form')
+            expect(form.locator('[name=mode]')).to_have_value(mode)
+            if include_algorithm:
+                expect(form.locator('[name=category_id]')).to_have_value('architect')
+            snapshot = "(() => {const f=document.querySelector('#collect-form').elements;return {mode:f.mode.value,category:f.category_id?f.category_id.value:null};})()"
+            before = page.evaluate(snapshot)
+            for _ in range(250):
+                if state['held']: break
+                page.wait_for_timeout(20)
+            assert len(state['held']) == 1
+            state['released'] = True; state['held'][0].continue_()
+            page.wait_for_load_state('networkidle', timeout=15000)
+            after = page.evaluate(snapshot)
+            assert before == after, 'Late initialization overwrote an explicit collection choice'
+            assert not server.collector.list()['runs'] and not state['external'] and not state['errors']
+            result['entry_initialization_results'].append(dict(entry_category=category,
+                selected_mode=mode, selected_category=after['category'], selection_preserved=True,
+                new_tasks=0, external_browser_requests=0))
+            result['checks'].append(category + ' entry preserves an explicit newer preset while delayed initial data finishes; no task, consent or upstream request is created')
+        finally:
+            if not state['released']:
+                state['released'] = True
+                for route in state['held']: route.abort()
+            context.close()
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--channel', choices=['msedge'])
@@ -32,6 +82,7 @@ def main():
             with sync_playwright() as pw:
                 browser = pw.chromium.launch(headless=True, **({'channel': args.channel} if args.channel else {}))
                 result['browser_version'] = browser.version
+                verify_entry_preset_initialization(browser, server, result, include_algorithm=False)
                 context = browser.new_context(viewport={'width': 1440, 'height': 1050})
                 def local_only(route):
                     if route.request.url.startswith(server.origin + '/'):
@@ -43,8 +94,27 @@ def main():
                 try:
                     page.goto(server.entry_url)
                     expect(page.locator('#counts')).to_contain_text('真实记录 0')
-                    page.get_by_role('link', name='进入自动采集 / 原文复核 / 附件与量化指标工作台').click()
+                    page.set_viewport_size({'width': 390, 'height': 844})
+                    expect(page.get_by_role('link', name='进入猎聘架构师公开分类采集')).to_be_visible()
+                    assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')
+                    page.screenshot(path=str(output / 'homepage-category-mobile.png'), full_page=True)
+                    page.set_viewport_size({'width': 1440, 'height': 1050})
+                    with patch('vibe_job_radar.collection.SiteFetcher') as source:
+                        page.get_by_role('link', name='进入猎聘架构师公开分类采集').click()
+                        expect(page.locator('#guide-liepin_category')).to_be_visible()
+                        page.reload()
+                        expect(page.locator('#guide-liepin_category')).to_be_visible()
+                        expect(page.locator('#collect-roles input[value=architect]')).to_be_checked()
+                        expect(page.locator('#collect-platforms input[value=liepin]')).to_be_checked()
+                        expect(page.locator('#collect-permits input[value=liepin]')).not_to_be_checked()
+                        expect(page.locator('#collect-form [name=consent]')).not_to_be_checked()
+                        expect(page.locator('#collect-form [name=detail_budget]')).to_have_value('5')
+                        expect(page.locator('#collect-form [name=api_key]')).to_be_hidden()
+                        expect(page.locator('#collect-form [name=urls]')).to_be_hidden()
+                        assert server.collector.list()['runs'] == []
+                        source.assert_not_called()
                     expect(page.locator('#revision')).to_contain_text('版本 0')
+                    result['checks'].append('home category link and reload select the original fixed-scope preset without consent, task creation or upstream requests')
                     page.get_by_role('button', name='我有职位链接：套用 URL 入门参数').click()
                     f = page.locator('#collect-form')
                     expect(page.locator('#guide-urls')).to_be_visible()
