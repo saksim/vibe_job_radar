@@ -374,16 +374,30 @@ class SiteFetcher:
         self.max_redirects = max_redirects
         self.robots: dict[str, RobotsRules | None] = {}
         self.last_diagnostic: dict = {}
+        self.rate_gate = None
 
     def _get(self, url: str, phase: str) -> Response:
         from .redirect_policy import observed_origin
         self.last_diagnostic.update(phase=phase, last_origin=observed_origin(url))
+        if self.rate_gate is not None:
+            self.rate_gate.before_request(url)
         self.last_diagnostic["http_attempts"] += 1
         # Injected offline transports may expose only request(); production uses
         # SafeHTTP.public_get with pinned TLS and no implicit following.
         get = getattr(self.transport, "public_get", None) or self.transport.request
-        response = get(url)
+        try:
+            response = get(url)
+        except FetchError as exc:
+            if exc.code in {'http_401', 'http_403', 'http_429'}:
+                # Preserve the actual refusal even if persisting its cooldown
+                # subsequently fails and becomes the terminal error.
+                self.last_diagnostic['http_status'] = int(exc.code[-3:])
+            if self.rate_gate is not None:
+                self.rate_gate.failed(exc)
+            raise
         self.last_diagnostic["http_status"] = response.status
+        if self.rate_gate is not None:
+            self.rate_gate.response(response)
         return response
 
     def _follow(self, current: str, response: Response, phase: str,
@@ -433,6 +447,8 @@ class SiteFetcher:
         rp = self.robots[origin]
         if rp is None:
             raise FetchError("robots_unavailable", "automation is not enabled for this origin")
+        if self.rate_gate is not None:
+            self.rate_gate.robots(origin, rp)
         if not rp.allowed(url):
             raise FetchError("robots_denied")
         self.transport.interval = max(self.transport.interval, rp.delay,
@@ -443,6 +459,8 @@ class SiteFetcher:
         self.last_diagnostic = {"phase": "validation", "http_attempts": 0, "redirects": []}
         try:
             current = validate_target(url, self.domains)
+            if self.rate_gate is not None:
+                self.rate_gate.before_page(current)
             visited = {current}
             while True:
                 # Every redirected detail path is checked, including same-origin

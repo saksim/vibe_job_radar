@@ -354,6 +354,10 @@ class WorkerTests(unittest.TestCase):
         self.assertNotIn('PRIVATE',json.dumps(self.events))
 
     def test_shutdown_during_read_preserves_checkpoint_without_replaying(self):
+        # Prepare local storage before measuring the shutdown interaction.
+        # Cold first-use and stops during startup have separate coverage.
+        self.assertIsNone(self.worker.tasks.hybrid.cached(query()))
+        self.wire.json.assert_not_called()
         from worker_sqlite_probe import WorkerSqliteProbe
         probe=WorkerSqliteProbe(lambda:self.worker.tasks._thread)
         probe.start();self.addCleanup(probe.stop)

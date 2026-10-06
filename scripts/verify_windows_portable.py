@@ -269,6 +269,28 @@ def verify_category_next_checkpoint(app, workspace, category_key='architect'):
     return child['id'],child['details'],child['category_outcomes']
 
 
+def verify_collection_shared_cooldown(app, workspace, *, register=True):
+    """Actual exe default factory sees a real ledger; reserved .invalid input only."""
+    from vibe_job_radar.guided.rate import RateLedger
+    if register:
+        app.json('/api/collection/register',dict(key='rate_acceptance',label='人工限额验收',domains='quota-probe.invalid'))
+        RateLedger(workspace/'guided/rates.sqlite').cool('rate_acceptance',3600)
+    state=app.json('/api/collection/start',dict(mode='urls',urls='https://quota-probe.invalid/job/1',
+        roles=['architect'],platforms=['rate_acceptance'],permit_platforms=['rate_acceptance'],consent=True,
+        detail_budget=1,rights_note='Artificial shared-cooldown fixture on a reserved invalid domain; no recruiting request.'))
+    for _ in range(4):
+        state=app.json('/api/collection/step',{'id':state['id']})
+        if state['status']=='needs_attention':break
+    row=state['details'][0]
+    ledger=RateLedger(workspace/'guided/rates.sqlite')
+    counts=ledger.summary('rate_acceptance')
+    if (state['status']!='needs_attention' or row['status']!='cooldown' or state['report_id']
+            or row['fetch_diagnostic']['http_attempts']!=0 or not row.get('retry_after_seconds')
+            or any(counts[k]['day'] for k in counts)):
+        raise AssertionError('frozen default advanced factory ignored the shared cooldown or reserved an HTTP visit')
+    return state['id'],(workspace/'collections'/f'{state["id"]}.json').read_bytes()
+
+
 def verify_store_report_reader(app, workspace, previous):
     """The actual exe must read an initialized WAL store beside an open writer."""
     from contextlib import closing
@@ -694,6 +716,10 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
                 algorithm_next_id,algorithm_next_details,algorithm_next_outcomes=verify_category_next_checkpoint(app,workspace,'algorithm')
                 result['public_algorithm_category_next_checkpoint_verified']=True
                 result['public_category_next_checkpoint_verified']=True
+                result['stage']='advanced_shared_cooldown'
+                rate_task_id,rate_task_bytes=verify_collection_shared_cooldown(app,workspace)
+                result['advanced_shared_cooldown_verified']=True
+                result['checks'].append('actual frozen default advanced HTTP factory reads the guided ledger and blocks a reserved .invalid fixture before HTTP; no request/page reservation or historical report')
                 result['checks'].append('actual frozen API explains and deduplicates synthetic Liepin share inputs, preserves unknown parameters and saves a paused checkpoint without tracking values or any collection step')
                 result['stage']='original_report'
                 app.json('/api/job',{'title':'时间序列算法工程师','company':'便携包人工测试（非招聘事实）',
@@ -825,6 +851,10 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
                 if history_row['detail_attempt_history']!=history_saved or history_row['browser_open']:
                     raise AssertionError('fresh frozen process changed saved detail history')
                 result['detail_history_restart_verified']=True
+                verify_collection_shared_cooldown(restarted,workspace,register=False)
+                if (workspace/'collections'/f'{rate_task_id}.json').read_bytes()!=rate_task_bytes:
+                    raise AssertionError('frozen restart changed the original cooldown outcome')
+                result['advanced_shared_cooldown_restart_verified']=True
             finally:restarted.close()
             result['checks'].append('fresh exe process preserves original report, leaves daily plan off and requires a fresh browser check')
         verify_payload_unchanged(bundle,before,result)
