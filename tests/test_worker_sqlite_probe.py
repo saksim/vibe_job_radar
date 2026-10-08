@@ -190,3 +190,55 @@ class WorkerSqliteProbeTests(unittest.TestCase):
                 holder.rollback()
                 holder.close()
             case.doCleanups()
+
+
+    def test_shutdown_read_wait_records_scheduler_insert_before_cleanup(self):
+        import test_public_worker as worker_tests
+        from unittest.mock import patch
+        case = worker_tests.WorkerTests()
+        case.setUp()
+        release = threading.Event()
+        blocked = threading.Event()
+        connect = sqlite3.connect
+        previous = threading.getprofile()
+
+        def observe_connection(*args, **kwargs):
+            connection = connect(*args, **kwargs)
+            if threading.current_thread() is case.worker.schedule._thread:
+                def authorizer(action, table, column, database, trigger):
+                    # Hold an actual schedule INSERT after it has created the
+                    # task, while its dispatch lock still excludes the reader.
+                    if action == sqlite3.SQLITE_INSERT and table == 'schedule' and case.worker.tasks._thread:
+                        blocked.set()
+                        if not release.wait(15):
+                            return sqlite3.SQLITE_DENY
+                    return sqlite3.SQLITE_OK
+                connection.set_authorizer(authorizer)
+            return connection
+
+        with patch('sqlite3.connect', side_effect=observe_connection):
+            try:
+                with self.assertRaises(AssertionError) as caught:
+                    case.test_shutdown_during_read_preserves_checkpoint_without_replaying()
+                self.assertTrue(blocked.is_set())
+                message = str(caught.exception)
+                evidence = json.loads(message.split(' : ', 1)[1])
+                pending = evidence['schedule_sqlite']['current_calls']
+                self.assertEqual(len(pending), 1)
+                self.assertEqual(pending[0]['operation'], 'connection.execute')
+                self.assertEqual(pending[0]['caller']['file'], 'public_schedule.py')
+                self.assertEqual(pending[0]['caller']['function'], '_write')
+                self.assertGreaterEqual(pending[0]['elapsed_ms'], 4000)
+                self.assertEqual(evidence['task_sqlite']['current_calls'], [])
+                self.assertEqual(evidence['task_sqlite']['operations'], {})
+                self.assertTrue(case.worker.tasks._thread.is_alive())
+                case.wire.json.assert_not_called()
+                for private in (str(case.workspace.root), 'INSERT', 'Architect', 'https://'):
+                    self.assertNotIn(private, message)
+            finally:
+                release.set()
+                case.doCleanups()
+        self.assertIs(threading.getprofile(), previous)
+        self.assertFalse(case.worker.tasks.is_running())
+        self.assertFalse(case.worker.schedule.is_running())
+        self.assertFalse(case.thread.is_alive())

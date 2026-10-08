@@ -364,12 +364,16 @@ class WorkerTests(unittest.TestCase):
         self.assertIsNone(self.worker.tasks.hybrid.cached(query()))
         self.wire.json.assert_not_called()
         from worker_sqlite_probe import WorkerSqliteProbe
-        probe=WorkerSqliteProbe(lambda:self.worker.tasks._thread)
-        probe.start();self.addCleanup(probe.stop)
+        # Dispatch keeps the task lock while saving the schedule. Observe
+        # both owners: a waiting task can have no SQLite calls of its own.
+        probes={'task_sqlite':WorkerSqliteProbe(lambda:self.worker.tasks._thread),
+                'schedule_sqlite':WorkerSqliteProbe(lambda:self.worker.schedule._thread)}
+        for probe in probes.values():
+            probe.start();self.addCleanup(probe.stop)
         seed(self.workspace);entered=threading.Event();release=threading.Event()
         self.addCleanup(release.set)
         def hold(url):entered.set();release.wait(10);return payload()
-        self.wire.json.side_effect=hold;self.start();self.assertTrue(entered.wait(5),json.dumps(probe.snapshot(),sort_keys=True))
+        self.wire.json.side_effect=hold;self.start();self.assertTrue(entered.wait(5),json.dumps({name:probe.snapshot() for name,probe in probes.items()},sort_keys=True))
         self.worker.request_stop();self.assertTrue(self.worker.tasks._cancel.wait(5));release.set();self.stop()
         self.assertEqual(self.results,[0]);self.assertEqual(self.wire.json.call_count,1)
         self.assertTrue(self.worker.tasks.path.exists());self.assertTrue(self.worker.schedule.path.exists())
