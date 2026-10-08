@@ -94,6 +94,7 @@ def start(collector, data):
     if existing is not None:
         return dict(created=False, task=collector._view(existing))
     child = copy.deepcopy(parent)
+    child.pop('category_page_retry', None)
     child.update(id=child_id, status='paused', phase='category', details=[], report_id='',
         category_attempts=0, detail_attempts=0, search_requests=0, feed_requests=0, warnings=[],
         created_at=utc_now(), updated_at=utc_now(), category_page_context=plan['context'],
