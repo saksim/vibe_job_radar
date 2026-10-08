@@ -259,12 +259,17 @@ class PublicHTTPTests(unittest.TestCase):
     call=http_fixtures.HTTPTests.call
 
     def wait(self):
-        deadline=time.monotonic()+10
-        while time.monotonic()<deadline:
-            state=self.server.public_tasks.state()['task']
-            if state['status'] not in {'queued','running'}:return state
-            time.sleep(.02)
-        self.fail('public task did not settle')
+        # This is fixture completion, not a report-latency requirement. Join the
+        # worker we submitted, including its cleanup, without repeated policy
+        # discovery under its task lock. Product-operation deadlines are unchanged.
+        worker=self.server.public_tasks._thread
+        self.assertIsNotNone(worker, 'public task has no owned worker')
+        worker.join(timeout=30)
+        self.assertFalse(worker.is_alive(), 'public task did not settle')
+        state=self.server.public_tasks.state()['task']
+        self.assertNotIn(state['status'], {'queued','running','cancelling'},
+                         'public worker stopped without a terminal state')
+        return state
 
     def test_shell_and_status_are_offline_and_token_protected(self):
         with patch.object(SafeHTTP,'json') as network:
@@ -327,3 +332,41 @@ class PublicHTTPTests(unittest.TestCase):
             finally:release.set()
             self.wait()
         self.assertEqual(network.call_count,1)
+
+
+class PublicWaitTests(unittest.TestCase):
+    def fixture(self):
+        case=PublicHTTPTests('test_public_example_actual_http_store_and_report_without_commands')
+        case.server=Mock()
+        worker=case.server.public_tasks._thread
+        worker.is_alive.return_value=False
+        return case,worker
+
+    def test_wait_returns_fresh_terminal_state_after_owned_worker_cleanup(self):
+        for status in ('completed','failed','cancelled'):
+            with self.subTest(status=status):
+                case,worker=self.fixture()
+                result={'task':{'status':status,'report_id':'fixture' if status=='completed' else ''}}
+                def joined(**kwargs):
+                    case.server.public_tasks.state.assert_not_called()
+                    case.server.public_tasks.state.return_value=result
+                worker.join.side_effect=joined
+                self.assertEqual(case.wait(),result['task'])
+                worker.join.assert_called_once_with(timeout=30)
+                case.server.public_tasks.state.assert_called_once_with()
+
+    def test_wait_rejects_live_worker_without_reading_potentially_locked_state(self):
+        case,worker=self.fixture()
+        worker.is_alive.return_value=True
+        with self.assertRaisesRegex(AssertionError,'public task did not settle'):
+            case.wait()
+        worker.join.assert_called_once_with(timeout=30)
+        case.server.public_tasks.state.assert_not_called()
+
+    def test_wait_rejects_stopped_worker_without_terminal_record(self):
+        for status in ('queued','running','cancelling'):
+            with self.subTest(status=status):
+                case,worker=self.fixture()
+                case.server.public_tasks.state.return_value={'task':{'status':status}}
+                with self.assertRaisesRegex(AssertionError,'without a terminal state'):
+                    case.wait()

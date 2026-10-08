@@ -198,7 +198,7 @@ class QualificationTests(unittest.TestCase):
         def stalled(args,**kwargs):
             target=Path(args[args.index('--report')+1])
             target.with_suffix('.progress.log').write_text('START artificial_stalled_test\n',encoding='utf-8')
-            raise subprocess.TimeoutExpired(args,600)
+            raise subprocess.TimeoutExpired(args,kwargs['timeout'])
         with patch.object(module.platform,'platform',return_value='fixture'),patch.object(module.subprocess,'run',side_effect=stalled):
             report=module.verify(out)
         self.assertFalse(report['success']);self.assertEqual(report['tests'],{})
@@ -230,7 +230,7 @@ class QualificationTests(unittest.TestCase):
                 self.assertEqual(result.get('error'),'local_check_timeout')
                 self.assertEqual(result.get('error_type'),'TimeoutExpired')
                 self.assertEqual(result.get('failed_check'),failed_check)
-                self.assertEqual(result.get('timeout_seconds'),600 if failed_index==0 else 180)
+                self.assertEqual(result.get('timeout_seconds'),1200 if failed_index==0 else 180)
                 self.assertEqual(result['steps'][-1].get('timeout_seconds'),result['timeout_seconds'])
                 self.assertTrue(result['source_unchanged'])
                 self.assertNotIn('PRIVATE_',json.dumps(result))
@@ -241,7 +241,7 @@ class QualificationTests(unittest.TestCase):
         import subprocess,sys
         module=self.load_script('verify_candidate');run=subprocess.run
         def bounded_child(args,**kwargs):
-            self.assertEqual(kwargs['timeout'],600)
+            self.assertEqual(kwargs['timeout'],1200)
             return run([sys.executable,'-c','import time; time.sleep(10)'],
                        stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=0.05)
         with patch.object(module.platform,'platform',return_value='fixture'),patch.object(module.subprocess,'run',side_effect=bounded_child) as child:
@@ -251,7 +251,7 @@ class QualificationTests(unittest.TestCase):
         self.assertEqual(result['tests'],{})
         self.assertEqual(result.get('error_type'),'TimeoutExpired')
         self.assertEqual(result.get('failed_check'),'unit-tests')
-        self.assertEqual(result.get('timeout_seconds'),600)
+        self.assertEqual(result.get('timeout_seconds'),1200)
         self.assertEqual(json.loads((self.root/'out/result.json').read_text(encoding='utf-8')),result)
 
     def test_timeout_preserves_source_change_and_progress_separately(self):
@@ -288,9 +288,9 @@ class QualificationTests(unittest.TestCase):
             with self.subTest(secondary=expected):
                 module=self.load_script('verify_candidate')
                 def timeout(args, **kwargs):
-                    self.assertEqual(kwargs['timeout'],600)
+                    self.assertEqual(kwargs['timeout'],1200)
                     Path(args[args.index('--report')+1]).write_bytes(raw)
-                    raise subprocess.TimeoutExpired('PRIVATE_COMMAND',600)
+                    raise subprocess.TimeoutExpired('PRIVATE_COMMAND',kwargs['timeout'])
                 with patch.object(module.platform,'platform',return_value='fixture'),patch.object(module.subprocess,'run',side_effect=timeout) as child:
                     result=module.verify(self.root/'out')
                 child.assert_called_once()
@@ -298,7 +298,7 @@ class QualificationTests(unittest.TestCase):
                 self.assertEqual(result['error_type'],'TimeoutExpired')
                 self.assertEqual(result['error'],'local_check_timeout')
                 self.assertEqual(result['failed_check'],'unit-tests')
-                self.assertEqual(result['timeout_seconds'],600)
+                self.assertEqual(result['timeout_seconds'],1200)
                 self.assertEqual(result.get('post_timeout_error_type'),expected)
                 self.assertEqual(result['tests'],{})
                 self.assertEqual(json.loads((self.root/'out/result.json').read_text(encoding='utf-8')),result)
@@ -321,7 +321,7 @@ class QualificationTests(unittest.TestCase):
         self.assertEqual(result['error_type'],'TimeoutExpired')
         self.assertEqual(result['error'],'local_check_timeout')
         self.assertEqual(result['failed_check'],'unit-tests')
-        self.assertEqual(result['timeout_seconds'],600)
+        self.assertEqual(result['timeout_seconds'],1200)
         self.assertEqual(result.get('post_timeout_error_type'),'OSError')
         self.assertNotIn('PRIVATE',json.dumps(result))
         with self.assertRaises(ValueError):require_local_evidence(self.root,result)
