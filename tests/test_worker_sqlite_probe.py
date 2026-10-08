@@ -155,3 +155,38 @@ class WorkerSqliteProbeTests(unittest.TestCase):
             holder.rollback()
             holder.close()
             case.doCleanups()
+
+    def test_second_retry_wait_retains_pending_sqlite_and_original_budget(self):
+        import test_read_retry as retry_tests
+        case = retry_tests.ReadRetryWorkerTests()
+        case.setUp()
+        holder = None
+        try:
+            case.failures = 9
+            case.create()
+            first = case.wait('read_retry_wait')
+            self.assertEqual(first['read_retry']['used'], 1)
+            holder = sqlite3.connect(case.ledger.path)
+            holder.execute('BEGIN IMMEDIATE')
+            case.now = 1031
+            with self.assertRaises(AssertionError) as caught:
+                case.wait('read_retry_wait', retry_used=2)
+            message = str(caught.exception)
+            self.assertIn('after 5s: ', message)
+            evidence = json.loads(message.split('after 5s: ', 1)[1])
+            self.assertEqual(evidence['expected_read_retry_used'], 2)
+            self.assertEqual(evidence['observed_read_retry_used'], 1)
+            self.assertTrue(evidence['worker_alive'])
+            pending = evidence['worker_sqlite']['at_timeout']['current_calls']
+            self.assertEqual(len(pending), 1)
+            self.assertEqual(pending[0]['operation'], 'connection.execute')
+            self.assertEqual(pending[0]['caller']['file'], 'rate.py')
+            self.assertEqual(pending[0]['caller']['function'], 'reserve')
+            self.assertGreaterEqual(pending[0]['elapsed_ms'], 4000)
+            self.assertIn('worker_fsync', evidence)
+            self.assertNotIn(str(case.ledger.path), message)
+        finally:
+            if holder is not None:
+                holder.rollback()
+                holder.close()
+            case.doCleanups()

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 REASONS = {
-    'network_error': ('网络请求未完成', '保留原失败并核对网络；尚未取得名单的分类页可预览同页重试，原配额继续有效。'),
+    'network_error': ('网络请求未完成', '保留本次失败并核对网络；恢复后为未取得正文的链接新建已确认的小批任务，原配额继续有效。'),
     'ok': ('已取得完整正文', '可以下载本批报告并核对原文。'),
     'fresh_reused': ('复用了已保存的新鲜正文', '没有为这条记录重复访问网站。'),
     'budget_skipped': ('未执行：本批正文尝试预算已用完', '不是抓取失败；先确认已尝试条目的问题，再为剩余链接新建小批次。'),
@@ -87,6 +87,9 @@ def explain(state: dict) -> dict:
         message = (('使用已保存的公开分类名单' if original.get('snapshot_reused') else '已读取公开分类主列表') if original['status'] == 'ok' else
                    REASONS.get(original['status'], ('分类状态：' + original['status'], ''))[0])
         action = REASONS.get(original['status'], ('', ''))[1]
+        if (state['mode'] == 'liepin_category' and state.get('status') == 'needs_attention'
+                and not state['details'] and original['status'] == 'network_error'):
+            action = '保留原失败并核对网络；可预览同页重试，原配额继续有效。'
         category_outcomes.append({**original, 'status_message': message, 'next_action': action})
     if state['mode'] == 'liepin_category':
         from .public_category import get_category, page_for_state

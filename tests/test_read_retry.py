@@ -167,13 +167,15 @@ class ReadRetryWorkerTests(unittest.TestCase):
         self.ident=self.service.create({'platform':'fixture','keyword':'时间序列','roles':['time_series'],
             'max_pages':1,'max_jobs':1,'consent':True,'rights_note':'ARTIFICIAL RETRY TEST'})['id']
 
-    def wait(self,code):
+    def wait(self,code,*,retry_used=None):
         before=self.write_probe.snapshot()
         sqlite_before=self.sqlite_probe.snapshot()
         deadline=time.monotonic()+5
         while time.monotonic()<deadline:
             state=self.service._load(self.ident)
-            if not self.service.state()['busy'] and state['code']==code:return state
+            if (not self.service.state()['busy'] and state['code']==code
+                    and (retry_used is None or state.get('read_retry',{}).get('used')==retry_used)):
+                return state
             time.sleep(.01)
         # Keep the last completed poll. A fresh state() can block on the same
         # writer and hide the failure-time stack before cleanup releases it.
@@ -183,6 +185,10 @@ class ReadRetryWorkerTests(unittest.TestCase):
                                     'at_timeout':self.write_probe.snapshot()}
         diagnostic['worker_sqlite']={'before_wait':sqlite_before,
                                      'at_timeout':self.sqlite_probe.snapshot()}
+        if retry_used is not None:
+            diagnostic['expected_read_retry_used'] = retry_used
+            used = state.get('read_retry',{}).get('used')
+            diagnostic['observed_read_retry_used'] = used if type(used) is int and 0 <= used <= 2 else 'unknown'
         self.fail('worker did not reach '+code+' after 5s: '+json.dumps(diagnostic))
 
     def test_worker_recovers_once_preserving_budget_and_accounting(self):
@@ -197,11 +203,7 @@ class ReadRetryWorkerTests(unittest.TestCase):
     def test_second_failure_then_exhaustion_never_schedules_fourth_request(self):
         self.failures=9;self.create();self.wait('read_retry_wait')
         self.now=1031
-        deadline=time.monotonic()+5
-        while time.monotonic()<deadline:
-            state=self.service._load(self.ident)
-            if not self.service.state()['busy'] and state.get('read_retry',{}).get('used')==2:break
-            time.sleep(.01)
+        state=self.wait('read_retry_wait',retry_used=2)
         self.assertEqual(state['read_retry']['used'],2)
         self.now=1062;state=self.wait('read_retry_exhausted')
         self.assertFalse(state['auto_resume']);self.assertEqual(len(self.instances[0].opens),3)
