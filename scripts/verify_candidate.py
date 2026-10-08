@@ -17,6 +17,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 UNIT_SNAPSHOT_SECONDS = 570
+# Complete supported Windows suite measured 677s; see SOURCE_QUALIFICATION.md.
+UNIT_TEST_TIMEOUT_SECONDS = 1200
 sys.path.insert(0, str(ROOT/'src'))
 from vibe_job_radar.qualification import check_source, fingerprint, output_directory, require_local_evidence
 from vibe_job_radar.guided.browser_health import safe_text
@@ -51,7 +53,7 @@ def verify(out: Path) -> dict:
                 if name == 'unit-tests':
                     entry['suite_snapshot_after_seconds'] = UNIT_SNAPSHOT_SECONDS
                 report['steps'].append(entry)
-                timeout = 600 if name == 'unit-tests' else 180
+                timeout = UNIT_TEST_TIMEOUT_SECONDS if name == 'unit-tests' else 180
                 try:
                     run = subprocess.run([sys.executable,*args], cwd=ROOT, stdin=subprocess.DEVNULL,
                                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
