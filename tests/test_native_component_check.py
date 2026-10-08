@@ -38,7 +38,9 @@ class NativeComponentCheckTests(unittest.TestCase):
         self.factory.side_effect = factory
 
     def test_selected_channel_uses_no_request_rule_and_proves_guard_and_cleanup(self):
-        r = check_native_browser(channel='chrome', headless=False)
+        with patch('vibe_job_radar.network_policy.NetworkPolicy.capture',
+                   side_effect=AssertionError('must not read user network configuration')):
+            r = check_native_browser(channel='chrome', headless=False)
         self.assertTrue(r['success']); self.assertFalse(r['live_sites_certified'])
         self.assertEqual(r['external_connections'], 0)
         self.assertTrue(r['blank_page_check'] and r['request_guard_check'] and r['cleanup_verified'])
@@ -168,3 +170,23 @@ class NativeComponentCheckTests(unittest.TestCase):
         self.factory.side_effect=BrowserStartupError({'code':'browser_executable_missing'})
         row=check_native_browser(channel='chrome');self.assertFalse(row['cleanup']['attempted'])
         for field in ['profile_removed','profile_cleanup_ok','bridge_exited']:self.assertIsNone(row['cleanup'][field])
+
+    def test_page_mismatch_fails_before_request_probe_and_still_cleans(self):
+        self.page.evaluate.side_effect = [{'url':'about:blank','value':41}]
+        result = check_native_browser(channel='chrome')
+        self.assertFalse(result['success'])
+        self.assertFalse(result['blank_page_check'])
+        self.assertTrue(result['cleanup_verified'])
+        self.page.evaluate.assert_called_once()
+        self.backend.close.assert_called_once()
+
+    def test_generic_blocked_result_without_controller_refusal_cannot_pass(self):
+        self.backend.error = None
+        self.backend._halted = False
+        self.backend.native_counts['blocked'] = 0
+        result = check_native_browser(channel='chrome')
+        self.assertFalse(result['success'])
+        self.assertFalse(result['request_guard_check'])
+        self.assertTrue(result['cleanup_verified'])
+        self.assertEqual(self.page.evaluate.call_count, 2)
+        self.backend.close.assert_called_once()

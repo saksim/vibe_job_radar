@@ -145,6 +145,7 @@ class ObservationRetentionTests(unittest.TestCase):
         self.assertEqual(len(current_cards(b)), 1)
         button.click.assert_not_called()
         self.assertIsNone(b._pagination_page)
+        b.wire.reserve.assert_called_once_with('page')
 
     def test_refused_action_does_not_fetch_old_or_new_responses(self):
         b = backend_with_data()

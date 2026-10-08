@@ -158,5 +158,19 @@ class PortablePackagingTests(unittest.TestCase):
         self.assertNotIn('payload_changes',result);self.assertFalse(result['success'])
         self.assertEqual(self.builder.inventory(self.bundle),before)
 
+    def test_each_native_mode_must_keep_success_guard_and_numeric_zero_connections(self):
+        from test_native_component_portable import good_component
+        proof = {'success': True, 'verified_browser': 'bundled',
+                 'files': self.builder.inventory(self.bundle),
+                 'native_components': {c: good_component(c) for c in ['bundled', 'chrome']}}
+        self.builder.validate_runtime_evidence(self.bundle, proof)
+        for channel in ('bundled', 'chrome'):
+            for field, value in (('success', False), ('request_guard_check', False),
+                                 ('external_connections', False)):
+                bad = json.loads(json.dumps(proof))
+                bad['native_components'][channel][field] = value
+                with self.subTest(channel=channel, field=field), self.assertRaises(ValueError):
+                    self.builder.validate_runtime_evidence(self.bundle, bad)
+
 
 if __name__=='__main__':unittest.main()
