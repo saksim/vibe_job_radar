@@ -1,6 +1,8 @@
 # 当前取数能力与验证范围
 
-核对日期 2026-09-27，已验证主干基线 `2e50b608`（PR80）；当前 PR62 整合候选尚待自身 CI 与合并验收。本表由 `acquisition_status.py` 生成，同一份数据进入适配注册表、采集页与新报告的 `software_acquisition_capabilities`。修改后执行 `python scripts/check_acquisition_status.py --write` 并核对证据；自动测试检查文字表格未与程序脱节。
+文案核对日期 2026-10-08。本源码的流程与历史受控证据分别记录；准确提交的候选、主干和程序包资格见对应PR。本表由 acquisition_status.py 生成，同一份数据进入适配注册表、采集页与新报告的 software_acquisition_capabilities。修改后执行 python scripts/check_acquisition_status.py --write 并核对证据；自动测试检查文字表格未与程序脱节。
+
+猎聘原生实验已有本机 Edge 正常关键词单页列表观察，但未完成正常账号到相关完整JD和原报告的验收。公开分类历史采样覆盖四个真实日期；较早第二日、第三日记录仍保留各自分母，不能用最新累计数改写旧报告。见[已有取数证据](CURRENT_ACQUISITION_EVIDENCE.md)。这些观察不认证默认浏览器桥、其他环境或其他平台。
 
 <!-- acquisition-status:start -->
 | 平台 / 适配版本 | 后端 / 默认 | 实现 | 最近记录的受控验证 | 实站 / 剩余跟踪 |
@@ -23,16 +25,15 @@
 
 PR60 已合并人工登录返回后的自动接续、当前会话复用与完整 JD 到报告。PR61 已合并明确选择的工作区 Cookie 保存/恢复；默认不持久保存，不读取日常浏览器。Windows 使用当前用户 DPAPI，Linux/macOS 使用仅所有者权限文件且不加密。密码、localStorage、IndexedDB 不保存；Cookie 恢复不证明账号仍有效。见 [本机会话说明](SAVED_SESSION_D04.md)。
 
-原生实验已合并；当前 PR62 候选扩展了明确列出的猎聘搜索与资源契约，并有独立受控测试。未知业务、SSO 或跨域行为不能通过开关自动获得支持，已有人工环境记录也不证明候选或实站验证完成。BOSS/51job 没有原生契约。真实猎聘搜索入口受 robots 及页面跳转空白影响，见 [#63](https://github.com/saksim/vibe_job_radar/issues/63)，未取得本系列真实账号成功及完整 JD 验收。
+本源码提供明确列出的猎聘正常搜索与资源契约，原生模式仍须主动选择；未知业务、SSO或跨域行为不能通过开关自动获得支持。历史 robots 拒绝、页面清空、正常列表成功和首个详情已关闭分别留有记录，见[取数证据](CURRENT_ACQUISITION_EVIDENCE.md)及[首个关闭详情](NATIVE_CLOSED_DETAIL.md)。BOSS/51job没有原生契约，三站正常账号到所选完整JD仍待现场验收。
 
-## 当前整合状态与实站缺口
+## 当前实现与实站缺口
 
-- [PR62](https://github.com/saksim/vibe_job_radar/pull/62)：猎聘单次正常密码表单、自动接续、小批身份去重、查询范围与检查点、逐条取数漏斗。代码和受控测试结果以该 PR 当前 head 为准；未合并，不写成主干已支持密码自动填写。
-- [PR66](https://github.com/saksim/vibe_job_radar/pull/66) 已合并并通过主干验收：高级采集/CLI 工作区网络偏好接线。
-- [PR67](https://github.com/saksim/vibe_job_radar/pull/67) 已合并并通过主干验收：Windows 拒绝 POST 时可靠返回错误。
-- [PR69](https://github.com/saksim/vibe_job_radar/pull/69)：公开任务停止和重启后确认继续。
+- 猎聘单次正常密码表单、人工验证交接、自动接续、小批身份去重、查询检查点和取数结果统计已有实现；真实账号、会话和完整JD验收仍由 #50/#51/#53/#63 跟踪，不能把按钮可用当作站点认证。
+- 工作区网络偏好、代理认证、有限读取重试、公开任务暂停和重启后明确继续已有实现，各范围以[交付清单](DELIVERY_STATUS.md)及原PR自身验收为准。
+- 公开目录、分类及相邻页的实际采样与浏览器登录链路分别记录；四日期、91个不同完整职位URL来自独立报告，并不代表91个相关目标岗位或一次重算后的报告。
 
-三站真实正常登录、首条/小批完整 JD、跨日期至少 30 条/3 日期、过期与结构变化现场恢复仍须逐项验收。无 href、特殊 iframe/SSO/业务响应需专用契约。本机代理认证与有限 GET 读取重试分别随 PR76、PR80 合并并完成受控验收，不能替代用户网络验证。PAC、VM 宿主机、各 VPN/TUN 产品现场矩阵、长期调度和跨设备账户配额仍未完成。完整清单见 [交付状态](DELIVERY_STATUS.md)。
+至少30个不同目标岗位、实际日期、全部尝试分母、身份/全文人工审核及阈值核准仍须整体核验；已有日期覆盖不替代剩余条件。无 href、特殊 iframe/SSO/业务响应需专用契约，正常登录、过期与结构变化恢复仍待实站证据。PAC、VM宿主机及VPN/TUN产品现场矩阵、长期调度和跨设备账户配额继续分别跟踪；已有受控验证不认证用户当前环境。
 
 ## 数据与回退
 

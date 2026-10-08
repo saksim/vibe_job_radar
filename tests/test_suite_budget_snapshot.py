@@ -232,7 +232,7 @@ class SuiteBudgetTests(unittest.TestCase):
                 self.assertEqual(caught.exception.code, 2)
                 self.assertFalse(report.exists())
 
-    def test_verifier_keeps_600_180_timeouts_and_separates_snapshot_metadata(self):
+    def test_verifier_uses_reviewed_900_180_timeouts_and_keeps_570_snapshot(self):
         path = ROOT / "scripts/verify_candidate.py"
         spec = importlib.util.spec_from_file_location("budget_verifier_fixture", path)
         module = importlib.util.module_from_spec(spec)
@@ -253,7 +253,7 @@ class SuiteBudgetTests(unittest.TestCase):
                 patch.object(module.subprocess, "run", side_effect=run):
             result = module.verify(self.root / "out")
         self.assertTrue(result["success"])
-        self.assertEqual([kwargs["timeout"] for _, kwargs in calls], [600, 180, 180, 180])
+        self.assertEqual([kwargs["timeout"] for _, kwargs in calls], [900, 180, 180, 180])
         self.assertEqual(calls[0][0][-2:], ["--suite-snapshot-after", "570"])
         self.assertTrue(all("--suite-snapshot-after" not in args for args, _ in calls[1:]))
         self.assertEqual(result["steps"][0]["suite_snapshot_after_seconds"], 570)
