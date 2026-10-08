@@ -59,6 +59,7 @@ def _generation(state):
 
 def _template(parent, indices, ident):
     child = copy.deepcopy(parent)
+    child.pop('category_page_retry', None)
     child.update(id=ident, status='paused', phase='detail', report_id='', category_attempts=0,
         detail_attempts=0, detail_budget=len(indices), blocked_hosts=[], warnings=[],
         created_at=utc_now(), updated_at=utc_now(), category_rate_recovery=dict(
