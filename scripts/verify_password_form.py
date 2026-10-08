@@ -18,6 +18,7 @@ from vibe_job_radar.guided.adapters import builtins
 from vibe_job_radar.guided.browser import PlaywrightBackend
 from vibe_job_radar.guided.contracts import CrawlError
 from vibe_job_radar.guided.password_login import LoginCredentials, submit_password_login
+from password_form_evidence import FormEvidence
 
 FORM = '''<html><head><meta charset="utf-8"></head><body><div hidden>登录后查看</div>
 <form><input data-nick="login-user"><input data-nick="login-pwd" type="password">
@@ -31,7 +32,7 @@ document.querySelector('button').textContent='账号或密码错误';};</script>
 
 
 @contextmanager
-def fixture_browser(runtime, args):
+def fixture_browser(runtime, args, evidence):
     if args.native:
         from vibe_job_radar.guided.cdp_browser import CDPBrowser, edge_executable, chrome_executable
         # Reserve an unlistened loopback port for the lifetime of the browser,
@@ -42,6 +43,8 @@ def fixture_browser(runtime, args):
         try:
             browser = CDPBrowser(executable_path=(edge_executable() if args.channel == 'msedge' else chrome_executable() if args.channel == 'chrome' else runtime.chromium.executable_path),
                                  headless=True, args=[], proxy={'server': 'http://127.0.0.1:' + str(denied_proxy.getsockname()[1])})
+            evidence.version = browser.version
+            browser.connection.socket = evidence.wrap(browser.connection.socket)
             page = browser.new_context().new_page()
             # All document requests are fulfilled inside the owned CDP page.
             # The closed loopback proxy also prevents browser background egress.
@@ -51,8 +54,13 @@ def fixture_browser(runtime, args):
                     'body': base64.b64encode(FORM.encode()).decode()})
             page.client.on('Fetch.requestPaused', fulfill)
             page.client.send('Fetch.enable', {'patterns': [{'urlPattern': '*', 'requestStage': 'Request'}]})
+            evidence.interception_ready = True
             yield browser, page
+        except BaseException as exc:
+            evidence.fail(exc)
+            raise
         finally:
+            evidence.enter('cleanup')
             try:
                 if browser is not None:
                     browser.close()
@@ -61,10 +69,16 @@ def fixture_browser(runtime, args):
     else:
         browser = runtime.chromium.launch(headless=True, **({'channel': args.channel} if args.channel else {}))
         try:
+            evidence.version = browser.version
             context = browser.new_context(service_workers='block')
             context.route('**/*', lambda route: route.fulfill(status=200, content_type='text/html', body=FORM))
+            evidence.interception_ready = True
             yield browser, context.new_page()
+        except BaseException as exc:
+            evidence.fail(exc)
+            raise
         finally:
+            evidence.enter('cleanup')
             browser.close()
 
 
@@ -107,20 +121,27 @@ def setup_entry(page, scenario):
     }""", scenario)
 
 
-def verify_entry_paths(page, backend):
+def verify_entry_paths(page, backend, evidence):
     checks=[]
     for scenario in ('sms_overlay', 'sms_inline', 'closed_login', 'hidden_switch',
                      'delayed_switch', 'duplicate_switch', 'unchanged_sms'):
+        evidence.enter('page_load', scenario)
         page.goto(backend.adapter.search_url('synthetic login entry fixture'))
+        evidence.enter('entry_setup')
         setup_entry(page, scenario)
         credentials=LoginCredentials('synthetic-user', 'synthetic-password')
         expected={'duplicate_switch':'login_password_tab_unavailable',
                   'unchanged_sms':'login_password_form_unavailable'}.get(scenario)
         try:
+            evidence.enter('password_submit')
             code=submit_password_login(backend,credentials)
+            evidence.enter('assertions')
             assert expected is None and code=='login_agreement_required', (scenario,code)
         except CrawlError as exc:
+            if expected is None or exc.code != expected:
+                raise
             assert exc.code==expected, (scenario,exc.code)
+        evidence.enter('assertions')
         assert not credentials.username and not credentials.password, scenario
         assert page.evaluate('window.headerClicks')==int(scenario in {'closed_login','hidden_switch','delayed_switch'}), scenario
         assert page.evaluate('window.tabClicks')==int(scenario!='duplicate_switch'), scenario
@@ -131,24 +152,24 @@ def verify_entry_paths(page, backend):
         assert values==(['',''] if expected else ['synthetic-user','synthetic-password']), scenario
         assert page.evaluate("Array.from(document.querySelectorAll('#sms-form input')).every(e=>e.value==='')") is True, scenario
         checks.append(scenario)
+        evidence.checks.append(scenario)
     return checks
 
 
-def main():
-    parser = argparse.ArgumentParser(); parser.add_argument('--channel', choices=['msedge', 'chrome'])
-    parser.add_argument('--native', action='store_true', help='Exercise the explicit Chrome native CDP page/input implementation')
-    args = parser.parse_args()
+def run_checks(args, evidence):
     from playwright.sync_api import sync_playwright
-    checks = []
+    checks = evidence.checks
     with sync_playwright() as runtime:
-        with fixture_browser(runtime, args) as (browser, page):
+        with fixture_browser(runtime, args, evidence) as (browser, page):
             backend = SimpleNamespace(page=page, adapter=builtins().get('liepin'), auth_mode=True,
                                       cancelled=threading.Event(), error=None)
             url = backend.adapter.search_url('synthetic login fixture')
             for scenario in ('submit_once', 'unchecked_agreement', 'revoked_agreement', 'hidden_duplicate',
                              'missing_agreement', 'duplicate_agreement', 'captcha',
                              'foreign_action', 'cancelled', 'changed_form'):
+                evidence.enter('page_load', scenario)
                 page.goto(url)
+                evidence.enter('entry_setup')
                 credentials = LoginCredentials('synthetic-user', 'synthetic-password')
                 expected = None
                 manual = scenario in {'unchecked_agreement', 'revoked_agreement'}
@@ -178,13 +199,18 @@ def main():
                     page.locator('button').evaluate("e=>e.className='unrelated'")
                     expected = 'login_form_changed'
                 try:
+                    evidence.enter('password_submit')
                     result = submit_password_login(backend, credentials)
+                    evidence.enter('assertions')
                     assert expected is None, scenario
                     assert result == ('login_agreement_required' if manual else 'login_password_submitted'), scenario
                 except CrawlError as exc:
+                    if expected is None or exc.code != expected:
+                        raise
                     assert exc.code == expected, (scenario, exc.code)
                 finally:
                     backend.cancelled.clear()
+                evidence.enter('assertions')
                 assert not credentials.username and not credentials.password, scenario
                 automatic = expected is None and not manual
                 assert page.evaluate('window.submissions') == int(automatic), scenario
@@ -193,27 +219,48 @@ def main():
                     assert page.locator('#terms').evaluate('e => e.checked') is False, scenario
                     # Simulated human actions on this local fixture only. A tick
                     # alone must not submit; the later human click submits once.
+                    evidence.enter('manual_submit')
                     page.locator('#terms').click()
                     assert page.evaluate('window.submissions') == 0, scenario
                     assert page.evaluate('window.clicks') == 0, scenario
                     page.locator('button').click()
                     assert page.evaluate('window.submissions') == 1, scenario
                     assert page.evaluate('window.clicks') == 1, scenario
+                evidence.enter('assertions')
                 if expected is None:
                     assert page.evaluate('window.filled') == ['synthetic-user', 'synthetic-password']
                     try:
                         PlaywrightBackend.snapshot(backend)
                     except CrawlError as exc:
+                        if exc.code != 'login_credentials_rejected':
+                            raise
                         assert exc.code == 'login_credentials_rejected', exc.code
                     else:
                         raise AssertionError('bad password must not resume the list behind its dialog')
                 else:
                     assert page.locator('input[data-nick="login-pwd"]').evaluate('e => e.value === ""') is True, scenario
                 checks.append(scenario)
-            checks.extend(verify_entry_paths(page, backend))
-            print(json.dumps({'success': True, 'checks': checks, 'external_requests': 0,
-                              'real_account_tested': False, 'input_backend': 'minimal_cdp' if args.native else 'playwright',
-                              'browser_version': browser.version}))
+            verify_entry_paths(page, backend, evidence)
+            evidence.enter('browser_version')
+            evidence.version = browser.version
+
+
+def main():
+    parser = argparse.ArgumentParser(); parser.add_argument('--channel', choices=['msedge', 'chrome'])
+    parser.add_argument('--native', action='store_true', help='Exercise the explicit Chrome native CDP page/input implementation')
+    args = parser.parse_args()
+    evidence = FormEvidence(args.channel, args.native)
+    try:
+        run_checks(args, evidence)
+    except BaseException as exc:
+        evidence.fail(exc)
+        try:
+            evidence.publish(False)
+        except OSError:
+            print(json.dumps({**evidence.report(False), 'artifact_write_failed': True}))
+        raise
+    evidence.publish(True)
+
 
 
 if __name__ == '__main__': main()

@@ -1,6 +1,6 @@
 # Vibe Job Radar｜招聘要求与个人证据工作台
 
-软件提供的流程见[交付清单](docs/DELIVERY_STATUS.md)，已保存的实站观察、逐次成败和仍需人工验收的条件见[取数证据](docs/CURRENT_ACQUISITION_EVIDENCE.md)。历史关键词列表不等于登录后完整正文；较早文档中的主干提交和采样数量只属于当时记录。
+软件提供的流程见[交付清单](docs/DELIVERY_STATUS.md)，已保存的实站观察、逐次成败和仍需人工验收的条件统一见[取数证据](docs/CURRENT_ACQUISITION_EVIDENCE.md)。[GAP 审计](docs/PROJECT_GAP_AUDIT_2026_09_26.md)和[历史目标追溯](docs/PROJECT_GOAL_TRACE_2026_09_26.md)保留2026年9月26日的核查原文，后续处理记录见[Issue #210](https://github.com/saksim/vibe_job_radar/issues/210)。历史关键词列表不等于登录后完整正文；较早文档中的主干提交和采样数量只属于当时记录。
 
 本次#115补齐[独立公开计划进程](docs/PUBLIC_WORKER.md)：沿用已确认的计划、所有权、配额和原报告，无需保持网页服务运行。另按#118增加[Cursor固定公开目录](docs/PUBLIC_SOURCES.md)，各自新增范围以准确提交验收为准，当前已合并功能与历史组合候选分别记录。
 
