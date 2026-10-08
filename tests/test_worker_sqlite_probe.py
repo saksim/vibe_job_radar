@@ -164,6 +164,15 @@ class WorkerSqliteProbeTests(unittest.TestCase):
         try:
             case.failures = 9
             case.create()
+            # The first action only prepares the saved retry for this probe.
+            # Wait for its real durable writes and task_done before measuring
+            # the second, deliberately blocked action with the original 5s.
+            # Normal retry behavior keeps its separate unchanged 5s tests.
+            queue = case.service._queue
+            with queue.all_tasks_done:
+                self.assertTrue(queue.all_tasks_done.wait_for(
+                    lambda: queue.unfinished_tasks == 0, timeout=10),
+                    'first retry diagnostic fixture preparation did not finish')
             first = case.wait('read_retry_wait')
             self.assertEqual(first['read_retry']['used'], 1)
             holder = sqlite3.connect(case.ledger.path)
