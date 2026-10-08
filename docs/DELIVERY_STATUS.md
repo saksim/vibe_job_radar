@@ -1,4 +1,10 @@
+<!-- pr201-current-qualification-budget -->
+当前源码资格单测固定上限900秒，按完整2579项七平台实测最慢677秒加余量确定；其他三步180秒、570秒诊断快照和产品时限保持。源码/Windows外层作业同步为30/35分钟，保留原有6/11分钟构建和证据上传余量；独立审查的两层预算问题已补回归。原PR201的600秒首失败仍保留，#179耗时根因未解决。依据与验收边界见 [SOURCE_QUALIFICATION.md](SOURCE_QUALIFICATION.md)。此本地候选尚待当前提交CI、代码审查及实际Windows程序验证。
+<!-- /pr201-current-qualification-budget -->
+
 # 当前交付清单：本地优先，生产部署后置
+
+已有真实采样、关键词列表与所选详情的分母和日期统一见[取数证据](CURRENT_ACQUISITION_EVIDENCE.md)。原生单页观察、公开分类正文和正常账号后的相关完整JD是分别验收的范围；旧报告、失败记录及下方有日期的历史全文保持。
 
 同一 e857316 首轮最终为 23/25 检查通过、8 工作流 attempt 1。另一个失败在[原生 TLS 工作流全量单测](https://github.com/saksim/vibe_job_radar/actions/runs/37817413866/job/113449468316)：2578 项、1 失败及 1 清理错误、0 跳过（737.843 秒）；TLS 链和修复界面的独立结果另存。登录详情回归在 setUp 的原 5 秒等待超时，任务等报告线程，快照中的报告线程在 mkstemp/fsync；随后有界 close 返回后工作线程仍持有 .writer.lock，临时目录删除产生 WinError32。失败工件11567774033，ZIP SHA256 4b23d9c0be3cfadf416e7c88e8e8999ff09263b03a4fc54ae728cf9d65379a6c，原日志与快照已保存。
 

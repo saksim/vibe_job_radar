@@ -12,7 +12,9 @@ concurrency:
 jobs:
   build-and-run-executable:
     runs-on: windows-latest
-    timeout-minutes: 30
+    # 900s unit + 3x180s auxiliary checks + the original 11m allowance for
+    # installation, freezing, executable validation, and evidence upload.
+    timeout-minutes: 35
     env:
       PYTHONUTF8: '1'
       PLAYWRIGHT_BROWSERS_PATH: '0'
