@@ -1,4 +1,3 @@
-# Current main has no PR140 detail_attempt_history feature; both historical audit-only assertions are deferred, while all current selection/card/login/report/terminal assertions remain.
 """Browser callbacks must not restore the snapshot from an earlier action."""
 from pathlib import Path
 import tempfile
@@ -61,6 +60,7 @@ class GuidedProgressCheckpointTests(unittest.TestCase):
         self.assertEqual(during['phase'], 'collect')
         self.assertEqual(during['status'], 'running')
         self.assertEqual(during['cards'][0]['status'], 'opening')
+        self.assertEqual(len(during['detail_attempt_history']['attempts']), 1)
         self.assertEqual((during['code'], during['wait_seconds']), ('rate_wait', 0.4))
         self.assertEqual(result['status'], 'completed')
         self.assertEqual(result['outcome']['saved'], 1)
@@ -77,6 +77,7 @@ class GuidedProgressCheckpointTests(unittest.TestCase):
         state = self.service._load(self.ident)
         self.assertEqual(state['selection'], [self.card])
         self.assertEqual(state['authentication'], 'manual_pending')
+        self.assertEqual(len(state['detail_attempt_history']['attempts']), 1)
         self.assertEqual(state['login_continuation'], 'watching')
         self.assertTrue(state['auto_continue_after_login'])
         self.assert_file_unchanged_by_progress()

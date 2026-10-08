@@ -204,3 +204,38 @@ class NativeDocumentDeliveryTests(unittest.TestCase):
             continue_document_response(self.b, 'session', event(responseStatusCode=status))
             self.assertEqual(self.b._send.call_args.args[1:],
                              ('Fetch.continueResponse', {'requestId':'r'}))
+
+    def test_direct_cdp_without_cors_blocks_workers_and_websockets_preserving_source_policy(self):
+        self.b._native_cors = False
+        self.b._direct_cdp = True
+        headers = [{'name':'Content-Security-Policy','value':"script-src 'self'"}]
+        continue_document_response(self.b, 'session', event(responseHeaders=headers))
+        request = self.b._send.call_args.args
+        self.assertEqual(request[1:3], ('Fetch.getResponseBody', {'requestId':'r'}))
+        request[3]({'body':'original document'})
+        delivery = self.b._send.call_args.args
+        self.assertEqual(delivery[1], 'Fetch.fulfillRequest')
+        self.assertEqual(base64.b64decode(delivery[2]['body']), b'original document')
+        policies = [row['value'] for row in delivery[2]['responseHeaders']
+                    if row['name'].lower() == 'content-security-policy']
+        self.assertEqual(policies[0], headers[0]['value'])
+        self.assertEqual(len(policies), 2)
+        self.assertIn("worker-src 'none'", policies[1])
+        self.assertIn('connect-src https: http:', policies[1])
+        self.assertNotIn('wss:', policies[1])
+        self.assertNotIn('allow-popups', policies[1])
+        self.assertIn('allow-forms', policies[1])
+
+    def test_direct_cdp_robots_remain_inert_without_cors_contract(self):
+        self.b._native_cors = False
+        self.b._direct_cdp = True
+        continue_document_response(self.b, 'session', event(), robots=True)
+        request = self.b._send.call_args.args
+        self.assertEqual(request[1], 'Fetch.getResponseBody')
+        request[3]({'body':'robots document'})
+        delivery = self.b._send.call_args.args
+        self.assertEqual(delivery[1], 'Fetch.fulfillRequest')
+        self.assertEqual(base64.b64decode(delivery[2]['body']), b'robots document')
+        policies = [row['value'] for row in delivery[2]['responseHeaders']
+                    if row['name'].lower() == 'content-security-policy']
+        self.assertEqual(policies, [ROBOTS_SANDBOX])

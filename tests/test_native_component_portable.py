@@ -40,7 +40,7 @@ class NativeComponentPortableTests(unittest.TestCase):
     def test_cli_conflicting_flags_never_launch(self):
         from vibe_job_radar.workbench import main
         with patch('vibe_job_radar.guided.native_check.run_cli') as run, contextlib.redirect_stderr(io.StringIO()):
-            for args in [['--native-browser-check','--doctor'],['--native-browser-check','--port','1'],
+            for args in [['--native-browser-check','--doctor'],['--native-browser-check','--public-worker'],['--native-browser-check','--port','1'],
                          ['--native-browser-channel','chrome'],['--native-browser-check','--native-browser-channel','chrome-beta']]:
                 with self.subTest(args=args),self.assertRaises(SystemExit):main(args)
         run.assert_not_called()

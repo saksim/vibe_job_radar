@@ -176,3 +176,22 @@ class NativeFailureEvidenceTests(unittest.TestCase):
         self.assertEqual(self.b.probe['first_fatal']['latest_loading_failure']['browser_error'], 'ERR_CONNECTION_RESET')
         self.assertEqual(self.b.probe['events']['Network.loadingFailed'], 1)
         self.b._send.assert_not_called()
+
+    def test_missing_and_non_string_failure_categories_never_copy_event_values(self):
+        cases = [
+            ({}, 'unknown', None),
+            ({'blockedReason': [], 'corsErrorStatus': {'corsError': []}}, 'unknown', 'unknown'),
+            ({'blockedReason': {'raw': SECRET},
+              'corsErrorStatus': {'corsError': {'raw': SECRET}, 'failedParameter': SECRET}},
+             'unknown', 'unknown'),
+            ({'blockedReason': None, 'corsErrorStatus': []}, 'unknown', None),
+        ]
+        for index, (params, blocked, cors) in enumerate(cases, 1):
+            with self.subTest(index=index):
+                event = self.event(**params)
+                evidence.loading_failure(self.b, event, json.loads(event['message']))
+                self.assertEqual(self.b.probe['loading_failure_count'], index)
+                row = self.b.probe['loading_failures'][-1]
+                self.assertEqual(row['blocked_reason'], blocked)
+                self.assertEqual(row['cors_error'], cors)
+                self.assertNotIn(SECRET, json.dumps(self.b.probe))

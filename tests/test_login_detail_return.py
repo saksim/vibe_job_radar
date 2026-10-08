@@ -245,7 +245,7 @@ class DetailReturnServiceTests(unittest.TestCase):
             def close(self):pass
         self.service=GuidedService(self.workspace,registry=Registry([ADAPTER]),backend_factory=Backend,
             ledger=RateLedger(self.workspace.root/'guided'/'rates.sqlite',Limits(login_interval=0)))
-        self.addCleanup(self.service.close)
+        self.addCleanup(self.close_fixture)
         self.write_probe.start()
         self.ident=self.service.create({'platform':'liepin','keyword':'时间序列算法工程师','roles':['time_series'],
             'consent':True,'rights_note':'合成页面测试，非猎聘实站验收','max_pages':1,'max_jobs':2})['id']
@@ -258,6 +258,16 @@ class DetailReturnServiceTests(unittest.TestCase):
         self.partial_report=state['report_id'];self.first_record=state['cards'][0]['record_id']
         self.backend=self.service._backends[self.ident]
         self.service._login_return.interval=.01
+    def close_fixture(self):
+        # Production close retains its original 5s bound and ownership while
+        # a durable report finishes. The fixture must not delete that worker's
+        # workspace immediately after a bounded close returns.
+        worker=self.service._thread
+        self.service.close()
+        if worker is not None and worker.is_alive():
+            worker.join(timeout=10)
+            self.assertFalse(worker.is_alive(),'fixture report worker did not finish before workspace cleanup')
+
     def wait_idle(self):
         probe=getattr(self,'write_probe',None)
         before=probe.snapshot() if probe is not None else None
@@ -403,6 +413,59 @@ class DetailReturnFixtureTests(unittest.TestCase):
             self.assertIs(os.fsync,original_fsync)
         finally:
             if hasattr(case,'service'):case.service.close()
+            if hasattr(case,'tmp'):case.tmp.cleanup()
+
+    def test_setup_failure_awaits_report_writer_after_bounded_close_returns(self):
+        import os
+        original_fsync=os.fsync
+        release=threading.Event();entered=threading.Event()
+        case=DetailReturnServiceTests('test_dead_owner_does_not_create_or_restore_replacement_browser')
+        original_wait=case.wait_idle;calls=0;join_calls=[];replacement=None
+        def fsync(descriptor):
+            owner=getattr(getattr(case,'service',None),'_thread',None)
+            if owner is not None and threading.current_thread().name.startswith(f'radar-report-{owner.ident}_'):
+                entered.set()
+                if not release.wait(10):raise AssertionError('controlled report writer was not released')
+            return original_fsync(descriptor)
+        def wait():
+            nonlocal calls,replacement
+            calls+=1
+            if calls==1:
+                original_wait()
+            else:
+                self.assertTrue(entered.wait(5))
+                worker=case.service._thread;real_join=worker.join
+                def join(timeout=None):
+                    join_calls.append(timeout)
+                    if len(join_calls)==1:
+                        # Model close reaching its existing 5s bound while a
+                        # durable report write still owns the workspace.
+                        self.assertEqual(timeout,5)
+                        return
+                    release.set()
+                    return real_join(timeout=timeout)
+                replacement=patch.object(worker,'join',side_effect=join)
+                replacement.start()
+                raise AssertionError('injected_setup_failure_during_report_write')
+        case.wait_idle=wait
+        try:
+            with patch.object(os,'fsync',side_effect=fsync):
+                result=unittest.TestResult();case.run(result)
+            self.assertEqual(len(result.failures),1)
+            self.assertIn('injected_setup_failure_during_report_write',result.failures[0][1])
+            self.assertEqual(result.errors,[])
+            self.assertEqual(join_calls,[5,10])
+            self.assertIsNone(case.service._thread)
+            self.assertIsNone(case.service._ownership.lease)
+            self.assertFalse(case.workspace.root.exists())
+            self.assertIs(os.fsync,original_fsync)
+        finally:
+            release.set()
+            if replacement is not None:replacement.stop()
+            if hasattr(case,'service'):
+                worker=case.service._thread
+                case.service.close()
+                if worker is not None:worker.join(10)
             if hasattr(case,'tmp'):case.tmp.cleanup()
 
     def test_same_five_second_deadline_reports_bounded_stage_and_worker_frames_without_inputs(self):
