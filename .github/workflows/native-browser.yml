@@ -16,7 +16,8 @@ jobs:
         os: [ubuntu-latest, windows-latest]
         mode: [headless, headed]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
+    # The 29-check search suite has 5m; retain the previous 7m for other work.
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -46,11 +47,11 @@ jobs:
         run: python scripts/run_native_auth_probe.py --controlled --channel msedge ${{ matrix.mode == 'headed' && '--headed' || '' }}
       - name: Verify recorded Liepin CORS search through native Chromium
         if: runner.os == 'Linux'
-        timeout-minutes: 3
+        timeout-minutes: 5
         run: ${{ matrix.mode == 'headed' && 'xvfb-run -a' || '' }} python scripts/run_native_liepin_probe.py --controlled ${{ matrix.mode == 'headed' && '--headed' || '' }}
       - name: Verify recorded Liepin CORS search through native Edge
         if: runner.os == 'Windows'
-        timeout-minutes: 3
+        timeout-minutes: 5
         run: python scripts/run_native_liepin_probe.py --controlled --channel msedge ${{ matrix.mode == 'headed' && '--headed' || '' }}
       - name: Verify finite native document retries on Linux
         if: runner.os == 'Linux' && matrix.mode == 'headless'
@@ -110,7 +111,8 @@ jobs:
       matrix:
         mode: [headless, headed]
     runs-on: windows-latest
-    timeout-minutes: 10
+    # The 29-check search suite has 5m; retain the previous 7m for other work.
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -122,7 +124,7 @@ jobs:
         timeout-minutes: 3
         run: python scripts/run_native_auth_probe.py --controlled --channel chrome ${{ matrix.mode == 'headed' && '--headed' || '' }}
       - name: Verify native Chrome search, complete JD, report and delayed progress
-        timeout-minutes: 3
+        timeout-minutes: 5
         run: python scripts/run_native_liepin_probe.py --controlled --channel chrome ${{ matrix.mode == 'headed' && '--headed' || '' }}
       - name: Verify finite native Chrome document retries
         timeout-minutes: 3

@@ -75,9 +75,9 @@ jobs:
     needs: browser-exercises
     if: always()
     runs-on: ubuntu-latest
-    # verify_candidate keeps its 600s unit and 3x180s auxiliary limits. Include
-    # dependency setup, evidence upload and building without truncating them.
-    timeout-minutes: 25
+    # 1200s unit + 3x180s auxiliary checks + the original 6m setup/build/upload
+    # allowance. Keep this outer budget aligned with the verifier limits.
+    timeout-minutes: 35
     steps:
       - name: Require successful browser exercises
         env:
