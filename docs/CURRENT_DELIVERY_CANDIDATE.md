@@ -2,6 +2,8 @@
 
 以下为旧提交 `c5eb434ba4f5f81d9755d7c3d6f438418dbe1077` 的原始组合记录，保留当时的提交、采样和未完成项；“当前”“main”“待完成”等均指当时，不作为现在的发布状态。最新能力以[交付说明](DELIVERY_STATUS.md)、[已有实站证据](CURRENT_ACQUISITION_EVIDENCE.md)和当前PR/Issue验收为准。原记录全文保留如下。
 
+历史承诺与Issue/PR索引另见[2026-09-26目标追溯](PROJECT_GOAL_TRACE_2026_09_26.md)。该索引同样冻结于审计时点，后续状态看[当前取数证据](CURRENT_ACQUISITION_EVIDENCE.md)和原Issue/PR。
+
 ---
 
 # 当前18项改进的组合候选

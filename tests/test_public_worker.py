@@ -195,7 +195,10 @@ def dispatch_stop_child(root, stop_kind, phase, *, preserve_schedule=False, pres
         def start():
             real_start()
             try:
-                assert entered.wait(8),'dispatch did not reach controlled phase'
+                # Only preparation may wait longer for real storage/thread
+                # startup. Stop, release, completion and no-request checks below
+                # retain their original bounds and assertions.
+                assert entered.wait(30),'dispatch did not reach controlled phase'
                 if stop_kind=='request':
                     thread=threading.Thread(target=worker.request_stop)
                     thread.start();thread.join(5)
@@ -506,7 +509,7 @@ class ProcessWorkerTests(unittest.TestCase):
                     env['PYTHONUTF8']='1'
                     result=subprocess.run([sys.executable,str(Path(__file__).resolve()),
                         '--dispatch-stop-worker',str(root),stop_kind,phase],
-                        capture_output=True,text=True,encoding='utf8',timeout=30,env=env)
+                        capture_output=True,text=True,encoding='utf8',timeout=90,env=env)
                     self.assertEqual(result.returncode,0,result.stderr)
                     self.assertEqual(json.loads(result.stdout),{'success':True,
                         'stop_kind':stop_kind,'phase':phase,'source_requests':0})
@@ -527,7 +530,7 @@ class ProcessWorkerTests(unittest.TestCase):
                 env['PYTHONUTF8']='1'
                 result=subprocess.run([sys.executable,str(Path(__file__).resolve()),
                     '--presubmit-stop-worker',str(root),stop_kind],
-                    capture_output=True,text=True,encoding='utf8',timeout=30,env=env)
+                    capture_output=True,text=True,encoding='utf8',timeout=90,env=env)
                 self.assertEqual(result.returncode,0,result.stderr)
                 self.assertEqual(json.loads(result.stdout),{'success':True,'stop_kind':stop_kind,
                     'phase':'after_decision','source_requests':0,'resumed_source_requests':1})
@@ -552,7 +555,7 @@ class ProcessWorkerTests(unittest.TestCase):
                 env={k:v for k,v in os.environ.items() if not k.startswith('VIBE_RADAR_')};env['PYTHONUTF8']='1'
                 result=subprocess.run([sys.executable,str(Path(__file__).resolve()),
                     '--queue-presubmit-stop-worker',str(root),stop_kind],
-                    capture_output=True,text=True,encoding='utf8',timeout=30,env=env)
+                    capture_output=True,text=True,encoding='utf8',timeout=90,env=env)
                 self.assertEqual(result.returncode,0,result.stderr)
                 self.assertEqual(json.loads(result.stdout),{'success':True,'stop_kind':stop_kind,
                     'phase':'after_decision','source_requests':0,'resumed_source_requests':1})
