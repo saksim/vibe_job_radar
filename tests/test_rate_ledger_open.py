@@ -241,5 +241,164 @@ class LedgerOpenTests(unittest.TestCase):
         connect.assert_not_called()
 
 
+    def test_repeated_or_weaker_publisher_rules_preserve_database_bytes(self):
+        ledger = self.ledger(); origin = 'https://jobs.fixture.test'
+        ledger.set_publisher('fixture', origin, delay=7, requests=2, seconds=30)
+        ledger.reserve('fixture', 'request', origin=origin)
+        before = self.snapshot(); digest = hashlib.sha256(self.path.read_bytes()).hexdigest()
+        statements = []
+        with self.trace(statements):
+            for delay in (7, 0, 3):
+                ledger.set_publisher('fixture', origin.upper().replace('HTTPS:', 'https:')+'/',
+                                     delay=delay, requests=2, seconds=30)
+                ledger.set_publisher('fixture', origin, delay=delay)
+        self.assertTrue(all(sql.startswith('SELECT ') for sql in statements))
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(hashlib.sha256(self.path.read_bytes()).hexdigest(), digest)
+        with self.assertRaises(RateLimit) as caught:
+            self.ledger().reserve('fixture', 'request', origin=origin)
+        self.assertEqual(caught.exception.wait, 7)
+
+    def test_cached_bridge_and_native_rules_finish_while_another_process_holds_writer(self):
+        from test_guided import fixture_adapter
+        from vibe_job_radar.guided.native_browser import NativeControl
+        from vibe_job_radar.guided.transport import PinnedTransport, WireResponse
+        ledger = self.ledger(); origin = 'https://jobs.fixture.test'
+        body = b'User-agent: *\nAllow: /\nCrawl-delay: 7\nRequest-rate: 2/30\n'
+        native = NativeControl(fixture_adapter(), ledger, threading.Event())
+        native.install_robots(origin, 200, 'text/plain', body)
+        bridge = PinnedTransport(fixture_adapter(), ledger, threading.Event())
+        with patch.object(bridge, 'fetch', return_value=WireResponse(200, {'content-type':'text/plain'}, body)):
+            bridge.ensure_robots(origin+'/job/1')
+        script = (
+            "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); "
+            "c.execute('BEGIN IMMEDIATE'); print('READY',flush=True); "
+            "sys.stdin.readline(); c.rollback(); c.close()")
+        child = subprocess.Popen([sys.executable, '-c', script, str(self.path)],
+                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                 stderr=subprocess.PIPE, text=True)
+        ready = queue.Queue()
+        reader = threading.Thread(target=lambda: ready.put(child.stdout.readline()))
+        reader.start()
+        try:
+            self.assertEqual(ready.get(timeout=5).strip(), 'READY')
+            reader.join(5)
+            # Real original 10s SQLite timeout: unchanged rules must not need
+            # the held writer reservation, through either production transport.
+            with patch.object(bridge, 'fetch', side_effect=AssertionError('cached robots')):
+                bridge.ensure_robots(origin+'/job/2')
+            native.install_robots(origin, 200, 'text/plain', body)
+            self.assertIsNone(child.poll())
+        finally:
+            try: child.communicate(input='RELEASE\n', timeout=5)
+            except subprocess.TimeoutExpired:
+                child.kill(); child.communicate(timeout=5)
+            reader.join(5)
+        self.assertEqual(child.returncode, 0)
+        self.assertFalse(reader.is_alive())
+
+    def test_stricter_new_window_and_new_scope_still_commit_and_survive_restart(self):
+        ledger = self.ledger(); origin = 'https://jobs.fixture.test'
+        ledger.set_publisher('fixture', origin, delay=7, requests=2, seconds=30)
+        updates = [
+            ('fixture', origin, dict(delay=9, requests=2, seconds=30)),
+            ('fixture', origin, dict(delay=1, requests=1, seconds=60)),
+            ('another', origin, dict(delay=1, requests=1, seconds=60)),
+            ('fixture', 'https://other.fixture.test', dict(delay=1, requests=1, seconds=60)),
+        ]
+        for site, target, rule in updates:
+            statements = []
+            with self.trace(statements): ledger.set_publisher(site, target, **rule)
+            self.assertEqual(statements.count('BEGIN IMMEDIATE'), 1)
+            self.assertEqual(statements.count('COMMIT'), 1)
+        with closing(self.real_connect(self.path)) as conn:
+            self.assertEqual(conn.execute(
+                'SELECT delay FROM publisher_policy WHERE site=? AND origin=?',
+                ('fixture', origin)).fetchone(), (9,))
+            self.assertEqual(conn.execute(
+                'SELECT requests,seconds FROM publisher_windows WHERE site=? AND origin=? ORDER BY requests',
+                ('fixture', origin)).fetchall(), [(1, 60), (2, 30)])
+        reopened = self.ledger(); reopened.reserve('fixture', 'request', origin=origin)
+        with self.assertRaises(RateLimit) as caught:
+            reopened.reserve('fixture', 'request', origin=origin)
+        self.assertEqual(caught.exception.wait, 60)
+
+    def test_failed_publisher_window_write_rolls_back_stricter_delay(self):
+        ledger = self.ledger(); origin = 'https://jobs.fixture.test'
+        ledger.set_publisher('fixture', origin, delay=7, requests=2, seconds=30)
+        before = self.snapshot()
+        class BrokenConnection(sqlite3.Connection):
+            def execute(conn, sql, *args, **kwargs):
+                if sql.startswith('INSERT OR IGNORE INTO publisher_windows'):
+                    raise sqlite3.OperationalError('Artificial window write failure')
+                return super().execute(sql, *args, **kwargs)
+        def connect(*args, **kwargs):
+            return self.real_connect(*args, factory=BrokenConnection, **kwargs)
+        with patch('sqlite3.connect', side_effect=connect), self.assertRaisesRegex(CrawlError, 'rate_storage_error'):
+            ledger.set_publisher('fixture', origin, delay=120, requests=1, seconds=300)
+        self.assertEqual(self.snapshot(), before)
+        self.ledger().set_publisher('fixture', origin, delay=120, requests=1, seconds=300)
+
+    def test_concurrent_publisher_merges_retain_both_windows_and_strictest_delay(self):
+        ledger = self.ledger(); origin = 'https://jobs.fixture.test'
+        ledger.set_publisher('fixture', origin, delay=7)
+        barrier = threading.Barrier(3); errors = []
+        def install(delay, count, seconds):
+            try:
+                barrier.wait(timeout=5)
+                ledger.set_publisher('fixture', origin, delay=delay, requests=count, seconds=seconds)
+            except BaseException as exc: errors.append(exc)
+        workers = [threading.Thread(target=install, args=args) for args in ((9, 2, 30), (12, 1, 60))]
+        for worker in workers: worker.start()
+        try: barrier.wait(timeout=5)
+        finally:
+            for worker in workers: worker.join(15)
+        self.assertTrue(all(not worker.is_alive() for worker in workers)); self.assertEqual(errors, [])
+        with closing(self.real_connect(self.path)) as conn:
+            self.assertEqual(conn.execute('SELECT delay FROM publisher_policy').fetchall(), [(12,)])
+            self.assertEqual(conn.execute('SELECT requests,seconds FROM publisher_windows ORDER BY requests').fetchall(),
+                             [(1, 60), (2, 30)])
+        reopened = self.ledger(); reopened.reserve('fixture', 'request', origin=origin)
+        with self.assertRaises(RateLimit) as caught: reopened.reserve('fixture', 'request', origin=origin)
+        self.assertEqual(caught.exception.wait, 60)
+
+    def test_noop_during_pending_stricter_commit_does_not_cache_request_authorization(self):
+        ledger = self.ledger(); origin = 'https://jobs.fixture.test'
+        ledger.set_publisher('fixture', origin, delay=7)
+        ledger.reserve('fixture', 'request', origin=origin)
+        done = threading.Event(); errors = []
+        def install():
+            try: ledger.set_publisher('fixture', origin, delay=7)
+            except BaseException as exc: errors.append(exc)
+            finally: done.set()
+        with closing(self.real_connect(self.path)) as writer:
+            writer.execute('BEGIN IMMEDIATE')
+            writer.execute('UPDATE publisher_policy SET delay=120 WHERE site=? AND origin=?', ('fixture', origin))
+            worker = threading.Thread(target=install); worker.start()
+            try:
+                self.assertTrue(done.wait(5), 'Sufficient committed rule should not wait for the pending stricter writer')
+                self.assertTrue(writer.in_transaction)
+            finally:
+                writer.commit(); worker.join(15)
+        self.assertFalse(worker.is_alive()); self.assertEqual(errors, [])
+        self.now += 8
+        with self.assertRaises(RateLimit) as caught:
+            ledger.reserve('fixture', 'request', origin=origin)
+        self.assertEqual(caught.exception.wait, 112)
+
+    def test_repeated_publisher_install_does_not_cache_missing_or_corrupt_storage(self):
+        origin = 'https://jobs.fixture.test'
+        for damaged in ('missing', 'corrupt'):
+            self.path = Path(self.temp.name)/(damaged+'.sqlite')
+            ledger = self.ledger()
+            ledger.set_publisher('fixture', origin, delay=7, requests=2, seconds=30)
+            if damaged == 'missing': self.path.unlink()
+            else: self.path.write_bytes(b'Artificial invalid database')
+            with self.subTest(damaged=damaged), self.assertRaisesRegex(CrawlError, 'rate_storage_error'):
+                ledger.set_publisher('fixture', origin, delay=7, requests=2, seconds=30)
+            if damaged == 'missing': self.assertFalse(self.path.exists())
+            else: self.assertEqual(self.path.read_bytes(), b'Artificial invalid database')
+
+
 if __name__ == '__main__':
     unittest.main()

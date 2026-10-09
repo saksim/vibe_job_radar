@@ -130,6 +130,22 @@ class RateLedger:
                 or not math.isfinite(seconds) or not 0 < seconds <= MAX_PUBLISHER_WINDOW):
             raise CrawlError('publisher_policy_invalid')
         with self._connection() as conn:
+            # One coherent read can prove there is nothing to merge. Stored
+            # delays only grow and windows are never removed, so another
+            # compliant writer cannot invalidate an already sufficient policy.
+            # Do not retain this result: reserve() reads current constraints
+            # in its original write transaction before authorizing a request.
+            current = conn.execute(
+                'SELECT delay, EXISTS(SELECT 1 FROM publisher_windows '
+                'WHERE site=? AND origin=? AND requests=? AND seconds=?) '
+                'FROM publisher_policy WHERE site=? AND origin=?',
+                (site, origin, requests, seconds, site, origin)).fetchone()
+            if (current and type(current[0]) in (int, float)
+                    and math.isfinite(current[0]) and current[0] >= delay
+                    and (requests is None or current[1])):
+                return
+            # A stricter/missing rule retains the atomic merge. The UPSERT and
+            # unique key recheck under the writer lock if a peer got here first.
             conn.execute('BEGIN IMMEDIATE')
             conn.execute('INSERT INTO publisher_policy VALUES (?,?,?) ON CONFLICT(site,origin) '
                          'DO UPDATE SET delay=MAX(delay,excluded.delay)', (site, origin, delay))
