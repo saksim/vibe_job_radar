@@ -298,7 +298,6 @@ class GuidedService:
             foreign=self._ownership.foreign()
             jobs = []
             checkpoint_warnings = []
-            login_availability = {}
             for path in sorted(self.root.glob('*.json'), key=lambda p: p.stat().st_mtime, reverse=True)[:30]:
                 if path.is_symlink():
                     continue
@@ -309,14 +308,6 @@ class GuidedService:
                     continue
                 if not foreign and item['status'] in {'queued', 'running'} and item['id'] != self._active:
                     item.update(status='interrupted', code='interrupted', message=MESSAGES['interrupted'])
-                site = item['platform']
-                if site not in login_availability:
-                    try:
-                        login_availability[site] = self.ledger.login_availability(site)
-                    except CrawlError as exc:
-                        login_availability[site] = {'available': False, 'reason': exc.code,
-                                                    'next_allowed_at': None, 'wait_seconds': None}
-                item['login_availability'] = copy.deepcopy(login_availability[site])
                 item['browser_open'] = item['id'] in self._backends
                 item['owned_elsewhere']=foreign
                 item['automatic_resume_available'] = (item.get('auto_resume') is True
@@ -328,7 +319,7 @@ class GuidedService:
                 if item['backend'] == 'native' and backend is not None:
                     item['native_requests'] = dict(getattr(backend, 'native_counts', {}))
                 jobs.append(item)
-            return {'jobs': jobs, 'busy': self._busy, 'active': self._active,
+            view = {'jobs': jobs, 'busy': self._busy, 'active': self._active,
                     'owned_elsewhere':foreign,'ownership_message':OWNER_MESSAGE if foreign else '',
                     'closure_uncertain':self._closure_uncertain,
                     'checkpoint_warnings': list(dict.fromkeys(checkpoint_warnings)),
@@ -345,6 +336,21 @@ class GuidedService:
                     'sessions_persisted': any(j.get('saved_session_status') == 'saved_unverified' for j in jobs),
                     'session_storage_scope': 'opt_in_cookies_only_not_account_certification',
                     'external_site_certification': False}
+
+        # Quota advice can wait on SQLite. Enrich only these local job copies
+        # after releasing the task/checkpoint locks needed by running actions.
+        # Every real login still calls reserve(); advice never authorizes it.
+        login_availability = {}
+        for item in jobs:
+            site = item['platform']
+            if site not in login_availability:
+                try:
+                    login_availability[site] = self.ledger.login_availability(site)
+                except CrawlError as exc:
+                    login_availability[site] = {'available': False, 'reason': exc.code,
+                                                'next_allowed_at': None, 'wait_seconds': None}
+            item['login_availability'] = copy.deepcopy(login_availability[site])
+        return view
 
     @staticmethod
     def _package():

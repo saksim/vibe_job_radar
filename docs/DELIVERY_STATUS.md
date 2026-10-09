@@ -1,3 +1,16 @@
+<!-- guided-state-login-advice-lock -->
+## 2026-10-09：状态查询释放任务锁后读取登录额度建议
+
+[PR #275](https://github.com/saksim/vibe_job_radar/pull/275)实际main 0bb8d065首次CI为24/25：Windows Python3.12的2674项中，recorded-layout原测试在首次列表准备的10秒等待失败，尚未到正文或报告阶段。候选通过不能替代主干验收；原失败工件及评论保留在[任务调查 #126](https://github.com/saksim/vibe_job_radar/issues/126)和[稳定性 #269](https://github.com/saksim/vibe_job_radar/issues/269)。原诊断采样晚于finally清理，没有工作线程现场，仍不能确认底层耗时原因。
+
+沿该路径发现并确定性复现一个锁范围缺陷：state()在持有任务锁和共享checkpoint锁时读取SQLite登录额度建议。受控慢查询使无关任务无法提交完成，也使另一个工作台实例无法保存进度。旧代码的6项状态测试恰有这2项失败，无错误或跳过；这证明锁竞争机制，不证明原CI当时正在等待此查询。
+
+现在保留锁内任务快照和原读写序列化，释放两把锁后只给本次任务副本补充额度建议。每个站点每次视图查询一次，下次刷新重新读取，各任务副本隔离；存储异常仍显示不可用。建议只用于界面提示，实际登录仍必须执行原reserve校验。没有缓存授权、新增网络请求或改变登录次数限制。
+
+Python3.10/3.12各241项相关回归零失败、错误和跳过，覆盖上述并发、快照一致性、原checkpoint读写锁、所有权、额度、密码登录、恢复与完整JD/原报告。新增4项测试；原recorded-layout文件、10秒期限、业务断言、工作流及配额实现均保持。全部测试集合发现2678项，597份跟踪源码；完整候选和实际main仍须各自验收。沿用#126/#269/[总线 #57](https://github.com/saksim/vibe_job_radar/issues/57)/[GAP #210](https://github.com/saksim/vibe_job_radar/issues/210)，没有新Issue，不自动关闭历史根因问题，不认证真人实站登录。
+
+<!-- /guided-state-login-advice-lock -->
+
 <!-- browser-choice-before-cleanup-evidence -->
 ## 浏览器选择：保留检查点与清理前有限状态（#202 / #263 / #269 / #57 / #210）
 
