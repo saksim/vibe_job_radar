@@ -167,10 +167,12 @@ class ReadRetryWorkerTests(unittest.TestCase):
         self.ident=self.service.create({'platform':'fixture','keyword':'时间序列','roles':['time_series'],
             'max_pages':1,'max_jobs':1,'consent':True,'rights_note':'ARTIFICIAL RETRY TEST'})['id']
 
-    def wait(self,code,*,retry_used=None):
+    def wait(self,code,*,retry_used=None,timeout=30):
         before=self.write_probe.snapshot()
         sqlite_before=self.sqlite_probe.snapshot()
-        deadline=time.monotonic()+5
+        # Functional state assertions include several real durable writes.
+        # Diagnostic lock tests explicitly retain their separate 5s deadline.
+        deadline=time.monotonic()+timeout
         while time.monotonic()<deadline:
             state=self.service._load(self.ident)
             if (not self.service.state()['busy'] and state['code']==code
@@ -189,7 +191,7 @@ class ReadRetryWorkerTests(unittest.TestCase):
             diagnostic['expected_read_retry_used'] = retry_used
             used = state.get('read_retry',{}).get('used')
             diagnostic['observed_read_retry_used'] = used if type(used) is int and 0 <= used <= 2 else 'unknown'
-        self.fail('worker did not reach '+code+' after 5s: '+json.dumps(diagnostic))
+        self.fail('worker did not reach '+code+f' after {timeout:g}s: '+json.dumps(diagnostic))
 
     def test_worker_recovers_once_preserving_budget_and_accounting(self):
         self.failures=1;self.create();state=self.wait('read_retry_wait')

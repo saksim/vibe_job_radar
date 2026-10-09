@@ -20,7 +20,9 @@ from vibe_job_radar.guided.contracts import CrawlError
 from vibe_job_radar.guided.password_login import LoginCredentials, submit_password_login
 from password_form_evidence import FormEvidence
 
-FORM = '''<html><head><meta charset="utf-8"></head><body><div hidden>登录后查看</div>
+# A self-contained icon prevents an unrelated automatic /favicon.ico request
+# from outliving a form scenario; unexpected CDP errors still fail the check.
+FORM = '''<html><head><meta charset="utf-8"><link rel="icon" href="data:,"></head><body><div hidden>登录后查看</div>
 <form><input data-nick="login-user"><input data-nick="login-pwd" type="password">
 <button class="login-submit-btn" type="submit">登录</button></form>
 <label><input id="terms" type="checkbox" checked>同意猎聘</label>

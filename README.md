@@ -2,6 +2,8 @@
 
 软件提供的流程见[交付清单](docs/DELIVERY_STATUS.md)，已保存的实站观察、逐次成败和仍需人工验收的条件统一见[取数证据](docs/CURRENT_ACQUISITION_EVIDENCE.md)。[GAP 审计](docs/PROJECT_GAP_AUDIT_2026_09_26.md)和[历史目标追溯](docs/PROJECT_GOAL_TRACE_2026_09_26.md)保留2026年9月26日的核查原文，后续处理记录见[Issue #210](https://github.com/saksim/vibe_job_radar/issues/210)。历史关键词列表不等于登录后完整正文；较早文档中的主干提交和采样数量只属于当时记录。
 
+候选交接、包来源和升级回退的历史材料见[固定候选交接清单](docs/MAIN_HANDOFF_REVIEW.md)。其中PR220、81项PR索引及旧包均有固定核查日期；当前源码与程序包按各自提交核验，旧到期工件不作为当前下载入口。
+
 本次#115补齐[独立公开计划进程](docs/PUBLIC_WORKER.md)：沿用已确认的计划、所有权、配额和原报告，无需保持网页服务运行。另按#118增加[Cursor固定公开目录](docs/PUBLIC_SOURCES.md)，各自新增范围以准确提交验收为准，当前已合并功能与历史组合候选分别记录。
 
 另按#131加入[有限公开查询待办](docs/PUBLIC_QUERY_QUEUE.md)：最多5条一次性查询，逐条明确同意后由工作台或独立进程顺序执行，沿用原任务、缓存、共享额度和报告；跨重启保留未开始项，执行结果不确定时暂停而不重放。实际Windows登录与24小时运行仍需独立验收。

@@ -137,7 +137,7 @@ class WorkerSqliteProbeTests(unittest.TestCase):
             case.failures = 1
             case.create()
             with self.assertRaises(AssertionError) as caught:
-                case.wait('read_retry_wait')
+                case.wait('read_retry_wait', timeout=5)
             message = str(caught.exception)
             self.assertIn('after 5s: ', message)
             evidence = json.loads(message.split('after 5s: ', 1)[1])
@@ -167,7 +167,7 @@ class WorkerSqliteProbeTests(unittest.TestCase):
             # The first action only prepares the saved retry for this probe.
             # Wait for its real durable writes and task_done before measuring
             # the second, deliberately blocked action with the original 5s.
-            # Normal retry behavior keeps its separate unchanged 5s tests.
+            # Functional state waits have a separate durable-write allowance.
             queue = case.service._queue
             with queue.all_tasks_done:
                 self.assertTrue(queue.all_tasks_done.wait_for(
@@ -179,7 +179,7 @@ class WorkerSqliteProbeTests(unittest.TestCase):
             holder.execute('BEGIN IMMEDIATE')
             case.now = 1031
             with self.assertRaises(AssertionError) as caught:
-                case.wait('read_retry_wait', retry_used=2)
+                case.wait('read_retry_wait', retry_used=2, timeout=5)
             message = str(caught.exception)
             self.assertIn('after 5s: ', message)
             evidence = json.loads(message.split('after 5s: ', 1)[1])
