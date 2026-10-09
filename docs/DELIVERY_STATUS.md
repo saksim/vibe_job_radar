@@ -1,3 +1,27 @@
+<!-- worker-resumed-report-completion-budget -->
+## 2026-10-09：恢复任务的完成等待与停止等待分开
+
+[PR #274 首轮](https://github.com/saksim/vibe_job_radar/actions/runs/37920480264/job/113786934300)为24/25；Windows Python 3.11全量2651项中一项失败，其余检查成功。失败在停止后的重新启动任务保存正文/生成报告阶段，停止及停止前零请求断言已通过。10,001.139毫秒诊断显示任务为running/saving，栈位于Store.add的事务结束处；四次fsync已完成、合计1591.428毫秒。这些信息不足以解释完整10秒耗时，SQLite保存变慢的底层原因仍未知。
+
+原测试把正常恢复后的完整报告也套用了停止清理的10秒等待。现在只对恢复日计划、恢复队列这两处正常完成等待明确给30秒，停止观察默认10秒、子进程90秒、原停止/准备期限以及所有结果和请求断言均保持。生产实现、SQLite设置与报告逻辑未改变。
+
+受控对照在自有fixture首次Store.add前等待真实12秒：原测试按10秒期限失败，新测试完成正常恢复和原报告断言；这验证等待预算的区别，未复现CI底层慢因。Python 3.10和3.12各40项相关测试零失败、错误、跳过，测试总集合仍2651。首次CI失败及日志保留，修正提交须另做候选与实际main独立验收。继续关联[原worker调查 #126](https://github.com/saksim/vibe_job_radar/issues/126)、[总线 #57](https://github.com/saksim/vibe_job_radar/issues/57)和[GAP #210](https://github.com/saksim/vibe_job_radar/issues/210)，不新建重复Issue。
+
+<!-- /worker-resumed-report-completion-budget -->
+
+<!-- browser-install-and-exercise-budgets -->
+## 2026-10-09：浏览器 CI 的安装与执行预算
+
+[PR #273](https://github.com/saksim/vibe_job_radar/pull/273)已合并到main bc01bc1a36d5f71552505b44e0dbb960c286a258，候选独立首轮25/25通过，但实际main的浏览器验收没有通过，不能借候选结果认证主干。[首次作业](https://github.com/saksim/vibe_job_radar/actions/runs/37918558552/job/113780630392)明确记录“超过10分钟作业期限”：依赖安装300秒，浏览器脚本执行308秒后取消；同树候选分别25秒和421秒，说明旧作业预算会被较慢安装挤占。安装耗时差异的底层原因尚未确认。
+
+首次取消日志及30,056,881字节工件完整保留，工件SHA256 fad172fa9a942f40075894b9cb09cd8bc3fc01df91f29686775f65a35f4a629b。后置 chromium-user-journey 正确因前置未成功而失败，未构建Linux源码候选；不能将取消或未执行项记为通过。首次结果不被后续提交或重跑覆盖。
+
+修正仅涉及CI调度预算：安装显式最多8分钟，原完整浏览器命令序列显式最多10分钟，外层作业20分钟，为检出和失败工件保存留2分钟。所有原命令、逐项断言、产品超时、配额、源资格35分钟和“前置成功才构建”的门槛保持；没有重试或跳过。该修正自身仍须候选与实际main各自独立验收，验收结果见对应PR及[总线 #57](https://github.com/saksim/vibe_job_radar/issues/57)、[GAP #210](https://github.com/saksim/vibe_job_radar/issues/210)。
+
+猎聘正常账号和完整实站链路仍未闭环；最新官方配置域名在原解析路径返回name_not_found，0新JD/报告。此次CI预算修正不认证站点登录，不解决其他历史浏览器根因，也不发布Release或升级用户工作台。
+
+<!-- /browser-install-and-exercise-budgets -->
+
 <!-- current-main-and-pac-attribution -->
 ## 2026-10-09：已验收主线与当前 PAC 请求调查
 

@@ -37,10 +37,10 @@ def wait_for(condition, timeout=20):
     raise AssertionError('controlled worker did not reach expected state')
 
 
-def wait_public_task(tasks):
-    # Keep the original child-process 10-second bound and failure result;
-    # capture this process's worker before shutdown destroys the live frames.
-    alive, evidence = join_observed(tasks, timeout=10)
+def wait_public_task(tasks, *, timeout=10):
+    # Stop/cleanup observation keeps its original default 10-second bound.
+    # A normal restarted report may use an explicit completion budget.
+    alive, evidence = join_observed(tasks, timeout=timeout)
     assert not alive, evidence
 
 
@@ -227,7 +227,7 @@ def dispatch_stop_child(root, stop_kind, phase, *, preserve_schedule=False, pres
             try:
                 resumed.schedule.tick()
                 assert resumed.tasks._thread is not None
-                wait_public_task(resumed.tasks)
+                wait_public_task(resumed.tasks, timeout=30)
                 resumed.schedule.tick();restored=resumed.schedule.state()
                 assert restored['status']=='scheduled' and len(restored['history'])==1
                 assert restored['history'][0]['status']=='completed'
@@ -245,7 +245,7 @@ def dispatch_stop_child(root, stop_kind, phase, *, preserve_schedule=False, pres
             try:
                 resumed.queue.tick()
                 assert resumed.tasks._thread is not None
-                wait_public_task(resumed.tasks)
+                wait_public_task(resumed.tasks, timeout=30)
                 resumed.queue.tick();restored=resumed.queue.state()
                 assert restored['status']=='idle' and not restored['items'] and len(restored['history'])==1
                 assert restored['history'][0]['status']=='completed'
