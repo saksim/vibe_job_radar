@@ -196,9 +196,17 @@ def main():
                 before=ledger.summary('liepin');requests=list(wire.calls)
                 page.get_by_role('button',name='预览失败分类页的同页重试（不联网）').click()
                 expect(page.locator('#collect-result')).to_contain_text('第 1/3 次显式重试，最多 2 条正文')
-                page.set_viewport_size({'width':390,'height':844})
-                expect(page.get_by_role('button',name='确认保存同页重试（暂不联网）')).to_be_visible()
-                assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')
+                preview_widths=[320,350,390]
+                for width in preview_widths:
+                    page.set_viewport_size({'width':width,'height':844})
+                    expect(page.get_by_role('button',name='确认保存同页重试（暂不联网）')).to_be_visible()
+                    assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')
+                    # The URL must fit its confirmation card, not just the page.
+                    assert page.locator('#collect-result').evaluate(
+                        "root => root.scrollWidth <= root.clientWidth && "
+                        "Array.from(root.querySelectorAll('.guide-box')).every("
+                        "box => box.scrollWidth <= box.clientWidth)")
+                result['retry_preview_widths']=preview_widths
                 page.locator('#collect-result').screenshot(path=str(output/'same-page-retry-mobile.png'))
                 result['retry_preview_mobile_verified']=True
                 result['checks'].append('390px same-page retry preview and explicit save action fit without horizontal overflow')
