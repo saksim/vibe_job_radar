@@ -38,7 +38,7 @@
 
 BOSS、猎聘、51job 的浏览器采集仍需逐站现场验收，不能因入口存在就宣称三站已可用。手工导入只作为已有材料入口和正常兜底，不替代目标平台自动取数验收。
 
-当前主干基线与待合并实现分别列在[能力矩阵](docs/ACQUISITION_CAPABILITIES.md)。同一能力快照进入采集页、适配注册表和新报告；受控测试、正常账号实测与默认启用分别记录。升级/回退须核对[已验证的工作区范围](docs/WORKSPACE_COMPATIBILITY.md)。
+已实现的流程与尚未认证的范围列在[能力矩阵](docs/ACQUISITION_CAPABILITIES.md)。同一能力快照进入采集页、适配注册表和新报告；受控测试、正常账号实测与默认启用分别记录。升级/回退须核对[已验证的工作区范围](docs/WORKSPACE_COMPATIBILITY.md)。
 
 首页可选择 **Anthropic Greenhouse**、**Cloudflare Greenhouse** 和本分支按#118新增的 **Cursor Ashby** 公开目录，免 Key、无需产品服务器。每次只获取用户所选公司，关键词、地区在本机筛选；缓存和变化记录隔离，请求额度仍共用。Cursor仅纳入公开列出的岗位，保留二级地区和来源remote标志。它可用于“真实来源→分析→证据”流程，但不是全市场搜索，不能替代中国招聘平台或时间序列/电力算法岗位研究。范围与实际观察见[固定公开来源](docs/PUBLIC_SOURCES.md)。
 
@@ -141,6 +141,6 @@ python scripts/run_guided_browser.py
 
 ### 原生浏览器实验（D02 / #48）
 
-新建任务可显式选择原生实验并确认范围，旧HTTP桥仍默认。页面HTTP/TLS由浏览器完成，经过只透明转发加密字节的本机公网目标CONNECT守卫；不是Python重发页面。当前仅猎聘主站bootstrap契约，真实业务API/跨域依赖尚待逐站核实，BOSS/51job未启用native；不能把开关出现当成三站取数成功。详见[实现与限制](docs/NATIVE_BROWSER_D02.md)。
+新建任务可显式选择原生实验并确认范围，旧HTTP桥仍默认。页面HTTP/TLS由浏览器完成，经过只透明转发加密字节的本机公网目标CONNECT守卫；不是Python重发页面。猎聘已包含经审查的只读搜索、筛选初始化、必要资源及用户明确发起的密码登录请求控制；真实账号到完整JD和原报告仍待实站验收。BOSS/51job未启用native，未知路径与操作仍停止；不能把开关出现当成三站取数成功。详见[实现与限制](docs/NATIVE_BROWSER_D02.md)。
 
 报告分析重新打开当前版本的职位库时，本分支移除重复版本写锁；原数据库等待与写入语义保持，范围和首次失败记录见[并发报告读取](docs/STORE_READ_OPEN.md)。
