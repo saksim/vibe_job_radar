@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from html import unescape
 from html.parser import HTMLParser
 from urllib.parse import parse_qsl, urljoin, urlsplit
-from .utils import canonical_url
+from .utils import canonical_url, compact
 from .url_safety import credential_query_key
 
 
@@ -159,11 +159,12 @@ def _posting_location(posting: dict) -> str:
         if not isinstance(value, str) or len(value) > 512:
             return None
         value = unescape(value)
-        if any((ord(c) < 32 and c not in "\r\n\t") or ord(c) == 127 for c in value):
+        if any((ord(c) < 32 and c not in "\r\n\t") or ord(c) == 127
+               or 0xD800 <= ord(c) <= 0xDFFF for c in value):
             return None
         return " ".join(value.split())
 
-    locations = []
+    locations = {}
     for place in places:
         if not isinstance(place, dict):
             return ""
@@ -187,8 +188,11 @@ def _posting_location(posting: dict) -> str:
             return ""
         if not location:
             return ""
-        locations.append(location)
-    result = "; ".join(sorted(set(locations)))
+        # Match the fingerprint's normalization before ordering the place set.
+        # Keep one deterministic original spelling for the displayed address.
+        key = compact(location)
+        locations[key] = min(location, locations.get(key, location))
+    result = "; ".join(locations[key] for key in sorted(locations))
     return result if len(result) <= 2048 else ""
 
 

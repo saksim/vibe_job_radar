@@ -426,6 +426,38 @@ class StructuredJobLocationTests(unittest.TestCase):
             'addressCountry':country, 'addressRegion':region,
             'addressLocality':city, **extra}}
 
+
+    def test_surrogate_optional_location_does_not_discard_complete_jd(self):
+        from vibe_job_radar.html_parser import parse_job_html
+        from vibe_job_radar.models import JobRecord
+        for mode in ('generic','recorded'):
+            for bad in ('\ud800','\udfff'):
+                for value in (self.place(bad), {'address':bad}):
+                    with self.subTest(mode=mode,code_point=ord(bad),address_kind=type(value['address']).__name__), tempfile.TemporaryDirectory() as tmp:
+                        html=markup(posting(jobLocation=value),raw_breaks=False,anchor=mode=='recorded')
+                        html=html.replace(bad,'\\u'+format(ord(bad),'04x'))
+                        parsed=(parse_job_html(html,source_url=URL) if mode=='generic' else
+                                builtins().get('liepin').detail(PageSnapshot(URL,html)))
+                        record=JobRecord(**parsed,url=URL)
+                        with Store(Path(tmp)/'jobs.sqlite') as store:
+                            store.add(record)
+                            saved=store.records()[0]
+                        self.assertEqual(saved.location,'')
+                        self.assertEqual(saved.text,BODY)
+
+    def test_equivalent_multiplace_case_and_width_share_existing_fingerprint(self):
+        from vibe_job_radar.models import JobRecord
+        variants=[['alpha','Beta'],['Alpha','beta'],['ＡＬＰＨＡ','Ｂｅｔａ'],
+                  ['Beta','alpha','ＡＬＰＨＡ','beta']]
+        for mode in ('generic','recorded'):
+            with self.subTest(mode=mode):
+                records=[]
+                for names in variants:
+                    value=posting(jobLocation=[{'address':name} for name in names])
+                    records.append(JobRecord(**self.parse_location(value,mode),url=URL))
+                self.assertEqual(len({r.fingerprint for r in records}),1)
+                self.assertTrue(all(len(r.location.split('; '))==2 for r in records))
+
     def test_address_fields_retained_in_all_structured_representations(self):
         data=posting(jobLocation=self.place('人工城市', streetAddress='合成路1号', postalCode='000001'))
         for mode in ('generic', 'recorded', 'valid_intro'):
