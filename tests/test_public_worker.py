@@ -361,7 +361,7 @@ class WorkerTests(unittest.TestCase):
         self.assertFalse(self.worker.schedule.is_running());self.wire.json.assert_not_called()
         self.assertNotIn('PRIVATE',json.dumps(self.events))
 
-    def test_shutdown_during_read_preserves_checkpoint_without_replaying(self):
+    def test_shutdown_during_read_preserves_checkpoint_without_replaying(self, *, preparation_timeout=30):
         # Prepare local storage before measuring the shutdown interaction.
         # Cold first-use and stops during startup have separate coverage.
         self.assertIsNone(self.worker.tasks.hybrid.cached(query()))
@@ -376,7 +376,11 @@ class WorkerTests(unittest.TestCase):
         seed(self.workspace);entered=threading.Event();release=threading.Event()
         self.addCleanup(release.set)
         def hold(url):entered.set();release.wait(10);return payload()
-        self.wire.json.side_effect=hold;self.start();self.assertTrue(entered.wait(5),json.dumps({name:probe.snapshot() for name,probe in probes.items()},sort_keys=True))
+        self.wire.json.side_effect=hold;self.start()
+        # Dispatch must durably save the plan and initial task checkpoint before
+        # the authored read can begin. This is fixture preparation, not the
+        # shutdown/cancellation bound exercised below.
+        self.assertTrue(entered.wait(preparation_timeout),json.dumps({name:probe.snapshot() for name,probe in probes.items()},sort_keys=True))
         self.worker.request_stop();self.assertTrue(self.worker.tasks._cancel.wait(5));release.set();self.stop()
         self.assertEqual(self.results,[0]);self.assertEqual(self.wire.json.call_count,1)
         self.assertTrue(self.worker.tasks.path.exists());self.assertTrue(self.worker.schedule.path.exists())
@@ -384,6 +388,21 @@ class WorkerTests(unittest.TestCase):
         resumed.schedule.recover()
         self.assertEqual(resumed.schedule.state()['status'],'paused')
         resumed.schedule.tick();self.assertEqual(self.wire.json.call_count,1);resumed.tasks.close()
+
+    def test_shutdown_after_slow_initial_checkpoint_preserves_checkpoint_without_replaying(self):
+        # Six seconds affects only preparation, before the authored read starts.
+        # Delegate every save to the real writer, including atomic replacement
+        # and fsync; the cancellation/checkpoint/no-replay assertions are shared.
+        real_save=self.worker.tasks._save
+        delayed=[]
+        def save(**changes):
+            if changes.get('status')=='running' and not delayed:
+                delayed.append(True)
+                time.sleep(6)
+            return real_save(**changes)
+        with patch.object(self.worker.tasks,'_save',side_effect=save):
+            self.test_shutdown_during_read_preserves_checkpoint_without_replaying()
+        self.assertEqual(delayed,[True])
 
     def test_corrupt_record_exits_nonzero_without_overwrite_or_raw_error(self):
         self.worker.schedule.root.mkdir()

@@ -228,7 +228,9 @@ class WorkerSqliteProbeTests(unittest.TestCase):
         with patch('sqlite3.connect', side_effect=observe_connection):
             try:
                 with self.assertRaises(AssertionError) as caught:
-                    case.test_shutdown_during_read_preserves_checkpoint_without_replaying()
+                    # This control intentionally times out while SQLite is
+                    # blocked; it retains the original five-second observation.
+                    case.test_shutdown_during_read_preserves_checkpoint_without_replaying(preparation_timeout=5)
                 self.assertTrue(blocked.is_set())
                 message = str(caught.exception)
                 evidence = json.loads(message.split(' : ', 1)[1])
