@@ -20,6 +20,72 @@ from vibe_job_radar.workspace import Workspace
 from vibe_job_radar.workbench import LocalServer
 
 
+CHOICE_CHECKPOINTS = frozenset({
+    'startup', 'guided-ready', 'initial-check', 'choose-channel',
+    'selected-choice-visible', 'selected-ready-summary', 'selected-health-facts',
+    'restart-history', 'saved-channel-check', 'layout-and-requests',
+    'native-choice-check', 'failed-bridge-check', 'finished',
+})
+HEALTH_STAGES = frozenset({
+    'not_checked', 'import', 'driver', 'launch', 'context',
+    'blank_page_content', 'blank_page_verify', 'ready', 'restart',
+})
+
+
+def record_choice_failure(result, service, error):
+    """Keep finite facts before caller cleanup; never read UI or service.state."""
+    if 'first_failure' in result:
+        return
+    row = {'checkpoint': 'unknown', 'assertion_site': None,
+           'service_facts': {'available': False}, 'observer_failed': False}
+    result['first_failure'] = row
+    try:
+        checkpoint = result.get('checkpoint')
+        if checkpoint in CHOICE_CHECKPOINTS:
+            row['checkpoint'] = checkpoint
+        current = error.__traceback__
+        for _ in range(32):
+            if current is None:
+                break
+            code = current.tb_frame.f_code
+            if (Path(code.co_filename) == Path(__file__)
+                    and code.co_name in {'main', 'open_workbench'}
+                    and 0 < current.tb_lineno < 1_000_000):
+                row['assertion_site'] = {'script': 'run_browser_choice_acceptance.py',
+                                         'function': code.co_name, 'line': current.tb_lineno}
+            current = current.tb_next
+        lock = service._lock
+        if not lock.acquire(False):
+            return
+        try:
+            def fixed(value, allowed):
+                return value if isinstance(value, str) and value in allowed else 'unknown'
+            def boolean(value):
+                return value if type(value) is bool else None
+            health = service._browser_health
+            from vibe_job_radar.guided.browser_health import HEALTH_MESSAGES
+            row['service_facts'] = {
+                'available': True,
+                'busy': boolean(service._busy),
+                'selected_browser': fixed(service._selected_browser, {'bundled', 'msedge', 'chrome'}),
+                'setup_stage': fixed(service._setup.get('stage'),
+                    {'idle', 'queued', 'launch_check', 'ready', 'failed', 'restart_required'}),
+                'health': {
+                    **{key: boolean(health.get(key))
+                       for key in ('ready', 'selection_applied', 'launch_tested')},
+                    'stage': fixed(health.get('stage'), HEALTH_STAGES),
+                    'code': fixed(health.get('code'), HEALTH_MESSAGES),
+                    'mode': fixed(health.get('mode'), {'headed', 'headless'}),
+                    'browser_channel': fixed(health.get('browser_channel'), {'bundled', 'msedge', 'chrome'}),
+                    'network_backend': fixed(health.get('network_backend'), {'bridge', 'native'}),
+                },
+            }
+        finally:
+            lock.release()
+    except Exception:
+        row['observer_failed'] = True
+
+
 def open_workbench(page, server, expect):
     """Check application readiness, not a late browser-wide load event.
 
@@ -48,6 +114,8 @@ def main():
     out=ROOT/'browser-acceptance'/artifact;out.mkdir(parents=True,exist_ok=True)
     result={'success':False,'stage':'startup','ui_events':[],'checks':[],'page_errors':[], 'external_ui_requests':[],
             'channel':channel, 'backend':args.backend, 'ui_channel':ui_channel, 'scope':'Real selected installed browser headed collector and local UI; bundled native exception is artificial. Not user-PC crash reproduction or site certification.'}
+    result['failure_observer_installed'] = True
+    result['checkpoint'] = 'startup'
     fixture=failed_report({**environment_report(),'stage':'launch'},RuntimeError(
         '<launched> pid=123\n[pid=123] <process did exit: exitCode=3221226356, signal=null>'))
     try:
@@ -95,17 +163,23 @@ def main():
                         finally:
                             second.close()
                         result['stage'] = 'collector-choice'
+                        result['checkpoint'] = 'guided-ready'
                         page.locator('a[href="/guided"]').click()
                         expect(page.locator('#environment')).to_contain_text('不表示缺少组件')
+                        result['checkpoint'] = 'initial-check'
                         page.locator('#check-browser').click()
                         expect(page.locator('#browser-summary')).to_contain_text('停止循环重装')
                         expect(page.locator('#browser-history')).to_contain_text('0xC0000374')
                         result['checks'].append('operation log is not installation detection; failed check records minimal history')
                         page.locator('#browser-alternative summary').click()
+                        result['checkpoint'] = 'choose-channel'
                         page.locator('#browser-choice').select_option(channel)
                         page.locator('#use-native-browser-choice' if native_mode else '#use-browser-choice').click()
+                        result['checkpoint'] = 'selected-choice-visible'
                         expect(page.locator('#browser-selected')).to_contain_text('当前采集浏览器：'+label,timeout=45000)
+                        result['checkpoint'] = 'selected-ready-summary'
                         expect(page.locator('#browser-summary')).to_contain_text(ready_text)
+                        result['checkpoint'] = 'selected-health-facts'
                         health=server.guided.state()['browser_health']
                         assert health['selection_applied'] and health['mode']=='headed'
                         assert health['network_backend']==args.backend
@@ -118,6 +192,7 @@ def main():
                         result['checks'].append('explicit selected channel runs the real headed collector on a blank page before persisting; no install, jobs or source quota')
                         page.screenshot(path=str(out/(channel+'-ready.png')),full_page=True)
                         # Service restart exercises the persisted product state, not a browser reload.
+                        result['checkpoint'] = 'restart-history'
                         server.guided.close()
                         from vibe_job_radar.guided.service import GuidedService
                         server.guided=GuidedService(workspace)
@@ -128,12 +203,15 @@ def main():
                         expect(page.locator('#browser-history')).to_contain_text('历史，不代表本次就绪')
                         assert not server.guided.state()['browser_health']['ready']
                         result['checks'].append('restart keeps the selected channel and history but never calls a historical green check current readiness')
+                        result['checkpoint'] = 'saved-channel-check'
                         if native_mode:
                             page.locator('#browser-alternative summary').click()
+                            result['checkpoint'] = 'native-choice-check'
                             page.locator('#use-native-browser-choice').click()
                         else:page.locator('#check-browser').click()
                         expect(page.locator('#browser-summary')).to_contain_text(ready_text,timeout=45000)
                         assert server.guided.state()['browser_health']['browser_channel']==channel
+                        result['checkpoint'] = 'layout-and-requests'
                         page.set_viewport_size({'width':390,'height':844})
                         assert page.evaluate('() => document.documentElement.scrollWidth <= innerWidth')
                         page.screenshot(path=str(out/(channel+'-mobile.png')),full_page=True)
@@ -151,6 +229,7 @@ def main():
                             # A deterministic failed bridge check cannot inherit native readiness
                             # or change the successful explicit selection; no SDK retry/fallback.
                             server.guided._health_probe=lambda **kw:fixture
+                            result['checkpoint'] = 'failed-bridge-check'
                             page.locator('#use-browser-choice').click()
                             expect(page.locator('#browser-summary')).to_contain_text('停止循环重装',timeout=45000)
                             assert server.guided.state()['browser_choice']['selected']==channel
@@ -161,6 +240,7 @@ def main():
                             result['checks'].append('native restart/recheck remains scoped; a separate failed bridge check cannot borrow readiness or replace the explicit choice, with zero source quota')
                         else:
                             page.locator('#browser-alternative summary').click()
+                            result['checkpoint'] = 'native-choice-check'
                             page.locator('#use-native-browser-choice').click()
                             expect(page.locator('#browser-summary')).to_contain_text('已通过原生实验',timeout=45000)
                             native=server.guided.state()['browser_health']
@@ -174,8 +254,12 @@ def main():
                             result['native_component']=component
                             result['checks'].append('separate native check uses the selected channel, rejects a synthetic request locally and confirms disconnect/tunnel cleanup without source quota; history labels the native scope')
                             page.screenshot(path=str(out/(channel+'-native-mobile.png')),full_page=True)
+                        result['checkpoint'] = 'finished'
                         result['stage']='passed'
                         result['success']=True
+                    except Exception as error:
+                        record_choice_failure(result, server.guided, error)
+                        raise
                     finally:browser.close()
             finally:server.shutdown();server.server_close();thread.join(timeout=5)
     except Exception as exc:
