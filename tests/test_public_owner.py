@@ -17,8 +17,9 @@ from vibe_job_radar.local_public import LocalPublicDataClient
 from vibe_job_radar.public_tasks import PublicTasks,PublicTaskBusy
 from vibe_job_radar.public_schedule import PublicSchedule,DAY
 from vibe_job_radar.workspace import InputError,Workspace
-from public_owner_diagnostics import wait_diagnostic
+from public_owner_diagnostics import wait_diagnostic, hold_reader_through_worker_commit
 from worker_fsync_probe import WorkerFsyncProbe
+from worker_sqlite_probe import WorkerSqliteProbe
 
 
 CHILD = r'''
@@ -30,6 +31,7 @@ from vibe_job_radar.local_public import LocalPublicDataClient
 from vibe_job_radar.public_tasks import PublicTasks
 from public_owner_diagnostics import require_child_ready
 from worker_fsync_probe import WorkerFsyncProbe
+from worker_sqlite_probe import WorkerSqliteProbe
 entered,release=threading.Event(),threading.Event()
 def held(url):
  entered.set()
@@ -39,9 +41,10 @@ with patch('urllib.request.getproxies',return_value={}):
  w=Workspace(sys.argv[1]);transport=Mock();transport.json.side_effect=held
  tasks=PublicTasks(w,hybrid_client=LocalPublicDataClient(w,transport=transport,clock=lambda:float(sys.argv[2])))
  probe=WorkerFsyncProbe(lambda:tasks._thread);probe.start()
+ sqlite_probe=WorkerSqliteProbe(lambda:tasks._thread);sqlite_probe.start()
  try:
   ident=tasks.search({'consent':True,'query':query().payload()})['id']
-  require_child_ready(entered,tasks,probe,lambda line:print(line,flush=True))
+  require_child_ready(entered,tasks,probe,lambda line:print(line,flush=True),sqlite_probe=sqlite_probe,timeout=30)
   print(json.dumps({'id':ident}),flush=True)
   action=sys.stdin.readline().strip()
   if action=='crash':os._exit(23)
@@ -52,7 +55,9 @@ with patch('urllib.request.getproxies',return_value={}):
  finally:
   release.set()
   try:tasks.close()
-  finally:probe.stop()
+  finally:
+   sqlite_probe.stop()
+   probe.stop()
 '''
 
 
@@ -65,9 +70,12 @@ class OwnerTests(unittest.TestCase):
         proxy=patch('urllib.request.getproxies',return_value={});proxy.start();self.addCleanup(proxy.stop)
         self.entered,self.release=threading.Event(),threading.Event()
         self.instances=[]
-        self.write_probe=WorkerFsyncProbe(lambda:next((task._thread for task in self.instances
-            if task._thread is not None and task._thread.is_alive()),None))
+        worker=lambda:next((task._thread for task in self.instances
+            if task._thread is not None and task._thread.is_alive()),None)
+        self.write_probe=WorkerFsyncProbe(worker)
+        self.sqlite_probe=WorkerSqliteProbe(worker)
         self.write_probe.start();self.addCleanup(self.write_probe.stop)
+        self.sqlite_probe.start();self.addCleanup(self.sqlite_probe.stop)
         self.first,self.first_transport=self.instance();self.second,self.second_transport=self.instance()
         self.addCleanup(self.release.set)
 
@@ -80,9 +88,11 @@ class OwnerTests(unittest.TestCase):
     def start(self,task=None):return (task or self.first).search({'consent':True,'query':query().payload()})['id']
 
     def wait(self,task=None):
-        task=task or self.first;before=self.write_probe.snapshot();task._thread.join(15)
+        task=task or self.first;before=self.write_probe.snapshot();sqlite_before=self.sqlite_probe.snapshot()
+        task._thread.join(15)
         if task._thread.is_alive():
-            self.fail('public owner remained running after 15s: '+json.dumps(wait_diagnostic(task,self.write_probe,before)))
+            self.fail('public owner remained running after 15s: '+json.dumps(wait_diagnostic(
+                task,self.write_probe,before,sqlite_probe=self.sqlite_probe,sqlite_before=sqlite_before)))
         return task.snapshot()
 
     def hold(self,url):
@@ -90,11 +100,14 @@ class OwnerTests(unittest.TestCase):
         if not self.release.wait(15):raise AssertionError('fixture not released')
         return payload()
 
-    def running(self):
+    def running(self, *, timeout=30):
         self.first_transport.json.side_effect=self.hold
-        ident=self.start();before=self.write_probe.snapshot()
-        if not self.entered.wait(5):
-            self.fail('public owner did not enter transport after 5s: '+json.dumps(wait_diagnostic(self.first,self.write_probe,before)))
+        ident=self.start();before=self.write_probe.snapshot();sqlite_before=self.sqlite_probe.snapshot()
+        # Functional preparation includes the real 10s SQLite busy allowance.
+        # Deliberate lock diagnostics explicitly request their original 5s.
+        if not self.entered.wait(timeout):
+            self.fail(f'public owner did not enter transport after {timeout:g}s: '+json.dumps(wait_diagnostic(
+                self.first,self.write_probe,before,sqlite_probe=self.sqlite_probe,sqlite_before=sqlite_before)))
         return ident
 
     def cancelled(self):
@@ -114,7 +127,7 @@ class OwnerTests(unittest.TestCase):
         self.assertTrue(line,'child failed before task start; returncode='+str(child.poll()))
         started=json.loads(line)
         if started.get('event')=='owner_wait_failed':
-            self.fail('child did not enter transport after 5s: '+json.dumps(started['diagnostic']))
+            self.fail('child did not enter transport after 30s: '+json.dumps(started['diagnostic']))
         return child,started['id']
 
     def test_new_owner_between_probe_and_read_does_not_look_interrupted(self):
@@ -222,6 +235,14 @@ class OwnerTests(unittest.TestCase):
         ident=self.cancelled();self.second.snapshot();self.first.path.unlink()
         with self.assertRaises(InputError):self.second.resume({'id':ident,'consent':True})
         self.assertEqual(self.second.snapshot()['status'],'idle');self.second_transport.json.assert_not_called()
+
+
+    def test_normal_preparation_accepts_a_commit_within_the_SQLite_wait_budget(self):
+        self.first.hybrid._prepare()
+        # Start the 6.5s hold at the actual commit, not before task setup.
+        with hold_reader_through_worker_commit(
+                self.first.hybrid.ledger.path, lambda: self.first._thread):
+            self.test_deleted_record_does_not_resume_stale_in_memory_state()
 
     def test_actual_process_owner_blocks_submission_and_graceful_exit_preserves_report(self):
         child,ident=self.child();before=self.first.path.read_bytes()

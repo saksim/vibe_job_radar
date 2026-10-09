@@ -263,3 +263,46 @@ class WorkerSqliteProbeTests(unittest.TestCase):
         self.assertFalse(case.worker.tasks.is_running())
         self.assertFalse(case.worker.schedule.is_running())
         self.assertFalse(case.thread.is_alive())
+
+
+    def test_public_owner_ready_wait_records_real_pending_commit_before_cleanup(self):
+        import test_public_owner as owner_tests
+        case = owner_tests.OwnerTests()
+        previous = threading.getprofile()
+        case.setUp()
+        holder = None
+        try:
+            case.first.hybrid._prepare()
+            holder = sqlite3.connect(case.first.hybrid.ledger.path)
+            # A real read transaction allows reserve's write, but holds its
+            # COMMIT. Do not substitute SQLite calls or extend the 5s wait.
+            holder.execute('BEGIN')
+            holder.execute('SELECT COUNT(*) FROM visits').fetchone()
+            with self.assertRaises(AssertionError) as caught:
+                case.running(timeout=5)
+            message = str(caught.exception)
+            evidence = json.loads(message.split('after 5s: ', 1)[1])
+            self.assertTrue(evidence['worker_alive'])
+            pending = evidence['worker_sqlite']['at_timeout']['current_calls']
+            self.assertEqual(len(pending), 1)
+            self.assertEqual(pending[0]['operation'], 'connection.commit')
+            self.assertEqual(pending[0]['caller']['file'], 'rate.py')
+            self.assertEqual(pending[0]['caller']['function'], 'reserve')
+            # Preparation is part of the 5s wait; do not assume that all
+            # but one second must have been spent inside this commit.
+            self.assertGreater(pending[0]['elapsed_ms'], 0)
+            commits = evidence['worker_sqlite']['at_timeout']['operations']['connection.commit']
+            self.assertEqual(commits['calls_started'], 1)
+            self.assertEqual(commits['calls_completed'], 0)
+            self.assertIn('before_wait', evidence['worker_sqlite'])
+            self.assertIn('worker_fsync', evidence)
+            case.first_transport.json.assert_not_called()
+            for private in (str(case.workspace.root), 'SELECT', 'visits', 'Architect', 'https://'):
+                self.assertNotIn(private, message)
+        finally:
+            if holder is not None:
+                holder.rollback()
+                holder.close()
+            case.doCleanups()
+        self.assertIs(threading.getprofile(), previous)
+        self.assertFalse(case.first._thread.is_alive())

@@ -14,6 +14,7 @@ from vibe_job_radar.collection_runtime import CollectionRunner, CollectionBusy
 from vibe_job_radar.network import SafeHTTP
 from vibe_job_radar.workspace import InputError
 import test_collection_shared_rate as shared
+from public_owner_diagnostics import hold_reader_through_worker_commit
 from test_public_category import Wire, data, listing, card, job_url
 
 
@@ -38,7 +39,9 @@ class RuntimeTests(unittest.TestCase):
         return runner.start({'id':state['id'],'consent':True})
 
     def wait(self, runner):
-        runner._thread.join(10)
+        # Functional completion includes real SQLite and report fsyncs. Match
+        # other durable-write fixtures; this is not a 10s performance assertion.
+        runner._thread.join(30)
         self.assertFalse(runner.is_running(), 'Bounded background batch did not finish')
         return runner.state()
 
@@ -49,6 +52,8 @@ class RuntimeTests(unittest.TestCase):
         return wire
 
     def blocked(self):
+        # Readiness includes real durable preparation and the ledger's 10s busy
+        # allowance. Functional callers wait 30s; response-release guards stay.
         wire = Wire(listing(''.join(card(i) for i in range(1,8))))
         entered, release = threading.Event(), threading.Event()
         self.releases.append(release)
@@ -76,9 +81,39 @@ class RuntimeTests(unittest.TestCase):
         with self.assertRaises(InputError):self.start(runner,result['task'])
         self.assertEqual(len(wire.calls),before)
 
+
+    def test_batch_allows_slow_durable_report_completion_without_client_steps(self):
+        original_fsync = os.fsync
+        entered, release = threading.Event(), threading.Event()
+        guard = threading.Lock()
+        timer = None
+        def slow_report_sync(fd):
+            nonlocal timer
+            if threading.current_thread().name.startswith('radar-report-'):
+                with guard:
+                    if timer is None:
+                        entered.set()
+                        timer = threading.Timer(11.5, release.set)
+                        timer.daemon = True
+                        timer.start()
+                if not release.wait(20):
+                    raise AssertionError('controlled report write was not released')
+            return original_fsync(fd)
+        with patch('os.fsync', side_effect=slow_report_sync):
+            try:
+                # Reuse all original batch/count/quota/report assertions. Only
+                # the report's durable writes are delayed; the real fsync runs.
+                self.test_batch_finishes_without_any_more_client_steps()
+            finally:
+                release.set()
+                if timer is not None:
+                    timer.cancel()
+                    timer.join(2)
+        self.assertTrue(entered.is_set(), 'control did not observe a report fsync')
+
     def test_pause_saves_current_body_and_resume_only_fetches_remaining(self):
         wire,entered,release=self.blocked();state=self.collector.start(data(detail_budget=3));runner=self.runner()
-        self.start(runner,state);self.assertTrue(entered.wait(5))
+        self.start(runner,state);self.assertTrue(entered.wait(30))
         self.assertEqual(runner.pause({'id':state['id']})['status'],'pausing')
         release.set();paused=self.wait(runner)
         self.assertEqual(paused['task']['status'],'paused')
@@ -92,7 +127,7 @@ class RuntimeTests(unittest.TestCase):
 
     def test_second_instance_observes_inflight_without_recovery_or_mutation(self):
         wire,entered,release=self.blocked();state=self.collector.start(data(detail_budget=2));runner=self.runner()
-        self.start(runner,state);self.assertTrue(entered.wait(5))
+        self.start(runner,state);self.assertTrue(entered.wait(30))
         before=self.collector._path(state['id']).read_bytes()
         observer=Collector(self.workspace);other=self.runner(observer)
         self.assertTrue(other.state()['owned_elsewhere'])
@@ -106,7 +141,7 @@ class RuntimeTests(unittest.TestCase):
 
     def test_actual_other_process_cannot_recover_or_step_active_task(self):
         _,entered,release=self.blocked();state=self.collector.start(data(detail_budget=2));runner=self.runner()
-        self.start(runner,state);self.assertTrue(entered.wait(5))
+        self.start(runner,state);self.assertTrue(entered.wait(30))
         before=self.collector._path(state['id']).read_bytes()
         script='''import socket,sys
 from vibe_job_radar.workspace import Workspace
@@ -130,7 +165,7 @@ else:raise AssertionError('ownership was not enforced')
 
     def test_duplicate_start_and_status_do_not_dispatch_again(self):
         wire,entered,release=self.blocked();state=self.collector.start(data(detail_budget=1));runner=self.runner()
-        self.start(runner,state);self.assertTrue(entered.wait(5))
+        self.start(runner,state);self.assertTrue(entered.wait(30))
         worker=runner._thread
         for _ in range(3):
             self.assertEqual(self.start(runner,state)['id'],state['id'])
@@ -140,7 +175,7 @@ else:raise AssertionError('ownership was not enforced')
 
     def test_application_close_does_not_auto_continue_on_new_server(self):
         wire,entered,release=self.blocked();state=self.collector.start(data(detail_budget=2));runner=self.runner()
-        self.start(runner,state);self.assertTrue(entered.wait(5))
+        self.start(runner,state);self.assertTrue(entered.wait(30))
         closer=threading.Thread(target=runner.close);closer.start()
         self.assertTrue(runner._stop.wait(2));release.set();closer.join(5)
         stopped=self.wait(runner);self.assertEqual(stopped['code'],'application_closed')
@@ -151,7 +186,7 @@ else:raise AssertionError('ownership was not enforced')
 
     def test_network_policy_change_stops_before_next_request(self):
         wire,entered,release=self.blocked();state=self.collector.start(data(detail_budget=2));runner=self.runner()
-        self.start(runner,state);self.assertTrue(entered.wait(5))
+        self.start(runner,state);self.assertTrue(entered.wait(30))
         policy=self.workspace.network_policy()
         with patch.object(self.workspace,'network_policy',return_value=replace(policy,source=policy.source+'-changed')):
             release.set();stopped=self.wait(runner)
@@ -159,9 +194,16 @@ else:raise AssertionError('ownership was not enforced')
         self.assertEqual(stopped['task']['details'][1]['status'],'pending')
         self.assertNotIn(job_url(2),wire.calls)
 
+
+    def test_policy_change_accepts_preparation_within_SQLite_wait_budget(self):
+        # Setup may be slow; count only from the worker's real ledger commit.
+        with hold_reader_through_worker_commit(
+                self.ledger.path, lambda: self.runners[-1]._thread if self.runners else None):
+            self.test_network_policy_change_stops_before_next_request()
+
     def test_pending_shutdown_keeps_owner_until_request_really_finishes(self):
         _,entered,release=self.blocked();state=self.collector.start(data(detail_budget=2));runner=self.runner()
-        self.start(runner,state);self.assertTrue(entered.wait(5))
+        self.start(runner,state);self.assertTrue(entered.wait(30))
         with patch.object(runner._thread,'join'):
             runner.close()  # Simulate returning while the bounded join still has a live request.
         self.assertTrue(runner.is_running())
@@ -182,7 +224,7 @@ else:raise AssertionError('ownership was not enforced')
                 between.set();self.assertTrue(release.wait(5))
             return result
         with patch.object(self.collector,'step',side_effect=pause_after_list):
-            self.start(runner,state);self.assertTrue(between.wait(5))
+            self.start(runner,state);self.assertTrue(between.wait(30))
             altered=self.collector._load(state['id']);altered['permit_platforms']=[]
             self.collector._save(altered);expected=self.collector._path(state['id']).read_bytes()
             release.set();stopped=self.wait(runner)
