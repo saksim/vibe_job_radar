@@ -38,7 +38,9 @@ class RuntimeTests(unittest.TestCase):
         return runner.start({'id':state['id'],'consent':True})
 
     def wait(self, runner):
-        runner._thread.join(10)
+        # Functional completion includes real SQLite and report fsyncs. Match
+        # other durable-write fixtures; this is not a 10s performance assertion.
+        runner._thread.join(30)
         self.assertFalse(runner.is_running(), 'Bounded background batch did not finish')
         return runner.state()
 
@@ -75,6 +77,36 @@ class RuntimeTests(unittest.TestCase):
         before=len(wire.calls)
         with self.assertRaises(InputError):self.start(runner,result['task'])
         self.assertEqual(len(wire.calls),before)
+
+
+    def test_batch_allows_slow_durable_report_completion_without_client_steps(self):
+        original_fsync = os.fsync
+        entered, release = threading.Event(), threading.Event()
+        guard = threading.Lock()
+        timer = None
+        def slow_report_sync(fd):
+            nonlocal timer
+            if threading.current_thread().name.startswith('radar-report-'):
+                with guard:
+                    if timer is None:
+                        entered.set()
+                        timer = threading.Timer(11.5, release.set)
+                        timer.daemon = True
+                        timer.start()
+                if not release.wait(20):
+                    raise AssertionError('controlled report write was not released')
+            return original_fsync(fd)
+        with patch('os.fsync', side_effect=slow_report_sync):
+            try:
+                # Reuse all original batch/count/quota/report assertions. Only
+                # the report's durable writes are delayed; the real fsync runs.
+                self.test_batch_finishes_without_any_more_client_steps()
+            finally:
+                release.set()
+                if timer is not None:
+                    timer.cancel()
+                    timer.join(2)
+        self.assertTrue(entered.is_set(), 'control did not observe a report fsync')
 
     def test_pause_saves_current_body_and_resume_only_fetches_remaining(self):
         wire,entered,release=self.blocked();state=self.collector.start(data(detail_budget=3));runner=self.runner()
