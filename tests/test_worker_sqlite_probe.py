@@ -279,7 +279,7 @@ class WorkerSqliteProbeTests(unittest.TestCase):
             holder.execute('BEGIN')
             holder.execute('SELECT COUNT(*) FROM visits').fetchone()
             with self.assertRaises(AssertionError) as caught:
-                case.running()
+                case.running(timeout=5)
             message = str(caught.exception)
             evidence = json.loads(message.split('after 5s: ', 1)[1])
             self.assertTrue(evidence['worker_alive'])

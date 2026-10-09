@@ -66,5 +66,6 @@ class OwnerDiagnosticTests(unittest.TestCase):
         self.assertNotIn('id',packet)
         self.assertNotIn('PRIVATE',emitted[0])
         event.wait.return_value=True;probe.snapshot.side_effect=None;probe.snapshot.return_value={}
-        require_child_ready(event,task,probe,emitted.append)
+        require_child_ready(event,task,probe,emitted.append,timeout=30)
+        event.wait.assert_called_with(30)
         self.assertEqual(len(emitted),1)

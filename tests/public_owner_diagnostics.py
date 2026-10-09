@@ -42,13 +42,13 @@ def wait_diagnostic(tasks, probe=None, before=None, *, sqlite_probe=None, sqlite
     return result
 
 
-def require_child_ready(event, tasks, probe, emit, *, sqlite_probe=None):
-    """Emit before teardown; preserve the existing five-second assertion."""
+def require_child_ready(event, tasks, probe, emit, *, sqlite_probe=None, timeout=5):
+    """Emit before teardown; lock diagnostics keep their five-second default."""
     before = probe.snapshot()
     sqlite_before = sqlite_probe.snapshot() if sqlite_probe is not None else None
-    ready = event.wait(5)
+    ready = event.wait(timeout)
     if not ready:
         emit(json.dumps({'event': 'owner_wait_failed',
                          'diagnostic': wait_diagnostic(tasks, probe, before,
                              sqlite_probe=sqlite_probe, sqlite_before=sqlite_before)}))
-    assert ready, 'child fixture did not enter transport after 5s'
+    assert ready, f'child fixture did not enter transport after {timeout:g}s'

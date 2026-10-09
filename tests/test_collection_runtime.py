@@ -1,8 +1,10 @@
 """Real Collector/ledger/ownership; only upstream responses are controlled."""
+from contextlib import closing
 from dataclasses import replace
 import json
 import os
 from pathlib import Path
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -51,6 +53,8 @@ class RuntimeTests(unittest.TestCase):
         return wire
 
     def blocked(self):
+        # Readiness includes real durable preparation and the ledger's 10s busy
+        # allowance. Functional callers wait 30s; response-release guards stay.
         wire = Wire(listing(''.join(card(i) for i in range(1,8))))
         entered, release = threading.Event(), threading.Event()
         self.releases.append(release)
@@ -110,7 +114,7 @@ class RuntimeTests(unittest.TestCase):
 
     def test_pause_saves_current_body_and_resume_only_fetches_remaining(self):
         wire,entered,release=self.blocked();state=self.collector.start(data(detail_budget=3));runner=self.runner()
-        self.start(runner,state);self.assertTrue(entered.wait(5))
+        self.start(runner,state);self.assertTrue(entered.wait(30))
         self.assertEqual(runner.pause({'id':state['id']})['status'],'pausing')
         release.set();paused=self.wait(runner)
         self.assertEqual(paused['task']['status'],'paused')
@@ -124,7 +128,7 @@ class RuntimeTests(unittest.TestCase):
 
     def test_second_instance_observes_inflight_without_recovery_or_mutation(self):
         wire,entered,release=self.blocked();state=self.collector.start(data(detail_budget=2));runner=self.runner()
-        self.start(runner,state);self.assertTrue(entered.wait(5))
+        self.start(runner,state);self.assertTrue(entered.wait(30))
         before=self.collector._path(state['id']).read_bytes()
         observer=Collector(self.workspace);other=self.runner(observer)
         self.assertTrue(other.state()['owned_elsewhere'])
@@ -138,7 +142,7 @@ class RuntimeTests(unittest.TestCase):
 
     def test_actual_other_process_cannot_recover_or_step_active_task(self):
         _,entered,release=self.blocked();state=self.collector.start(data(detail_budget=2));runner=self.runner()
-        self.start(runner,state);self.assertTrue(entered.wait(5))
+        self.start(runner,state);self.assertTrue(entered.wait(30))
         before=self.collector._path(state['id']).read_bytes()
         script='''import socket,sys
 from vibe_job_radar.workspace import Workspace
@@ -162,7 +166,7 @@ else:raise AssertionError('ownership was not enforced')
 
     def test_duplicate_start_and_status_do_not_dispatch_again(self):
         wire,entered,release=self.blocked();state=self.collector.start(data(detail_budget=1));runner=self.runner()
-        self.start(runner,state);self.assertTrue(entered.wait(5))
+        self.start(runner,state);self.assertTrue(entered.wait(30))
         worker=runner._thread
         for _ in range(3):
             self.assertEqual(self.start(runner,state)['id'],state['id'])
@@ -172,7 +176,7 @@ else:raise AssertionError('ownership was not enforced')
 
     def test_application_close_does_not_auto_continue_on_new_server(self):
         wire,entered,release=self.blocked();state=self.collector.start(data(detail_budget=2));runner=self.runner()
-        self.start(runner,state);self.assertTrue(entered.wait(5))
+        self.start(runner,state);self.assertTrue(entered.wait(30))
         closer=threading.Thread(target=runner.close);closer.start()
         self.assertTrue(runner._stop.wait(2));release.set();closer.join(5)
         stopped=self.wait(runner);self.assertEqual(stopped['code'],'application_closed')
@@ -183,7 +187,7 @@ else:raise AssertionError('ownership was not enforced')
 
     def test_network_policy_change_stops_before_next_request(self):
         wire,entered,release=self.blocked();state=self.collector.start(data(detail_budget=2));runner=self.runner()
-        self.start(runner,state);self.assertTrue(entered.wait(5))
+        self.start(runner,state);self.assertTrue(entered.wait(30))
         policy=self.workspace.network_policy()
         with patch.object(self.workspace,'network_policy',return_value=replace(policy,source=policy.source+'-changed')):
             release.set();stopped=self.wait(runner)
@@ -191,9 +195,26 @@ else:raise AssertionError('ownership was not enforced')
         self.assertEqual(stopped['task']['details'][1]['status'],'pending')
         self.assertNotIn(job_url(2),wire.calls)
 
+
+    def test_policy_change_accepts_preparation_within_SQLite_wait_budget(self):
+        # Real reader/commit contention may outlast the old 5s readiness wait
+        # while remaining inside the production ledger's 10s busy timeout.
+        with closing(sqlite3.connect(self.ledger.path, check_same_thread=False)) as holder:
+            holder.execute('BEGIN')
+            holder.execute('SELECT COUNT(*) FROM visits').fetchone()
+            timer = threading.Timer(6.5, holder.rollback)
+            timer.daemon = True
+            timer.start()
+            try:
+                self.test_network_policy_change_stops_before_next_request()
+            finally:
+                timer.cancel()
+                timer.join(2)
+                holder.rollback()
+
     def test_pending_shutdown_keeps_owner_until_request_really_finishes(self):
         _,entered,release=self.blocked();state=self.collector.start(data(detail_budget=2));runner=self.runner()
-        self.start(runner,state);self.assertTrue(entered.wait(5))
+        self.start(runner,state);self.assertTrue(entered.wait(30))
         with patch.object(runner._thread,'join'):
             runner.close()  # Simulate returning while the bounded join still has a live request.
         self.assertTrue(runner.is_running())
@@ -214,7 +235,7 @@ else:raise AssertionError('ownership was not enforced')
                 between.set();self.assertTrue(release.wait(5))
             return result
         with patch.object(self.collector,'step',side_effect=pause_after_list):
-            self.start(runner,state);self.assertTrue(between.wait(5))
+            self.start(runner,state);self.assertTrue(between.wait(30))
             altered=self.collector._load(state['id']);altered['permit_platforms']=[]
             self.collector._save(altered);expected=self.collector._path(state['id']).read_bytes()
             release.set();stopped=self.wait(runner)

@@ -44,7 +44,7 @@ with patch('urllib.request.getproxies',return_value={}):
  sqlite_probe=WorkerSqliteProbe(lambda:tasks._thread);sqlite_probe.start()
  try:
   ident=tasks.search({'consent':True,'query':query().payload()})['id']
-  require_child_ready(entered,tasks,probe,lambda line:print(line,flush=True),sqlite_probe=sqlite_probe)
+  require_child_ready(entered,tasks,probe,lambda line:print(line,flush=True),sqlite_probe=sqlite_probe,timeout=30)
   print(json.dumps({'id':ident}),flush=True)
   action=sys.stdin.readline().strip()
   if action=='crash':os._exit(23)
@@ -100,11 +100,13 @@ class OwnerTests(unittest.TestCase):
         if not self.release.wait(15):raise AssertionError('fixture not released')
         return payload()
 
-    def running(self):
+    def running(self, *, timeout=30):
         self.first_transport.json.side_effect=self.hold
         ident=self.start();before=self.write_probe.snapshot();sqlite_before=self.sqlite_probe.snapshot()
-        if not self.entered.wait(5):
-            self.fail('public owner did not enter transport after 5s: '+json.dumps(wait_diagnostic(
+        # Functional preparation includes the real 10s SQLite busy allowance.
+        # Deliberate lock diagnostics explicitly request their original 5s.
+        if not self.entered.wait(timeout):
+            self.fail(f'public owner did not enter transport after {timeout:g}s: '+json.dumps(wait_diagnostic(
                 self.first,self.write_probe,before,sqlite_probe=self.sqlite_probe,sqlite_before=sqlite_before)))
         return ident
 
@@ -125,7 +127,7 @@ class OwnerTests(unittest.TestCase):
         self.assertTrue(line,'child failed before task start; returncode='+str(child.poll()))
         started=json.loads(line)
         if started.get('event')=='owner_wait_failed':
-            self.fail('child did not enter transport after 5s: '+json.dumps(started['diagnostic']))
+            self.fail('child did not enter transport after 30s: '+json.dumps(started['diagnostic']))
         return child,started['id']
 
     def test_new_owner_between_probe_and_read_does_not_look_interrupted(self):
@@ -233,6 +235,24 @@ class OwnerTests(unittest.TestCase):
         ident=self.cancelled();self.second.snapshot();self.first.path.unlink()
         with self.assertRaises(InputError):self.second.resume({'id':ident,'consent':True})
         self.assertEqual(self.second.snapshot()['status'],'idle');self.second_transport.json.assert_not_called()
+
+
+    def test_normal_preparation_accepts_a_commit_within_the_SQLite_wait_budget(self):
+        self.first.hybrid._prepare()
+        # A real reader holds commit for longer than the old 5s fixture wait,
+        # but shorter than the unchanged 10s SQLite busy timeout.
+        with closing(sqlite3.connect(self.first.hybrid.ledger.path, check_same_thread=False)) as holder:
+            holder.execute('BEGIN')
+            holder.execute('SELECT COUNT(*) FROM visits').fetchone()
+            timer = threading.Timer(6.5, holder.rollback)
+            timer.daemon = True
+            timer.start()
+            try:
+                self.test_deleted_record_does_not_resume_stale_in_memory_state()
+            finally:
+                timer.cancel()
+                timer.join(2)
+                holder.rollback()
 
     def test_actual_process_owner_blocks_submission_and_graceful_exit_preserves_report(self):
         child,ident=self.child();before=self.first.path.read_bytes()
