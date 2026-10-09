@@ -13,7 +13,7 @@ from html import unescape
 from typing import Callable
 
 from ..html_parser import (Document, Node, ParseError, jobpostings, plain_text,
-                           _posting_identity, _unique_object)
+                           _posting_identity, _posting_location, _unique_object)
 from .adapters import DOMAdapter
 from .contracts import Card, CrawlError, PageSnapshot
 from .page_surface import surface_text
@@ -285,7 +285,8 @@ def structured_intro_detail(markup: str, url: str,
         posted = posting.get('datePosted', '')
         return {'title': title, 'text': body,
                 'company': company.strip() if isinstance(company, str) else '',
-                'published_at': posted if isinstance(posted, str) else '', 'parser': parser}
+                'published_at': posted if isinstance(posted, str) else '', 'parser': parser,
+                'location': _posting_location(posting)}
     except CrawlError:
         raise
     except (ValueError, TypeError, RecursionError) as exc:
