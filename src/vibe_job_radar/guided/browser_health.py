@@ -15,6 +15,7 @@ import sys
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from ..utils import utc_now
 from ..runtime import is_portable, PORTABLE_GUIDANCE, description as runtime_description
@@ -22,6 +23,11 @@ from .contracts import CrawlError
 
 PLAYWRIGHT_REQUIREMENT = 'playwright>=1.48,<2'
 VERSION_CHECK_REQUIREMENT = 'packaging>=24.2'
+# Authored, script-free content only; no caller-supplied URL or site request.
+OFFLINE_CHECK_URL = 'data:text/html;charset=utf-8,' + quote(
+    '<!doctype html><meta charset="utf-8">'
+    '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; base-uri \'none\'; form-action \'none\'">'
+    '<title>Vibe Radar browser check</title><p>本机浏览器检查成功</p>', safe='')
 HEALTH_MESSAGES = {
     'not_checked': '尚未验证浏览器能否启动。包版本不等于就绪；请点“检查浏览器（不采集）”。',
     'browser_ready': '采集浏览器已通过空白页启动检查。只验证本机组件，不代表已登录或网站可采集。',
@@ -230,10 +236,11 @@ def probe_browser(*, headless: bool = False, executable_path: str | None = None,
         for name in ('domcontentloaded', 'load', 'crash', 'close'):
             backend.page.on(name, observed(name))
         backend.browser.on('disconnected', observed('disconnected'))
-        # Keep the current DOM-ready contract and original 6s bound.
-        check_step('set_content', lambda: backend.page.set_content(
-            '<title>Vibe Radar browser check</title><p>本机浏览器检查成功</p>',
-            wait_until='domcontentloaded', timeout=6000))
+        # A fixed data document uses native navigation/lifecycle completion.
+        # It does not depend on set_content's console-tag/document.write barrier.
+        # Keep DOM readiness, the original 6s bound and the later title check.
+        check_step('load_inline_page', lambda: backend.page.goto(
+            OFFLINE_CHECK_URL, wait_until='domcontentloaded', timeout=6000))
         backend.startup_report['stage'] = 'blank_page_verify'
         title = check_step('read_title', backend.page.title)
         detail['step'] = 'verify_title'

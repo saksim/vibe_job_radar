@@ -66,7 +66,7 @@ def main():
                 second=server.guided.state()['browser_health']
                 assert second['ready'] and second['mode']=='headed' and second['launch_tested']
                 detail=second['blank_page_check']
-                assert detail['step']=='verified' and set(detail['elapsed_ms'])=={'set_content','read_title'}
+                assert detail['step']=='verified' and set(detail['elapsed_ms'])=={'load_inline_page','read_title'}
                 assert detail['page_closed'] is False and detail['browser_connected'] is True
                 assert not any(detail['events_before_cleanup'][name] for name in ('crash','close','disconnected'))
                 result['blank_page_check']=detail
@@ -91,8 +91,12 @@ def main():
                 assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')
                 assert result['page_errors']==[] and result['unexpected_ui_requests']==[]
                 result['checks'].append('narrow viewport does not overflow; no JavaScript errors or external UI requests')
-                result['success']=True
                 browser.close()
+            # Start the two owned SDK contexts after the UI SDK session exits.
+            # The control does not attribute the original CI root cause.
+            from blank_probe_control import verify_inline_probe
+            result['inline_probe_control']=verify_inline_probe(executable_path=override)
+            result['success']=True
         finally:
             server.shutdown();server.server_close();thread.join(timeout=5)
             (output/'results.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
