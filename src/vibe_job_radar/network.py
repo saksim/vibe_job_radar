@@ -232,6 +232,11 @@ def validate_public_url(url: str, allowed_domains: set[str], *, all_addresses: b
                     cache_reused=resolved.cache_reused, address_count=len(ips),
                     ttl_remaining=max(0.0, resolved.expires_at-active.clock()))
         except ResolutionError as exc:
+            if resolution_info is not None and exc.code in {'encrypted_dns_unavailable', 'encrypted_dns_cooldown'}:
+                from .dns_transport_diagnostic import public_details
+                details = public_details(exc.diagnostic)
+                if details is not None:
+                    resolution_info['failure'] = details
             raise FetchError(exc.code) from exc
     else:
         try:
@@ -388,6 +393,12 @@ class SiteFetcher:
         try:
             response = get(url)
         except FetchError as exc:
+            if exc.code in {'encrypted_dns_unavailable', 'encrypted_dns_cooldown'}:
+                from .dns_transport_diagnostic import public_details
+                observed = getattr(self.transport, 'last_resolution', None)
+                details = public_details(observed.get('failure')) if type(observed) is dict else None
+                if details is not None:
+                    self.last_diagnostic['resolution_failure'] = details
             if exc.code in {'http_401', 'http_403', 'http_429'}:
                 # Preserve the actual refusal even if persisting its cooldown
                 # subsequently fails and becomes the terminal error.

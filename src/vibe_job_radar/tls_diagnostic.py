@@ -55,14 +55,14 @@ def failure_details(exc: ssl.SSLError, *, phase: str, connection=None,
         category, error_type = 'protocol_mismatch', 'SSLError'
     else:
         category, error_type = 'tls_protocol', 'SSLError'
-    phases = {'tls_context', 'tls_handshake', 'dns_request', 'response_headers', 'response_body'}
+    phases = {'tls_context', 'tls_handshake', 'request_setup', 'dns_request', 'response_headers', 'response_body'}
     result = {
         'schema_version': 1, 'observed_at': utc_now(), 'category': category,
         'error_type': error_type, 'phase': phase if phase in phases else 'unknown',
         'endpoint_host': 'cloudflare-dns.com', 'endpoint_port': 443,
         'policy_id': policy_id, 'reused_failure': False,
         'cause_confirmed': False, 'next_action': HINTS[category],
-        'tls_handshake_completed': phase in {'dns_request', 'response_headers', 'response_body'},
+        'tls_handshake_completed': phase in {'request_setup', 'dns_request', 'response_headers', 'response_body'},
         'dns_request_attempted': phase in {'dns_request', 'response_headers', 'response_body'},
         'ssl_cert_file_configured': bool(os.environ.get('SSL_CERT_FILE')),
         'ssl_cert_dir_configured': bool(os.environ.get('SSL_CERT_DIR')),

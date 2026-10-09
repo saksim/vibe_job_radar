@@ -212,6 +212,7 @@ class PublicResolver:
             conn = PinnedHTTPSConnection(DOH_HOST, BOOTSTRAP, budget, network_policy=route)
             phase = 'tls_handshake'
             conn.connect()
+            phase = 'request_setup'
             def remaining():
                 self._permission()
                 self._cancel(cancelled)
@@ -253,6 +254,11 @@ class PublicResolver:
                 # read1 prevents a slow body from resetting the overall deadline.
                 part = response.read1(min(4096, 65536-len(parts)))
                 if not part:
+                    unread = getattr(response, 'length', None)
+                    if type(unread) is int and unread > 0:
+                        # read1() leaves the outstanding fixed length at EOF.
+                        # Keep partial DNS payload out of the exception.
+                        raise http.client.IncompleteRead(b'', unread)
                     break
                 parts.extend(part)
                 if len(parts) > 65535:
@@ -296,8 +302,15 @@ class PublicResolver:
         except FetchError as exc:
             # Keep the reason category only, never upstream headers or URL data.
             raise ResolutionError('encrypted_dns_route_failed') from exc
-        except (OSError, http.client.HTTPException):
-            raise ResolutionError('encrypted_dns_unavailable') from None
+        except (OSError, http.client.HTTPException) as exc:
+            details = None
+            try:
+                from .dns_transport_diagnostic import failure_details
+                details = failure_details(exc, phase=phase, connection=conn,
+                                          policy_id=policy.fingerprint)
+            except Exception:
+                pass  # Optional evidence must not replace the original failure.
+            raise ResolutionError('encrypted_dns_unavailable', diagnostic=details) from None
         finally:
             if conn is not None:
                 conn.close()
