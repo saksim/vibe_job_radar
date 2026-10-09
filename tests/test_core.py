@@ -86,6 +86,34 @@ class ModelsTests(unittest.TestCase):
     def test_time_series_role_fallback(self):
         self.assertIn("time_series", detect_roles(job(title="算法工程师", text="研究时间序列算法。"), CONF))
 
+    def test_sales_forecast_algorithm_titles_are_time_series(self):
+        for title in ("算法专家（供应链）", "算法工程师", "机器学习工程师"):
+            with self.subTest(title=title):
+                self.assertEqual(detect_roles(job(title=title,
+                    text="负责销量预测模型开发，评估季节趋势与未来需求。"), CONF),
+                    ["time_series"])
+
+    def test_algorithm_expert_uses_existing_temporal_body_evidence(self):
+        for body in ("负责时间序列模型开发。", "负责负荷预测模型研发与验证。"):
+            with self.subTest(body=body):
+                self.assertEqual(detect_roles(job(title="算法专家", text=body), CONF),
+                                 ["time_series"])
+
+    def test_sales_forecast_requires_algorithm_title_and_specific_body_evidence(self):
+        cases = [
+            ("供应链经理", "使用销量预测报表优化库存与商品布局。"),
+            ("商品规划专家", "结合销量预测结果制定经营策略。"),
+            ("AI算法工程师", "熟悉InfluxDB时序数据库，开发设备监控。"),
+            ("算法专家", "熟悉时序数据库，开发工业数据接口。"),
+            ("算法工程师", "负责Transformer架构设计与模型调优。"),
+            ("算法专家", "负责金融风控模型与客户分群。"),
+            ("算法专家", "建设商品推荐模型提升销量。"),
+            ("算法专家", "预测用户点击率和流失风险。"),
+        ]
+        for title, body in cases:
+            with self.subTest(title=title, body=body):
+                self.assertEqual(detect_roles(job(title=title, text=body), CONF), [])
+
     def test_hostname_boundary(self):
         self.assertEqual(platform_for_url("https://zhipin.com.evil.org/job/x", CONF), "unknown")
 

@@ -192,6 +192,46 @@ class RoleSamplePipelineTests(unittest.TestCase):
         self.assertIn("未记录", markdown)
         self.assertNotIn("| 时间序列算法工程师 | 0", markdown)
 
+    def test_sales_forecast_role_enters_report_without_inventing_ai_evidence(self):
+        forecast = self.job("forecast", title="算法专家（供应链）",
+                            text="负责销量预测模型开发，评估季节趋势与未来需求。")
+        manager = self.job("manager", title="供应链经理",
+                           text="使用销量预测报表制定库存计划。")
+        architect = self.job("architect", title="架构师")
+        manifest, output = self.report([forecast, manager, architect])
+        samples = {r["id"]: r for r in manifest["research_brief"]["roles"]}
+        self.assertEqual(manifest["stats"]["selected_source_records"], 2)
+        self.assertEqual(manifest["stats"]["full_text_job_groups"], 2)
+        self.assertEqual(manifest["stats"]["vibe_evidence_job_groups"], 1)
+        self.assertEqual(samples["time_series"]["sample_status"], "no_ai_evidence")
+        self.assertEqual(samples["time_series"]["sample_counts"]["full_text_job_groups"], 1)
+        self.assertEqual(samples["time_series"]["sample_counts"]["vibe_evidence_job_groups"], 0)
+        self.assertEqual(samples["time_series"]["sample_counts"]["human_approved_positive_rows"], 0)
+        self.assertEqual(samples["architect"]["sample_counts"]["full_text_job_groups"], 1)
+        with (output / "input_audit.csv").open(encoding="utf-8-sig", newline="") as stream:
+            audit_rows = {r["record_id"]: r for r in csv.DictReader(stream)}
+        self.assertEqual(audit_rows[forecast.record_id]["status"], "selected")
+        self.assertEqual(json.loads(audit_rows[forecast.record_id]["roles"]), ["time_series"])
+        self.assertEqual(audit_rows[manager.record_id]["status"], "role_unmatched")
+        records = [JobRecord.from_dict(json.loads(s)) for s in
+                   (output / "jobs.jsonl").read_text(encoding="utf-8").splitlines()]
+        self.assertEqual({r.record_id for r in records},
+                         {forecast.record_id, manager.record_id, architect.record_id})
+        self.assertEqual(next(r.text for r in records if r.record_id == forecast.record_id),
+                         forecast.text)
+        saved = json.loads((output / "research_brief.json").read_text(encoding="utf-8"))
+        self.assertEqual(saved, manifest["research_brief"])
+        self.assertIn("| 时间序列算法工程师 | 1 | 1 | 0 |",
+                      (output / "research_brief.md").read_text(encoding="utf-8"))
+        for name in ("input_audit.csv", "research_brief.json", "research_brief.md", "dashboard.html"):
+            self.assertEqual(hashlib.sha256((output / name).read_bytes()).hexdigest(),
+                             manifest["output_files_sha256"][name])
+        filtered, _ = self.report([], name="time-series-only", role_filter=["time_series"])
+        self.assertEqual(filtered["stats"]["selected_source_records"], 1)
+        self.assertEqual(filtered["stats"]["full_text_job_groups"], 1)
+        self.assertEqual(filtered["stats"]["vibe_evidence_job_groups"], 0)
+        self.assertEqual([r["id"] for r in filtered["research_brief"]["roles"]], ["time_series"])
+
     def test_role_labels_cannot_inject_html_or_break_markdown_table(self):
         from vibe_job_radar.config import load_config
         conf = load_config()
