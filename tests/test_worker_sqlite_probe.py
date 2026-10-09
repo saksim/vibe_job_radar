@@ -208,6 +208,7 @@ class WorkerSqliteProbeTests(unittest.TestCase):
         case.setUp()
         release = threading.Event()
         blocked = threading.Event()
+        diagnostic_now = [0.0]
         connect = sqlite3.connect
         previous = threading.getprofile()
 
@@ -218,6 +219,9 @@ class WorkerSqliteProbeTests(unittest.TestCase):
                     # Hold an actual schedule INSERT after it has created the
                     # task, while its dispatch lock still excludes the reader.
                     if action == sqlite3.SQLITE_INSERT and table == 'schedule' and case.worker.tasks._thread:
+                        # Measure the pending C call independently of the
+                        # five-second wait, which also includes preparation.
+                        diagnostic_now[0] = 2.5
                         blocked.set()
                         if not release.wait(15):
                             return sqlite3.SQLITE_DENY
@@ -225,7 +229,13 @@ class WorkerSqliteProbeTests(unittest.TestCase):
                 connection.set_authorizer(authorizer)
             return connection
 
-        with patch('sqlite3.connect', side_effect=observe_connection):
+        def timed_probe(worker):
+            return WorkerSqliteProbe(worker, clock=lambda: diagnostic_now[0])
+
+        # Only the diagnostic clock is controlled. The SQLite INSERT, reader
+        # exclusion, original five-second timeout and cleanup remain real.
+        with patch('sqlite3.connect', side_effect=observe_connection), \
+                patch('worker_sqlite_probe.WorkerSqliteProbe', side_effect=timed_probe):
             try:
                 with self.assertRaises(AssertionError) as caught:
                     # This control intentionally times out while SQLite is
@@ -239,7 +249,7 @@ class WorkerSqliteProbeTests(unittest.TestCase):
                 self.assertEqual(pending[0]['operation'], 'connection.execute')
                 self.assertEqual(pending[0]['caller']['file'], 'public_schedule.py')
                 self.assertEqual(pending[0]['caller']['function'], '_write')
-                self.assertGreaterEqual(pending[0]['elapsed_ms'], 4000)
+                self.assertEqual(pending[0]['elapsed_ms'], 2500)
                 self.assertEqual(evidence['task_sqlite']['current_calls'], [])
                 self.assertEqual(evidence['task_sqlite']['operations'], {})
                 self.assertTrue(case.worker.tasks._thread.is_alive())
