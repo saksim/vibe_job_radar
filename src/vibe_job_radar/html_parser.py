@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from html import unescape
 from html.parser import HTMLParser
 from urllib.parse import parse_qsl, urljoin, urlsplit
-from .utils import canonical_url
+from .utils import canonical_url, compact
 from .url_safety import credential_query_key
 
 
@@ -142,6 +142,60 @@ def _select_posting(postings: list[dict], source_url: str) -> dict:
     raise ParseError("ambiguous or mismatching JobPosting identity")
 
 
+def _posting_location(posting: dict) -> str:
+    """Read bounded addresses from the already selected JobPosting only.
+
+    Unknown or partly unsupported multi-place metadata stays unknown. Employer
+    headquarters and applicant eligibility are not a job's physical location.
+    """
+    places = posting.get("jobLocation")
+    places = places if isinstance(places, list) else [places]
+    if not 1 <= len(places) <= 16:
+        return ""
+
+    def text(value):
+        if value is None:
+            return ""
+        if not isinstance(value, str) or len(value) > 512:
+            return None
+        value = unescape(value)
+        if any((ord(c) < 32 and c not in "\r\n\t") or ord(c) == 127
+               or 0xD800 <= ord(c) <= 0xDFFF for c in value):
+            return None
+        return " ".join(value.split())
+
+    locations = {}
+    for place in places:
+        if not isinstance(place, dict):
+            return ""
+        address = place.get("address")
+        if isinstance(address, str):
+            location = text(address)
+        elif isinstance(address, dict):
+            parts = []
+            for key in ("addressCountry", "addressRegion", "addressLocality",
+                        "streetAddress", "postalCode"):
+                value = address.get(key)
+                if key in {"addressCountry", "addressRegion"} and isinstance(value, dict):
+                    value = value.get("name")
+                value = text(value)
+                if value is None:
+                    return ""
+                if value and value not in parts:
+                    parts.append(value)
+            location = " / ".join(parts)
+        else:
+            return ""
+        if not location:
+            return ""
+        # Match the fingerprint's normalization before ordering the place set.
+        # Keep one deterministic original spelling for the displayed address.
+        key = compact(location)
+        locations[key] = min(location, locations.get(key, location))
+    result = "; ".join(locations[key] for key in sorted(locations))
+    return result if len(result) <= 2048 else ""
+
+
 def parse_job_html(markup: str, *, source_url: str = "") -> dict:
     """Return only an isolated JD, never the entire body or search recommendations."""
     if source_url and urlsplit(source_url).path in {"", "/"}:
@@ -168,7 +222,7 @@ def parse_job_html(markup: str, *, source_url: str = "") -> dict:
         org = posting.get("hiringOrganization") or {}
         company = org.get("name", "") if isinstance(org, dict) else ""
         return {"title": title, "text": text, "company": str(company), "parser": "json_ld_jobposting",
-                "published_at": str(posting.get("datePosted") or "")}
+                "published_at": str(posting.get("datePosted") or ""), "location": _posting_location(posting)}
     # Dedicated containers only. No full-body fallback, and no brittle undocumented API.
     for selector in ("job-sec-text", "job-description", "job-detail-body", "job-detail-content", "job_msg", "bmsg", "job-detail"):
         matches = [n for n in nodes if selector in (n.attrs.get("class") or "").split()]

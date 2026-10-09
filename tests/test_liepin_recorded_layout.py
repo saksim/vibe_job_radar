@@ -410,4 +410,165 @@ class RecordedLayoutPipelineTests(unittest.TestCase):
                 self.assertEqual(before, {p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in original.iterdir() if p.is_file()})
 
 
+
+class StructuredJobLocationTests(unittest.TestCase):
+    """Only the selected JobPosting supplies location; all examples authored."""
+    def parse_location(self, value, mode='recorded', url=URL):
+        from vibe_job_radar.html_parser import parse_job_html
+        if mode == 'generic':
+            return parse_job_html(markup(value, raw_breaks=False, anchor=False), source_url=url)
+        return builtins().get('liepin').detail(PageSnapshot(
+            url, markup(value, raw_breaks=mode == 'recorded')))
+
+    @staticmethod
+    def place(city, region='人工省', country='CN', **extra):
+        return {'@type':'Place', 'address':{'@type':'PostalAddress',
+            'addressCountry':country, 'addressRegion':region,
+            'addressLocality':city, **extra}}
+
+
+    def test_surrogate_optional_location_does_not_discard_complete_jd(self):
+        from vibe_job_radar.html_parser import parse_job_html
+        from vibe_job_radar.models import JobRecord
+        for mode in ('generic','recorded'):
+            for bad in ('\ud800','\udfff'):
+                for value in (self.place(bad), {'address':bad}):
+                    with self.subTest(mode=mode,code_point=ord(bad),address_kind=type(value['address']).__name__), tempfile.TemporaryDirectory() as tmp:
+                        html=markup(posting(jobLocation=value),raw_breaks=False,anchor=mode=='recorded')
+                        html=html.replace(bad,'\\u'+format(ord(bad),'04x'))
+                        parsed=(parse_job_html(html,source_url=URL) if mode=='generic' else
+                                builtins().get('liepin').detail(PageSnapshot(URL,html)))
+                        record=JobRecord(**parsed,url=URL)
+                        with Store(Path(tmp)/'jobs.sqlite') as store:
+                            store.add(record)
+                            saved=store.records()[0]
+                        self.assertEqual(saved.location,'')
+                        self.assertEqual(saved.text,BODY)
+
+    def test_equivalent_multiplace_case_and_width_share_existing_fingerprint(self):
+        from vibe_job_radar.models import JobRecord
+        variants=[['alpha','Beta'],['Alpha','beta'],['ＡＬＰＨＡ','Ｂｅｔａ'],
+                  ['Beta','alpha','ＡＬＰＨＡ','beta']]
+        for mode in ('generic','recorded'):
+            with self.subTest(mode=mode):
+                records=[]
+                for names in variants:
+                    value=posting(jobLocation=[{'address':name} for name in names])
+                    records.append(JobRecord(**self.parse_location(value,mode),url=URL))
+                self.assertEqual(len({r.fingerprint for r in records}),1)
+                self.assertTrue(all(len(r.location.split('; '))==2 for r in records))
+
+    def test_address_fields_retained_in_all_structured_representations(self):
+        data=posting(jobLocation=self.place('人工城市', streetAddress='合成路1号', postalCode='000001'))
+        for mode in ('generic', 'recorded', 'valid_intro'):
+            with self.subTest(mode=mode):
+                parsed=self.parse_location(data, mode)
+                self.assertEqual(parsed['location'], 'CN / 人工省 / 人工城市 / 合成路1号 / 000001')
+                self.assertEqual(parsed['title'], TITLE)
+                self.assertEqual(parsed['text'], BODY)
+
+    def test_selected_identity_location_never_comes_from_recommendation(self):
+        selected=posting(jobLocation=self.place('甲市'))
+        recommendation=posting(url=URL.replace('123','456'), jobLocation=self.place('乙市'))
+        for mode in ('generic', 'recorded'):
+            with self.subTest(mode=mode):
+                self.assertEqual(self.parse_location([recommendation, selected], mode)['location'],
+                                 'CN / 人工省 / 甲市')
+
+    def test_missing_location_is_not_inferred_from_other_metadata(self):
+        data=posting(jobLocationType='TELECOMMUTE',
+            applicantLocationRequirements={'@type':'Country','name':'CN'},
+            hiringOrganization={'name':'合成测试企业','address':self.place('总部')['address']})
+        other=posting(url=URL.replace('123','456'), jobLocation=self.place('乙市'))
+        for mode in ('generic', 'recorded'):
+            with self.subTest(mode=mode):
+                self.assertEqual(self.parse_location([other, data], mode).get('location',''), '')
+
+    def test_multiple_places_have_canonical_order_and_no_repeated_place(self):
+        a,b=self.place('甲市'),self.place('乙市')
+        for mode in ('generic', 'recorded'):
+            with self.subTest(mode=mode):
+                first=self.parse_location(posting(jobLocation=[a,b,a]), mode)
+                second=self.parse_location(posting(jobLocation=[b,a]), mode)
+                self.assertEqual(first['location'], '; '.join(sorted(['CN / 人工省 / 甲市','CN / 人工省 / 乙市'])))
+                self.assertEqual(first['location'], second['location'])
+
+    def test_explicit_text_address_and_named_country_region_are_supported(self):
+        values=[
+            ({'@type':'Place','address':' 合成地区 \n 合成街道 '}, '合成地区 合成街道'),
+            (self.place('人工城市',region={'@type':'AdministrativeArea','name':'合成省'},
+                        country={'@type':'Country','name':'人工国'}), '人工国 / 合成省 / 人工城市'),
+            (self.place('甲市',region='甲市',country=''), '甲市')]
+        for value,expected in values:
+            with self.subTest(value=value):
+                self.assertEqual(self.parse_location(posting(jobLocation=value))['location'],expected)
+
+    def test_invalid_or_unbounded_optional_location_stays_unknown(self):
+        values=[None,[],True,'甲市',{}, {'address':True},
+            self.place(['甲市']),self.place('甲市\u0000'),self.place('a'*513),
+            [self.place(str(i)) for i in range(17)],
+            self.place('a'*512,region='b'*512,country='c'*512,streetAddress='d'*512,postalCode='e'*512)]
+        for mode in ('generic','recorded'):
+            for value in values:
+                with self.subTest(mode=mode,value_type=type(value).__name__):
+                    parsed=self.parse_location(posting(jobLocation=value), mode)
+                    self.assertEqual(parsed.get('location',''),'')
+                    self.assertEqual(parsed['text'],BODY)
+
+    def test_partial_place_list_never_silently_discards_unknown_member(self):
+        for unknown in ({},None,{'address':{'addressLocality':123}}):
+            with self.subTest(unknown=unknown):
+                self.assertEqual(self.parse_location(posting(jobLocation=[self.place('甲市'),unknown])).get('location',''),'')
+
+    def test_location_does_not_relax_selected_identity_check(self):
+        from vibe_job_radar.html_parser import ParseError
+        value=posting(url=URL.replace('123','456'),jobLocation=self.place('甲市'))
+        with self.assertRaises(ParseError):
+            self.parse_location(value,'generic')
+        with self.assertRaises(CrawlError):
+            self.parse_location(value,'recorded')
+
+    def test_distinct_cities_remain_separate_in_original_store_and_report(self):
+        from vibe_job_radar.models import JobRecord
+        from vibe_job_radar.pipeline import analyze
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace=Workspace(Path(tmp))
+            records=[]
+            for number,city in ((123,'甲市'),(456,'乙市'),(789,'甲市')):
+                url=URL.replace('123',str(number))
+                parsed=self.parse_location(posting(url=url,jobLocation=self.place(city)),url=url)
+                records.append(JobRecord(**parsed,url=url,platform='liepin',source_mode='manual',
+                                         rights_note='independently authored test fixture'))
+            with Store(workspace.db) as store:
+                for record in records:store.add(record)
+                self.assertEqual({r.location for r in store.records()},
+                                 {'CN / 人工省 / 甲市','CN / 人工省 / 乙市'})
+            output=workspace.root/'location-report'
+            analyze(workspace.db,output)
+            manifest=json.loads((output/'run_manifest.json').read_text(encoding='utf8'))
+            self.assertEqual(manifest['stats']['selected_source_records'],3)
+            self.assertEqual(manifest['stats']['full_text_job_groups'],2)
+            self.assertNotEqual(records[0].fingerprint,records[1].fingerprint)
+            self.assertEqual(records[0].fingerprint,records[2].fingerprint)
+
+    def test_fresh_location_snapshot_keeps_identity_and_prior_report_immutable(self):
+        from vibe_job_radar.models import JobRecord
+        from vibe_job_radar.pipeline import analyze
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace=Workspace(Path(tmp))
+            common=dict(url=URL,platform='liepin',source_mode='manual',
+                        rights_note='independently authored test fixture')
+            before=JobRecord(**self.parse_location(posting()),**common,
+                             collected_at='2026-10-01T00:00:00+00:00')
+            with Store(workspace.db) as store:store.add(before)
+            old=workspace.root/'previous-report';analyze(workspace.db,old)
+            hashes={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in old.iterdir() if p.is_file()}
+            after=JobRecord(**self.parse_location(posting(jobLocation=self.place('甲市'))),**common,
+                            collected_at='2026-10-02T00:00:00+00:00')
+            self.assertEqual(before.record_id,after.record_id)
+            with Store(workspace.db) as store:
+                store.add(after)
+                self.assertEqual(store.records()[0].location,'CN / 人工省 / 甲市')
+            self.assertEqual(hashes,{p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in old.iterdir() if p.is_file()})
+
 if __name__=='__main__': unittest.main()
