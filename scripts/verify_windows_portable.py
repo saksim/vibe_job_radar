@@ -16,6 +16,7 @@ from urllib.parse import urlsplit
 
 from build_windows_portable import inventory, native_component_valid
 from vibe_job_radar.guided.browser_health import HEALTH_MESSAGES
+from vibe_job_radar.guided.native_startup_diagnostic import startup_failure_facts
 
 
 class RunningApp:
@@ -143,6 +144,15 @@ def verify_native_component(exe,cwd,env,channel,*,evidence=None):
         'code':set(HEALTH_MESSAGES)|{'native_check_failed','native_component_ready'}}
     for key,allowed in choices.items():
         value=row.get(key);evidence[key]=value if isinstance(value,str) and value in allowed else 'unrecognized'
+    # Retain already available launch facts before the unchanged gate raises.
+    # Raw summaries, stderr, URLs and executable paths are never copied.
+    if 'launch_tested' in row:
+        evidence['launch_tested']=row['launch_tested'] if type(row['launch_tested']) is bool else None
+    if 'process_exit_hex' in row:
+        value=row['process_exit_hex']
+        evidence['process_exit_hex']=value if isinstance(value,str) and re.fullmatch(r'0x[0-9A-F]{8}',value) else ''
+    if 'startup_failure' in row:
+        evidence['startup_failure']=startup_failure_facts(row['startup_failure'])
     version=row.get('browser_version')
     evidence['browser_version']=version if isinstance(version,str) and re.fullmatch(r'[0-9]+(?:\.[0-9]+){1,4}',version) else ''
     count=row.get('external_connections')
