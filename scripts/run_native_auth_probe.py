@@ -16,6 +16,7 @@ from unittest.mock import patch
 import run_native_browser_acceptance as acceptance
 from vibe_job_radar.guided.native_tunnel import NativeTunnel
 from native_failure_evidence import loading_failure, fatal_failure
+from native_guard_evidence import install_guard_observer, guard_transport_facts
 
 COMMANDS = frozenset({
     'Network.enable', 'Network.setUserAgentOverride', 'Network.setCacheDisabled',
@@ -45,6 +46,17 @@ class ObservedBackend(acceptance.NativeBackend):
             if isinstance(report, dict):
                 self.probe['startup_diagnostic'] = report
             raise
+        self._guard_evidence = install_guard_observer(self.tunnel)
+
+    def close(self):
+        try:
+            return super().close()
+        finally:
+            # Save a copy; an observer failure must preserve the original close.
+            try:
+                self.probe['guard_transport'] = guard_transport_facts(self)
+            except Exception:
+                pass
 
     def _attached(self, event):
         info = event.get('targetInfo', {})

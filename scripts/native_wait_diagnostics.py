@@ -262,6 +262,50 @@ def observed_backend(base, stages):
     return Backend
 
 
+def observed_wait(original, stages, out, prefix):
+    """Save the first original timeout before the acceptance caller cleans up.
+
+    This wrapper adds no state read, retry or wait. Both arguments and the
+    original outcome are preserved. Successful waits perform no file writes.
+    """
+    state = {'installed': True, 'attempts': 0, 'snapshot_written': False,
+             'stack_written': False, 'writer_error_types': []}
+    stages.result['wait_failure_observer'] = state
+    lock = threading.Lock()
+
+    @wraps(original)
+    def wait(*args, **kwargs):
+        try:
+            return original(*args, **kwargs)
+        except TimeoutError:
+            if lock.acquire(False):
+                try:
+                    if not state['attempts']:
+                        state['attempts'] = 1
+                        try:
+                            # Take the bounded metadata snapshot before any IO.
+                            evidence = {
+                                'phase': 'wait_timeout_before_caller_cleanup',
+                                'error_types': ['TimeoutError'],
+                                'progress': stages.snapshot(),
+                            }
+                            with (out / (prefix + '-first-wait-failure.json')).open(
+                                    'x', encoding='utf-8') as stream:
+                                json.dump(evidence, stream, indent=2)
+                            state['snapshot_written'] = True
+                            with (out / (prefix + '-first-wait-failure-threads.log')).open(
+                                    'x', encoding='utf-8') as stream:
+                                faulthandler.dump_traceback(file=stream, all_threads=True)
+                            state['stack_written'] = True
+                        except Exception as error:
+                            state['writer_error_types'] = [type(error).__name__[:80]]
+                finally:
+                    lock.release()
+            # An observer error cannot replace the original failed wait.
+            raise
+    return wait
+
+
 @contextmanager
 def capture(stages, out, prefix, *, interval=5, stack_interval=35):
     """Retain pre-cleanup evidence without file writes inside browser callbacks."""
