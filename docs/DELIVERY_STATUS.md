@@ -1,3 +1,17 @@
+# 公开任务等待失败的SQLite计时（#174，2026-10-09）
+
+PR280实际main 589ef3d5290e的首轮检查为24/25：Windows portable源资格2701项在809.215秒内1失败、0错误/跳过。原任务恢复测试在进入模拟网络层前等待5秒超时，工作线程快照位于reserve的commit；原测试、reserve及其直接调用代码相对上个合格版本没有变化。该主干未验收，最近完整通过仍为PR279 ff181195。首失败及[完整记录](https://github.com/saksim/vibe_job_radar/pull/280#issuecomment-6089527271)保留；一次本机原用例0.193秒通过也不能解释云端原因。
+
+失败记录已有Python fsync计时，缺少SQLite自身操作计时。现在只在公开任务测试及其子进程中接入已有WorkerSqliteProbe，记录等待前与失败瞬间的完成次数、累计/最大时长，以及当前尚未返回的SQLite调用和相对耗时。观察不读取SQL、参数、结果或私有路径，不替换数据库操作。原5秒/15秒等待、业务断言、产品代码、额度、持久化与工作流保持。
+
+新增一项真实SQLite读事务阻住reserve提交的对照：原观察器缺少worker_sqlite记录；补齐后在原5秒失败点读到尚未完成的commit，并在释放锁后清理完成、恢复原线程profile。Python3.10/3.12各23项关联测试通过；本地复查将新增对照中的“提交至少4秒”改为“当前提交存在正耗时”，避免假设准备阶段必须少于1秒，最终单项在两Python均通过。原负对照及一次安装脚本中途退出后的不完整源码测试结果保留，均未覆盖；没有外部网络请求。
+
+本次解决失败记录不足，未确定云端commit缓慢或历史超时根因。[#174](https://github.com/saksim/vibe_job_radar/issues/174)、[#269](https://github.com/saksim/vibe_job_radar/issues/269)、[GAP #210](https://github.com/saksim/vibe_job_radar/issues/210)和[总线 #57](https://github.com/saksim/vibe_job_radar/issues/57)继续保留验收条件；不新增Issue。全量集合2702项，本候选及实际main仍须各自验收。G10固定PR277原真实窗口继续，不因本次诊断变更重启。
+
+以下保留历史记录。
+
+---
+
 # 重复发布方规则安装只读核对（G06，2026-10-09）
 
 相同或更宽松的 robots 规则在账本中已经完整保存时，原生与桥接采集仍申请 SQLite 写锁。隔离真实数据库复现中，三次原生安装和三次桥接核对产生12次写事务；无关进程持有写锁时，原桥接调用还会在原10秒 SQLite 期限后报存储错误。这是已复现的独立锁竞争机制，不代表已解释 [#269](https://github.com/saksim/vibe_job_radar/issues/269) 等历史 CI 超时。

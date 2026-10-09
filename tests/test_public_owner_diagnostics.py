@@ -52,14 +52,17 @@ class OwnerDiagnosticTests(unittest.TestCase):
     def test_child_failure_is_emitted_before_raising_and_never_becomes_ready(self):
         event=Mock();event.wait.return_value=False
         probe=Mock();probe.snapshot.side_effect=[{'calls_started':0},{'calls_started':1}]
+        sql_probe=Mock();sql_probe.snapshot.side_effect=[{'operations':{}},{'current_calls':[{'operation':'connection.commit'}]}]
         task=SimpleNamespace(_thread=None,_state={'status':'running','message':'PRIVATE_MESSAGE'})
         emitted=[]
         with self.assertRaisesRegex(AssertionError,'after 5s'):
-            require_child_ready(event,task,probe,emitted.append)
+            require_child_ready(event,task,probe,emitted.append,sqlite_probe=sql_probe)
         event.wait.assert_called_once_with(5)
         self.assertEqual(len(emitted),1)
         packet=json.loads(emitted[0]);self.assertEqual(packet['event'],'owner_wait_failed')
         self.assertEqual(packet['diagnostic']['worker_fsync'],{'before_wait':{'calls_started':0},'at_timeout':{'calls_started':1}})
+        self.assertEqual(packet['diagnostic']['worker_sqlite'],{'before_wait':{'operations':{}},
+            'at_timeout':{'current_calls':[{'operation':'connection.commit'}]}})
         self.assertNotIn('id',packet)
         self.assertNotIn('PRIVATE',emitted[0])
         event.wait.return_value=True;probe.snapshot.side_effect=None;probe.snapshot.return_value={}

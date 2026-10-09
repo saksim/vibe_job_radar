@@ -6,7 +6,7 @@ import threading
 import traceback
 
 
-def wait_diagnostic(tasks, probe=None, before=None):
+def wait_diagnostic(tasks, probe=None, before=None, *, sqlite_probe=None, sqlite_before=None):
     # snapshot()/busy() acquire the same lock that a stalled writer can hold.
     # These are best-effort observations, not an atomic task-state assertion.
     worker = tasks._thread
@@ -37,14 +37,18 @@ def wait_diagnostic(tasks, probe=None, before=None):
                     break
     if probe is not None:
         result['worker_fsync'] = {'before_wait': before, 'at_timeout': probe.snapshot()}
+    if sqlite_probe is not None:
+        result['worker_sqlite'] = {'before_wait': sqlite_before, 'at_timeout': sqlite_probe.snapshot()}
     return result
 
 
-def require_child_ready(event, tasks, probe, emit):
+def require_child_ready(event, tasks, probe, emit, *, sqlite_probe=None):
     """Emit before teardown; preserve the existing five-second assertion."""
     before = probe.snapshot()
+    sqlite_before = sqlite_probe.snapshot() if sqlite_probe is not None else None
     ready = event.wait(5)
     if not ready:
         emit(json.dumps({'event': 'owner_wait_failed',
-                         'diagnostic': wait_diagnostic(tasks, probe, before)}))
+                         'diagnostic': wait_diagnostic(tasks, probe, before,
+                             sqlite_probe=sqlite_probe, sqlite_before=sqlite_before)}))
     assert ready, 'child fixture did not enter transport after 5s'
