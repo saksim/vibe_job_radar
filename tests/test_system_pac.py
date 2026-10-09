@@ -19,14 +19,18 @@ SCRIPT = 'function FindProxyForURL(url,host){return "DIRECT";}'
 
 
 class SourceServer:
-    def __init__(self):
+    def __init__(self, *, observer=None):
         self.body = SCRIPT.encode(); self.status = 200; self.headers = []
         self.requests = []; self.delay = False; self.entered = threading.Event(); self.release = threading.Event()
+        self.observer=observer;self.observer_failed=False
         owner = self
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, *_): pass
             def do_GET(self):
                 owner.requests.append((self.path, dict(self.headers)))
+                if owner.observer is not None:
+                    try:owner.observer(self.client_address,self.connection.getsockname(),self.headers.get('User-Agent'))
+                    except Exception:owner.observer_failed=True
                 owner.entered.set()
                 if owner.delay: owner.release.wait(12)
                 try:

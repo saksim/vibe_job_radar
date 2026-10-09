@@ -6,13 +6,13 @@ import sys
 
 
 @contextmanager
-def configured_source():
+def configured_source(*, observer=None):
     if os.name!='nt' or os.environ.get('GITHUB_ACTIONS')!='true' or os.environ.get('CI')!='true':
         raise ValueError('system PAC registry acceptance requires ephemeral Windows CI')
     import winreg
     sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'tests'))
     from test_system_pac import SourceServer
-    fixture=SourceServer()
+    fixture=SourceServer(observer=observer)
     fixture.body=b'function FindProxyForURL(url,host){return "SOCKS5 127.0.0.1:1080; DIRECT";}'
     try:
         with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER,
