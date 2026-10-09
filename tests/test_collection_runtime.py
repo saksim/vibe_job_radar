@@ -1,10 +1,8 @@
 """Real Collector/ledger/ownership; only upstream responses are controlled."""
-from contextlib import closing
 from dataclasses import replace
 import json
 import os
 from pathlib import Path
-import sqlite3
 import subprocess
 import sys
 import threading
@@ -16,6 +14,7 @@ from vibe_job_radar.collection_runtime import CollectionRunner, CollectionBusy
 from vibe_job_radar.network import SafeHTTP
 from vibe_job_radar.workspace import InputError
 import test_collection_shared_rate as shared
+from public_owner_diagnostics import hold_reader_through_worker_commit
 from test_public_category import Wire, data, listing, card, job_url
 
 
@@ -197,20 +196,10 @@ else:raise AssertionError('ownership was not enforced')
 
 
     def test_policy_change_accepts_preparation_within_SQLite_wait_budget(self):
-        # Real reader/commit contention may outlast the old 5s readiness wait
-        # while remaining inside the production ledger's 10s busy timeout.
-        with closing(sqlite3.connect(self.ledger.path, check_same_thread=False)) as holder:
-            holder.execute('BEGIN')
-            holder.execute('SELECT COUNT(*) FROM visits').fetchone()
-            timer = threading.Timer(6.5, holder.rollback)
-            timer.daemon = True
-            timer.start()
-            try:
-                self.test_network_policy_change_stops_before_next_request()
-            finally:
-                timer.cancel()
-                timer.join(2)
-                holder.rollback()
+        # Setup may be slow; count only from the worker's real ledger commit.
+        with hold_reader_through_worker_commit(
+                self.ledger.path, lambda: self.runners[-1]._thread if self.runners else None):
+            self.test_network_policy_change_stops_before_next_request()
 
     def test_pending_shutdown_keeps_owner_until_request_really_finishes(self):
         _,entered,release=self.blocked();state=self.collector.start(data(detail_budget=2));runner=self.runner()

@@ -17,7 +17,7 @@ from vibe_job_radar.local_public import LocalPublicDataClient
 from vibe_job_radar.public_tasks import PublicTasks,PublicTaskBusy
 from vibe_job_radar.public_schedule import PublicSchedule,DAY
 from vibe_job_radar.workspace import InputError,Workspace
-from public_owner_diagnostics import wait_diagnostic
+from public_owner_diagnostics import wait_diagnostic, hold_reader_through_worker_commit
 from worker_fsync_probe import WorkerFsyncProbe
 from worker_sqlite_probe import WorkerSqliteProbe
 
@@ -239,20 +239,10 @@ class OwnerTests(unittest.TestCase):
 
     def test_normal_preparation_accepts_a_commit_within_the_SQLite_wait_budget(self):
         self.first.hybrid._prepare()
-        # A real reader holds commit for longer than the old 5s fixture wait,
-        # but shorter than the unchanged 10s SQLite busy timeout.
-        with closing(sqlite3.connect(self.first.hybrid.ledger.path, check_same_thread=False)) as holder:
-            holder.execute('BEGIN')
-            holder.execute('SELECT COUNT(*) FROM visits').fetchone()
-            timer = threading.Timer(6.5, holder.rollback)
-            timer.daemon = True
-            timer.start()
-            try:
-                self.test_deleted_record_does_not_resume_stale_in_memory_state()
-            finally:
-                timer.cancel()
-                timer.join(2)
-                holder.rollback()
+        # Start the 6.5s hold at the actual commit, not before task setup.
+        with hold_reader_through_worker_commit(
+                self.first.hybrid.ledger.path, lambda: self.first._thread):
+            self.test_deleted_record_does_not_resume_stale_in_memory_state()
 
     def test_actual_process_owner_blocks_submission_and_graceful_exit_preserves_report(self):
         child,ident=self.child();before=self.first.path.read_bytes()
