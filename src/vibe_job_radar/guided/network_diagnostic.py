@@ -61,6 +61,16 @@ def diagnose_workspace(workspace, host, *, raw_probe, cancelled, has_sessions=Fa
                     result['message'] += ' 当前处于原保护等待期，显示的是上次失败证据，本次没有重连解析服务。'
                     if exc.diagnostic.get('matches_current_policy') is False:
                         result['message'] += ' 原失败的策略标识与当前不同，不作为新策略已经失败的证据。'
+            elif exc.code in {'encrypted_dns_unavailable', 'encrypted_dns_cooldown'}:
+                from ..dns_transport_diagnostic import public_details
+                details = public_details(exc.diagnostic)
+                if details is not None:
+                    result['effective_resolution']['transport_diagnostic'] = details
+                    result['message'] += ' ' + details['next_action']
+                    if details['reused_failure']:
+                        result['message'] += ' 当前处于原保护等待期，显示的是上次失败证据，本次没有重连解析服务。'
+                        if details.get('matches_current_policy') is False:
+                            result['message'] += ' 原失败的策略标识与当前不同，不作为新策略已经失败的证据。'
     else:
         result['message'] = ('系统 DNS 未得到可用结果；此检查没有证明浏览器故障或账号问题。'
                              if result['code'] == 'dns_error' else
