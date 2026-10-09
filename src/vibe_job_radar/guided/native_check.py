@@ -15,6 +15,8 @@ from .browser_health import BrowserStartupError, HEALTH_MESSAGES, environment_re
 from .browser_choice import validate_choice
 from .native_browser import NativeBackend
 from .native_policy import NativeContract
+from .contracts import CrawlError
+from .native_startup_diagnostic import startup_failure_facts
 from .rate import RateLedger
 
 
@@ -123,6 +125,11 @@ def check_native_browser(*, channel=None, headless=True):
                 raise RuntimeError('native cleanup could not be confirmed')
         result.update(success=True, code='native_component_ready', stage='passed')
     except BrowserStartupError as exc:
+        # The backend has already preserved the cause while closing itself.
+        # Export only fixed facts, before the component summary loses them.
+        cause = exc.__cause__
+        result['startup_failure'] = startup_failure_facts({**exc.report,
+            'cause_code': cause.code if isinstance(cause, CrawlError) else ''})
         code = exc.report.get('code')
         if code in HEALTH_MESSAGES:
             result['code'] = code
