@@ -143,7 +143,7 @@ class StartupFactsReviewTests(unittest.TestCase):
         mock.startup_report = {'stage': 'ready', 'ready': True, 'launch_tested': True,
                                'executable_path': '/verified/chrome', 'executable_exists': True,
                                'mode': 'headed', 'playwright_version': '1.57.0'}
-        mock.page.set_content.side_effect = RuntimeError('browser crashed')
+        mock.page.goto.side_effect = RuntimeError('browser crashed')
         with patch('vibe_job_radar.guided.browser.PlaywrightBackend', return_value=mock):
             result = probe_browser()
         self.assertEqual(result['stage'], 'blank_page_content')

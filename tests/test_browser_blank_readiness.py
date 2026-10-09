@@ -1,6 +1,8 @@
 """Offline readiness checks retain timeout, DOM verification and first failure."""
 import unittest
 from types import SimpleNamespace
+from urllib.parse import unquote, urlsplit
+from html.parser import HTMLParser
 from unittest.mock import patch
 
 from vibe_job_radar.guided.browser_health import probe_browser
@@ -11,11 +13,17 @@ class BlankPage:
         self.content_error, self.title_error, self.value = content_error, title_error, title
         self.calls = []
         self.dom_written = False
+        self.inline_url = None
     def on(self, event, callback):
         pass
     def is_closed(self):
         return False
     def set_content(self, html, **options):
+        # Controlled old SDK completion failure after the DOM was written.
+        self.dom_written = True
+        raise TimeoutError('authored console completion barrier absent')
+    def goto(self, url, **options):
+        self.inline_url = url
         self.calls.append(('content', options))
         self.dom_written = True
         if self.content_error: raise self.content_error
@@ -69,6 +77,30 @@ class BlankReadinessTests(unittest.TestCase):
         self.assertEqual(report['stage'], 'blank_page_verify')
         self.assertIn('blank page verification failed', report['error_summary'])
         self.assertEqual([name for name, _ in page.calls], ['content', 'title'])
+
+
+    def test_inline_document_does_not_depend_on_legacy_console_completion(self):
+        page = BlankPage(); report = self.check(page)
+        self.assertTrue(report['ready'])
+        self.assertEqual(report['blank_page_check']['step'], 'verified')
+        self.assertEqual(set(report['blank_page_check']['elapsed_ms']), {'load_inline_page', 'read_title'})
+        self.assertTrue(page.dom_written)
+        self.assertEqual(len(page.calls), 2)
+
+    def test_only_fixed_script_free_inline_document_can_be_loaded(self):
+        page = BlankPage(); report = self.check(page)
+        self.assertTrue(report['ready'])
+        self.assertEqual(urlsplit(page.inline_url).scheme, 'data')
+        self.assertTrue(page.inline_url.startswith('data:text/html;charset=utf-8,'))
+        tags = []
+        class Tags(HTMLParser):
+            def handle_starttag(self, tag, attrs): tags.append((tag, dict(attrs)))
+        parser = Tags(); parser.feed(unquote(page.inline_url.split(',', 1)[1]))
+        self.assertEqual([tag for tag, _ in tags], ['meta', 'meta', 'title', 'p'])
+        self.assertEqual(tags[1][1], {'http-equiv':'Content-Security-Policy',
+            'content':"default-src 'none'; base-uri 'none'; form-action 'none'"})
+        self.assertTrue(all(not set(attrs).intersection({'src','href','action'}) for _, attrs in tags))
+        self.assertEqual(page.calls[0][1], {'wait_until':'domcontentloaded','timeout':6000})
 
 
 if __name__ == '__main__': unittest.main()

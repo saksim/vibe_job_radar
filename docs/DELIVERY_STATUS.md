@@ -1,3 +1,31 @@
+<!-- inline-probe-after-pr271-first-failure -->
+## 2026-10-09：空白页健康检查去除额外同步依赖
+
+PR #271 首轮 f9d4f723d73cecb26ba18bc0597bb733ef33b3a6 为24/25。Windows TLS全量通过，但[实际Windows程序](https://github.com/saksim/vibe_job_radar/actions/runs/37886154489/job/113676501021)在 bundled_browser_check 失败：set_content/6000ms/TimeoutError，加载事件各1次、无崩溃或关闭、浏览器仍连接。源码2623项已通过，未生成合格Windows ZIP，后续UI/报告/启动检查未执行。首次工件11596587243与日志保留，ZIP SHA256 b1f5f4daf6a03ca4ae268ecc5ef0faaa7119c725720d7958d83549b8e6b3e46c。原#117故障原因尚未确认，不能仅凭事件计数认定目标文档就绪。
+
+[固定版本SDK源码](https://github.com/microsoft/playwright/blob/v1.63.0/packages/playwright-core/src/server/frames.ts)表明 set_content 在 document.write 之外还等待控制台标记及生命周期。现在健康检查改为导航到程序内固定的data文档，保留6000ms、DOMContentLoaded、精确标题校验、真实采集后端初始化和关闭。文档无脚本/外部资源、带禁止资源的CSP，不接受调用者网址；原离线传输仍拒绝HTTP。具体步骤和耗时名改为load_inline_page，不把新操作标为旧set_content。没有把超时视为成功，没有回退或重试。
+
+真实浏览器验收加入独立受控对照：仅在自有测试页面的SDK隔离执行环境屏蔽console.debug，原set_content应在已写入标题后仍超时，新健康检查应成功；所有后端关闭且无外部页面请求。该注入用于验证已知同步依赖，**不证明本次或历史CI真的丢失了控制台标记**。不修改已安装SDK、不改变用户日常浏览器或PAC。
+
+本机两次原后端尝试分别在配套Chromium和系统Chrome启动阶段遇到STATUS_HEAP_CORRUPTION，尚未进入对照，不能充当CI超时复现或新方案实测。新实现的实际浏览器与冻结exe结果按当前PR的独立首轮记录；#117/#126/#174底层历史原因保持开放。
+
+本地Python3.10/3.12各127项相关测试零失败、错误和跳过；两项新增测试作用于原实现均断言失败，作用于新实现通过。全量仅发现2625项，本地未声称全量执行。原worker准备修复的44项结果继续对应未改变的两个测试文件。当前真实浏览器三矩阵和冻结exe结果仍待本次提交的首次CI。
+
+<!-- /inline-probe-after-pr271-first-failure -->
+
+<!-- worker-read-preparation-after-pr226 -->
+## 2026-10-09：读取中停止回归的准备阶段
+
+[PR #226](https://github.com/saksim/vibe_job_radar/pull/226)的候选通过首轮26/26后合并，但实际main a42ed3850a4450e599558e9c09131e6f0693a2df 首轮25/26。唯一失败来自[Windows原生TLS全量回归](https://github.com/saksim/vibe_job_radar/actions/runs/37883958315/job/113669674764)：2622项、1失败、0错误、0跳过，528.762秒。证书链与Edge修复已通过；随后真实系统信任检查未执行。候选成绩不替代实际main失败，#225保持开放直到后续修复提交独立验收完成。
+
+失败用例 test_shutdown_during_read_preserves_checkpoint_without_replaying 在模拟读取进入前的5秒等待失败，尚未执行停止断言。失败瞬间任务在初始running检查点的atomic_text/os.fsync中；调度SQLite两次commit已完成、合计2330.652ms、最长1280.288ms。这些是有限现场，不能证明单次fsync耗尽5秒或确认历史#126/#174底层慢因。原工件11596160566、ZIP SHA256 760d913745638b0dd237050b9e5d9535c784d6f4cf748eed4e5900b6dee35e4b、日志及首次失败栈完整保留，不重跑覆盖。
+
+本次把该用例进入模拟读取前的准备等待明确从5秒调整为30秒，使真实计划和初始检查点写入可先完成；它是测试准备容限的修改，不是产品性能修复，也不声称所有测试时限不变。读取中的10秒释放等待、停止后的5秒取消等待、25秒线程退出等待及保存检查点、重启后暂停、不重放等断言保持。所有生产文件、工作流、锁、事务和fsync不变，两个SQLite观察器继续保留；专门阻塞SQLite以检验失败快照的负对照显式传入原5秒准备窗口，其15秒锁夹具释放上限和所有诊断断言保持。
+
+新增回归只在第一次running检查点写入前施加6秒延迟，再调用原持久化实现，并复用完整关闭/恢复断言。该受控输入在原5秒准备等待下失败，用于验证测试准备边界，不模拟或解释原宿主机慢调用原因。新候选和真正main仍须分别验收；未知原因和真人账号、现场网络等目标保持开放。
+
+<!-- /worker-read-preparation-after-pr226 -->
+
 <!-- pr201-current-qualification-budget -->
 
 ## 2026-10-08：Chrome受控表单失败证据
