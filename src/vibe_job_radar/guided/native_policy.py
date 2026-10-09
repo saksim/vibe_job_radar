@@ -135,8 +135,9 @@ def liepin_bootstrap():
     login = r'/api/com\.liepin\.passport\.account\.(?:account-pwd-login|check-login|v2\.check-login|get-category)'
     manifest = 'feim.liepin.com'
     region = 'api-dok.liepin.com'
+    security = 'dalisi4api.tongdao.cn'
     region_path = r'/api/com\.liepin\.bd\.p\.v4\.get-all-dq'
-    return NativeContract('liepin_search_login_v3', (host, api, cdn, image, passport, manifest, region), (
+    return NativeContract('liepin_search_login_v4', (host, api, cdn, image, passport, manifest, region, security), (
         NativeRule('liepin_navigation', host, r'(?:/|/zhaopin/|/job/[^/]+\.(?:shtml|html)|/a/[0-9]+\.shtml|/lptjob/[0-9]+)',
                    resources=('Document',), role='document'),
         NativeRule('liepin_same_host_assets', host, r'.+\.(?:js|css|png|jpg|jpeg|gif|webp|svg|ico|woff2?|ttf)',
@@ -152,6 +153,10 @@ def liepin_bootstrap():
                    resources=('Script',), role='asset'),
         NativeRule('liepin_static_images', image, r'/.+\.(?:png|jpg|jpeg|gif|webp|svg|ico)',
                    resources=('Image',), role='asset'),
+        # The current official security script reads this fixed configuration.
+        # Keep its normal response, robots and refusal handling; never classify
+        # security checks as optional telemetry (LIEPIN_SECURITY_CONFIG.md).
+        NativeRule('liepin_security_config', security, r'/static/cfg/v2\.json'),
         NativeRule('liepin_search', api, search, methods=('POST',), **cors),
         NativeRule('liepin_search_preflight', api, search, methods=('OPTIONS',),
                    resources=('Preflight', 'Other', 'Fetch', 'XHR'), role='business', **cors),

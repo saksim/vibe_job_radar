@@ -1,6 +1,6 @@
 """Explicit, local-only CORS search -> actual Liepin adapter -> report test.
 
-Five artificial HTTPS hosts use a fresh isolated test CA and the existing
+Six artificial HTTPS hosts use a fresh isolated test CA and the existing
 native tunnel. No real platform traffic, credentials or request replay.
 """
 from __future__ import annotations
@@ -32,6 +32,8 @@ CDN_HOST = 'static.' + HOST
 LOGIN_HOST = 'login.' + HOST
 OPTIONAL_HOST = 'optional.' + HOST
 REGION_HOST = 'regions.' + HOST
+SECURITY_HOST = 'security.' + HOST
+SECURITY_PATH = '/static/cfg/v2.json'
 REGION_PATH = '/api/com.liepin.bd.p.v4.get-all-dq'
 SUGGEST_PATH = '/api/com.liepin.searchfront4c.pc-search-suggest-list'
 CONFIG_PATH = '/api/com.liepin.pupa.get-pc-login-scan-config'
@@ -48,6 +50,7 @@ class SearchFixture:
         self.deny_cors = False
         self.login_late_pacing = False
         self.dependency_mode = False
+        self.security_mode = ''
         self.binding_mode = ''
         self.form_mode = ''
         self.search_shapes = []
@@ -73,7 +76,7 @@ class SearchFixture:
                         "object-src 'none'; sandbox allow-scripts allow-same-origin allow-forms allow-popups")
                 self.send_header('Access-Control-Allow-Origin', URL)
                 dependency_path = urlsplit(self.path).path
-                self.send_header('Access-Control-Allow-Methods', 'GET' if dependency_path in (REGION_PATH, SUGGEST_PATH) else 'POST')
+                self.send_header('Access-Control-Allow-Methods', 'GET' if dependency_path in (REGION_PATH, SUGGEST_PATH, SECURITY_PATH) else 'POST')
                 if dependency_path in DEPENDENCY_PATHS:
                     self.send_header('Access-Control-Allow-Credentials', 'true')
                 self.send_header('Access-Control-Allow-Headers', 'content-type,x-client-type')
@@ -89,7 +92,7 @@ class SearchFixture:
             def do_GET(self):
                 self.record(); path = urlsplit(self.path).path
                 if path == '/robots.txt':
-                    if self.headers.get('Host') in (API_HOST, LOGIN_HOST, REGION_HOST):
+                    if self.headers.get('Host') in (API_HOST, LOGIN_HOST, REGION_HOST, SECURITY_HOST):
                         # Match the observed missing API robots file. HTML error
                         # content must remain inert while its status is read.
                         self.send('<script>fetch("/robots-error-must-not-run")</script>'
@@ -110,8 +113,13 @@ class SearchFixture:
                     self.send('<!doctype html><meta charset="utf-8">' + early + stale + '<h1>合成搜索页</h1>'
                               '<iframe id="common-footer" src="https://' + CDN_HOST + '/footer"></iframe>'
                               '<div id="loaded"></div><script src="https://' + CDN_HOST + ASSET + '"></script>')
+                elif path == SECURITY_PATH:
+                    self.send(json.dumps({'fixture_token':'synthetic-security-config'}),
+                              'application/json', status=403 if owner.security_mode=='refused' else 200)
                 elif path in (REGION_PATH, SUGGEST_PATH):
                     self.send(json.dumps({'flag':1,'data':[]}), 'application/json')
+                elif path == ASSET and owner.security_mode:
+                    self.send(security_config_script(), 'application/javascript')
                 elif path == ASSET and owner.form_mode:
                     self.send(visible_form_script(owner.form_mode), 'application/javascript')
                 elif path == ASSET and owner.binding_mode:
@@ -269,6 +277,86 @@ def verify_dependency_chain(root, server, local, factory, wait, query, result):
                 service.close()
     finally:
         server.dependency_mode=False;server.denied_dependency=None
+
+
+def security_config_script():
+    endpoints = {'config':'https://'+SECURITY_HOST+SECURITY_PATH,
+                 'search':'https://'+API_HOST+PATH}
+    return 'const endpoints = '+json.dumps(endpoints)+';\n'+'''
+(async () => {
+  const response = await fetch(endpoints.config, {
+    method:'GET',credentials:'omit',cache:'no-store'
+  });
+  if (!response.ok) throw new Error('configuration refused');
+  const configuration = await response.json();
+  if (configuration.fixture_token !== 'synthetic-security-config') {
+    throw new Error('configuration changed');
+  }
+  const key = new URL(location.href).searchParams.get('key');
+  const jobs = await fetch(endpoints.search, {
+    method:'POST',headers:{'Content-Type':'application/json','X-Client-Type':'web'},
+    body:JSON.stringify({data:{mainSearchPcConditionForm:{key,currentPage:0,pageSize:40}}})
+  });
+  await jobs.json();
+  document.querySelector('#loaded').textContent='configuration and response received';
+})().catch(() => {document.querySelector('#loaded').textContent='configuration refused';});
+'''
+
+
+def verify_security_config_chain(root, server, local, factory, wait, query, result):
+    result['security_config_results'] = []
+    try:
+        for label in ('allowed', 'refused'):
+            server.security_mode = label
+            before = len(server.requests)
+            workspace = Workspace(root/('security-config-'+label))
+            ledger = RateLedger(root/('security-config-'+label+'.sqlite'),
+                                Limits(page_interval=0,request_interval=0))
+            service = GuidedService(workspace,registry=Registry([local]),
+                                    ledger=ledger,native_backend_factory=factory)
+            try:
+                service.create(explicit_seed({**query,'max_pages':1},local))
+                task = wait(service)
+                requests = server.requests[before:]
+                actual = [(r['method'],r['path']) for r in requests
+                          if r['path'] in (SECURITY_PATH,PATH)]
+                config = [r for r in requests if r['path']==SECURITY_PATH]
+                assert len(config)==1 and config[0]['host']==SECURITY_HOST
+                assert config[0]['anonymous'] and config[0]['no_credentials']
+                assert any(r['host']==SECURITY_HOST and r['path']=='/robots.txt'
+                           for r in requests)
+                assert ledger.summary('liepin')['login']['day']==0
+                if label=='allowed':
+                    assert task['status']=='ready' and len(task['cards'])==1,task.get('code')
+                    assert actual==[('GET',SECURITY_PATH),('OPTIONS',PATH),('POST',PATH)],actual
+                    native = service._backends[task['id']]
+                    observed = [o for o in native.observations()
+                                if o.operation=='liepin_security_config']
+                    assert len(observed)==1
+                    assert observed[0].payload=={'fixture_token':'synthetic-security-config'}
+                    assert not local.native_ready(observed)
+                    service.action({'id':task['id'],'action':'collect',
+                                    'selected':[task['cards'][0]['id']]})
+                    task = wait(service)
+                    assert task['status']=='completed' and task['outcome']['saved']==1
+                    with Store(workspace.db) as store:
+                        records=store.records()
+                        assert len(records)==1 and records[0].text==RECORDED_BODY
+                    assert workspace.report(task['report_id'])['manifest']['stats']['full_text_job_groups']==1
+                    result['checks'].append('fixed security configuration GET stays anonymous and native, keeps robots, supplies no job, and precedes original search/full JD/report')
+                else:
+                    assert task['code']=='http_403' and task['status']!='ready',task.get('code')
+                    assert not task['cards'] and not task['report_id']
+                    assert actual==[('GET',SECURITY_PATH)],actual
+                    result['checks'].append('publisher security configuration403 remains fatal; no later search, fabricated configuration, job or report')
+                result['security_config_results'].append({'case':label,'required_sequence':actual,
+                    'anonymous':True,'robots_verified':True,'login_attempts':0,
+                    'full_text_job_groups':1 if label=='allowed' else 0,
+                    'code':task['code']})
+            finally:
+                service.close()
+    finally:
+        server.security_mode = ''
 
 
 def binding_script(mode):
@@ -495,13 +583,13 @@ def main():
     if not args.controlled:
         print('No requests; use --controlled for the local artificial-source test.'); return
     out = ROOT / 'browser-acceptance/native'; out.mkdir(parents=True, exist_ok=True)
-    result = {'success':False,'scope':'Five artificial TLS hosts, actual native backend and Liepin adapter; not live certification.', 'checks':[]}
+    result = {'success':False,'scope':'Six artificial TLS hosts, actual native backend and Liepin adapter; not live certification.', 'checks':[]}
     services = []; server = None
     try:
         with tempfile.TemporaryDirectory(prefix='radar-search-fixture-') as tmp, ExitStack() as cleanup:
             root = Path(tmp)
             cleanup.callback(lambda: [s.close() for s in services])
-            with trust_fixture(root, (API_HOST, CDN_HOST, LOGIN_HOST, REGION_HOST)):
+            with trust_fixture(root, (API_HOST, CDN_HOST, LOGIN_HOST, REGION_HOST, SECURITY_HOST)):
                 server = SearchFixture(root)
                 cleanup.callback(server.close)
                 template = builtins().get('liepin')
@@ -509,9 +597,10 @@ def main():
                 mapping = {'www.liepin.com':HOST, 'api-c.liepin.com':API_HOST,
                            'concat.lietou-static.com':CDN_HOST, 'image0.lietou-static.com':CDN_HOST,
                            'api-passport.liepin.com':LOGIN_HOST, 'feim.liepin.com':CDN_HOST,
-                           'api-dok.liepin.com':REGION_HOST}
+                           'api-dok.liepin.com':REGION_HOST,
+                           'dalisi4api.tongdao.cn':SECURITY_HOST}
                 rules = tuple(replace(r, host=mapping[r.host], cors_origin=URL if r.cors_origin else '') for r in contract.rules)
-                local_contract = replace(contract, hosts=(HOST,API_HOST,CDN_HOST,LOGIN_HOST,REGION_HOST), rules=rules,
+                local_contract = replace(contract, hosts=(HOST,API_HOST,CDN_HOST,LOGIN_HOST,REGION_HOST,SECURITY_HOST), rules=rules,
                     ignored_rules=tuple(replace(r,host=API_HOST if r.key=='liepin_hotwords' else OPTIONAL_HOST) for r in contract.ignored_rules))
                 local = replace(template, domains=(HOST,), resource_domains=(HOST,),
                     search_base=URL+'/zhaopin/', login_url=URL+'/', native_contract=local_contract)
@@ -726,6 +815,7 @@ def main():
                     finally: b.close()
                     result['checks'].append('a published main document leaving for blank stops with an explicit cause, discards old results and never retries')
                     verify_dependency_chain(root,server,local,factory,wait,query,result)
+                    verify_security_config_chain(root,server,local,factory,wait,query,result)
                     verify_published_binding(root,server,local,factory,wait,query,result)
                     verify_visible_forms(root, server, local, factory, wait, query, result)
                     verify_visible_login_return(root, server, local, factory, query, result)
