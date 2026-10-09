@@ -247,12 +247,14 @@ class DetailReturnServiceTests(unittest.TestCase):
             ledger=RateLedger(self.workspace.root/'guided'/'rates.sqlite',Limits(login_interval=0)))
         self.addCleanup(self.close_fixture)
         self.write_probe.start()
+        # Fixture preparation includes the real durable partial report; its
+        # bounded readiness allowance is separate from login behavior checks.
         self.ident=self.service.create({'platform':'liepin','keyword':'时间序列算法工程师','roles':['time_series'],
             'consent':True,'rights_note':'合成页面测试，非猎聘实站验收','max_pages':1,'max_jobs':2})['id']
-        self.wait_idle()
+        self.wait_idle(timeout=30)
         state=self.service._load(self.ident)
         self.service.action({'id':self.ident,'action':'collect','selected':[r['id'] for r in state['cards']]})
-        self.wait_idle()
+        self.wait_idle(timeout=30)
         state=self.service._load(self.ident)
         self.assertEqual([r['status'] for r in state['cards']], ['ok','manual_required'])
         self.partial_report=state['report_id'];self.first_record=state['cards'][0]['record_id']
@@ -268,10 +270,10 @@ class DetailReturnServiceTests(unittest.TestCase):
             worker.join(timeout=10)
             self.assertFalse(worker.is_alive(),'fixture report worker did not finish before workspace cleanup')
 
-    def wait_idle(self):
+    def wait_idle(self, *, timeout=5):
         probe=getattr(self,'write_probe',None)
         before=probe.snapshot() if probe is not None else None
-        end=time.monotonic()+5
+        end=time.monotonic()+timeout
         while True:
             view=self.service.state()
             if not view['busy']:return
@@ -280,7 +282,7 @@ class DetailReturnServiceTests(unittest.TestCase):
         diagnostic=wait_diagnostic(self.service,view)
         if probe is not None:
             diagnostic['worker_fsync']={'before_wait':before,'at_timeout':probe.snapshot()}
-        self.fail('guided action remained busy after 5s: '+json.dumps(diagnostic))
+        self.fail(f'guided action remained busy after {timeout:g}s: '+json.dumps(diagnostic))
     def await_state(self,key,value):
         end=time.monotonic()+5
         while time.monotonic()<end:
@@ -388,11 +390,11 @@ class DetailReturnFixtureTests(unittest.TestCase):
         original_fsync=os.fsync
         case=DetailReturnServiceTests('test_dead_owner_does_not_create_or_restore_replacement_browser')
         original_wait=case.wait_idle;entered=threading.Event();calls=0
-        def wait():
+        def wait(*, timeout=5):
             nonlocal calls
             calls+=1
             if calls==1:
-                original_wait();original_collect=case.service._collect
+                original_wait(timeout=timeout);original_collect=case.service._collect
                 def held(*args,**kwargs):
                     entered.set();case.service._cancel.wait(10)
                     return original_collect(*args,**kwargs)
@@ -427,11 +429,11 @@ class DetailReturnFixtureTests(unittest.TestCase):
                 entered.set()
                 if not release.wait(10):raise AssertionError('controlled report writer was not released')
             return original_fsync(descriptor)
-        def wait():
+        def wait(*, timeout=5):
             nonlocal calls,replacement
             calls+=1
             if calls==1:
-                original_wait()
+                original_wait(timeout=timeout)
             else:
                 self.assertTrue(entered.wait(5))
                 worker=case.service._thread;real_join=worker.join
