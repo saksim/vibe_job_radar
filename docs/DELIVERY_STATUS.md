@@ -1,3 +1,9 @@
+**阶段交付与验收日志｜阅读范围更新于2026-10-09**
+
+下文逐项保留各候选当时的实现、失败和待验收状态；历史段落中的“本分支/本候选/当前”只指其列明的PR与提交。PR281的后续修订及实际main `ed628e68642e2fc070539d2ce7a4c4e512baf4f6`已独立验收，见[完成记录](https://github.com/saksim/vibe_job_radar/pull/281#issuecomment-6090809350)；原失败与审查阻断仍保留。后续最新合并状态统一见[总线#57](https://github.com/saksim/vibe_job_radar/issues/57)，实站范围见[能力矩阵](ACQUISITION_CAPABILITIES.md)和[取数证据](CURRENT_ACQUISITION_EVIDENCE.md)。本文不能替代新候选或实际main自身的检查。
+
+---
+
 # 锁等待回归从实际commit开始计时（#174，2026-10-09）
 
 PR281候选f3ccae62cf29已完成首25/25、七组2705项及全部产物，但[审查指出](https://github.com/saksim/vibe_job_radar/pull/281#discussion_r4234997760)新增6.5秒读锁控制的计时早于任务准备，可能漏检恢复5秒短等待的回归。因此该候选未合并、未授予完整资格，CI通过记录原样保留。

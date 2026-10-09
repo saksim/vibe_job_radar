@@ -1,6 +1,6 @@
 # Vibe Job Radar｜招聘要求与个人证据工作台
 
-软件提供的流程见[交付清单](docs/DELIVERY_STATUS.md)，已保存的实站观察、逐次成败和仍需人工验收的条件统一见[取数证据](docs/CURRENT_ACQUISITION_EVIDENCE.md)。[GAP 审计](docs/PROJECT_GAP_AUDIT_2026_09_26.md)和[历史目标追溯](docs/PROJECT_GOAL_TRACE_2026_09_26.md)保留2026年9月26日的核查原文，后续处理记录见[Issue #210](https://github.com/saksim/vibe_job_radar/issues/210)。历史关键词列表不等于登录后完整正文；较早文档中的主干提交和采样数量只属于当时记录。
+软件提供的流程见[交付清单](docs/DELIVERY_STATUS.md)，已保存的实站观察、逐次成败和仍需人工验收的条件统一见[取数证据](docs/CURRENT_ACQUISITION_EVIDENCE.md)。[GAP 审计](docs/PROJECT_GAP_AUDIT_2026_09_26.md)和[历史目标追溯](docs/PROJECT_GOAL_TRACE_2026_09_26.md)保留2026年9月26日的核查原文，后续处理记录见[Issue #210](https://github.com/saksim/vibe_job_radar/issues/210)。历史关键词列表不等于登录后完整正文；较早文档中的主干提交和采样数量只属于当时记录。按某个PR或基线编写的实施说明保留该阶段的“本分支/待验收”措辞；当前合并状态与验收以总线Issue、能力矩阵和准确提交的证据为准。
 
 候选交接、包来源和升级回退的历史材料见[固定候选交接清单](docs/MAIN_HANDOFF_REVIEW.md)。其中PR220、81项PR索引及旧包均有固定核查日期；当前源码与程序包按各自提交核验，旧到期工件不作为当前下载入口。
 
@@ -40,9 +40,9 @@ BOSS、猎聘、51job 的浏览器采集仍需逐站现场验收，不能因入�
 
 已实现的流程与尚未认证的范围列在[能力矩阵](docs/ACQUISITION_CAPABILITIES.md)。同一能力快照进入采集页、适配注册表和新报告；受控测试、正常账号实测与默认启用分别记录。升级/回退须核对[已验证的工作区范围](docs/WORKSPACE_COMPATIBILITY.md)。
 
-首页可选择 **Anthropic Greenhouse**、**Cloudflare Greenhouse** 和本分支按#118新增的 **Cursor Ashby** 公开目录，免 Key、无需产品服务器。每次只获取用户所选公司，关键词、地区在本机筛选；缓存和变化记录隔离，请求额度仍共用。Cursor仅纳入公开列出的岗位，保留二级地区和来源remote标志。它可用于“真实来源→分析→证据”流程，但不是全市场搜索，不能替代中国招聘平台或时间序列/电力算法岗位研究。范围与实际观察见[固定公开来源](docs/PUBLIC_SOURCES.md)。
+首页可选择 **Anthropic Greenhouse**、**Cloudflare Greenhouse** 和 **Cursor Ashby** 公开目录，免 Key、无需产品服务器。每次只获取用户所选公司，关键词、地区在本机筛选；缓存和变化记录隔离，请求额度仍共用。Cursor仅纳入公开列出的岗位，保留二级地区和来源remote标志。它可用于“真实来源→分析→证据”流程，但不是全市场搜索，不能替代中国招聘平台或时间序列/电力算法岗位研究。范围与实际观察见[固定公开来源](docs/PUBLIC_SOURCES.md)。
 
-默认提供默认关闭的[公开查询24小时计划](docs/PUBLIC_DAILY_SCHEDULE.md)：首页明确确认固定查询后首次24小时执行，工作台或[独立后台进程](docs/PUBLIC_WORKER.md)需保持运行；关闭网页仍执行，重启最多补一次到期查询，异常会暂停。独立入口沿用原同意和配额，不启动网页服务器或采集浏览器。Windows便携版可按#120明确选择[登录后启动工作台或独立进程](docs/WINDOWS_LOGIN_STARTUP.md)，默认关闭且不自动改变已有登记。结果进入原报告；不自动翻页、不代表三站连续采集或全天服务。
+提供默认关闭的[公开查询24小时计划](docs/PUBLIC_DAILY_SCHEDULE.md)：首页明确确认固定查询后首次24小时执行，工作台或[独立后台进程](docs/PUBLIC_WORKER.md)需保持运行；关闭网页仍执行，重启最多补一次到期查询，异常会暂停。独立入口沿用原同意和配额，不启动网页服务器或采集浏览器。Windows便携版可按#120明确选择[登录后启动工作台或独立进程](docs/WINDOWS_LOGIN_STARTUP.md)，默认关闭且不自动改变已有登记。结果进入原报告；不自动翻页、不代表三站连续采集或全天服务。
 
 公开目录支持[按服务器版本确认未变化](docs/PUBLIC_CONDITIONAL_REFRESH.md)：304复用原完整正文并保留采集时间，另记确认时间；新的200正文仍完整校验和比较变化，失败显示过期缓存。每次校验仍遵守原额度，不增加请求频次。
 
@@ -52,7 +52,7 @@ BOSS、猎聘、51job 的浏览器采集仍需逐站现场验收，不能因入�
 
 主干已合入[工作区网页代理偏好](docs/WORKSPACE_PROXY_SETTINGS.md)：三个工作台入口可保存匿名本机HTTP/SOCKS5入口，DNS与代理共享修订号，其他工作区不受影响。已有应用专用代理/凭据冲突时停止；保存不联网测试，更换后需停止并重开采集会话。首次保存代理写入v2网络偏好，旧源码会明确拒绝，回退需先备份并恢复原v1偏好。本次 #83/#84 增加[明确指定的宿主机代理](docs/VM_HOST_PROXY.md)，使用独立模式和许可；不把来宾loopback当宿主机，不猜网关或扫描入口，实际虚拟化产品环境仍待实测。
 
-当前 main 为 Python 3.10+ 源码版本；本分支另增加 [Windows x64 便携候选包](docs/WINDOWS_PORTABLE.md)的构建与实际 exe 验收，包含 Python/Chromium，须以对应提交的成功 CI 产物为准，尚非正式签名发行或自动升级。源码用户在 Windows 可双击 `start_windows.bat`，其他系统使用原启动入口。新增的 `research_brief.md` 便于带走本批结论；底层完整原文、复核队列和历史报告保留。
+当前项目提供 Python 3.10+ 源码和 [Windows x64 便携候选包](docs/WINDOWS_PORTABLE.md)的构建与实际 exe 验收，包含 Python/Chromium，须以对应提交的成功 CI 产物为准，尚非正式签名发行或自动升级。源码用户在 Windows 可双击 `start_windows.bat`，其他系统使用原启动入口。新增的 `research_brief.md` 便于带走本批结论；底层完整原文、复核队列和历史报告保留。
 
 Windows便携包可在首页明确选择[登录后打开工作台](docs/WINDOWS_LOGIN_STARTUP.md)，默认关闭，只登记当前用户和当前工作区。原每日计划仍独立确认；移动或升级程序前关闭旧登记，再从新包启用。实际登录时机由Windows管理，不是全天服务保证。
 
