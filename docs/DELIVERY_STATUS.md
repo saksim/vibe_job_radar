@@ -1,3 +1,14 @@
+<!-- current-main-and-pac-attribution -->
+## 2026-10-09：已验收主线与当前 PAC 请求调查
+
+[PR #271](https://github.com/saksim/vibe_job_radar/pull/271) 已正常合并；实际main 09c1da8b37b5224dcab7197dcf2dc4e31452c040 完成独立首轮25/25、8工作流attempt1，七组各2625项零失败/错误/跳过，Windows TLS完整测试与原实网信任检查通过。Windows/Linux各587份源码绑定，实际Windows原23项、32组浏览器、三份真实健康机制对照和5张当前截图均核验；[主线结果](https://github.com/saksim/vibe_job_radar/pull/271#issuecomment-6075540424)。#225的8文件/27新增测试完整保持，有限DNS证据交付已关闭。
+
+下方PR226 main首轮25/26与PR271旧候选24/25仍是原始失败，后续资格不覆盖它们；旧段落“仍待CI/225开放”仅描述当时。历史#117/#126/#174等根因仍未知，未发布Release或升级用户工作台，真人账号/JD/原同批报告与现场验收继续开放。
+
+当前沿用 #183 增加 CI 自有 PAC 服务的有限请求归属观察，保持原0→1→1计数要求、缓存报告/配额和失败清理，不把同一User-Agent当作进程证明。见[系统PAC诊断边界](WINDOWS_SYSTEM_PAC.md#ci-来源请求诊断183)。本候选的完整CI与实际exe结果另按自身提交记录；父main通过不能替代。该工具不证明历史额外请求根因已修复。
+
+<!-- /current-main-and-pac-attribution -->
+
 <!-- inline-probe-after-pr271-first-failure -->
 ## 2026-10-09：空白页健康检查去除额外同步依赖
 

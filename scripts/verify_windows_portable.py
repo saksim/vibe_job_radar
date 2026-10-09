@@ -614,7 +614,7 @@ def verify_idle_worker(app,exe,workspace,cwd,env,*,registered_command=None):
         raise AssertionError('stopped worker changed the disabled plan')
 
 
-def verify_queued_worker(exe,root,cwd,env,*,command_prefix=None,system_pac_config_id=None):
+def verify_queued_worker(exe,root,cwd,env,*,command_prefix=None,system_pac_config_id=None,request_trace=None):
     """Original cached pipeline in a fresh workspace; no HTTP server required.
 
     The source harness authors one catalog and explicit queue consent. The
@@ -628,6 +628,7 @@ def verify_queued_worker(exe,root,cwd,env,*,command_prefix=None,system_pac_confi
     from vibe_job_radar.public_queue import PublicQueue
     from vibe_job_radar.public_tasks import PublicTasks
     from vibe_job_radar.workspace import Workspace
+    if request_trace is not None:request_trace.stage('cached_worker_prepare')
     workspace=Workspace(root/'queued-workspace')
     if system_pac_config_id is not None:
         workspace.network_system_pac_preferences(dict(config_id=system_pac_config_id,revision=0,consent=True))
@@ -651,6 +652,8 @@ def verify_queued_worker(exe,root,cwd,env,*,command_prefix=None,system_pac_confi
     child=subprocess.Popen(command,cwd=cwd,env=env,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
     try:
+        if request_trace is not None:
+            request_trace.register('cached_worker',child.pid);request_trace.stage('cached_worker_running')
         deadline=time.monotonic()+30
         while time.monotonic()<deadline:
             if child.poll() is not None:raise AssertionError('queued worker exited before report')
@@ -680,6 +683,7 @@ def verify_queued_worker(exe,root,cwd,env,*,command_prefix=None,system_pac_confi
             child.terminate()
             try:child.wait(5)
             except subprocess.TimeoutExpired:child.kill();child.wait(5)
+        if request_trace is not None:request_trace.stage('cached_worker_finished')
 
 
 def verify_startup_registration(app,exe,workspace,cwd,env):
@@ -800,18 +804,36 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
                 if verify_system_pac:
                     from system_pac_acceptance import configured_source,verify_app
                     result['stage']='configured_system_pac_setup'
-                    with configured_source() as fixture:
-                        counts=result['system_pac_source_request_counts']={'before_ui_check':len(fixture.requests)}
-                        result['stage']='configured_system_pac_ui_check'
-                        verify_app(app,fixture)
-                        counts['after_ui_check']=len(fixture.requests)
-                        result['stage']='configured_system_pac_cached_worker'
-                        result['system_pac_cached_worker']=verify_queued_worker(exe,root/'system-pac-worker',cwd,env,
-                            system_pac_config_id=fixture.source.config_id)
-                        counts['after_cached_worker']=len(fixture.requests)
-                        result['stage']='configured_system_pac_request_count'
-                        if len(fixture.requests)!=1:raise AssertionError('cached worker implicitly downloaded PAC')
-                        result['stage']='configured_system_pac_restore'
+                    from system_pac_request_trace import FixtureRequestTrace
+                    request_trace=FixtureRequestTrace()
+                    request_trace.register('verifier',os.getpid());request_trace.register('workbench',app.proc.pid)
+                    fixture=None
+                    try:
+                        with configured_source(observer=request_trace.observe) as fixture:
+                            request_trace.stage('ui_check')
+                            counts=result['system_pac_source_request_counts']={'before_ui_check':len(fixture.requests)}
+                            result['stage']='configured_system_pac_ui_check'
+                            verify_app(app,fixture)
+                            counts['after_ui_check']=len(fixture.requests)
+                            result['stage']='configured_system_pac_cached_worker'
+                            result['system_pac_cached_worker']=verify_queued_worker(exe,root/'system-pac-worker',cwd,env,
+                                system_pac_config_id=fixture.source.config_id,request_trace=request_trace)
+                            counts['after_cached_worker']=len(fixture.requests)
+                            result['stage']='configured_system_pac_request_count'
+                            if len(fixture.requests)!=1:raise AssertionError('cached worker implicitly downloaded PAC')
+                            result['stage']='configured_system_pac_restore'
+                            request_trace.stage('restore')
+                    finally:
+                        # Capture after owned fixture cleanup, including failures.
+                        # A diagnostic failure must not replace the original error.
+                        try:
+                            request_trace.stage('finished')
+                            result['system_pac_request_trace']={**request_trace.snapshot(),
+                                'capture_failed':False,
+                                'observer_failed':fixture.observer_failed if fixture is not None else False}
+                        except Exception:
+                            result['system_pac_request_trace']={'capture_failed':True,
+                                'historical_cause_confirmed':False}
                     result['system_pac_verified']=True
                     result['checks'].append('actual frozen exe reads ephemeral CI current-user PAC URL via WinHTTP, saves v4 offline, downloads once in its own frozen child, evaluates SOCKS5 without target connection and rolls back; independent frozen worker consumes a cached query under the same policy with no extra PAC download; original CI registry value restored')
                 for mode in ('ensure','reinstall','upgrade','tls'):
