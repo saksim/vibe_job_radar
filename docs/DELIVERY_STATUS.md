@@ -1,3 +1,16 @@
+<!-- browser-install-and-exercise-budgets -->
+## 2026-10-09：浏览器 CI 的安装与执行预算
+
+[PR #273](https://github.com/saksim/vibe_job_radar/pull/273)已合并到main bc01bc1a36d5f71552505b44e0dbb960c286a258，候选独立首轮25/25通过，但实际main的浏览器验收没有通过，不能借候选结果认证主干。[首次作业](https://github.com/saksim/vibe_job_radar/actions/runs/37918558552/job/113780630392)明确记录“超过10分钟作业期限”：依赖安装300秒，浏览器脚本执行308秒后取消；同树候选分别25秒和421秒，说明旧作业预算会被较慢安装挤占。安装耗时差异的底层原因尚未确认。
+
+首次取消日志及30,056,881字节工件完整保留，工件SHA256 fad172fa9a942f40075894b9cb09cd8bc3fc01df91f29686775f65a35f4a629b。后置 chromium-user-journey 正确因前置未成功而失败，未构建Linux源码候选；不能将取消或未执行项记为通过。首次结果不被后续提交或重跑覆盖。
+
+修正仅涉及CI调度预算：安装显式最多8分钟，原完整浏览器命令序列显式最多10分钟，外层作业20分钟，为检出和失败工件保存留2分钟。所有原命令、逐项断言、产品超时、配额、源资格35分钟和“前置成功才构建”的门槛保持；没有重试或跳过。该修正自身仍须候选与实际main各自独立验收，验收结果见对应PR及[总线 #57](https://github.com/saksim/vibe_job_radar/issues/57)、[GAP #210](https://github.com/saksim/vibe_job_radar/issues/210)。
+
+猎聘正常账号和完整实站链路仍未闭环；最新官方配置域名在原解析路径返回name_not_found，0新JD/报告。此次CI预算修正不认证站点登录，不解决其他历史浏览器根因，也不发布Release或升级用户工作台。
+
+<!-- /browser-install-and-exercise-budgets -->
+
 <!-- current-main-and-pac-attribution -->
 ## 2026-10-09：已验收主线与当前 PAC 请求调查
 

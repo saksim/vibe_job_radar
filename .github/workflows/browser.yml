@@ -11,17 +11,21 @@ permissions:
 jobs:
   browser-exercises:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Installation and the full browser suite have separate bounded budgets.
+    # Keep two minutes outside their 8m + 10m limits for checkout and evidence.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
       - name: Install developer-only browser test tools
+        timeout-minutes: 8
         run: |
           python -m pip install playwright "packaging>=24.2"
           python -m playwright install --with-deps chromium
       - name: Exercise actual browser onboarding and downloads
+        timeout-minutes: 10
         run: |
           python scripts/run_browser_acceptance.py
           python scripts/run_advanced_browser.py
