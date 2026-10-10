@@ -103,3 +103,22 @@ class EnglishSectionTests(unittest.TestCase):
                      BODY+'\n'+'\n'.join('- Authored extra qualification number '+str(i) for i in range(100))):
             with self.subTest(body=body[:40]), self.assertRaises(CrawlError):
                 self.parse(body)
+
+    def test_english_login_and_expansion_controls_are_incomplete(self):
+        for prompt in (
+                "Please sign in to see the complete job description.",
+                "Please log in to see the complete job description.",
+                "Please login to see the qualifications.",
+                "Please see the full job description.",
+                "Please click here to read more.",
+                "Click here to show more."):
+            with self.subTest(prompt=prompt), self.assertRaises(CrawlError):
+                self.parse(BODY+"\n- "+prompt)
+
+    def test_substantive_read_more_and_show_more_phrases_are_preserved(self):
+        for qualification in (
+                "Ability to read more complex technical diagrams and specifications.",
+                "Develop dashboards that show more detailed software diagnostics."):
+            body = BODY+"\n- "+qualification
+            with self.subTest(qualification=qualification):
+                self.assertEqual(self.parse(body)['text'], body)

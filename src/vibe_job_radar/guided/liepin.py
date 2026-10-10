@@ -57,14 +57,20 @@ def _labelled_duties_and_qualifications(body: str) -> bool:
             qualifications.add(line)
     return len(sections) >= 3 and len(qualifications) >= 2
 
+
 def _english_duties_and_qualifications(body: str) -> bool:
     """Observed Tasks/Qualifications bullets, only under full DOM agreement."""
     lines = [line.strip() for line in body.splitlines() if line.strip()]
     if not 6 <= len(lines) <= 100:
         return False
-    if re.search(r'\b(?:log|sign)\s+in\s+to\s+(?:view|read)|'
-                 r'\b(?:view|read|show)\s+(?:the\s+)?(?:full|complete)\s+(?:job|description)|'
-                 r'\b(?:show|read)\s+more\b', body, re.I):
+    if re.search(r'\b(?:log|sign)[\s-]*in\s+to\s+(?:view|read|see)\b|'
+                 r'\b(?:view|read|see|show)\s+(?:the\s+)?(?:full|complete)\s+(?:job|description)\b',
+                 body, re.I):
+        return False
+    # Expansion controls are whole prompts; duties can say "read more complex".
+    if any(re.fullmatch(
+            r'(?:[-•]\s*)?(?:please\s+)?(?:(?:click|tap)\s+(?:here\s+)?(?:to\s+)?)?'
+            r'(?:show|read)\s+more[.!…]*', line, re.I) for line in lines):
         return False
     sections = {'tasks:': set(), 'qualifications:': set()}
     current = None
