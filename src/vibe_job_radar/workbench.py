@@ -172,12 +172,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = unquote(urlsplit(self.path).path)
-        public = path in {"/", "/app.js", "/advanced", "/advanced.js", "/collection-help.js", "/guided", "/guided.js", "/network-settings.js", "/public-schedule.js", "/public-queue.js", "/windows-startup.js"}
+        public = path in {"/", "/app.js", "/report-sources.js", "/advanced", "/advanced.js", "/collection-help.js", "/guided", "/guided.js", "/network-settings.js", "/public-schedule.js", "/public-queue.js", "/windows-startup.js"}
         if not self._authorized(token_required=not public):
             return
         try:
             if public:
-                name = {"/": "workbench.html", "/app.js": "workbench.js", "/advanced": "advanced.html", "/advanced.js": "advanced.js", "/collection-help.js": "collection_help.js", "/guided": "guided.html", "/guided.js": "guided.js", "/network-settings.js": "network_settings.js", "/public-schedule.js": "public_schedule.js", "/public-queue.js": "public_queue.js", "/windows-startup.js": "windows_startup.js"}[path]
+                name = {"/": "workbench.html", "/app.js": "workbench.js", "/report-sources.js": "report_sources.js", "/advanced": "advanced.html", "/advanced.js": "advanced.js", "/collection-help.js": "collection_help.js", "/guided": "guided.html", "/guided.js": "guided.js", "/network-settings.js": "network_settings.js", "/public-schedule.js": "public_schedule.js", "/public-queue.js": "public_queue.js", "/windows-startup.js": "windows_startup.js"}[path]
                 mime = "text/html" if name.endswith(".html") else "text/javascript"
                 self._respond(200, files("vibe_job_radar").joinpath(name).read_bytes(), mime + "; charset=utf-8")
             elif path == "/api/network/state":
@@ -273,7 +273,7 @@ class Handler(BaseHTTPRequestHandler):
             methods = {"/api/guided/" + name: name for name in ("create", "action", "install", "check_browser", "diagnose", "export", "diagnostics")}
         elif route.startswith("/api/evidence/"):
             target = self.server.evidence
-            methods = {"/api/evidence/" + name: name for name in ("state", "catalogue", "review", "upload", "metric", "save", "remove", "generate")}
+            methods = {"/api/evidence/" + name: name for name in ("state", "catalogue", "sources", "source", "review", "upload", "metric", "save", "remove", "generate")}
         elif route in {"/api/collection/handoff_preview", "/api/collection/handoff_start"}:
             target = self.server.handoff
             methods = {"/api/collection/" + name: name for name in ("handoff_preview", "handoff_start")}

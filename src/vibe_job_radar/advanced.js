@@ -14,10 +14,12 @@ async function api(path, data={}) {
   if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
   return result;
 }
+const reportSources = window.createReportSources($('report-sources'), api);
+$('source-run').addEventListener('change', () => reportSources.setRun(''));
 function updateButtons() {
   const locked=initializing||busy||collecting;
   $("collection-controls").disabled=initializing;
-  document.querySelectorAll("button").forEach(b=>{b.disabled=locked;});
+  document.querySelectorAll("button").forEach(b=>{if(!b.closest("#report-sources"))b.disabled=locked;});
   document.querySelectorAll("[data-collection-preset]").forEach(b=>{b.disabled=busy||collecting;});
   $("collect-pause").disabled=!collecting||foreignCollection;
   $("prev-page").disabled=locked||page===0;
@@ -86,7 +88,10 @@ async function loadRequirements(reset=false) {
   if(!nextRun)throw new Error("先在基础工作台生成真实输入报告，或完成一次真实数据采集。");
   if(reset||nextRun!==runId){page=0;selected=new Map();}
   runId=nextRun;
-  const result=await api("/api/evidence/catalogue",{run_id:runId,query:$("requirement-query").value,page});total=result.total;
+  const result=await api("/api/evidence/catalogue",{run_id:runId,query:$("requirement-query").value,page});
+  if ($("source-run").value !== nextRun || runId !== nextRun) return;
+  total=result.total;
+  reportSources.setRun(nextRun);
   snapshotCapabilities=result.capabilities;
   checks("capabilities",snapshotCapabilities,chosen("capabilities"));
   // Do not silently refresh the optimistic revision while the user is editing.
