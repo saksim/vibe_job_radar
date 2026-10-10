@@ -58,3 +58,14 @@ PR295实际main 97c52ed9e9a228df0f3e98759d3435c7dafcc081完成一次正常工作
 [正常账号、会话及恢复](https://github.com/saksim/vibe_job_radar/issues/50)、[正常搜索与正文的整体验收](https://github.com/saksim/vibe_job_radar/issues/49)、[分页剩余情形](https://github.com/saksim/vibe_job_radar/issues/51)、[检查点与会话恢复](https://github.com/saksim/vibe_job_radar/issues/52)、[身份/全文人工审核及阈值](https://github.com/saksim/vibe_job_radar/issues/54)、[BOSS](https://github.com/saksim/vibe_job_radar/issues/55)和[51job](https://github.com/saksim/vibe_job_radar/issues/56)各保留自己的结果与未决条件。#63已按原范围完成当前Windows/Chrome的正常查询与结果配对验收；旧Edge页面清空的触发原因仍由#45/#23保留。公开分类、人工夹具、源码CI和实际便携程序资格互不替代实站或账号认证；三站不因此自动获得pilot_verified/live_verified。
 
 当前汇总见[专项总控](https://github.com/saksim/vibe_job_radar/issues/46)、[总线](https://github.com/saksim/vibe_job_radar/issues/57)和[GAP汇总](https://github.com/saksim/vibe_job_radar/issues/210)。本页不记录过期的登录冷却时间，不改变访问许可、配额、浏览器默认值、角色规则或历史报告。
+
+
+### 2026-10-10：main297后续补样与重定向诊断边界
+
+PR297的候选与实际main53ce6d6均完成独立首次26/26及原数据升级。普通预测查询40卡、固定a79526281详情302，0新增JD/报告；原DNS过期错误本次未出现，旧原因仍未知。两个有界隔离观察确认该/a目标首跳去wow.liepin.com，具体页面用途未取证、未访问被拒绝的目标；不能认定登录/验证、关闭或有效详情别名。
+
+另一次普通工业查询40卡，其中20条同时符合标题、原/job/路径及新URL条件。预选1985872599、1981420735、1971544665；首项redirect_requires_attention，另2未执行，0正文/报告。按预登记条件跳过第二次预测查询，0额外请求。原工作台当前16任务、3JD、93报告文件，原共享账本与偏好保留；全部所属浏览器正常关闭。没有新输入，独立研究报告仍为94不同URL/55目标组，方向49/4/3存在重叠、AI证据6/0/0、108要求候选/27规则正向/81待审/人工0。
+
+[交付与普通回归](https://github.com/saksim/vibe_job_radar/issues/23#issuecomment-6101941728)、[隔离诊断](https://github.com/saksim/vibe_job_radar/issues/49#issuecomment-6102210930)、[采样与停止记录](https://github.com/saksim/vibe_job_radar/issues/210#issuecomment-6101509060)分别保留。工业目的地未记录，不能套用另一个职位的WOW结果。所有原始失败和报告采集版本保持；不扩大为三站、真人账号或市场统计认证。
+
+原生拒绝新增的有限脱敏元数据见[D01增量](ACQUISITION_NATIVE_ADR.md)。该修复仅补齐跨域/跳数分支和目标模板的证据，不放行原拒绝、不复写历史原因；当前运行实例仍使用已验主线，候选资格与以后真实观察分别记录。

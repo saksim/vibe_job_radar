@@ -765,10 +765,14 @@ class NativeBackend(PlaywrightBackend):
             # Same-origin redirects keep native browser cookie/method semantics.
             # Cross-origin redirects need a site-specific credential contract.
             if urlsplit(target).netloc != urlsplit(url).netloc:
+                notify(getattr(self, '_diagnostics', None), 'redirect', url=target,
+                       reason='cross_origin', prior_hops=self._hops.get(key, 0))
                 raise CrawlError('redirect_requires_attention')
             self.contract.target(target)
             self._hops[key]=self._hops.get(key,0)+1
             if self._hops[key] > 5:
+                notify(getattr(self, '_diagnostics', None), 'redirect', url=target,
+                       reason='hop_limit', prior_hops=self._hops[key] - 1)
                 raise CrawlError('redirect_requires_attention')
         size=headers.get('content-length','')
         if size and (not size.isdigit() or int(size)>5_000_000):
