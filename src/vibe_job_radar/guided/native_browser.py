@@ -962,6 +962,16 @@ class NativeBackend(PlaywrightBackend):
             # Readiness is site content/response/challenge, not network-idle or a
             # fixed sleep. The existing parser still determines usable job data.
             try:
+                if (not search and not self.auth_mode and self.adapter.key == 'liepin'
+                        and self.page.url == self.adapter.search_base):
+                    # The keyword has not been submitted. An unrelated default
+                    # recommendation response is neither needed nor sufficient
+                    # to make the publisher's visible input usable.
+                    from .liepin_form import search_entry_ready
+                    if search_entry_ready(self):
+                        return
+                    self.page.wait_for_timeout(100)
+                    continue
                 body = self.page.locator('body')
                 if not body.count():
                     # A navigation can replace the document after DOMContentLoaded.
@@ -973,8 +983,16 @@ class NativeBackend(PlaywrightBackend):
                 if self.auth_mode and text.strip() and not search:
                     return
                 ready = getattr(self.adapter, 'native_ready', None)
-                if callable(ready) and ready(self.observations()):
-                    return
+                if callable(ready):
+                    observations = self.observations()
+                    if self.adapter.key == 'liepin':
+                        # The entry can now submit before recommendations arrive.
+                        # Their late response must not end the keyword-result wait,
+                        # including while a confirmed empty result is still pending.
+                        observations = tuple(o for o in observations
+                                             if not o.context.get('entry_bootstrap'))
+                    if ready(observations):
+                        return
                 snap=self.snapshot()
                 try:
                     if self.adapter.cards(snap):

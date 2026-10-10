@@ -481,7 +481,7 @@ function search(keyword) {
 field.addEventListener('keydown',event=>{
  if(event.key==='Enter') {event.preventDefault();window.searchSubmissions++;search(field.value);}
 });
-search('');
+if(fixture.mode!=='entry-without-recommendations')search('');
 '''
 
 
@@ -498,7 +498,7 @@ def verify_visible_forms(root, server, local, factory, wait, query, result):
         backend._settle=observed_settle
         return backend
     try:
-        for label in ('matched','empty','missing','challenge','query-document-refused'):
+        for label in ('matched','empty','missing','challenge','query-document-refused','entry-without-recommendations'):
             server.form_mode=label;before=len(server.requests);shape_before=len(server.search_shapes)
             key='明确无结果' if label=='empty' else query['keyword']
             workspace=Workspace(root/('visible-form-'+label))
@@ -514,14 +514,18 @@ def verify_visible_forms(root, server, local, factory, wait, query, result):
                 assert not any(r['path']=='/zhaopin/' and r['query_keys'] for r in requests)
                 assert ledger.summary('liepin')['login']['day']==0
                 row={'case':label,'keyword_posts':posts,'query_document_requests':0,'stale_recommendation_used':False,'login_attempts':0}
-                if label in ('matched','empty'):
+                if label in ('matched','empty','entry-without-recommendations'):
                     native=service._backends[task['id']]
                     observed=native.fixture_form_observation
-                    assert observed=={'submissions':1,'initializations':1},observed
-                    assert posts==1 and len(shapes)==2 and shapes[0]['keyword_empty']
-                    assert all(shapes[1][k] for k in ('date_alias','salary_split','rotated_id'))
-                    row.update(visible_submissions=1,initializations=1)
-                    if label=='matched':
+                    no_recommendations = label == 'entry-without-recommendations'
+                    assert observed['submissions']==1 and observed['initializations'] in (
+                        (0,) if no_recommendations else (0,1)),observed
+                    assert posts==1 and len(shapes)==(1 if no_recommendations else 2),shapes
+                    own_shape=next(row for row in shapes if not row['keyword_empty'])
+                    assert all(own_shape[k] for k in ('date_alias','salary_split','rotated_id'))
+                    row.update(visible_submissions=1,initializations=observed['initializations'],
+                               recommendation_requests=sum(s['keyword_empty'] for s in shapes))
+                    if label in ('matched','entry-without-recommendations'):
                         assert task['status']=='ready' and len(task['cards'])==1,task.get('code')
                         assert task['cards'][0]['url']==URL+'/job/123.shtml'
                         service.action({'id':task['id'],'action':'collect','selected':[task['cards'][0]['id']]})
