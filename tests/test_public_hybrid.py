@@ -322,16 +322,32 @@ class PublicHTTPTests(unittest.TestCase):
 
     def test_duplicate_requests_do_not_spawn_parallel_source_requests(self):
         import threading
-        release=threading.Event();entered=threading.Event()
+        release=threading.Event()
         def delayed(*a,**kw):
-            entered.set();release.wait(timeout=5);return example_fixtures.fixture_payload()
+            release.wait()
+            return example_fixtures.fixture_payload()
         with patch.object(SafeHTTP,'json',side_effect=delayed) as network:
             try:
-                self.call('/api/public/start',{'consent':True});self.assertTrue(entered.wait(2))
+                code,_,body=self.call('/api/public/start',{'consent':True})
+                self.assertEqual(code,200,body)
+                accepted=json.loads(body)
+                self.assertTrue(accepted['queued'])
+                worker=self.server.public_tasks._thread
+                self.assertIsNotNone(worker)
+                self.assertTrue(worker.is_alive())
+                # The accepted worker is active even while preparing durable
+                # quota. Duplicate exclusion has no two-second startup SLA.
                 self.assertEqual(self.call('/api/public/start',{'consent':True})[0],409)
-            finally:release.set()
-            self.wait()
+                self.assertIs(self.server.public_tasks._thread,worker)
+            finally:
+                # Never let the fixture finish on an arbitrary five-second
+                # timer, or leave its source mock before owned-worker cleanup.
+                release.set()
+                if self.server.public_tasks._thread is not None:
+                    settled=self.wait()
         self.assertEqual(network.call_count,1)
+        self.assertEqual(settled['id'],accepted['id'])
+        self.assertEqual(settled['status'],'completed',settled)
 
 
 class PublicWaitTests(unittest.TestCase):

@@ -20,11 +20,26 @@ from .page_surface import surface_text
 
 _OMIT = {'script', 'style', 'nav', 'footer', 'aside', 'noscript', 'template', 'iframe', 'svg'}
 _HEADINGS = {'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'dt'}
-# The observed phrase 公司信息部 names a department inside a duty, not an
-# employer-information panel. Keep the exception limited to that exact phrase.
-_FOREIGN = re.compile(r'推荐职位|相似职位|猜你喜欢|公司简介|公司信息(?!部)|猎聘温馨提示')
+# Foreign material is identified by its panel label, never by a word occurring
+# inside a professional duty (for example, 公司信息安全 or recommendation design).
+# A sentence delimiter can separate a panel label when the page omits a newline.
+_FOREIGN = re.compile(
+    r'(?:^|(?<=[。！？；.!?;]))[ \t]*(?:[-•][ \t]*)?(?:推荐职位|相似职位|猜你喜欢|公司简介|公司信息|猎聘温馨提示|'
+    r'(?:similar|recommended|related|other)\s+(?:jobs|positions|vacancies)|'
+    r'(?:company|employer)\s+(?:profile|information|overview|description)|'
+    r'about\s+(?:the\s+)?(?:company|employer)|about\s+us|who\s+we\s+are)'
+    r'(?:[ \t]*[:：][^\n]*|[ \t]*)$', re.I | re.M)
 _INCOMPLETE = re.compile(r'登录后.{0,8}(?:查看|浏览)|查看完整.{0,4}(?:职位|描述)|展开(?:全部|更多)|安全验证|滑动.{0,8}验证')
 _JOB_CONTENT = re.compile(r'职责|要求|岗位描述|职位描述|工作内容|工作职能|任职资格')
+_ENGLISH_QUALIFICATION = re.compile(
+    r'^(?:(?:(?:proven|hands[\s-]on|relevant|practical|professional)\s+){0,2}'
+    r'experience\s+(?:in|with|of|on|[a-z]+ing)\b|'
+    r'(?:familiar\s+with|knowledge\s+of|understanding\s+of|ability\s+to|'
+    r'proficien(?:t|cy)\s+in|fluen(?:t|cy)\s+in|expertise\s+in|degree\s+in)\b|'
+    r'(?:bachelor|master|doctorate|ph[.]?d)\b|'
+    r'(?:strong|excellent|good|solid|proven|working)\b.{0,80}'
+    r'\b(?:skills?|knowledge|experience|ability|expertise|understanding)\b|'
+    r'(?:熟悉|熟练|经验|学历|本科|硕士|掌握|精通|具备))', re.I)
 
 
 def _numbered_qualifications(body: str) -> bool:
@@ -56,6 +71,115 @@ def _labelled_duties_and_qualifications(body: str) -> bool:
                 r'(?:(?:具备|熟悉|熟练|掌握|精通)\S|有.{2,40}经验)', line)):
             qualifications.add(line)
     return len(sections) >= 3 and len(qualifications) >= 2
+
+
+def _english_incomplete_prompt(body: str) -> bool:
+    """Recognize whole access/control clauses, not professional prose."""
+    prefix = (r'(?:please\s+)?(?:you\s+(?:must|need\s+to|have\s+to|are\s+required\s+to)\s+)?'
+              r'(?:(?:click|tap)\s+(?:here\s+)?(?:to\s+)?)?')
+    account_name = r'(?:(?:your|the|an?)\s+)?(?:(?:free|new|registered|personal)\s+)?account'
+    # Use the same in/on forms for commands, states and visibility notices.
+    direction = r'(?:in|on)(?:to)?'
+    signed_state = r'(?:logged|signed)[\s-]*' + direction
+    auth_state = r'(?:' + signed_state + r'|registered|authenticated)'
+    auth_action = r'(?:log|sign)[\s-]*' + direction
+    auth = (r'(?:' + auth_action + r'|register|sign[\s-]*up|'
+            r'be\s+' + auth_state + r'|(?:create|set\s+up)\s+' + account_name + r')')
+    accounts = auth + r'(?:\s+or\s+' + auth + r'){0,2}'
+    account = r'(?:\s+(?:(?:to|with|for)\s+)?' + account_name + r')?'
+    login = prefix + accounts + account + r'(?:\s+(?:now|first|again))?'
+    object_ = r'(?:job(?:\s+(?:description|details))?|description|details|qualifications|requirements|posting)'
+    ending = r'(?:\s+(?:now|here))?[.!…?]*'
+    action = r'(?:view|read|see|show|learn|find\s+out|access|unlock|expand|open|reveal|(?:get|gain)\s+access\s+to|continue\s+(?:reading|to\s+read))'
+    article = r'(?:(?:the|this)\s+)?'
+    extent = r'(?:(?:full|complete|remaining|additional|further|entire|more|all)\s+|rest\s+of\s+(?:the|this)\s+)'
+    content = article + r'(?:' + extent + r')?' + object_
+    expanded = article + extent + object_
+    more = r'more(?:\s+(?:about\s+)?' + content + r')?'
+    reading = action + r'\s+(?:' + content + r'|' + more + r')'
+    access = r'(?:to\s+' + reading + r'|for\s+' + content + r'|to\s+continue(?:\s+reading)?)'
+    expansion = (r'(?:' + action + r'\s+(?:' + expanded + r'|' + more + r')|'
+                 r'for\s+' + more + r'|read\s+on|continue(?:\s+reading)?(?:\s+for\s+' + more + r')?)')
+    # Interface notices may resemble qualifications. Require a job-content
+    # subject and an account visibility predicate, never words within a duty.
+    subject = (r'(?:(?:access\s+to\s+)?' + content + r'|ability\s+to\s+' + reading
+               + r'|experience\s+in\s+(?:this|the)\s+(?:role|position|job))')
+    members = (r'(?:(?:registered|authenticated|' + signed_state
+               + r')\s+)?(?:account\s+holders|users|members)')
+    authentication = (r'(?:authentication|registration|' + auth_action
+                      + r'|(?:logging|signing)\s+(?:in|on)|being\s+' + auth_state + r')')
+    visibility = (r'(?:is|are)\s+(?:(?:only\s+)?(?:available|visible|accessible|displayed|shown|revealed)'
+                   r'\s+(?:only\s+)?(?:to\s+' + members + r'|after\s+' + authentication + r')|'
+                   r'(?:limited|restricted)\s+to\s+' + members + r')')
+    account_entity = (r'(?:(?:a|an|your|the)\s+)?'
+                      r'(?:(?:registered|active|valid|free|paid|personal)\s+)?(?:account|membership)')
+    account_requirement = (r'(?:requires?|needs?)\s+(?:' + account_entity + r'|'
+                           + authentication + r'|(?:you\s+to\s+)?' + accounts + r')')
+    restriction = r'(?:' + visibility + r'|' + account_requirement + r')'
+    # A notice can state a requirement instead of issuing a login command.
+    # Keep the entire clause anchored, including any job-content purpose, so
+    # technical duties about authentication still pass through verbatim.
+    auth_noun = (r'(?:(?:(?:a|an|your|the|user|account)\s+)?' + authentication
+                 + r'|' + account_entity + r')')
+    required = auth_noun + r'(?:\s+is)?\s+(?:required|needed|necessary|mandatory|essential)'
+    user_requirement = (r'you\s+(?:(?:need|require)\s+|'
+                        r'(?:must|need\s+to|have\s+to|are\s+required\s+to)\s+have\s+)'
+                        + account_entity)
+    declaration = r'(?:' + required + r'|' + user_requirement + r')'
+    for line in body.splitlines():
+        line = re.sub(r'^[-•]\s*', '', line.strip())
+        # An account-introduction question can precede the actual prompt.
+        for prompt in re.split(r'(?<=[.!?])\s+', line):
+            if (re.fullmatch(login + ending, prompt, re.I)
+                    and not re.search(r'\bregistered\b', prompt, re.I)):
+                return True
+            if re.fullmatch(
+                    r'(?:' + login + r'\s+' + access + r'|'
+                    + access + r'\s*[,;:]?\s+' + login + r')' + ending,
+                    prompt, re.I):
+                return True
+            # Registration and membership can describe professional eligibility.
+            # Without a job-access purpose, keep those qualifications as prose.
+            if (re.fullmatch(declaration + ending, prompt, re.I)
+                    and not re.search(r'\b(?:registration|registered|membership)\b', prompt, re.I)):
+                return True
+            if re.fullmatch(
+                    r'(?:' + declaration + r'\s+(?:in\s+order\s+)?' + access + r'|'
+                    + access + r'\s*[,;:]?\s+' + declaration + r')' + ending,
+                    prompt, re.I):
+                return True
+            if re.fullmatch(prefix + expansion + ending, prompt, re.I):
+                return True
+            if re.fullmatch(subject + r'\s+' + restriction + ending, prompt, re.I):
+                return True
+    return False
+
+
+def _english_duties_and_qualifications(body: str) -> bool:
+    """Observed Tasks/Qualifications bullets, only under full DOM agreement."""
+    lines = [line.strip() for line in body.splitlines() if line.strip()]
+    if not 6 <= len(lines) <= 100:
+        return False
+    sections = {'tasks:': set(), 'qualifications:': set()}
+    current = None
+    seen = []
+    for line in lines:
+        label = line.casefold()
+        if label in sections:
+            if label in seen or (label == 'qualifications:' and seen != ['tasks:']):
+                return False
+            seen.append(label)
+            current = label
+            continue
+        item = re.fullmatch(r'[-•]\s+(\S.{19,})', line)
+        if current is None or item is None:
+            return False
+        sections[current].add(item[1].casefold())
+    qualifications = sections['qualifications:'] - sections['tasks:']
+    # Unknown control text cannot become a qualification just by being long.
+    return (seen == ['tasks:', 'qualifications:']
+            and len(sections['tasks:']) >= 2
+            and sum(bool(_ENGLISH_QUALIFICATION.search(item)) for item in qualifications) >= 2)
 
 
 def _hidden(node: Node) -> bool:
@@ -135,9 +259,11 @@ def semantic_detail(markup: str) -> dict:
                 raise CrawlError('structure_changed')
             fragments.append(_text(child))
         body = _clean('\n'.join(fragments))
-        if _INCOMPLETE.search(body):
+        if len(body) > 150_000:
+            raise CrawlError('structure_changed')
+        if (_INCOMPLETE.search(body) or _english_incomplete_prompt(body)):
             raise CrawlError('jd_incomplete')
-        if (_FOREIGN.search(body) or len(body) < 40 or len(body) > 150_000
+        if (_FOREIGN.search(body) or len(body) < 40
                 or not _JOB_CONTENT.search(body)):
             raise CrawlError('structure_changed')
         return {'title': titles[0], 'text': body, 'parser': 'liepin:semantic_intro:v1'}
@@ -251,6 +377,8 @@ def structured_intro_detail(markup: str, url: str,
             raise CrawlError('structure_changed')
         title = unescape(title).strip()
         description = _clean(plain_text(description))
+        if len(description) > 150_000:
+            raise CrawlError('structure_changed')
         if not title or len(title) > 500 or len(description) < 20:
             raise CrawlError('jd_incomplete')
         body = description
@@ -261,6 +389,8 @@ def structured_intro_detail(markup: str, url: str,
             if id(anchor) not in visible_ids:
                 raise CrawlError('jd_incomplete')
             body = _clean(_text(anchor))
+            if len(body) > 150_000:
+                raise CrawlError('structure_changed')
             # A visible complete introduction can extend a structured prefix;
             # incompatible descriptions must not mix metadata from another job.
             compact_body = re.sub(r'\s+', '', body)
@@ -270,14 +400,16 @@ def structured_intro_detail(markup: str, url: str,
             parser = 'liepin:job_intro_jsonld:v1'
         else:
             parser = 'liepin:jsonld_string_whitespace:v1'
-        if _INCOMPLETE.search(body) or _INCOMPLETE.search(description):
+        if ((_INCOMPLETE.search(body) or _english_incomplete_prompt(body))
+                or (_INCOMPLETE.search(description) or _english_incomplete_prompt(description))):
             raise CrawlError('jd_incomplete')
-        # Unheaded forms require the entire visible introduction to agree
+        # Additional labelled/unheaded forms require the visible introduction to agree
         # with the same job's structured description, never only a prefix.
         corroborated_intro = (bool(anchors) and compact_body == compact_description
                               and (_numbered_qualifications(body)
-                                   or _labelled_duties_and_qualifications(body)))
-        if (len(body) < 40 or len(body) > 150_000 or _FOREIGN.search(body)
+                                   or _labelled_duties_and_qualifications(body)
+                                   or _english_duties_and_qualifications(body)))
+        if (len(body) < 40 or _FOREIGN.search(body)
                 or not (_JOB_CONTENT.search(body) or corroborated_intro)):
             raise CrawlError('structure_changed')
         org = posting.get('hiringOrganization')
@@ -369,12 +501,19 @@ class LiepinAdapter(DOMAdapter):
             return intro
         try:
             parsed = super().detail(page)
-            if _INCOMPLETE.search(parsed['text']):
-                raise CrawlError('jd_incomplete')
-            return parsed
         except CrawlError as exc:
             if exc.code != 'structure_changed':
                 raise
             if _has_structured_job(Document(page.html).root):
                 raise
             return semantic_detail(page.html)
+        # Parsing succeeded. Validation errors are fatal: a second layout must
+        # not replace an oversized or incomplete body selected by the parser.
+        # Keep the established batch status previously supplied by JobRecord.
+        if len(parsed['text']) > 150_000:
+            raise CrawlError('invalid_job_data')
+        if (_INCOMPLETE.search(parsed['text']) or _english_incomplete_prompt(parsed['text'])):
+            raise CrawlError('jd_incomplete')
+        if _FOREIGN.search(parsed['text']):
+            raise CrawlError('structure_changed')
+        return parsed

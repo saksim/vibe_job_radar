@@ -6,15 +6,59 @@ requests, CSP, credentials or fixture outcomes; exceptions still fail the run.
 from __future__ import annotations
 
 import json
+import sys
 from urllib.parse import urlsplit
 from unittest.mock import patch
 
 import run_native_liepin_search as acceptance
 from run_native_auth_probe import ObservedBackend, PROBES
+from native_netlog_evidence import NativeNetLog, unavailable
 from native_wait_diagnostics import Stages, capture, observed_backend, observed_wait, observe_io, require_ci
 
 
+# Keep only our CI captures for a final cleanup pass after all browser owners
+# have finished; raw files remain outside the artifact directory.
+CONNECTION_LOGS = []
+
+
+def finish_client_logs(entries):
+    complete = True
+    for probe, observer in entries:
+        try:
+            probe['client_connection_log'] = observer.finish()
+        except Exception:
+            probe['client_connection_log'] = {**unavailable('observer_error'), 'private_cleanup': 'pending'}
+        if probe['client_connection_log'].get('private_cleanup') != 'removed':
+            complete = False
+    return complete
+
+
 class SearchObserver(ObservedBackend):
+    def _launch_options(self, options):
+        configured = super()._launch_options(options)
+        try:
+            self._connection_log = NativeNetLog(
+                acceptance.ROOT / '.verify' / 'native-netlog-private',
+                self.tunnel.endpoint, self.contract.hosts)
+            CONNECTION_LOGS.append((self.probe, self._connection_log))
+            return self._connection_log.options(configured)
+        except Exception:
+            self.probe['client_connection_log'] = unavailable('setup_failed')
+            return configured
+
+    def close(self):
+        try:
+            return super().close()
+        finally:
+            observer = self.__dict__.get('_connection_log')
+            if observer is not None:
+                # Browser shutdown flushes the private log. Preserve any close
+                # exception; auxiliary evidence never alters the test outcome.
+                try:
+                    self.probe['client_connection_log'] = observer.finish()
+                except Exception:
+                    self.probe['client_connection_log'] = unavailable('observer_error')
+
     def _received(self, event):
         message = json.loads(event['message'])
         if message.get('method') == 'Target.attachedToTarget':
@@ -40,12 +84,18 @@ def main():
                 patch.object(acceptance, 'wait', observed_wait(acceptance.wait, stages, out, 'search-wait')):
             acceptance.main()
     finally:
+        private_logs_removed = finish_client_logs(CONNECTION_LOGS)
         out = acceptance.ROOT / 'browser-acceptance' / 'native'
         out.mkdir(parents=True, exist_ok=True)
         (out / 'search-probe.json').write_text(json.dumps({
             'scope': 'Passive metadata only; unchanged artificial-source tests and production request decisions.',
             'backends': PROBES,
+            'private_logs_removed': private_logs_removed,
         }, indent=2), encoding='utf-8')
+        # Retain the original acceptance failure, but never let successful
+        # acquisition checks certify a probe that left private raw logs behind.
+        if not private_logs_removed and sys.exc_info()[0] is None:
+            raise RuntimeError('Private browser connection log cleanup incomplete')
 
 
 if __name__ == '__main__':
