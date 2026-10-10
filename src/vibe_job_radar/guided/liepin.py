@@ -63,15 +63,19 @@ def _english_duties_and_qualifications(body: str) -> bool:
     lines = [line.strip() for line in body.splitlines() if line.strip()]
     if not 6 <= len(lines) <= 100:
         return False
-    if re.search(r'\b(?:log|sign)[\s-]*in\s+to\s+(?:view|read|see)\b|'
-                 r'\b(?:view|read|see|show)\s+(?:the\s+)?(?:full|complete)\s+(?:job|description)\b',
-                 body, re.I):
-        return False
-    # Expansion controls are whole prompts; duties can say "read more complex".
-    if any(re.fullmatch(
-            r'(?:[-•]\s*)?(?:please\s+)?(?:(?:click|tap)\s+(?:here\s+)?(?:to\s+)?)?'
-            r'(?:show|read)\s+more[.!…]*', line, re.I) for line in lines):
-        return False
+    # A prompt is a complete line or a leading imperative to authenticate.
+    # Do not reject substantive duties that merely mention login or a full job.
+    prefix = r'(?:please\s+)?(?:(?:click|tap)\s+(?:here\s+)?(?:to\s+)?)?'
+    for line in lines:
+        prompt = re.sub(r'^[-•]\s*', '', line)
+        if re.match(prefix + r'(?:log|sign)[\s-]*in\b', prompt, re.I):
+            return False
+        if re.fullmatch(
+                prefix + r'(?:(?:show|read)\s+more|'
+                r'(?:view|read|see|show|access|unlock)\s+(?:the\s+)?(?:full|complete)\s+'
+                r'(?:job(?:\s+(?:description|details))?|description|details))'
+                r'(?:\s+(?:now|here))?[.!…]*', prompt, re.I):
+            return False
     sections = {'tasks:': set(), 'qualifications:': set()}
     current = None
     seen = []

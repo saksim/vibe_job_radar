@@ -111,14 +111,21 @@ class EnglishSectionTests(unittest.TestCase):
                 "Please login to see the qualifications.",
                 "Please see the full job description.",
                 "Please click here to read more.",
-                "Click here to show more."):
+                "Click here to show more.",
+                "Please sign in to access the complete job description.",
+                "Log in to unlock the complete job description.",
+                "Please sign in to continue reading this posting.",
+                "Please click here to see the full description."):
             with self.subTest(prompt=prompt), self.assertRaises(CrawlError):
                 self.parse(BODY+"\n- "+prompt)
 
     def test_substantive_read_more_and_show_more_phrases_are_preserved(self):
         for qualification in (
                 "Ability to read more complex technical diagrams and specifications.",
-                "Develop dashboards that show more detailed software diagnostics."):
+                "Develop dashboards that show more detailed software diagnostics.",
+                "Ability to see the full job lifecycle from architecture to production.",
+                "Read the complete job specification and turn it into a technical design.",
+                "Design sign-in workflows to access internal monitoring dashboards."):
             body = BODY+"\n- "+qualification
             with self.subTest(qualification=qualification):
                 self.assertEqual(self.parse(body)['text'], body)
