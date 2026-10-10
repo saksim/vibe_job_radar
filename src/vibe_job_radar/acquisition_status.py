@@ -27,10 +27,36 @@ NATIVE_DEFINITION = '1e1531acdeea880808c168fa33df4b4b7d957c3b707b1c0a43760735823
 LIEPIN_DEFINITION = 'a84e31bfac42377dfe238a41ebba113d31fcdd232cf16095729bd5703701cae7'
 LIEPIN_NATIVE_DEFINITION = 'fcea6e2869894c082fdddabb2b7c465d77dbe3c245fc4360051dcd8e10ff136b'
 LIEPIN_EVIDENCE_HEAD = '0d85f554818779f9445ad8e3d618a26a118910b7'
+# The icon-only pager definition has its own later proof; September evidence
+# stays attached to its original definitions and revisions.
+LIEPIN_PAGER_DEFINITION = '3840b65f9416c54cee0560912ae5b57dc3d93429085d00e4a45a46bc26d74815'
+LIEPIN_PAGER_NATIVE_DEFINITION = 'cda90b91d6bdfcc6e4d9cab15eaf8390c783d50ec9fed7c5f009128a956ffa36'
+LIEPIN_PAGER_EVIDENCE_HEAD = '448fa17e7ea9fc2f647dab99b74324004dd54dae'
 
 
 def _digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+
+
+def _pager_evidence(backend):
+    common = {'level':'controlled_verified', 'date':'2026-10-10',
+              'source_revision':LIEPIN_PAGER_EVIDENCE_HEAD}
+    evidence = [{**common,
+        'scope':('人工分页控件中的桥接生产 next_page 方法（11项）；未认证实站'
+                 if backend == 'bridge' else
+                 '人工分页控件中的原生 next_page 方法（11项），注入 Playwright 页面；不含原生 CDP/网络'),
+        'browser_os':['Chromium / Linux'],
+        'network':'内存人工页面，无外部请求；不代表用户网络',
+        'url':REPO+'/actions/runs/38051204590'}]
+    if backend == 'native':
+        evidence.insert(0, {**common,
+            'scope':'六个人工 TLS 主机、真实原生后端与猎聘适配，每环境32项；未认证平台账号或实站',
+            'browser_os':['Chromium / Linux（有头与无头）',
+                          'Edge / Windows（有头与无头）',
+                          'Chrome / Windows（有头与无头）'],
+            'network':'本机 TLS 夹具；不代表用户 VPN/TUN',
+            'url':REPO+'/actions/runs/38051204635'})
+    return evidence
 
 
 def describe_adapter(adapter):
@@ -43,7 +69,8 @@ def describe_adapter(adapter):
         identity = None
     baseline = identity is not None and identity == DEFINITIONS.get(adapter.key)
     updated_liepin = adapter.key == 'liepin' and identity == LIEPIN_DEFINITION
-    known = baseline or updated_liepin
+    pager_liepin = adapter.key == 'liepin' and identity == LIEPIN_PAGER_DEFINITION
+    known = baseline or updated_liepin or pager_liepin
     try:
         contract = contract_for(adapter)
     except CrawlError:
@@ -52,11 +79,14 @@ def describe_adapter(adapter):
     rows = []
     for backend in ('bridge','native'):
         available = backend == 'bridge' or contract is not None
-        expected_native = LIEPIN_NATIVE_DEFINITION if updated_liepin else NATIVE_DEFINITION
+        expected_native = (LIEPIN_PAGER_NATIVE_DEFINITION if pager_liepin else
+                           LIEPIN_NATIVE_DEFINITION if updated_liepin else NATIVE_DEFINITION)
         matched = known and (backend == 'bridge' or contract is not None
                              and _digest(asdict(contract)) == expected_native)
         evidence = []
-        if matched:
+        if matched and pager_liepin:
+            evidence = _pager_evidence(backend)
+        elif matched:
             # Shared backend fixtures are not dedicated live-site certification.
             evidence = [{'level':'controlled_verified', 'date':'2026-09-23' if updated_liepin else EVIDENCE_DATE,
                 'source_revision':LIEPIN_EVIDENCE_HEAD if updated_liepin else EVIDENCE_HEAD,
@@ -71,6 +101,10 @@ def describe_adapter(adapter):
             message = '尚无本站原生访问契约，不能选择该模式。'
         elif not known:
             message = '当前适配定义没有匹配的已记录验收；需单独验证，实站未认证。'
+        elif pager_liepin:
+            message = ('浏览器桥已有当前定义的受控验证；真实账号、搜索和完整 JD 链路仍待实站验收。'
+                       if backend == 'bridge' else
+                       '原生模式仍须显式选择；本机 Chrome 已分别观察到匿名关键词两页列表、两份完整 JD 与各自报告；真实账号、会话恢复和整体样本验收仍待完成。')
         elif adapter.key == 'liepin':
             message = ('浏览器桥的真实搜索、正常登录与完整 JD 链路仍待验收。'
                        if backend == 'bridge' else
@@ -84,9 +118,9 @@ def describe_adapter(adapter):
             'contract':contract.key if backend == 'native' and contract else '',
             'access_scope':('已配置的搜索/详情页面与资源；按 robots 和正常登录范围执行' if backend == 'bridge' else
                             '仅代码内已审核的主机/方法/路径；不接受页面扩展权限' if contract else '未开放'),
-            'live_status':'blocked' if adapter.key == 'liepin' else 'not_verified',
+            'live_status':'not_verified',
             'live_verified':False, 'pilot_verified':False, 'user_network_verified':False,
-            'blocking_issues':[issue] + ([63] if adapter.key == 'liepin' else []), 'message':message})
+            'blocking_issues':[49,50,51,52,54] if adapter.key == 'liepin' else [issue], 'message':message})
     return {'platform':adapter.key, 'label':adapter.label,
             'adapter_version':getattr(adapter,'version','custom'),
             'definition_matches_recorded_evidence':known, 'certification':'not_live_verified', 'backends':rows}
@@ -96,7 +130,7 @@ def snapshot(registry=None):
     if registry is None:
         from .guided.adapters import builtins
         registry = builtins()
-    return {'schema_version':1, 'catalog_revision':'2026-10-08', 'main_baseline':BASELINE,
+    return {'schema_version':1, 'catalog_revision':'2026-10-10', 'main_baseline':BASELINE,
         'scope':'软件能力及历史受控证据；不证明本报告岗位的获取方式、真实登录或市场覆盖',
         'sites':[site['acquisition'] for site in registry.describe()]}
 

@@ -21,10 +21,11 @@ ROOT = Path(__file__).resolve().parents[1]
 class AcquisitionStatusTests(unittest.TestCase):
     def test_builtin_availability_and_default_are_separate_from_verification(self):
         for site in snapshot()['sites']:
-            # The new Liepin pager definition cannot inherit old fixture proof.
-            self.assertEqual(site['definition_matches_recorded_evidence'], site['platform'] != 'liepin')
+            self.assertTrue(site['definition_matches_recorded_evidence'])
             if site['platform'] == 'liepin':
-                self.assertTrue(all(not row['evidence'] for row in site['backends']))
+                self.assertTrue(all(row['evidence'] for row in site['backends']))
+                self.assertTrue(all(row['blocking_issues'] == [49,50,51,52,54]
+                                    for row in site['backends']))
             self.assertEqual(site['certification'], 'not_live_verified')
             bridge, native = site['backends']
             self.assertTrue(bridge['default'])
@@ -32,6 +33,7 @@ class AcquisitionStatusTests(unittest.TestCase):
             self.assertEqual(native['available'], site['platform'] == 'liepin')
             for row in site['backends']:
                 self.assertIn(row['verification_level'], LEVELS)
+                self.assertEqual(row['live_status'], 'not_verified')
                 self.assertFalse(row['live_verified'])
                 self.assertFalse(row['pilot_verified'])
                 self.assertFalse(row['user_network_verified'])
@@ -43,7 +45,8 @@ class AcquisitionStatusTests(unittest.TestCase):
     def test_adapter_changes_cannot_inherit_same_key_evidence(self):
         adapter = builtins().get('liepin')
         for changed in (replace(adapter, version='future'), replace(adapter, resource_domains=('other.test',)),
-                        replace(adapter, certification='live_verified'), replace(adapter, card_selector='.new-cards')):
+                        replace(adapter, certification='live_verified'), replace(adapter, card_selector='.new-cards'),
+                        replace(adapter, next_selectors=('button.unreviewed-next',))):
             data = describe_adapter(changed)
             self.assertFalse(data['definition_matches_recorded_evidence'])
             self.assertTrue(all(not row['evidence'] for row in data['backends']))
@@ -69,6 +72,22 @@ class AcquisitionStatusTests(unittest.TestCase):
         self.assertEqual(old['evidence'][0]['date'],'2026-09-18')
         self.assertEqual(new['evidence'][0]['date'],'2026-09-23')
         self.assertFalse(new['live_verified'])
+        # Current proof is separately dated and tied to the reviewed pager
+        # definition. It cannot rewrite the two historical records above.
+        current = describe_adapter(builtins().get('liepin'))['backends']
+        for row in current:
+            for proof in row['evidence']:
+                self.assertEqual(proof['source_revision'],'448fa17e7ea9fc2f647dab99b74324004dd54dae')
+                self.assertEqual(proof['date'],'2026-10-10')
+            self.assertFalse(row['live_verified'])
+        self.assertEqual(len(current[0]['evidence']),1)
+        self.assertEqual(len(current[1]['evidence']),2)
+        self.assertEqual(current[0]['evidence'][0]['url'],
+                         'https://github.com/saksim/vibe_job_radar/actions/runs/38051204590')
+        self.assertEqual(current[1]['evidence'][0]['url'],
+                         'https://github.com/saksim/vibe_job_radar/actions/runs/38051204635')
+        self.assertIn('Chrome / Windows（有头与无头）',current[1]['evidence'][0]['browser_os'])
+        self.assertIn('不含原生 CDP/网络',current[1]['evidence'][1]['scope'])
         # Expanding the reviewed hosts again cannot keep either proof.
         other=describe_adapter(replace(after,resource_domains=(*after.resource_domains,'unreviewed.test')))
         self.assertTrue(all(not row['evidence'] for row in other['backends']))
