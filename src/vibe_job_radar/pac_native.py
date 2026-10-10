@@ -177,12 +177,12 @@ def evaluate(source: str, url: str, permitted) -> str:
     if not _SLOTS.acquire(blocking=False): raise LocalProxyError('pac_busy')
     receiver = sender = process = None
     try:
+        end = time.monotonic() + DEADLINE
         if not permitted(): raise LocalProxyError('pac_revoked')
         context = multiprocessing.get_context('spawn')
         receiver, sender = context.Pipe(duplex=False)
         process = context.Process(target=_worker, args=(sender, source, url), daemon=True)
         process.start(); sender.close(); sender = None
-        end = time.monotonic() + DEADLINE
         while time.monotonic() < end:
             if not permitted(): raise LocalProxyError('pac_revoked')
             if receiver.poll(min(.1, max(0, end-time.monotonic()))):
@@ -192,6 +192,7 @@ def evaluate(source: str, url: str, permitted) -> str:
                     raise LocalProxyError(value['error'])
                 if set(value) != {'raw'} or not isinstance(value['raw'], str): raise ValueError()
                 if not permitted(): raise LocalProxyError('pac_revoked')
+                if time.monotonic() >= end: raise LocalProxyError('pac_timeout')
                 return value['raw']
             if not process.is_alive(): raise LocalProxyError('pac_failed')
         raise LocalProxyError('pac_timeout')
