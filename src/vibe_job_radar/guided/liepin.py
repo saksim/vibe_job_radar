@@ -58,24 +58,28 @@ def _labelled_duties_and_qualifications(body: str) -> bool:
     return len(sections) >= 3 and len(qualifications) >= 2
 
 
+def _english_incomplete_prompt(body: str) -> bool:
+    """Recognize authentication commands and complete expansion prompt lines."""
+    prefix = r'(?:please\s+)?(?:(?:click|tap)\s+(?:here\s+)?(?:to\s+)?)?'
+    action = r'(?:view|read|see|show|access|unlock|expand|continue\s+(?:reading|to\s+read))'
+    for line in body.splitlines():
+        prompt = re.sub(r'^[-•]\s*', '', line.strip())
+        if re.match(prefix + r'(?:log|sign)[\s-]*in\b', prompt, re.I):
+            return True
+        if re.fullmatch(
+                prefix + r'(?:(?:show|read)\s+more|read\s+on|continue(?:\s+reading)?|'
+                + action + r'\s+(?:the\s+)?(?:full|complete)\s+'
+                r'(?:job(?:\s+(?:description|details))?|description|details))'
+                r'(?:\s+(?:now|here))?[.!…]*', prompt, re.I):
+            return True
+    return False
+
+
 def _english_duties_and_qualifications(body: str) -> bool:
     """Observed Tasks/Qualifications bullets, only under full DOM agreement."""
     lines = [line.strip() for line in body.splitlines() if line.strip()]
     if not 6 <= len(lines) <= 100:
         return False
-    # A prompt is a complete line or a leading imperative to authenticate.
-    # Do not reject substantive duties that merely mention login or a full job.
-    prefix = r'(?:please\s+)?(?:(?:click|tap)\s+(?:here\s+)?(?:to\s+)?)?'
-    for line in lines:
-        prompt = re.sub(r'^[-•]\s*', '', line)
-        if re.match(prefix + r'(?:log|sign)[\s-]*in\b', prompt, re.I):
-            return False
-        if re.fullmatch(
-                prefix + r'(?:(?:show|read)\s+more|'
-                r'(?:view|read|see|show|access|unlock)\s+(?:the\s+)?(?:full|complete)\s+'
-                r'(?:job(?:\s+(?:description|details))?|description|details))'
-                r'(?:\s+(?:now|here))?[.!…]*', prompt, re.I):
-            return False
     sections = {'tasks:': set(), 'qualifications:': set()}
     current = None
     seen = []
@@ -91,7 +95,9 @@ def _english_duties_and_qualifications(body: str) -> bool:
         if current is None or item is None:
             return False
         sections[current].add(item[1].casefold())
-    return seen == ['tasks:', 'qualifications:'] and all(len(items) >= 2 for items in sections.values())
+    return (seen == ['tasks:', 'qualifications:']
+            and len(sections['tasks:']) >= 2
+            and len(sections['qualifications:'] - sections['tasks:']) >= 2)
 
 
 def _hidden(node: Node) -> bool:
@@ -171,7 +177,7 @@ def semantic_detail(markup: str) -> dict:
                 raise CrawlError('structure_changed')
             fragments.append(_text(child))
         body = _clean('\n'.join(fragments))
-        if _INCOMPLETE.search(body):
+        if (_INCOMPLETE.search(body) or _english_incomplete_prompt(body)):
             raise CrawlError('jd_incomplete')
         if (_FOREIGN.search(body) or len(body) < 40 or len(body) > 150_000
                 or not _JOB_CONTENT.search(body)):
@@ -306,7 +312,8 @@ def structured_intro_detail(markup: str, url: str,
             parser = 'liepin:job_intro_jsonld:v1'
         else:
             parser = 'liepin:jsonld_string_whitespace:v1'
-        if _INCOMPLETE.search(body) or _INCOMPLETE.search(description):
+        if ((_INCOMPLETE.search(body) or _english_incomplete_prompt(body))
+                or (_INCOMPLETE.search(description) or _english_incomplete_prompt(description))):
             raise CrawlError('jd_incomplete')
         # Additional labelled/unheaded forms require the visible introduction to agree
         # with the same job's structured description, never only a prefix.
@@ -406,7 +413,7 @@ class LiepinAdapter(DOMAdapter):
             return intro
         try:
             parsed = super().detail(page)
-            if _INCOMPLETE.search(parsed['text']):
+            if (_INCOMPLETE.search(parsed['text']) or _english_incomplete_prompt(parsed['text'])):
                 raise CrawlError('jd_incomplete')
             return parsed
         except CrawlError as exc:

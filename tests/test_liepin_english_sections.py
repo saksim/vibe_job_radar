@@ -51,8 +51,19 @@ class EnglishSectionTests(unittest.TestCase):
             self.assertEqual(saved['record_id'], record.record_id)
             self.assertEqual(saved['text'], BODY)
             hashes = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in first.iterdir()}
-            analyze(store, Path(tmp)/'second', role_filter=['architect'], demo_mode=True)
+            second = Path(tmp)/'second'
+            analyze(store, second, role_filter=['architect'], demo_mode=True)
+            # A later report must not rewrite the earlier one. Run timestamps
+            # and manifests need not be identical between separate reports.
             self.assertEqual(hashes, {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in first.iterdir()})
+            self.assertEqual(set(hashes), {p.name for p in second.iterdir()})
+            replay = json.loads((second/'jobs.jsonl').read_text(encoding='utf8'))
+            self.assertEqual(replay['record_id'], record.record_id)
+            self.assertEqual(replay['text'], BODY)
+            manifest = json.loads((second/'run_manifest.json').read_text(encoding='utf8'))
+            self.assertEqual(manifest['stats']['full_text_job_groups'], 1)
+            for name, expected in manifest['output_files_sha256'].items():
+                self.assertEqual(hashlib.sha256((second/name).read_bytes()).hexdigest(), expected)
 
     def test_paired_ordered_headings_are_required(self):
         tasks, qualifications = BODY.split('Qualifications:')
@@ -70,9 +81,13 @@ class EnglishSectionTests(unittest.TestCase):
                      '\n'.join(lines[:-1]),
                      BODY.replace(lines[2], lines[1]),
                      BODY.replace(lines[-1], lines[-2]),
-                     BODY.replace(lines[1], '- Short item.')):
+                     BODY.replace(lines[1], '- Short item.'),
+                     '\n'.join(lines[:4]+lines[1:3])):
             with self.subTest(body=body[:30]), self.assertRaises(CrawlError):
                 self.parse(body)
+        # Repeating a duty does not replace the two genuine qualifications.
+        body = BODY+'\n'+lines[1]
+        self.assertEqual(self.parse(body)['text'], body)
 
     def test_prefix_absent_or_hidden_visible_intro_does_not_gain_acceptance(self):
         for layout in ({'description':BODY[:50]}, {'anchor':False}, {'attrs':'hidden'},
@@ -115,7 +130,10 @@ class EnglishSectionTests(unittest.TestCase):
                 "Please sign in to access the complete job description.",
                 "Log in to unlock the complete job description.",
                 "Please sign in to continue reading this posting.",
-                "Please click here to see the full description."):
+                "Please click here to see the full description.",
+                "Continue reading the full job description.",
+                "Please click here to continue reading.",
+                "Please continue to read the complete description."):
             with self.subTest(prompt=prompt), self.assertRaises(CrawlError):
                 self.parse(BODY+"\n- "+prompt)
 
@@ -129,3 +147,15 @@ class EnglishSectionTests(unittest.TestCase):
             body = BODY+"\n- "+qualification
             with self.subTest(qualification=qualification):
                 self.assertEqual(self.parse(body)['text'], body)
+
+    def test_recognized_english_prompts_report_incomplete_across_layouts(self):
+        for prompt in ("Please sign in to see the complete job description.",
+                       "Continue reading the full job description."):
+            for body, layout in (
+                    (BODY, {}),
+                    (BODY.replace("Qualifications:", "任职资格"), {}),
+                    (BODY, {'anchor':False, 'raw_breaks':False})):
+                with self.subTest(prompt=prompt, layout=layout, body=body[:6]):
+                    with self.assertRaises(CrawlError) as failure:
+                        self.parse(body+"\n- "+prompt, **layout)
+                    self.assertEqual(failure.exception.code, 'jd_incomplete')
