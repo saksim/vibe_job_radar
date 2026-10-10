@@ -60,7 +60,7 @@ class GatherCheckpointBoundaryTests(unittest.TestCase):
     def assert_saved_prefix(self, before):
         after = self.service._load(before['id'])
         for field in ('cards', 'selection', 'pages_seen', 'cursors_seen',
-                      'effective_search', 'last_list_url', 'report_id'):
+                      'effective_search', 'last_list_url', 'checkpoint_list_url', 'report_id'):
             self.assertEqual(after.get(field), before.get(field), field)
 
     def test_resume_traverses_multiple_saved_pages_without_replacing_old_cards_or_selection(self):
@@ -116,12 +116,17 @@ class GatherCheckpointBoundaryTests(unittest.TestCase):
     def test_resume_unverifiable_old_history_stops_before_backend_allocation(self):
         state, _ = self.paused_listing()
         before = copy.deepcopy(state)
-        variants = []
-        for field in ('last_list_url', 'effective_search'):
-            changed = copy.deepcopy(state); changed.pop(field); variants.append(changed)
-        variants += [
-            {**state, 'last_list_url': ADAPTER.search_url('another-query')},
-            {**state, 'last_list_url': SEARCH+'&currentPage=9'},
+        missing = copy.deepcopy(state)
+        missing.pop('checkpoint_list_url'); missing.pop('last_list_url')
+        for card in missing['cards']:
+            card['source_url'] = ''
+        no_scope = copy.deepcopy(state); no_scope.pop('effective_search')
+        variants = [
+            missing, no_scope,
+            {**state, 'checkpoint_list_url': ADAPTER.search_url('another-query')},
+            {**state, 'checkpoint_list_url': SEARCH+'&currentPage=9'},
+            {**state, 'checkpoint_list_url': None},
+            {**state, 'cards': []},
             {**state, 'pages_seen': state['pages_seen']*2},
             {**state, 'cursors_seen': ['0','0']},
             {**state, 'pages_seen': [], 'cursors_seen': ['0']},
@@ -234,6 +239,41 @@ class GatherCheckpointBoundaryTests(unittest.TestCase):
                 else:
                     backend.open_search.assert_called_once_with(SEARCH, keyword=state['keyword'])
                     submit.assert_not_called()
+
+    def test_unreadable_next_page_recovers_the_last_saved_position(self):
+        for legacy, action in ((old, mode) for old in (False, True) for mode in ('resume','capture')):
+            with self.subTest(legacy=legacy, action=action):
+                state = self.create(max_pages=3)
+                first = replace(listing(job(1)), url=SEARCH+'&currentPage=0')
+                empty = replace(listing(), url=SEARCH+'&currentPage=1')
+                self.service._gather(state, Pages([first, empty]), ADAPTER)
+                self.assertEqual(state['code'], 'empty_list')
+                self.assertEqual(state['last_list_url'], empty.url)
+                self.assertEqual(state['cursors_seen'], ['0'])
+                self.assertEqual(state['checkpoint_list_url'], first.url)
+                if legacy:
+                    state.pop('checkpoint_list_url', None)
+                    self.service._save(state)
+                before = copy.deepcopy(state)
+                readable = replace(listing(job(2)), url=empty.url)
+                if action == 'resume':
+                    resumed, backend = self.resume_listing(state, [first, readable])
+                else:
+                    # The same previously attempted page can become readable.
+                    # Capture must consume it without navigating to page one.
+                    backend = Pages([readable])
+                    backend.open_search = Mock();backend.open = Mock()
+                    with patch.object(self.service, '_backend', return_value=backend):
+                        self.service._run('capture', state, None)
+                    resumed = self.service._load(state['id'])
+                    backend.open.assert_not_called();backend.open_search.assert_not_called()
+                self.assertEqual([c['url'] for c in resumed['cards']], [job(1),job(2)])
+                self.assertEqual(resumed['cards'][:1], before['cards'])
+                self.assertEqual(resumed['selection'], before['selection'])
+                self.assertEqual(resumed['effective_search'], before['effective_search'])
+                self.assertEqual(resumed['cursors_seen'], ['0','1'])
+                self.assertEqual(resumed['list_end'], 'no_next_button')
+                self.assertEqual(backend.clicks, 2 if action=='resume' else 1)
 
     def test_terminal_state_is_complete_at_the_first_committed_write(self):
         state = self.create(max_pages=1)

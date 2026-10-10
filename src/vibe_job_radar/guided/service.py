@@ -847,21 +847,33 @@ class GuidedService:
             if saved_cursors:
                 raise CrawlError('checkpoint_list_changed')
             return prefix, saved_cursors, None
-        checkpoint_url = state.get('last_list_url')
-        if (not isinstance(checkpoint_url, str) or not checkpoint_url or len(checkpoint_url) > 2048
-                or len(set(prefix)) != len(prefix) or len(saved_cursors) > len(prefix)
-                or len(set(saved_cursors)) != len(saved_cursors)
+        if (not state['cards'] or len(set(prefix)) != len(prefix)
+                or len(saved_cursors) > len(prefix) or len(set(saved_cursors)) != len(saved_cursors)
                 or state.get('query_scope_version') == 1
                 and not isinstance(state.get('effective_search'), dict)):
             raise CrawlError('checkpoint_list_changed')
-        try:
-            adapter.accept_url(checkpoint_url)
-            last_cursor = check_scope(dict(state), adapter, checkpoint_url)
-        except CrawlError:
-            raise CrawlError('checkpoint_list_changed') from None
-        if len(saved_cursors) == len(prefix) and saved_cursors[-1] != last_cursor:
-            raise CrawlError('checkpoint_list_changed')
-        return prefix, saved_cursors, last_cursor
+        if 'checkpoint_list_url' in state:
+            # New tasks bind this URL to a committed signature, not to a later
+            # attempted page that might be empty or temporarily unreadable.
+            candidates = [state['checkpoint_list_url']]
+        else:
+            # Legacy checkpoints only have last_list_url, which may describe
+            # an unrecorded empty page. The last appended card still carries
+            # its actually observed source URL. Never construct a page URL.
+            candidates = [row.get('source_url') for row in reversed(state['cards'])]
+            candidates.append(state.get('last_list_url'))
+        for checkpoint_url in candidates:
+            if not isinstance(checkpoint_url, str) or not checkpoint_url or len(checkpoint_url) > 2048:
+                continue
+            try:
+                adapter.accept_url(checkpoint_url)
+                last_cursor = check_scope(dict(state), adapter, checkpoint_url)
+            except CrawlError:
+                continue
+            if len(saved_cursors) == len(prefix) and saved_cursors[-1] != last_cursor:
+                continue
+            return prefix, saved_cursors, last_cursor
+        raise CrawlError('checkpoint_list_changed')
 
     @traced('listing', 'service', state_index=0)
     def _gather(self, state, backend, adapter, *, navigate=False, more=False, resume=False):
@@ -908,6 +920,14 @@ class GuidedService:
                            last_list_url=page.url)
                 return
             signature = page_signature(state, cards)
+            if (prefix and prefix_index == 0 and not navigate
+                    and page.url == state.get('last_list_url')
+                    and len(saved_cursors) == len(prefix)
+                    and cursor is not None and cursor not in saved_cursors):
+                # Capture may still own an attempted, previously empty page.
+                # Its exact saved URL, frozen query and unseen explicit cursor
+                # identify that unfinished page without refetching the prefix.
+                prefix_index = len(prefix)
             if prefix_index < len(prefix):
                 # Revisit only the finite, unchanged saved prefix using normal
                 # controls. A true repeat after that prefix still terminates.
@@ -940,6 +960,7 @@ class GuidedService:
                 end_reason = 'repeated_cursor'
                 break
             state['pages_seen'].append(signature)
+            state['checkpoint_list_url'] = page.url
             if cursor is not None:
                 state.setdefault('cursors_seen', []).append(cursor)
             existing = {r['id'] for r in state['cards']}
