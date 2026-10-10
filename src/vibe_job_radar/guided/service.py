@@ -880,11 +880,42 @@ class GuidedService:
             return prefix, saved_cursors, last_cursor
         raise CrawlError('checkpoint_list_changed')
 
+    @staticmethod
+    def _resident_list_matches(state, backend, adapter, prefix, cursors, last_cursor):
+        """Probe only a still-owned page; never relax the saved prefix contract."""
+        if (not prefix or len(cursors) != len(prefix) or last_cursor is None
+                or not state.get('checkpoint_list_url')):
+            return False
+        if hasattr(backend, 'collection_mode'):
+            backend.collection_mode()
+        try:
+            page = backend.snapshot()
+            if callable(getattr(backend, 'ensure_page_access', None)):
+                backend.ensure_page_access(page.url)
+            elif hasattr(backend, 'wire'):
+                backend.wire.ensure_robots(page.url)
+            if page.url != state['checkpoint_list_url']:
+                return False
+            # Probe a copy: observation cannot change the frozen query.
+            cursor = check_scope(dict(state), adapter, page.url)
+            cards = batch_cards(state, adapter, adapter.cards(page))
+        except CrawlError as exc:
+            if exc.code in {'page_not_ready', 'not_job_list', 'structure_changed'}:
+                return False  # Keep the existing checked search/replay path.
+            raise  # Login, publisher refusal, policy, quota and cancel still stop.
+        return bool(cards) and cursor == last_cursor and page_signature(state, cards) == prefix[-1]
+
     @traced('listing', 'service', state_index=0)
-    def _gather(self, state, backend, adapter, *, navigate=False, more=False, resume=False):
+    def _gather(self, state, backend, adapter, *, navigate=False, more=False, resume=False, reuse_current=False):
         prefix, saved_cursors, last_cursor = (self._list_resume_checkpoint(state, adapter)
                                              if resume else ((), (), None))
         prefix_index = 0
+        if (navigate and reuse_current
+                and self._resident_list_matches(state, backend, adapter, prefix, saved_cursors, last_cursor)):
+            # Read it again in the normal loop before any click. A changed page
+            # must fail the same signature/cursor checks, with no search fallback.
+            navigate = False
+            prefix_index = len(prefix) - 1
         if navigate:
             if callable(getattr(backend, 'open_search', None)):
                 backend.open_search(state['search_url'], keyword=state['keyword'])
@@ -1196,6 +1227,7 @@ class GuidedService:
             except RateLimit as exc:
                 self._save(state, wait_seconds=round(exc.wait, 1))
                 raise CrawlError('login_rate_limited') from exc
+        previous_backend = self._backends.get(state['id'])
         if action in {'resume_returned_detail', 'resume_returned_search'}:
             # This internal action cannot be submitted by the HTTP/UI API. A
             # replaced browser must never inherit or replay another page's handoff.
@@ -1218,6 +1250,11 @@ class GuidedService:
         else:
             backend = (self._backend(state, required=secret.backend)
                        if isinstance(secret, DeferredResume) else self._backend(state))
+        reuse_current_list = (action == 'resume' and resume_list and state['code'] == 'paused'
+                              and state.get('authentication') != 'manual_pending'
+                              and not getattr(backend, 'auth_mode', False)
+                              and previous_backend is backend
+                              and callable(getattr(backend, 'alive', None)) and backend.alive())
         self._save(state, 'opening', status='running')
         pending_login = state.get('authentication') == 'manual_pending'
         if action in {'login', 'login_password'}:
@@ -1289,7 +1326,8 @@ class GuidedService:
             if state['phase'] == 'collect':
                 self._collect(state,backend,adapter)
             else:
-                self._gather(state,backend,adapter,navigate=action=='resume',resume=resume_list)
+                self._gather(state,backend,adapter,navigate=action=='resume',resume=resume_list,
+                             reuse_current=reuse_current_list)
         if action in {'search', 'capture', 'resume', 'resume_returned_search'}:
             self._auto_collect_ready(state, backend, adapter)
         if (pending_login and action in {'capture', 'search', 'resume', 'collect', 'resume_returned_detail', 'resume_returned_search'}
