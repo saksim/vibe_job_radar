@@ -26,6 +26,7 @@ from run_native_browser_acceptance import (ROOT, HOST, URL, NativeBackend, RateL
 from vibe_job_radar.guided.adapters import builtins
 from native_service_wait import wait_for_guided_job as wait
 from vibe_job_radar.guided.native_policy import contract_for, NativeRule
+from vibe_job_radar.network import FetchError
 
 API_HOST = 'api.' + HOST
 CDN_HOST = 'static.' + HOST
@@ -284,13 +285,21 @@ def security_config_script():
                  'search':'https://'+API_HOST+PATH}
     return 'const endpoints = '+json.dumps(endpoints)+';\n'+'''
 (async () => {
-  const response = await fetch(endpoints.config, {
-    method:'GET',credentials:'omit',cache:'no-store'
-  });
-  if (!response.ok) throw new Error('configuration refused');
-  const configuration = await response.json();
-  if (configuration.fixture_token !== 'synthetic-security-config') {
-    throw new Error('configuration changed');
+  // Synthetic application failure handling; no publisher security code.
+  let response;
+  try {
+    response = await fetch(endpoints.config, {
+      method:'GET',credentials:'omit',cache:'no-store'
+    });
+  } catch (_) {
+    document.querySelector('#loaded').textContent='dependency unavailable';
+  }
+  if (response) {
+    if (!response.ok) throw new Error('configuration refused');
+    const configuration = await response.json();
+    if (configuration.fixture_token !== 'synthetic-security-config') {
+      throw new Error('configuration changed');
+    }
   }
   const key = new URL(location.href).searchParams.get('key');
   const jobs = await fetch(endpoints.search, {
@@ -306,7 +315,7 @@ def security_config_script():
 def verify_security_config_chain(root, server, local, factory, wait, query, result):
     result['security_config_results'] = []
     try:
-        for label in ('allowed', 'refused'):
+        for label in ('allowed', 'refused', 'unresolved'):
             server.security_mode = label
             before = len(server.requests)
             workspace = Workspace(root/('security-config-'+label))
@@ -321,19 +330,27 @@ def verify_security_config_chain(root, server, local, factory, wait, query, resu
                 actual = [(r['method'],r['path']) for r in requests
                           if r['path'] in (SECURITY_PATH,PATH)]
                 config = [r for r in requests if r['path']==SECURITY_PATH]
-                assert len(config)==1 and config[0]['host']==SECURITY_HOST
-                assert config[0]['anonymous'] and config[0]['no_credentials']
-                assert any(r['host']==SECURITY_HOST and r['path']=='/robots.txt'
-                           for r in requests)
+                if label=='unresolved':
+                    assert not any(r['host']==SECURITY_HOST for r in requests)
+                else:
+                    assert len(config)==1 and config[0]['host']==SECURITY_HOST
+                    assert config[0]['anonymous'] and config[0]['no_credentials']
+                    assert any(r['host']==SECURITY_HOST and r['path']=='/robots.txt'
+                               for r in requests)
                 assert ledger.summary('liepin')['login']['day']==0
-                if label=='allowed':
+                if label!='refused':
                     assert task['status']=='ready' and len(task['cards'])==1,task.get('code')
-                    assert actual==[('GET',SECURITY_PATH),('OPTIONS',PATH),('POST',PATH)],actual
+                    expected=[] if label=='unresolved' else [('GET',SECURITY_PATH)]
+                    assert actual==expected+[('OPTIONS',PATH),('POST',PATH)],actual
                     native = service._backends[task['id']]
                     observed = [o for o in native.observations()
                                 if o.operation=='liepin_security_config']
-                    assert len(observed)==1
-                    assert observed[0].payload=={'fixture_token':'synthetic-security-config'}
+                    if label=='unresolved':
+                        assert not observed and not native.error
+                        assert 'https://'+SECURITY_HOST not in native.wire.rules
+                    else:
+                        assert len(observed)==1
+                        assert observed[0].payload=={'fixture_token':'synthetic-security-config'}
                     assert not local.native_ready(observed)
                     service.action({'id':task['id'],'action':'collect',
                                     'selected':[task['cards'][0]['id']]})
@@ -343,15 +360,20 @@ def verify_security_config_chain(root, server, local, factory, wait, query, resu
                         records=store.records()
                         assert len(records)==1 and records[0].text==RECORDED_BODY
                     assert workspace.report(task['report_id'])['manifest']['stats']['full_text_job_groups']==1
-                    result['checks'].append('fixed security configuration GET stays anonymous and native, keeps robots, supplies no job, and precedes original search/full JD/report')
+                    if label=='unresolved':
+                        assert not any(r['host']==SECURITY_HOST for r in server.requests[before:])
+                        result['checks'].append('verified missing configuration origin stays offline; browser delivers Fetch failure; actual search response, full JD and same-task report remain required')
+                    else:
+                        result['checks'].append('fixed security configuration GET stays anonymous and native, keeps robots, supplies no job, and precedes original search/full JD/report')
                 else:
                     assert task['code']=='http_403' and task['status']!='ready',task.get('code')
                     assert not task['cards'] and not task['report_id']
                     assert actual==[('GET',SECURITY_PATH)],actual
                     result['checks'].append('publisher security configuration403 remains fatal; no later search, fabricated configuration, job or report')
                 result['security_config_results'].append({'case':label,'required_sequence':actual,
-                    'anonymous':True,'robots_verified':True,'login_attempts':0,
-                    'full_text_job_groups':1 if label=='allowed' else 0,
+                    'anonymous':True,'robots_verified':label!='unresolved','login_attempts':0,
+                    'configuration_egress':len(config),
+                    'full_text_job_groups':0 if label=='refused' else 1,
                     'code':task['code']})
             finally:
                 service.close()
@@ -606,6 +628,8 @@ def main():
                     search_base=URL+'/zhaopin/', login_url=URL+'/', native_contract=local_contract)
                 real_dns, real_dial = socket.getaddrinfo, socket.create_connection
                 def dns(host,*a,**kw):
+                    if host==SECURITY_HOST and server.security_mode=='unresolved':
+                        raise FetchError('encrypted_dns_name_not_found')
                     if host in local_contract.hosts: return [(socket.AF_INET,socket.SOCK_STREAM,6,'',('93.184.216.34',443))]
                     if host in ('127.0.0.1','localhost','::1'): return real_dns(host,*a,**kw)
                     raise AssertionError('external DNS attempted')

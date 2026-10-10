@@ -26,6 +26,7 @@ class NativeRule:
     cors_origin: str = ''
     cors_headers: tuple[str, ...] = ()
     cors_method: str = 'POST'
+    handles_dns_failure: bool = False
 
     def __post_init__(self):
         if not re.fullmatch(r'[a-z][a-z0-9_]{1,39}', self.key):
@@ -39,6 +40,11 @@ class NativeRule:
         if not re.fullmatch(r'[a-z0-9.-]{1,253}', self.host) or len(self.path) > 512:
             raise ValueError('invalid native operation target')
         re.compile(self.path)
+        if type(self.handles_dns_failure) is not bool or (self.handles_dns_failure and (
+                self.role != 'business' or self.authentication or self.methods != ('GET',)
+                or not self.resources or not set(self.resources) <= {'Fetch', 'XHR'}
+                or self.cors_origin)):
+            raise ValueError('DNS failure handling requires an anonymous read dependency')
         if self.cors_origin:
             p = urlsplit(self.cors_origin)
             if p.scheme != 'https' or p.path or p.query or p.fragment or p.username or p.password or p.port:
@@ -120,6 +126,13 @@ class NativeContract:
     def rule_origins(self):
         return tuple(dict.fromkeys('https://' + r.host for r in self.rules if r.role != 'asset'))
 
+    @property
+    def dns_failure_origins(self):
+        # Never relax an origin that also serves a required document or API.
+        return tuple(origin for origin in self.rule_origins
+                     if all(r.handles_dns_failure for r in self.rules
+                            if 'https://' + r.host == origin))
+
 
 def liepin_bootstrap():
     # Historical request/markup evidence is recorded in LIEPIN_SEARCH_NATIVE.md.
@@ -137,7 +150,7 @@ def liepin_bootstrap():
     region = 'api-dok.liepin.com'
     security = 'dalisi4api.tongdao.cn'
     region_path = r'/api/com\.liepin\.bd\.p\.v4\.get-all-dq'
-    return NativeContract('liepin_search_login_v4', (host, api, cdn, image, passport, manifest, region, security), (
+    return NativeContract('liepin_search_login_v5', (host, api, cdn, image, passport, manifest, region, security), (
         NativeRule('liepin_navigation', host, r'(?:/|/zhaopin/|/job/[^/]+\.(?:shtml|html)|/a/[0-9]+\.shtml|/lptjob/[0-9]+)',
                    resources=('Document',), role='document'),
         NativeRule('liepin_same_host_assets', host, r'.+\.(?:js|css|png|jpg|jpeg|gif|webp|svg|ico|woff2?|ttf)',
@@ -156,7 +169,10 @@ def liepin_bootstrap():
         # The current official security script reads this fixed configuration.
         # Keep its normal response, robots and refusal handling; never classify
         # security checks as optional telemetry (LIEPIN_SECURITY_CONFIG.md).
-        NativeRule('liepin_security_config', security, r'/static/cfg/v2\.json'),
+        # The publisher handles name-resolution failure in its own script.
+        # This grants no network access without that origin's robots policy.
+        NativeRule('liepin_security_config', security, r'/static/cfg/v2\.json',
+                   handles_dns_failure=True),
         NativeRule('liepin_search', api, search, methods=('POST',), **cors),
         NativeRule('liepin_search_preflight', api, search, methods=('OPTIONS',),
                    resources=('Preflight', 'Other', 'Fetch', 'XHR'), role='business', **cors),

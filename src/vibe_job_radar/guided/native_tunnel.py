@@ -66,10 +66,17 @@ class NativeTunnel:
             kwargs={'poll_interval': .05}, daemon=True, name='radar-native-connect')
         self.thread.start()
 
+    def resolve_host(self, host):
+        """Use the session's same public resolver without opening a target socket."""
+        if self._stop.is_set() or self.cancelled.is_set():
+            raise FetchError('paused')
+        _, addresses, _ = validate_public_url('https://' + host + '/', set(self.hosts),
+            all_addresses=True, network_policy=self.policy, cancelled=self.cancelled)
+        return addresses
+
     def _open(self, host):
         try:
-            _, addresses, _ = validate_public_url('https://' + host + '/', set(self.hosts),
-                all_addresses=True, network_policy=self.policy, cancelled=self.cancelled)
+            addresses = self.resolve_host(host)
             proxy = self.policy.for_host(host)
             deadline = time.monotonic() + self.timeout
             ips = _connection_candidates(addresses)
