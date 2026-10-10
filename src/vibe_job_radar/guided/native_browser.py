@@ -714,7 +714,20 @@ class NativeBackend(PlaywrightBackend):
         record = item.record
         self._requests[item.key] = record
         self.native_counts[record['role']] += 1
-        self._send(item.session,'Fetch.continueRequest',{'requestId':item.request_id})
+        from .cdp_connection import InterceptionGone
+        try:
+            self._send(item.session,'Fetch.continueRequest',{'requestId':item.request_id})
+        except InterceptionGone as exc:
+            client = self._page_sessions.get(item.session)
+            if (client is None or self._requests.get(item.key) is not record
+                    or not client.connection.has_pending_cancellation(
+                        client.ident, item.key[1], before=exc.response_order)):
+                raise
+            # The same browser request was canceled before this rejection.
+            # Its queued event still reaches all normal observers next pump.
+            # Do not replay, refund a reservation, or treat it as a response.
+            self._requests.pop(item.key, None)
+            self._hops.pop(item.key, None)
 
 
     def _response_paused(self, session, event):

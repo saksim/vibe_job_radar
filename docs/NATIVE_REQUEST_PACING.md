@@ -41,3 +41,14 @@ contention, deadlines and refusal/cleanup boundaries. The artificial TLS browser
 acceptance also adds 20 permitted stylesheets with the real default interval,
 then requires one visible keyword search, the full recorded JD, and the original
 report. These tests do not certify a real recruiting-site session or login.
+
+
+## 取消通知先到、继续命令后被拒绝
+
+2026-10-10 原工作台同任务恢复已越过名称解析阻断，搜索文档返回200，但在队列处理 api-c 请求时停止 native_protocol_error；0职位/JD/报告/登录。旧诊断没有具体协议拒绝原因，因此该实站原因仍未确定。
+
+本机独立 Chrome 的人工回环 HTTP 对照确认：取消后的普通请求可在继续时收到 Invalid InterceptionId；跨域预检的取消表现不同，不能混同。进一步用真实 CDPConnection 与 NativeRequestPacer 的确定性消息顺序重现：取消通知先于拒绝回复进入队列，但在回调内尚未分发，旧程序提前关闭整个任务。
+
+只有 Fetch.continueRequest 返回精确的 -32602 / Invalid InterceptionId，且已有早于回复、同协议会话、同 Network 请求编号的 canceled=true / net::ERR_ABORTED 通知，才清退该已取消请求。通知保持原顺序继续分发；不递归执行回调、不重发、不退回额度、不增加响应或职位成功数。缺少关联通知、其他会话/编号、证书等其他错误和其他协议命令继续停止。
+
+[Fetch 协议](https://raw.githubusercontent.com/ChromeDevTools/devtools-protocol/master/pdl/domains/Fetch.pdl)分别定义拦截编号与可选的 Network 编号；[Network 协议](https://raw.githubusercontent.com/ChromeDevTools/devtools-protocol/master/pdl/domains/Network.pdl)提供请求取消事件。实现保留这种区分，不按域名、URL或文本猜测请求身份。人工协议回归与本地 Chrome 对照不替代猎聘实站因果或正常登录认证。

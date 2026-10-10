@@ -14,6 +14,13 @@ import time
 from .contracts import CrawlError
 
 
+class InterceptionGone(CrawlError):
+    """A rejected continuation; only separately matched cancellation can retire it."""
+    def __init__(self, response_order):
+        super().__init__('native_protocol_error')
+        self.response_order = response_order
+
+
 class CDPSession:
     def __init__(self, connection, ident=None):
         self.connection, self.ident = connection, ident
@@ -115,6 +122,11 @@ class CDPConnection:
             response = self.responses.pop(ident)
             if 'error' in response:
                 # Raw CDP errors may contain expressions, URL or form values.
+                error = response['error']
+                if (method == 'Fetch.continueRequest' and isinstance(error, dict)
+                        and type(error.get('code')) is int and error['code'] == -32602
+                        and error.get('message') == 'Invalid InterceptionId.'):
+                    raise InterceptionGone(self._response_order[ident])
                 raise CrawlError('native_protocol_error')
             return response.get('result', {})
         except CrawlError:
@@ -185,6 +197,20 @@ class CDPConnection:
         else:
             self._dispatch(message)
         return True
+
+    def has_pending_cancellation(self, session, network_id, *, before):
+        """Inspect an earlier queued cancel without recursive event dispatch."""
+        self._owner()
+        if not isinstance(session, str) or not session or not isinstance(network_id, str) or not network_id:
+            return False
+        for message, _, order in self._events:
+            params = message.get('params', {})
+            if (order < before and message.get('sessionId') == session
+                    and message.get('method') == 'Network.loadingFailed'
+                    and isinstance(params, dict) and params.get('requestId') == network_id
+                    and params.get('canceled') is True and params.get('errorText') == 'net::ERR_ABORTED'):
+                return True
+        return False
 
     def add_pump_callback(self, callback):
         self._owner()
