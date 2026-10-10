@@ -10,7 +10,7 @@ from unittest.mock import patch
 from test_workbench import capture
 from test_guided import fixture_adapter
 from vibe_job_radar.acquisition_status import describe_adapter, snapshot, markdown_table, LEVELS
-from vibe_job_radar.guided.adapters import builtins, Registry
+from vibe_job_radar.guided.adapters import builtins, Registry, DOMAdapter
 from vibe_job_radar.guided.native_policy import contract_for
 from vibe_job_radar.guided.service import GuidedService
 from vibe_job_radar.workspace import Workspace
@@ -21,7 +21,10 @@ ROOT = Path(__file__).resolve().parents[1]
 class AcquisitionStatusTests(unittest.TestCase):
     def test_builtin_availability_and_default_are_separate_from_verification(self):
         for site in snapshot()['sites']:
-            self.assertTrue(site['definition_matches_recorded_evidence'])
+            # The new Liepin pager definition cannot inherit old fixture proof.
+            self.assertEqual(site['definition_matches_recorded_evidence'], site['platform'] != 'liepin')
+            if site['platform'] == 'liepin':
+                self.assertTrue(all(not row['evidence'] for row in site['backends']))
             self.assertEqual(site['certification'], 'not_live_verified')
             bridge, native = site['backends']
             self.assertTrue(bridge['default'])
@@ -55,7 +58,7 @@ class AcquisitionStatusTests(unittest.TestCase):
         self.assertEqual(native['evidence'], [])
 
     def test_recorded_liepin_definitions_keep_their_own_dated_proof(self):
-        adapter=builtins().get('liepin')
+        adapter=replace(builtins().get('liepin'), next_selectors=DOMAdapter.next_selectors)
         before=replace(adapter,resource_domains=('liepin.com','liepin.cn'))
         after=replace(adapter,resource_domains=('liepin.com','liepin.cn',
             'concat.lietou-static.com','image0.lietou-static.com'))
