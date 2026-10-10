@@ -135,10 +135,10 @@ class PublicResolver:
                     details['reused_failure'] = True
                     details['matches_current_policy'] = details.get('policy_id') == policy.fingerprint
                 raise ResolutionError(self._cooldown_reason, diagnostic=details)
-            self._name_cooldowns = {k: until for k, until in self._name_cooldowns.items()
-                                    if now < until}
+            self._name_cooldowns = {k: failure for k, failure in self._name_cooldowns.items()
+                                    if now < failure[0]}
             if key in self._name_cooldowns:
-                raise ResolutionError('encrypted_dns_name_not_found')
+                raise ResolutionError(self._name_cooldowns[key][1])
             self._requests = [stamp for stamp in self._requests if now-stamp < 300]
             if len(self._requests) >= 60:
                 raise ResolutionError('encrypted_dns_budget')
@@ -181,14 +181,15 @@ class PublicResolver:
                     self._cache[key] = snapshot
                 return snapshot
             except ResolutionError as exc:
-                if exc.code == 'encrypted_dns_name_not_found':
-                    # An NXDOMAIN is about this name, not every host using the
-                    # resolver. Keep the existing 30s retry backoff and original
-                    # failure, scoped to the same name, policy and provider.
+                if exc.code in {'encrypted_dns_name_not_found', 'encrypted_dns_expired_answer'}:
+                    # A missing name or expired answer describes this lookup,
+                    # not every host using the resolver. Retain the original
+                    # failure and 30s backoff for this name, policy and provider.
+                    # Expired addresses remain unusable; no lookup is retried.
                     # This is local throttling, not an authoritative negative TTL.
                     if len(self._name_cooldowns) >= 256:
                         self._name_cooldowns.pop(next(iter(self._name_cooldowns)))
-                    self._name_cooldowns[key] = self.clock()+30
+                    self._name_cooldowns[key] = (self.clock()+30, exc.code)
                 elif exc.code not in {'paused', 'encrypted_dns_disabled'}:
                     self._cooldown = max(self._cooldown, self.clock()+30)
                     # Preserve hard failures across subsequent attempts. Relabelling
