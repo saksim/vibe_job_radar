@@ -131,6 +131,47 @@ class EnglishSectionTests(unittest.TestCase):
                             self.parse(body+suffix, **layout)
                         self.assertEqual(failure.exception.code, 'structure_changed')
 
+    def test_registration_and_membership_qualifications_need_access_context(self):
+        for qualification in (
+            "Registration is mandatory.",
+            "You must be registered.",
+            "You are required to be registered.",
+            "Please be registered.",
+            "A valid membership is required.",
+            "An active membership is necessary.",
+            "Registration required.",
+            "Being registered is required.",
+            "You need a valid membership.",
+            "You must have a paid membership.",
+        ):
+            for body, layout in ((BODY, {}), (BODY.replace("Qualifications:", "任职资格"), {}),
+                                 (BODY, {'anchor': False, 'raw_breaks': False})):
+                value = body+"\n- "+qualification
+                with self.subTest(qualification=qualification, layout=layout):
+                    self.assertEqual(self.parse(value, **layout)['text'], value)
+
+    def test_registration_and_membership_access_requirements_still_reject(self):
+        for prompt in (
+            "Registration is mandatory to view the full job description.",
+            "You must be registered to view the full job description.",
+            "You are required to be registered to read the full qualifications.",
+            "To view the full requirements, please be registered.",
+            "A valid membership is required to access the full qualifications.",
+            "For the complete job description, an active membership is necessary.",
+            "To view the full requirements, being registered is required.",
+            "You need a valid membership to read the complete description.",
+            "To view the remaining job details, you must have a paid membership.",
+            "Login is required.",
+            "Sign-in required.",
+            "Authentication is required.",
+        ):
+            for body, layout in ((BODY, {}), (BODY.replace("Qualifications:", "任职资格"), {}),
+                                 (BODY, {'anchor': False, 'raw_breaks': False})):
+                with self.subTest(prompt=prompt, layout=layout):
+                    with self.assertRaises(CrawlError) as failure:
+                        self.parse(body+"\n- "+prompt, **layout)
+                    self.assertEqual(failure.exception.code, 'jd_incomplete')
+
     def test_complete_sections_preserve_authored_text_and_identity(self):
         for raw in (True, False):
             for body in (BODY, BODY.replace('Tasks:', 'TASKS:').replace('Qualifications:', 'QUALIFICATIONS:')):

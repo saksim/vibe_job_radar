@@ -125,15 +125,21 @@ def _english_incomplete_prompt(body: str) -> bool:
         line = re.sub(r'^[-•]\s*', '', line.strip())
         # An account-introduction question can precede the actual prompt.
         for prompt in re.split(r'(?<=[.!?])\s+', line):
-            if re.fullmatch(login + ending, prompt, re.I):
+            if (re.fullmatch(login + ending, prompt, re.I)
+                    and not re.search(r'\bregistered\b', prompt, re.I)):
                 return True
             if re.fullmatch(
                     r'(?:' + login + r'\s+' + access + r'|'
                     + access + r'\s*[,;:]?\s+' + login + r')' + ending,
                     prompt, re.I):
                 return True
+            # Registration and membership can describe professional eligibility.
+            # Without a job-access purpose, keep those qualifications as prose.
+            if (re.fullmatch(declaration + ending, prompt, re.I)
+                    and not re.search(r'\b(?:registration|registered|membership)\b', prompt, re.I)):
+                return True
             if re.fullmatch(
-                    r'(?:' + declaration + r'(?:\s+(?:in\s+order\s+)?' + access + r')?|'
+                    r'(?:' + declaration + r'\s+(?:in\s+order\s+)?' + access + r'|'
                     + access + r'\s*[,;:]?\s+' + declaration + r')' + ending,
                     prompt, re.I):
                 return True
