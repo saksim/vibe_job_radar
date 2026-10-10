@@ -204,3 +204,52 @@ class EnglishSectionTests(unittest.TestCase):
             body = BODY+"\n- "+duty
             with self.subTest(duty=duty):
                 self.assertEqual(self.parse(body)['text'], body)
+
+    def test_more_controls_are_incomplete_without_rejecting_prose(self):
+        for prompt in (
+                "Please click here to view more.",
+                "Click here for more details.",
+                "Sign in to view more.",
+                "Please see more.",
+                "Sign in to view all qualifications.",
+                "To see more details, please sign in.",
+                "View the remaining job description.",
+                "Continue reading for more details.",
+        ):
+            for body, layout in ((BODY, {}), (BODY.replace("Qualifications:", "任职资格"), {}),
+                                 (BODY, {'anchor':False, 'raw_breaks':False})):
+                with self.subTest(prompt=prompt, layout=layout):
+                    with self.assertRaises(CrawlError) as failure:
+                        self.parse(body+"\n- "+prompt, **layout)
+                    self.assertEqual(failure.exception.code, 'jd_incomplete')
+        for duty in (
+                "View more complex technical diagrams and check the production layout.",
+                "Ability to see more than one solution to a software design problem.",
+                "Show more detailed diagnostics for authorized platform operators.",
+                "Design interfaces with a click here to view more label.",
+        ):
+            body=BODY+"\n- "+duty
+            with self.subTest(duty=duty):
+                self.assertEqual(self.parse(body)['text'], body)
+
+    def test_account_visibility_notices_never_supply_professional_qualifications(self):
+        for notice in (
+                "Ability to view the remaining qualifications is limited to account holders.",
+                "Experience in this role is visible only after authentication.",
+                "The remaining qualifications are only available to registered users.",
+                "The full job description is available only after logging in.",
+        ):
+            for body in (BODY, "\n".join(BODY.splitlines()[:-1])):
+                for layout in ({}, {'anchor':False, 'raw_breaks':False}):
+                    with self.subTest(notice=notice, layout=layout, genuine_items=len(body.splitlines())):
+                        with self.assertRaises(CrawlError) as failure:
+                            self.parse(body+"\n- "+notice, **layout)
+                        self.assertEqual(failure.exception.code, 'jd_incomplete')
+        for duty in (
+                "Experience in maintaining systems whose content is limited to account holders.",
+                "Knowledge of building interfaces where details are available only after authentication.",
+                "Ability to implement permissions so the full job description is visible only to registered users.",
+        ):
+            body=BODY+"\n- "+duty
+            with self.subTest(duty=duty):
+                self.assertEqual(self.parse(body)['text'], body)

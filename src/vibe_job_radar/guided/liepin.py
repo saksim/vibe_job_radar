@@ -68,35 +68,48 @@ def _labelled_duties_and_qualifications(body: str) -> bool:
 
 
 def _english_incomplete_prompt(body: str) -> bool:
-    """Recognize complete access/expansion prompts, not ordinary login duties."""
+    """Recognize whole access/control clauses, not professional prose."""
     prefix = (r'(?:please\s+)?(?:you\s+(?:must|need\s+to|have\s+to)\s+)?'
               r'(?:(?:click|tap)\s+(?:here\s+)?(?:to\s+)?)?')
     auth = r'(?:log[\s-]*in|sign[\s-]*in|register|sign[\s-]*up)'
     accounts = auth + r'(?:\s+or\s+' + auth + r'){0,2}'
     account = r'(?:\s+(?:to|with)\s+(?:(?:your|an?)\s+)?account)?'
     login = prefix + accounts + account + r'(?:\s+(?:now|first|again))?'
-    object_ = r'(?:job(?:\s+(?:description|details))?|description|details|qualifications|posting)'
+    object_ = r'(?:job(?:\s+(?:description|details))?|description|details|qualifications|requirements|posting)'
     ending = r'(?:\s+(?:now|here))?[.!…?]*'
     action = r'(?:view|read|see|show|access|unlock|expand|open|reveal|(?:get|gain)\s+access\s+to|continue\s+(?:reading|to\s+read))'
-    content = r'(?:(?:the|this)\s+)?(?:(?:full|complete)\s+)?' + object_
-    access = r'(?:to\s+' + action + r'\s+' + content + r'|for\s+' + content + r'|to\s+continue(?:\s+reading)?)'
+    article = r'(?:(?:the|this)\s+)?'
+    extent = r'(?:(?:full|complete|remaining|additional|further|entire|more|all)\s+|rest\s+of\s+(?:the|this)\s+)'
+    content = article + r'(?:' + extent + r')?' + object_
+    expanded = article + extent + object_
+    more = r'more(?:\s+' + object_ + r')?'
+    reading = action + r'\s+(?:' + content + r'|' + more + r')'
+    access = r'(?:to\s+' + reading + r'|for\s+' + content + r'|to\s+continue(?:\s+reading)?)'
+    expansion = (r'(?:' + action + r'\s+(?:' + expanded + r'|' + more + r')|'
+                 r'for\s+' + more + r'|read\s+on|continue(?:\s+reading)?(?:\s+for\s+' + more + r')?)')
+    # Interface notices may resemble qualifications. Require a job-content
+    # subject and an account visibility predicate, never words within a duty.
+    subject = (r'(?:' + content + r'|ability\s+to\s+' + reading
+               + r'|experience\s+in\s+(?:this|the)\s+(?:role|position|job))')
+    members = r'(?:(?:registered|authenticated|logged[\s-]*in|signed[\s-]*in)\s+)?(?:account\s+holders|users|members)'
+    authentication = r'(?:authentication|registration|log[\s-]*in|sign[\s-]*in|logging\s+in|signing\s+in)'
+    restriction = (r'(?:is|are)\s+(?:(?:only\s+)?(?:available|visible|accessible|displayed|shown|revealed)'
+                   r'\s+(?:only\s+)?(?:to\s+' + members + r'|after\s+' + authentication + r')|'
+                   r'(?:limited|restricted)\s+to\s+' + members + r')')
     for line in body.splitlines():
         line = re.sub(r'^[-•]\s*', '', line.strip())
         # An account-introduction question can precede the actual prompt.
         for prompt in re.split(r'(?<=[.!?])\s+', line):
             if re.fullmatch(login + ending, prompt, re.I):
                 return True
-            # Bind both clause orders to an access request for job content.
-            # The account qualifier belongs to login, never arbitrary prose.
             if re.fullmatch(
                     r'(?:' + login + r'\s+' + access + r'|'
                     + access + r'\s*[,;:]?\s+' + login + r')' + ending,
                     prompt, re.I):
                 return True
-            if re.fullmatch(
-                    prefix + r'(?:(?:show|read)\s+more|read\s+on|continue(?:\s+reading)?|'
-                    + action + r'\s+(?:the\s+)?(?:full|complete)\s+'
-                    + object_ + r')' + ending, prompt, re.I):
+            if re.fullmatch(prefix + expansion + ending, prompt, re.I):
+                return True
+            if re.fullmatch(subject + r'\s+' + restriction + ending, prompt, re.I):
                 return True
     return False
 
