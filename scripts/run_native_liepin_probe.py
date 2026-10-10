@@ -6,6 +6,7 @@ requests, CSP, credentials or fixture outcomes; exceptions still fail the run.
 from __future__ import annotations
 
 import json
+import sys
 from urllib.parse import urlsplit
 from unittest.mock import patch
 
@@ -21,11 +22,15 @@ CONNECTION_LOGS = []
 
 
 def finish_client_logs(entries):
+    complete = True
     for probe, observer in entries:
         try:
             probe['client_connection_log'] = observer.finish()
         except Exception:
-            probe['client_connection_log'] = unavailable('observer_error')
+            probe['client_connection_log'] = {**unavailable('observer_error'), 'private_cleanup': 'pending'}
+        if probe['client_connection_log'].get('private_cleanup') != 'removed':
+            complete = False
+    return complete
 
 
 class SearchObserver(ObservedBackend):
@@ -79,13 +84,18 @@ def main():
                 patch.object(acceptance, 'wait', observed_wait(acceptance.wait, stages, out, 'search-wait')):
             acceptance.main()
     finally:
-        finish_client_logs(CONNECTION_LOGS)
+        private_logs_removed = finish_client_logs(CONNECTION_LOGS)
         out = acceptance.ROOT / 'browser-acceptance' / 'native'
         out.mkdir(parents=True, exist_ok=True)
         (out / 'search-probe.json').write_text(json.dumps({
             'scope': 'Passive metadata only; unchanged artificial-source tests and production request decisions.',
             'backends': PROBES,
+            'private_logs_removed': private_logs_removed,
         }, indent=2), encoding='utf-8')
+        # Retain the original acceptance failure, but never let successful
+        # acquisition checks certify a probe that left private raw logs behind.
+        if not private_logs_removed and sys.exc_info()[0] is None:
+            raise RuntimeError('Private browser connection log cleanup incomplete')
 
 
 if __name__ == '__main__':

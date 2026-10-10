@@ -1,5 +1,6 @@
 """Connection cause evidence, private-data exclusion and observer transparency."""
 import copy
+from contextlib import nullcontext
 import json
 from pathlib import Path
 import sys
@@ -11,6 +12,7 @@ from unittest.mock import Mock, patch
 ROOT = Path(__file__).resolve().parents[1]
 with patch.object(sys, 'path', [str(ROOT / 'scripts'), *sys.path]):
     import native_netlog_evidence as log
+    import run_native_liepin_probe as probe_module
     from run_native_liepin_probe import SearchObserver, finish_client_logs
     from run_native_auth_probe import ObservedBackend
 
@@ -158,6 +160,64 @@ class NativeNetLogEvidenceTests(unittest.TestCase):
             self.assertNotIn(SECRET, json.dumps(result))
             self.assertIs(observer.finish(), result)
             self.assertEqual(result['cleanup_attempts'], 2)
+
+    def test_final_cleanup_rejects_pending_owner_but_still_cleans_other_owners(self):
+        with tempfile.TemporaryDirectory() as folder, patch.object(log, 'require_ci'):
+            one = log.NativeNetLog(Path(folder), ENDPOINT, {HOST})
+            two = log.NativeNetLog(Path(folder), ENDPOINT, {HOST})
+            one.path.write_text(json.dumps(fixture()), encoding='utf8')
+            two.path.write_text(json.dumps(fixture()), encoding='utf8')
+            original_remove = log.shutil.rmtree
+            def remove(path, *args, **kwargs):
+                if Path(path) == one.directory:
+                    raise PermissionError(SECRET)
+                return original_remove(path, *args, **kwargs)
+            first, second = {}, {}
+            with patch.object(log.shutil, 'rmtree', side_effect=remove):
+                self.assertEqual(one.finish()['private_cleanup'], 'pending')
+                complete = finish_client_logs([(first, one), (second, two)])
+            self.assertIs(complete, False)
+            self.assertEqual(first['client_connection_log']['private_cleanup'], 'pending')
+            self.assertEqual(first['client_connection_log']['cleanup_attempts'], 2)
+            self.assertEqual(second['client_connection_log']['private_cleanup'], 'removed')
+            self.assertTrue(one.path.exists())
+            self.assertFalse(two.directory.exists())
+            self.assertNotIn(SECRET, json.dumps([first, second]))
+            self.assertIs(finish_client_logs([(first, one), (second, two)]), True)
+            self.assertFalse(one.directory.exists())
+
+    def test_final_cleanup_exception_is_pending_and_does_not_skip_other_owners(self):
+        one, two = Mock(), Mock()
+        one.finish.side_effect = OSError(SECRET)
+        two.finish.return_value = {'available': False, 'private_cleanup': 'removed'}
+        first, second = {}, {}
+        self.assertIs(finish_client_logs([(first, one), (second, two)]), False)
+        self.assertEqual(first['client_connection_log']['private_cleanup'], 'pending')
+        self.assertEqual(first['client_connection_log']['reason'], 'observer_error')
+        self.assertEqual(second['client_connection_log']['private_cleanup'], 'removed')
+        self.assertNotIn(SECRET, json.dumps([first, second]))
+
+    def test_probe_fails_after_saving_pending_cleanup_without_masking_business_error(self):
+        for original in (None, RuntimeError('original acceptance failure')):
+            with self.subTest(original=original), tempfile.TemporaryDirectory() as folder:
+                with patch.object(probe_module, 'require_ci'), \
+                        patch.object(probe_module, 'capture', return_value=nullcontext()), \
+                        patch.object(probe_module, 'observe_io', return_value=nullcontext()), \
+                        patch.object(probe_module, 'observed_backend', return_value=SearchObserver), \
+                        patch.object(probe_module, 'observed_wait', return_value=Mock()), \
+                        patch.object(probe_module, 'finish_client_logs', return_value=False), \
+                        patch.object(probe_module, 'PROBES', []), \
+                        patch.object(probe_module.acceptance, 'ROOT', Path(folder)), \
+                        patch.object(probe_module.acceptance, 'main', side_effect=original):
+                    with self.assertRaises(RuntimeError) as caught:
+                        probe_module.main()
+                if original is not None:
+                    self.assertIs(caught.exception, original)
+                else:
+                    self.assertIn('cleanup incomplete', str(caught.exception))
+                result = json.loads((Path(folder)/'browser-acceptance/native/search-probe.json').read_bytes())
+                self.assertIs(result['private_logs_removed'], False)
+                self.assertNotIn(SECRET, json.dumps(result))
 
     def test_ci_gate_precedes_creating_any_private_directory(self):
         with tempfile.TemporaryDirectory() as folder:
