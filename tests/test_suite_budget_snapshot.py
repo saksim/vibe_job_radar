@@ -309,7 +309,10 @@ class SuiteBudgetTests(unittest.TestCase):
         self.assertEqual(len(search_steps),3)
         for step in search_steps:
             self.assertIn('        timeout-minutes: 5\n',step)
-        self.assertEqual(native.count('        timeout-minutes: 3\n'),10)
+        self.assertEqual(native.count('        timeout-minutes: 3\n'),11)
+        wpad_steps=[s for s in steps if 'scripts/run_native_pac_browser.py --controlled --wpad' in s]
+        self.assertEqual(len(wpad_steps),1)
+        self.assertIn('        timeout-minutes: 3\n',wpad_steps[0])
 
     def test_real_child_retains_checkpoint_before_forced_termination_without_success_report(self):
         code = r'''

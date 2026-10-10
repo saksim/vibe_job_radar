@@ -162,7 +162,9 @@ class WpadSnapshot:
     def for_host(self, host):
         self.ensure_active()
         canonical_target(host)
-        end = time.monotonic() + wpad_native.DEADLINE
+        # A peer can own both sequential phases. Its discovery and download
+        # keep their original deadlines; contending hosts wait for both.
+        end = time.monotonic() + wpad_native.DEADLINE + system_pac.DEADLINE
         while not self._lock.acquire(timeout=.05):
             self.ensure_active()
             if time.monotonic() >= end:
