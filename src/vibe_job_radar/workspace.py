@@ -73,6 +73,37 @@ class Workspace:
         self.demo_db = self.root / "demo.sqlite"
         self.config = load_config()
         self._dns_lock = threading.Lock()
+        self._network_closed = threading.Event()
+
+    @property
+    def wpad_discovery(self):
+        with self._dns_lock:
+            if not hasattr(self, '_wpad_discovery'):
+                from .wpad import Discovery
+                self._wpad_discovery = Discovery()
+                if self._network_closed.is_set():
+                    self._wpad_discovery.close()
+            return self._wpad_discovery
+
+    def close_network(self):
+        self._network_closed.set()
+        with self._dns_lock:
+            discovery = getattr(self, '_wpad_discovery', None)
+        if discovery is not None:
+            discovery.close()
+
+    def network_wpad_discover(self, data):
+        from .network_settings import discover_wpad
+        return discover_wpad(self, data)
+
+    def network_wpad_cancel(self, data):
+        from .network_settings import cancel_wpad
+        return cancel_wpad(self, data)
+
+    def network_wpad_preferences(self, data):
+        from .network_settings import save_wpad
+        return save_wpad(self, data)
+
 
     @property
     def dns_resolver(self):

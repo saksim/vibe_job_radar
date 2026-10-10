@@ -68,6 +68,7 @@ class LocalServer(ThreadingHTTPServer):
             self.public_schedule.close()
 
     def server_close(self):
+        self.workspace.close_network()
         self.public_queue.close()
         self.collection_runner.close()
         self.public_schedule.close()
@@ -254,6 +255,9 @@ class Handler(BaseHTTPRequestHandler):
                    "/api/network/proxy": "network_proxy_preferences",
                    "/api/network/pac": "network_pac_preferences",
                    "/api/network/system-pac": "network_system_pac_preferences",
+                   "/api/network/wpad/discover": "network_wpad_discover",
+                   "/api/network/wpad/cancel": "network_wpad_cancel",
+                   "/api/network/wpad": "network_wpad_preferences",
                    "/api/network/pac/check": "network_pac_check"}
         target = self.server.workspace
         if route.startswith("/api/windows/startup/"):

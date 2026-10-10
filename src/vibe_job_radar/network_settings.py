@@ -18,7 +18,7 @@ from .utils import atomic_json, atomic_text, utc_now
 from .workspace import InputError
 from .pac import PacSnapshot, CONSENT as PAC_CONSENT, MESSAGES as PAC_MESSAGES, validate_script
 from . import pac_native
-from . import system_pac
+from . import system_pac, wpad, wpad_native
 
 CONSENT = 'cloudflare-doh-v1'
 PUBLIC_DNS_CONSENT = 'cloudflare-public-doh-v1'
@@ -31,7 +31,8 @@ PROXY_MODES = {'auto', *PROXY_PARSERS}
 PROXY_DEFAULT = {'proxy_mode': 'auto', 'proxy_endpoint': '', 'proxy_consent_version': ''}
 PAC_FIELDS = {'pac_name', 'pac_sha256', 'pac_id'}
 SYSTEM_PAC_FIELDS = {'system_pac_config_id', 'pac_id'}
-ALL_PAC_FIELDS = PAC_FIELDS | SYSTEM_PAC_FIELDS
+WPAD_FIELDS = {'wpad_config_id', 'pac_id'}
+ALL_PAC_FIELDS = PAC_FIELDS | SYSTEM_PAC_FIELDS | WPAD_FIELDS
 PAC_DISCLOSURE = ('只导入你信任的本地PAC文件（UTF-8，最多64KiB）。Windows会执行脚本，原生DNS函数可能解析域名。'
     '脚本只收到HTTPS根地址和域名，不含职位路径、关键词、Cookie或密码。仅接受DIRECT、匿名本机PROXY和明确SOCKS5；'
     '完整检查返回项，只采用第一项，失败不自动直连。不会自动读取系统PAC、发现WPAD或修改系统代理。')
@@ -91,13 +92,15 @@ def read_settings(workspace):
         if path.stat().st_size > 4096:
             raise ValueError
         value = json.loads(path.read_text(encoding='utf-8'), object_pairs_hook=_unique_object)
-        if not isinstance(value, dict) or type(value.get('schema_version')) is not int or value['schema_version'] not in (1, 2, 3, 4):
+        if not isinstance(value, dict) or type(value.get('schema_version')) is not int or value['schema_version'] not in (1, 2, 3, 4, 5):
             raise ValueError
         expected = set(default) | (set(PROXY_DEFAULT) if value['schema_version'] >= 2 else set())
         if value['schema_version'] == 3:
             expected |= PAC_FIELDS
         if value['schema_version'] == 4:
             expected |= SYSTEM_PAC_FIELDS
+        if value['schema_version'] == 5:
+            expected |= WPAD_FIELDS
         if (set(value) != expected
                 or value['mode'] not in MODES or type(value['revision']) is not int
                 or not 1 <= value['revision'] < 2**31 or not isinstance(value['updated_at'], str)
@@ -122,6 +125,13 @@ def read_settings(workspace):
                     or not re.fullmatch('[0-9a-f]{64}', value['system_pac_config_id'])
                     or not isinstance(value['pac_id'], str) or not re.fullmatch('[0-9a-f]{32}', value['pac_id'])):
                 raise ValueError
+        elif value['schema_version'] == 5:
+            if (value['proxy_mode'] != 'wpad' or value['proxy_endpoint'] != ''
+                    or value['proxy_consent_version'] != wpad.CONSENT
+                    or not isinstance(value['wpad_config_id'], str)
+                    or not re.fullmatch('[0-9a-f]{64}', value['wpad_config_id'])
+                    or not isinstance(value['pac_id'], str) or not re.fullmatch('[0-9a-f]{32}', value['pac_id'])):
+                raise ValueError
         return value
     except (ValueError, TypeError, OSError, InputError):
         raise InputError('网络偏好文件无效或版本不兼容；已停止联网，离线数据不受影响。') from None
@@ -131,7 +141,20 @@ def capture_policy(workspace, *, settings=None):
     if settings is None:
         settings = read_settings(workspace)
     mode = settings.get('proxy_mode', 'auto')
-    if mode == 'system_pac':
+    if mode == 'wpad':
+        def permitted():
+            current = read_settings(workspace)
+            return (not workspace._network_closed.is_set()
+                    and current.get('pac_id') == settings['pac_id']
+                    and current.get('wpad_config_id') == settings['wpad_config_id']
+                    and current.get('proxy_mode') == 'wpad' and not _environment_conflict()
+                    and workspace.wpad_discovery.matches(settings['wpad_config_id']))
+        policy = NetworkPolicy('explicit_workspace',
+            pac=wpad.WpadSnapshot(settings['wpad_config_id'], permitted), pac_id=settings['pac_id'],
+            error='workspace_proxy_environment_conflict' if _environment_conflict() else
+                'wpad_unavailable' if not wpad_native.available() else
+                None if pac_native.available() else 'pac_unavailable')
+    elif mode == 'system_pac':
         def permitted():
             current = read_settings(workspace)
             return (current.get('pac_id') == settings['pac_id']
@@ -178,6 +201,7 @@ def state(workspace):
             'dns_disclosures': {'fake_ip_doh': DISCLOSURE, 'public_doh': PUBLIC_DNS_DISCLOSURE},
             'pac_available': pac_native.available(), 'pac_disclosure': PAC_DISCLOSURE,
             'system_pac': system_pac.preview(), 'system_pac_disclosure': system_pac.DISCLOSURE,
+            'wpad': workspace.wpad_discovery.state(settings['revision']), 'wpad_disclosure': wpad.DISCLOSURE,
             'network_tested': False, 'policy': capture_policy(workspace, settings=settings).describe()}
 
 
@@ -308,18 +332,74 @@ def save_system_pac(workspace, data):
     return {**state(workspace), 'message': '已许可当前系统PAC来源；未下载或执行。实际新会话会读取一次。撤销时选择自动发现并保存。'}
 
 
+def discover_wpad(workspace, data):
+    if (not isinstance(data, dict) or set(data) != {'revision', 'consent'}
+            or type(data['revision']) is not int or data['consent'] is not True):
+        raise InputError('请单独同意向当前网络发现PAC地址；不接受地址或额外参数。')
+    if not wpad_native.available(): raise InputError(wpad.MESSAGES['wpad_unavailable'])
+    if not pac_native.available(): raise InputError(PAC_MESSAGES['pac_unavailable'])
+    if _environment_conflict(): raise InputError(PROXY_CONFLICT)
+    settings = read_settings(workspace)
+    if settings['revision'] != data['revision'] or settings['revision'] >= 2**31-1:
+        raise InputError('网络偏好已更新或修订号达到上限，请刷新后重试；原设置保留。')
+    def permitted():
+        return (read_settings(workspace)['revision'] == data['revision']
+                and not workspace._network_closed.is_set() and not _environment_conflict())
+    try:
+        workspace.wpad_discovery.start(data['revision'], permitted)
+    except LocalProxyError as exc:
+        raise InputError({**PAC_MESSAGES, **wpad.MESSAGES}.get(exc.code, wpad.MESSAGES['wpad_failed'])) from None
+    return state(workspace)
+
+
+def cancel_wpad(workspace, data):
+    if not isinstance(data, dict) or data:
+        raise InputError('取消发现不接受额外参数。')
+    workspace.wpad_discovery.cancel()
+    return state(workspace)
+
+
+def save_wpad(workspace, data):
+    if (not isinstance(data, dict) or set(data) != {'candidate', 'revision', 'consent'}
+            or type(data['revision']) is not int or data['consent'] is not True
+            or not isinstance(data['candidate'], str) or not re.fullmatch('[0-9a-f]{32}', data['candidate'])):
+        raise InputError('请核对来源并单独同意信任；不接受地址、凭据或额外参数。')
+    if not wpad_native.available(): raise InputError(wpad.MESSAGES['wpad_unavailable'])
+    if not pac_native.available(): raise InputError(PAC_MESSAGES['pac_unavailable'])
+    if _environment_conflict(): raise InputError(PROXY_CONFLICT)
+    from .collection import writer_lock
+    with writer_lock(workspace.root):
+        previous = read_settings(workspace)
+        if previous['revision'] >= 2**31-1 or previous['revision'] != data['revision']:
+            raise InputError('网络偏好已更新或修订号达到上限，请刷新后重试；原设置保留。')
+        def commit(config_id):
+            value = {**{k:v for k,v in previous.items() if k not in ALL_PAC_FIELDS},
+                'schema_version': 5, 'revision': previous['revision']+1, 'updated_at': utc_now(),
+                'proxy_mode': 'wpad', 'proxy_endpoint': '', 'proxy_consent_version': wpad.CONSENT,
+                'wpad_config_id': config_id, 'pac_id': secrets.token_hex(16)}
+            atomic_json(workspace.root/'network-preferences.json', value)
+        try:
+            workspace.wpad_discovery.confirm(data['revision'], data['candidate'], commit)
+        except LocalProxyError as exc:
+            raise InputError(wpad.MESSAGES.get(exc.code, PAC_MESSAGES['pac_revoked'])) from None
+    workspace.dns_resolver.clear()
+    return {**state(workspace), 'message': '已确认WPAD完整来源；尚未下载或执行。新会话首次使用时重新发现并核对来源，再读取脚本。选择自动模式并保存可撤销。'}
+
+
 def check_pac(workspace, data):
     if not isinstance(data, dict) or set(data) != {'revision'} or type(data['revision']) is not int:
         raise InputError('仅接受当前网络偏好修订号。')
     settings = read_settings(workspace)
-    if settings['revision'] != data['revision'] or settings.get('proxy_mode') not in {'pac', 'system_pac'}:
+    if settings['revision'] != data['revision'] or settings.get('proxy_mode') not in {'pac', 'system_pac', 'wpad'}:
         raise InputError('PAC设置已改变或尚未导入，请刷新后重试。')
     policy = capture_policy(workspace, settings=settings)
     try:
         selected = policy.for_host('pac-check.invalid')
     except LocalProxyError as exc:
         return {'passed': False, 'code': exc.code, 'target_requested': False,
-                'message': {**PAC_MESSAGES, **system_pac.MESSAGES}.get(exc.code, PROXY_CONFLICT)}
+                'message': {**PAC_MESSAGES, **system_pac.MESSAGES, **wpad.MESSAGES}.get(exc.code, PROXY_CONFLICT)}
+    finally:
+        policy.close()
     return {'passed': True, 'code': 'pac_evaluated', 'transport': policy.transport_name(selected),
             'target_requested': False,
             'message': '脚本对内置检查域名返回了有效路线；未连接代理或目标。不代表招聘域名的选路、登录或取数已通过。'}
@@ -329,6 +409,7 @@ DNS_MESSAGES = {
     **VM_MESSAGES,
     **PAC_MESSAGES,
     **system_pac.MESSAGES,
+    **wpad.MESSAGES,
     'workspace_proxy_environment_conflict': PROXY_CONFLICT,
     'non_public_address': '系统返回非公网地址。若网络检查显示映射地址，可在“网络自动适配”阅读说明并启用加密解析；无需改系统DNS或关闭VPN。其他私网地址仍会拒绝。',
     'encrypted_dns_disabled': '当前会话的加密解析许可已撤销或范围已改变；请停止并重开会话以采用已保存的设置。原任务与数据保留。',
