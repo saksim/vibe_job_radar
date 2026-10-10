@@ -1,7 +1,8 @@
 """Opt-in Fake-IP repair, preserving public targets, target TLS and proxy route.
 
-Only an entirely 198.18.0.0/15 *system DNS answer* triggers DoH. Private/mixed
-answers, blocked requests and DNS failures are not reinterpreted as Fake-IP.
+The original Fake-IP mode requires an entirely 198.18.0.0/15 system answer.
+A separately consented public-DNS policy queries the fixed resolver without
+a target system lookup. Neither mode changes route, public-IP or TLS checks.
 No recursive bootstrap lookup, arbitrary resolver URL or OS configuration write.
 """
 from __future__ import annotations
@@ -42,9 +43,10 @@ class ResolutionSnapshot:
 
 class PublicResolver:
     """Workspace-shared, bounded in-memory cache; no saved domain-query history."""
-    def __init__(self, *, clock=time.monotonic, permission=None):
+    def __init__(self, *, clock=time.monotonic, permission=None, mode_permission=None):
         self.clock = clock
         self.permission = permission
+        self.mode_permission = mode_permission
         self._cache = {}
         self._name_cooldowns = {}
         self._lock = threading.Lock()
@@ -73,35 +75,41 @@ class PublicResolver:
                 raise ResolutionError('non_public_address')
             return ResolutionSnapshot((str(literal),), 'literal_public_ip', 0, policy.fingerprint)
         host = hostname(host)
-        if any(host == zone or host.endswith('.' + zone) for zone in PRIVATE_ZONES):
-            raise ResolutionError('non_public_address')
-        self._cancel(cancelled)
-        try:
-            policy.for_host(host)  # A broken explicit proxy cannot leak DNS.
-        except LocalProxyError as exc:
-            raise ResolutionError(exc.code) from exc
-        try:
-            raw = tuple(dict.fromkeys(a[4][0] for a in socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)))
-            ips = tuple(ipaddress.ip_address(ip) for ip in raw)
-        except (OSError, ValueError):
-            raise ResolutionError('dns_error') from None
-        self._cancel(cancelled)
-        if not ips or any('%' in ip for ip in raw):
-            raise ResolutionError('non_public_address')
-        if all(ip.is_global for ip in ips):
-            return ResolutionSnapshot(tuple(str(ip) for ip in ips), 'system_dns', 0, policy.fingerprint)
-        if not all(ip.version == 4 and ip in FAKE_RANGE for ip in ips):
-            raise ResolutionError('non_public_address')
-        if not policy.encrypted_dns:
-            raise ResolutionError('non_public_address')
-        # Only public DNS names, never a literal, local hostname or special zone.
+        # IDNA/trailing-dot normalization can turn a name into an IP literal.
+        # Do not send such names to a public resolver, even in the new mode.
         try:
             ipaddress.ip_address(host)
         except ValueError:
             pass
         else:
             raise ResolutionError('non_public_address')
-        self._permission()
+        if any(host == zone or host.endswith('.' + zone) for zone in PRIVATE_ZONES):
+            raise ResolutionError('non_public_address')
+        self._cancel(cancelled)
+        if policy.public_dns:
+            self._permission(policy)
+        try:
+            policy.for_host(host)  # A broken explicit proxy cannot leak DNS.
+        except LocalProxyError as exc:
+            raise ResolutionError(exc.code) from exc
+        if not policy.public_dns:
+            # Old consent retains its exact trigger, including failure/private
+            # answers. Enabling the new mode is never inferred from an error.
+            try:
+                raw = tuple(dict.fromkeys(a[4][0] for a in socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)))
+                ips = tuple(ipaddress.ip_address(ip) for ip in raw)
+            except (OSError, ValueError):
+                raise ResolutionError('dns_error') from None
+            self._cancel(cancelled)
+            if not ips or any('%' in ip for ip in raw):
+                raise ResolutionError('non_public_address')
+            if all(ip.is_global for ip in ips):
+                return ResolutionSnapshot(tuple(str(ip) for ip in ips), 'system_dns', 0, policy.fingerprint)
+            if not all(ip.version == 4 and ip in FAKE_RANGE for ip in ips):
+                raise ResolutionError('non_public_address')
+            if not policy.encrypted_dns:
+                raise ResolutionError('non_public_address')
+        self._permission(policy)
         deadline = self.clock() + min(timeout, 10.0)
         while not self._lock.acquire(timeout=min(0.05, max(0.001, deadline-self.clock()))):
             self._cancel(cancelled)
@@ -111,7 +119,7 @@ class PublicResolver:
             self._cancel(cancelled)
             # The user may have revoked permission while this lookup waited for
             # another lookup's lock. Never reuse its cached result on old consent.
-            self._permission()
+            self._permission(policy)
             now = self.clock()
             if self._last_clock is not None and now < self._last_clock:
                 self._cache.clear()
@@ -139,12 +147,12 @@ class PublicResolver:
             try:
                 results = []
                 for kind in (1, 28):
-                    self._permission()
+                    self._permission(policy)
                     self._cancel(cancelled)
                     if self.clock() >= deadline:
                         raise ResolutionError('encrypted_dns_timeout')
                     answer = self._exchange(host, kind, policy, deadline, cancelled=cancelled)
-                    self._permission()
+                    self._permission(policy)
                     self._cancel(cancelled)
                     if self.clock() >= deadline:
                         raise ResolutionError('encrypted_dns_timeout')
@@ -167,7 +175,7 @@ class PublicResolver:
                 self._cache = {k: v for k, v in self._cache.items() if now < v.expires_at}
                 if len(self._cache) >= 256:
                     self._cache.pop(next(iter(self._cache)))
-                self._permission()
+                self._permission(policy)
                 self._cancel(cancelled)
                 if ttl > 0:
                     self._cache[key] = snapshot
@@ -193,10 +201,18 @@ class PublicResolver:
         finally:
             self._lock.release()
 
-    def _permission(self):
+    def _permission(self, policy):
         if self.permission is not None:
             try:
                 permitted = self.permission() is True
+            except Exception:
+                permitted = False
+            if not permitted:
+                raise ResolutionError('encrypted_dns_disabled')
+        if self.mode_permission is not None:
+            expected = 'public_doh' if policy.public_dns else 'fake_ip_doh'
+            try:
+                permitted = self.mode_permission() == expected
             except Exception:
                 permitted = False
             if not permitted:
@@ -214,12 +230,12 @@ class PublicResolver:
         # Resolver traffic uses the SAME target route. A resolver NO_PROXY rule
         # cannot accidentally bypass the proxy selected for the job hostname.
         route = replace(policy, source='explicit_application', proxy=selected, bypass=(),
-                        encrypted_dns=False, resolver=None,
+                        encrypted_dns=False, public_dns=False, resolver=None,
                         pac_route_host=host if policy.pac is not None else '')
         conn = None
         phase = 'tls_context'
         try:
-            self._permission()
+            self._permission(policy)
             self._cancel(cancelled)
             budget = max(0.001, deadline-self.clock())
             conn = PinnedHTTPSConnection(DOH_HOST, BOOTSTRAP, budget, network_policy=route)
@@ -227,7 +243,7 @@ class PublicResolver:
             conn.connect()
             phase = 'request_setup'
             def remaining():
-                self._permission()
+                self._permission(policy)
                 self._cancel(cancelled)
                 value = deadline-self.clock()
                 if value <= 0:

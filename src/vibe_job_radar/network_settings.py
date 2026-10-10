@@ -21,7 +21,8 @@ from . import pac_native
 from . import system_pac
 
 CONSENT = 'cloudflare-doh-v1'
-MODES = {'system', 'fake_ip_doh'}
+PUBLIC_DNS_CONSENT = 'cloudflare-public-doh-v1'
+MODES = {'system', 'fake_ip_doh', 'public_doh'}
 PROXY_CONSENT = 'workspace-anonymous-loopback-v1'
 VM_CONSENT = 'workspace-anonymous-vm-host-v1'
 PROXY_PARSERS = {'http': LoopbackProxy, 'socks5': LoopbackSocks5,
@@ -38,6 +39,16 @@ PROXY_CONFLICT = '已有应用专用代理或代理凭据环境设置；请先�
 DISCLOSURE = ('仅当系统DNS为映射地址时，使用Cloudflare加密解析目标域名；解析服务可看到域名和网络出口，'
               '不发送职位正文、查询参数、Cookie、密码或个人材料。不修改系统DNS，不要求关闭VPN/TUN。'
               '不开启时维持系统解析；不是所有VPN或企业网络的兼容保证。')
+
+
+PUBLIC_DNS_DISCLOSURE = ('所访问的公共域名直接交给Cloudflare加密解析，不先使用本机目标DNS；解析服务可看到域名和网络出口。'
+    '请求沿岗位原选代理或系统路线，不发送职位正文、URL路径与查询参数、Cookie、密码或个人材料。'
+    '不适用于企业内部域名或分区DNS；不保证兼容企业策略。失败时停止，不改用系统DNS或其他解析商。'
+    '这是单独授权的范围，不沿用仅修复映射地址的许可；不修改系统DNS或VPN。')
+
+
+def _dns_consent(mode):
+    return PUBLIC_DNS_CONSENT if mode == 'public_doh' else CONSENT if mode == 'fake_ip_doh' else ''
 
 
 def _proxy(mode, endpoint):
@@ -90,7 +101,7 @@ def read_settings(workspace):
         if (set(value) != expected
                 or value['mode'] not in MODES or type(value['revision']) is not int
                 or not 1 <= value['revision'] < 2**31 or not isinstance(value['updated_at'], str)
-                or value['consent_version'] != (CONSENT if value['mode'] == 'fake_ip_doh' else '')):
+                or value['consent_version'] != _dns_consent(value['mode'])):
             raise ValueError
         if value['schema_version'] == 2:
             proxy = _proxy(value['proxy_mode'], value['proxy_endpoint'])
@@ -157,13 +168,14 @@ def capture_policy(workspace, *, settings=None):
         policy = NetworkPolicy('explicit_workspace', error='workspace_proxy_environment_conflict')
     else:
         policy = NetworkPolicy('explicit_workspace', proxy)
-    return replace(policy, encrypted_dns=settings['mode'] == 'fake_ip_doh',
-                   resolver=workspace.dns_resolver)
+    return replace(policy, encrypted_dns=settings['mode'] != 'system',
+                   public_dns=settings['mode'] == 'public_doh', resolver=workspace.dns_resolver)
 
 
 def state(workspace):
     settings = read_settings(workspace)
     return {**PROXY_DEFAULT, **settings, 'disclosure': DISCLOSURE, 'provider': 'Cloudflare',
+            'dns_disclosures': {'fake_ip_doh': DISCLOSURE, 'public_doh': PUBLIC_DNS_DISCLOSURE},
             'pac_available': pac_native.available(), 'pac_disclosure': PAC_DISCLOSURE,
             'system_pac': system_pac.preview(), 'system_pac_disclosure': system_pac.DISCLOSURE,
             'network_tested': False, 'policy': capture_policy(workspace, settings=settings).describe()}
@@ -173,7 +185,7 @@ def save(workspace, data):
     if (not isinstance(data, dict) or set(data) != {'mode','revision','consent'}
             or not isinstance(data['mode'], str) or data['mode'] not in MODES or type(data['revision']) is not int
             or type(data['consent']) is not bool
-            or (data['mode'] == 'fake_ip_doh' and data['consent'] is not True)):
+            or (data['mode'] != 'system' and data['consent'] is not True)):
         raise InputError('请明确同意加密解析说明；不接受地址、凭据或额外参数。')
     from .collection import writer_lock
     with writer_lock(workspace.root):
@@ -183,7 +195,7 @@ def save(workspace, data):
         if previous['revision'] != data['revision']:
             raise InputError('网络偏好已被其他页面更新，请刷新后重试。')
         value = {**previous, 'mode': data['mode'], 'revision': previous['revision']+1,
-                 'consent_version': CONSENT if data['mode'] == 'fake_ip_doh' else '', 'updated_at': utc_now()}
+                 'consent_version': _dns_consent(data['mode']), 'updated_at': utc_now()}
         atomic_json(workspace.root/'network-preferences.json', value)
     workspace.dns_resolver.clear()
     return {**state(workspace), 'message': '已保存。新公开查询、高级采集的下一步和新浏览器会话采用此设置；已有浏览器会话不偷偷更换网络。关闭后不再发起新的加密DNS请求。'}
@@ -319,7 +331,7 @@ DNS_MESSAGES = {
     **system_pac.MESSAGES,
     'workspace_proxy_environment_conflict': PROXY_CONFLICT,
     'non_public_address': '系统返回非公网地址。若网络检查显示映射地址，可在“网络自动适配”阅读说明并启用加密解析；无需改系统DNS或关闭VPN。其他私网地址仍会拒绝。',
-    'encrypted_dns_disabled': '加密解析的许可已撤销；未发起新的解析。已有任务与数据保留。',
+    'encrypted_dns_disabled': '当前会话的加密解析许可已撤销或范围已改变；请停止并重开会话以采用已保存的设置。原任务与数据保留。',
     'encrypted_dns_invalid_response': '加密解析响应未通过校验，已停止；未把异常地址用于取数。',
     'encrypted_dns_non_public_answer': '加密解析仍返回非公网地址，已停止；不会放行内网或映射地址。',
     'encrypted_dns_tls_failed': '解析服务证书或TLS校验失败，已停止；不会关闭校验或切换其他解析商。',

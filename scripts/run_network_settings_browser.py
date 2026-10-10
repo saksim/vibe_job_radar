@@ -54,13 +54,49 @@ def main():
                 assert revoked.value.status==200
                 assert not workspace.network_policy().encrypted_dns
                 page.reload()
+                page.locator('#network-preferences summary').click()
                 expect(page.locator('#save-network-preferences')).to_be_enabled()
                 assert not page.locator('#encrypted-dns-consent').is_checked()
+                # A scope change never reuses the prior checkbox as consent.
+                page.locator('#network-dns-scope').select_option('public_doh')
+                expect(page.locator('#encrypted-dns-consent')).not_to_be_checked()
+                assert not workspace.network_policy().public_dns
+                with page.expect_response(lambda r:'/api/network/preferences' in r.url) as disabled:
+                    page.locator('#save-network-preferences').click()
+                assert disabled.value.json()['mode']=='system'
+                for path in ('/','/guided','/advanced'):
+                    page.goto(server.origin+path)
+                    page.locator('#network-preferences summary').click()
+                    expect(page.locator('#save-network-preferences')).to_be_enabled()
+                    page.locator('#network-dns-scope').select_option('public_doh')
+                    expect(page.locator('#encrypted-dns-consent')).not_to_be_checked()
+                    expect(page.locator('#network-dns-disclosure')).to_contain_text('不先使用本机目标DNS')
+                    page.locator('#encrypted-dns-consent').check()
+                    with page.expect_response(lambda r:'/api/network/preferences' in r.url) as enabled:
+                        page.locator('#save-network-preferences').click()
+                    assert enabled.value.status==200 and enabled.value.json()['mode']=='public_doh'
+                    expect(page.locator('#network-dns-status')).to_contain_text('已保存')
+                    assert workspace.network_policy().public_dns
+                    page.reload()
+                    page.locator('#network-preferences summary').click()
+                    expect(page.locator('#network-dns-scope')).to_have_value('public_doh')
+                    expect(page.locator('#encrypted-dns-consent')).to_be_checked()
+                    if path=='/advanced':
+                        page.set_viewport_size({'width':390,'height':900})
+                        page.locator('#network-preferences').screenshot(path=str(output/'public-dns-consent.png'))
+                        assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+                    page.locator('#network-dns-scope').select_option('fake_ip_doh')
+                    expect(page.locator('#encrypted-dns-consent')).not_to_be_checked()
+                    assert workspace.network_policy().public_dns
+                    with page.expect_response(lambda r:'/api/network/preferences' in r.url) as revoked_public:
+                        page.locator('#save-network-preferences').click()
+                    assert revoked_public.value.json()['mode']=='system'
+                    assert not workspace.network_policy().encrypted_dns
                 assert not external
                 page.screenshot(path=str(output/'network-consent.png'),full_page=True)
                 browser.close()
             value={'success':True,'real_chromium':True,'external_requests':0,
-                   'checks':['default_off','explicit_consent','cross_page_persistence','revoke','reload','strict_csp_without_unsafe_eval'],
+                   'checks':['default_off','explicit_consent','cross_page_persistence','revoke','reload','strict_csp_without_unsafe_eval','public_scope_requires_new_consent','public_mode_all_three_pages','public_mode_reloaded_and_revoked','mobile_no_horizontal_overflow'],
                    'scope':'Local UI only; upstream resolver and VPN/TUN are separate tests.'}
             (output/'network-consent.json').write_text(json.dumps(value,ensure_ascii=False,indent=2),encoding='utf-8')
         finally:
