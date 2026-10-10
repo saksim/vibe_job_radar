@@ -145,7 +145,7 @@ class LoginSearchEntryTests(unittest.TestCase):
         runner=self.make_runner();handoff=self.returned();submit=Mock()
         self.run_return(runner,handoff,submit)
         submit.assert_called_once_with(self.backend,'原查询')
-        runner._gather.assert_called_once_with(self.state,self.backend,ADAPTER)
+        runner._gather.assert_called_once_with(self.state,self.backend,ADAPTER,resume=False)
         runner._auto_collect_ready.assert_called_once_with(self.state,self.backend,ADAPTER)
         runner._backend.assert_not_called()
         self.backend.open.assert_not_called()

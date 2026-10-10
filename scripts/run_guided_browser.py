@@ -31,6 +31,9 @@ PASSWORD='BROWSER-FIXTURE-PASSWORD-NOT-REAL'
 ACCOUNT='browser-fixture-user'
 CALLS=[]
 MANUAL_LOGIN=threading.Event()
+PAUSE_LIST=threading.Event()
+LIST_BOUNDARY=threading.Event()
+EXPIRE_LIST_SESSION=threading.Event()
 
 
 class FixtureWire:
@@ -50,10 +53,11 @@ class FixtureWire:
         self.reserve('request')
         p=urlsplit(url);CALLS.append((method,p.path))
         cookie=(headers or {}).get('cookie','')
-        logged='fixture_login=yes' in cookie
+        logged='fixture_login=yes' in cookie and not EXPIRE_LIST_SESSION.is_set()
         response_headers={'content-type':'text/html; charset=utf-8'}
         if p.path=='/robots.txt':return WireResponse(200,{'content-type':'text/plain'},b'User-agent: *\nAllow: /')
         if p.path=='/login' and method=='POST':
+            EXPIRE_LIST_SESSION.clear()
             return WireResponse(302,{'location':'/search'},b'',('fixture_login=yes; Path=/; Secure; HttpOnly',))
         if p.path=='/login':
             text='''<!doctype html><h1>人工测试登录页</h1><form action="/login" method="post">
@@ -76,6 +80,17 @@ class FixtureWire:
 
 
 class ManualFixtureBackend(PlaywrightBackend):
+    def next_page(self):
+        # Gate only the artificial list after its first durable checkpoint.
+        # The real workbench Pause button must cancel this in-flight action.
+        if PAUSE_LIST.is_set():
+            PAUSE_LIST.clear()
+            LIST_BOUNDARY.set()
+            if not self.cancelled.wait(20):
+                raise AssertionError('controlled list boundary was not paused')
+            raise CrawlError('paused')
+        return super().next_page()
+
     # Simulates a human click ONLY for the controlled upstream fixture, on the
     # owning thread. This test hook is never selectable from a production API.
     def pump(self):
@@ -424,6 +439,104 @@ def main():
                 assert server.guided._load(previous_id)['report_id']==previous_report
                 assert 'fixture_login' not in json.dumps(server.guided.state())
                 result['checks'].append('opt-in cookies restore into a new service and new collection browser; no additional login POST, full selected JD reaches report, old reports remain')
+                # Stop a second-page navigation through the actual UI, close
+                # the owning service/browser, then explicitly resume from disk.
+                prior_tasks={p:p.read_bytes() for p in server.guided.root.glob('*.json')}
+                prior_reports={p:p.read_bytes() for p in (Path(tmp)/'reports').rglob('*') if p.is_file()}
+                form.locator('[name=max_pages]').select_option('2')
+                form.locator('[name=list_url]').fill('https://jobs.fixture.test/search?q=list-resume')
+                LIST_BOUNDARY.clear();PAUSE_LIST.set()
+                page.locator('#find').click()
+                expect(page.locator('#task')).not_to_have_value(restarted_id,timeout=30000)
+                expect(page.locator('#cards .card')).to_have_count(2,timeout=30000)
+                assert LIST_BOUNDARY.wait(5),'first page was not durably saved before navigation'
+                paused_id=page.locator('#task').input_value()
+                page.locator('#pause').click()
+                expect(page.locator('#task-status')).to_contain_text('已暂停',timeout=30000)
+                paused=server.guided._load(paused_id)
+                assert paused['status']=='paused' and len(paused['pages_seen'])==1
+                assert not paused.get('list_end') and not paused['report_id']
+                paused_backend=server.guided._backends[paused_id]
+                server.guided.close()
+                assert paused_backend.browser is None
+                paused_bytes=server.guided._path(paused_id).read_bytes()
+                before_reload=len(CALLS)
+                server.guided=GuidedService(workspace,registry=Registry([adapter]),
+                    ledger=RateLedger(Path(tmp)/'guided'/'rates.sqlite',Limits(page_interval=0,request_interval=0,login_interval=0)),
+                    backend_factory=lambda a,l,c,p,**saved:ManualFixtureBackend(a,l,c,p,headless=True,
+                        executable_path=executable,transport_factory=FixtureWire,**saved))
+                page.reload()
+                expect(page.locator('#task')).to_have_value(paused_id,timeout=10000)
+                expect(page.locator('#task-status')).to_contain_text('已暂停')
+                assert not server.guided._backends and len(CALLS)==before_reload
+                assert server.guided._path(paused_id).read_bytes()==paused_bytes
+                page.locator('#resume').click()
+                expect(page.locator('#task-status')).to_contain_text('可以选择岗位',timeout=30000)
+                expect(page.locator('#cards .card')).to_have_count(3,timeout=30000)
+                resumed=server.guided._load(paused_id)
+                assert resumed['cards'][:2]==paused['cards']
+                assert resumed['selection']==paused['selection'] and not resumed['report_id']
+                assert len(resumed['pages_seen'])==2 and resumed['list_end']=='page_limit'
+                assert server.guided._backends[paused_id] is not paused_backend
+                assert CALLS.count(('POST','/login'))==login_posts
+                assert all(p.read_bytes()==data for p,data in prior_tasks.items())
+                assert all(p.read_bytes()==data for p,data in prior_reports.items())
+                page.screenshot(path=str(output/'guided-list-resumed.png'),full_page=True)
+                page.locator('#cards input[type=checkbox]').last.check()
+                page.locator('#collect').click()
+                resumed_report=completed_report(page,server,workspace)
+                assert resumed_report['id']==paused_id
+                result['list_resume']={'paused_pages':1,'resumed_pages':2,'cards':3,
+                    'list_end':resumed['list_end'],'original_cards_preserved':True,
+                    'prior_tasks_and_reports_preserved':True,'reload_requests':0,
+                    'additional_login_posts':0,'resumed_task_report_completed':True}
+                result['checks'].append('actual Pause, service/browser close and offline reload preserve the first page; explicit Resume reaches the unread second page and its selected JD/report without another fixture login')
+
+                # The returned-list watcher submits Capture, not Resume.
+                # Expire only this synthetic supplier session after pausing a
+                # new list; the automatic return must still read page two.
+                form=page.locator('#search-form')
+                form.locator('[name=max_pages]').select_option('2')
+                if not form.locator('[name=list_url]').is_visible():
+                    form.locator('details:has(input[name=list_url]) > summary').click()
+                form.locator('[name=list_url]').fill('https://jobs.fixture.test/search')
+                form.locator('[name=rights_note]').fill('人工会话过期及原列表自动恢复验收；非实际账号。')
+                form.locator('[name=persist_session]').check()
+                form.locator('[name=consent]').check()
+                LIST_BOUNDARY.clear();PAUSE_LIST.set()
+                page.locator('#find').click()
+                expect(page.locator('#task')).not_to_have_value(paused_id,timeout=30000)
+                expect(page.locator('#cards .card')).to_have_count(2,timeout=30000)
+                assert LIST_BOUNDARY.wait(5)
+                reauth_id=page.locator('#task').input_value()
+                page.locator('#pause').click()
+                expect(page.locator('#task-status')).to_contain_text('已暂停',timeout=30000)
+                reauth_before=server.guided._load(reauth_id)
+                EXPIRE_LIST_SESSION.set()
+                page.locator('#resume').click()
+                expect(page.locator('#task-status')).to_contain_text('需要你操作',timeout=30000)
+                page.locator('#auto-login-return').check()
+                page.locator('#login').click()
+                expect(page.locator('#task-status')).to_contain_text('已打开平台登录页面',timeout=30000)
+                MANUAL_LOGIN.set()
+                # No second Resume/Capture click: the real watcher must submit
+                # its ordinary Capture action on the matching returned list.
+                expect(page.locator('#cards .card')).to_have_count(3,timeout=30000)
+                expect(page.locator('#task-status')).to_contain_text('可以选择岗位',timeout=30000)
+                reauthenticated=server.guided._load(reauth_id)
+                assert reauthenticated['cards'][:2]==reauth_before['cards']
+                assert reauthenticated['login_continuation']=='resumed'
+                assert reauthenticated['authentication']=='user_resumed'
+                assert reauthenticated['list_end']=='page_limit' and len(reauthenticated['pages_seen'])==2
+                assert CALLS.count(('POST','/login'))==login_posts+1
+                assert server.guided._load(paused_id)['report_id']==resumed_report['report_id']
+                assert all(p.read_bytes()==data for p,data in prior_tasks.items())
+                assert all(p.read_bytes()==data for p,data in prior_reports.items())
+                result['login_list_resume']={'paused_pages':1,'resumed_pages':2,'cards':3,
+                    'automatic_capture':True,'additional_fixture_login_posts':1,
+                    'original_cards_and_reports_preserved':True,'live_account':False}
+                result['checks'].append('synthetic session expiry after a paused first page requires one fixture login; automatic returned-list Capture continues to page two without another Resume/Capture click')
+
                 page.once('dialog',lambda dialog:dialog.accept())
                 page.locator('#forget-session').click()
                 expect(page.locator('#task-status')).to_contain_text('保存的会话已清除',timeout=30000)

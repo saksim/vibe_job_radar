@@ -62,6 +62,7 @@ MESSAGES = {
     'attempt_history_limit': '本任务的逐次采集记录已达到上限，已停止新采集；已有结果与历史保留。',
     'search_scope_changed': '当前列表的关键词、筛选条件或页码与本批不一致，已保留原进度；请回到原查询，或为新条件另建任务。',
     'checkpoint_incompatible': '任务的查询条件、适配器或访问契约与创建时不一致；已有选择和结果保留，请用兼容版本继续或另建任务。',
+    'checkpoint_list_changed': '无法确认先前保存的列表位置：页面、筛选条件或页码已变化，或旧任务缺少续读信息。已有岗位和选择保留，请核对原任务或另建查询；不会跳过未知页面。',
     'checkpoint_records_missing': '任务中已保存的正文记录缺失或不一致，已停止；请恢复工作区备份，不会把缺失正文算成成功或自动重复抓取。',
     'batch_identity_unsupported': '当前版本无法恢复该批次的岗位标识规则；原选择与记录已保留，请使用兼容版本继续。',
     'login_form_changed': '未找到可确认的猎聘密码登录表单，已停止自动填写。请在采集浏览器检查页面并正常登录。',
@@ -834,8 +835,51 @@ class GuidedService:
                 pass  # Diagnostics must not affect a third-party backend.
         return backend
 
+    @staticmethod
+    def _list_resume_checkpoint(state, adapter):
+        # Only an interrupted list has an unfinished saved prefix. Completed
+        # list outcomes retain the original inspect-current-surface behavior.
+        if state.get('list_end'):
+            return (), (), None
+        prefix = tuple(state['pages_seen'])
+        saved_cursors = tuple(state.get('cursors_seen', []))
+        if not prefix:
+            if saved_cursors:
+                raise CrawlError('checkpoint_list_changed')
+            return prefix, saved_cursors, None
+        if (not state['cards'] or len(set(prefix)) != len(prefix)
+                or len(saved_cursors) > len(prefix) or len(set(saved_cursors)) != len(saved_cursors)
+                or state.get('query_scope_version') == 1
+                and not isinstance(state.get('effective_search'), dict)):
+            raise CrawlError('checkpoint_list_changed')
+        if 'checkpoint_list_url' in state:
+            # New tasks bind this URL to a committed signature, not to a later
+            # attempted page that might be empty or temporarily unreadable.
+            candidates = [state['checkpoint_list_url']]
+        else:
+            # Legacy checkpoints only have last_list_url, which may describe
+            # an unrecorded empty page. The last appended card still carries
+            # its actually observed source URL. Never construct a page URL.
+            candidates = [row.get('source_url') for row in reversed(state['cards'])]
+            candidates.append(state.get('last_list_url'))
+        for checkpoint_url in candidates:
+            if not isinstance(checkpoint_url, str) or not checkpoint_url or len(checkpoint_url) > 2048:
+                continue
+            try:
+                adapter.accept_url(checkpoint_url)
+                last_cursor = check_scope(dict(state), adapter, checkpoint_url)
+            except CrawlError:
+                continue
+            if len(saved_cursors) == len(prefix) and saved_cursors[-1] != last_cursor:
+                continue
+            return prefix, saved_cursors, last_cursor
+        raise CrawlError('checkpoint_list_changed')
+
     @traced('listing', 'service', state_index=0)
-    def _gather(self, state, backend, adapter, *, navigate=False, more=False):
+    def _gather(self, state, backend, adapter, *, navigate=False, more=False, resume=False):
+        prefix, saved_cursors, last_cursor = (self._list_resume_checkpoint(state, adapter)
+                                             if resume else ((), (), None))
+        prefix_index = 0
         if navigate:
             if callable(getattr(backend, 'open_search', None)):
                 backend.open_search(state['search_url'], keyword=state['keyword'])
@@ -866,6 +910,8 @@ class GuidedService:
                 if not cards:
                     notify(self._trace_for(state), 'note', code='no_cards')
             if not cards:
+                if prefix_index < len(prefix):
+                    raise CrawlError('checkpoint_list_changed')
                 if getattr(adapter, 'confirmed_empty', lambda _: False)(page):
                     self._save(state, 'ready' if state['cards'] else 'no_matching_jobs', status='ready', phase='select',
                                last_list_url=page.url, list_end='confirmed_empty')
@@ -874,6 +920,37 @@ class GuidedService:
                            last_list_url=page.url)
                 return
             signature = page_signature(state, cards)
+            if (prefix and prefix_index == 0 and not navigate
+                    and page.url == state.get('last_list_url')
+                    and len(saved_cursors) == len(prefix)
+                    and cursor is not None and cursor not in saved_cursors):
+                # Capture may still own an attempted, previously empty page.
+                # Its exact saved URL, frozen query and unseen explicit cursor
+                # identify that unfinished page without refetching the prefix.
+                prefix_index = len(prefix)
+            if prefix_index < len(prefix):
+                # Revisit only the finite, unchanged saved prefix using normal
+                # controls. A true repeat after that prefix still terminates.
+                if signature != prefix[prefix_index]:
+                    raise CrawlError('checkpoint_list_changed')
+                if len(saved_cursors) == len(prefix) and cursor != saved_cursors[prefix_index]:
+                    raise CrawlError('checkpoint_list_changed')
+                prefix_index += 1
+                if prefix_index == len(prefix):
+                    if cursor != last_cursor:
+                        raise CrawlError('checkpoint_list_changed')
+                    if len(state['cards']) >= 100:
+                        end_reason = 'card_limit'
+                        break
+                    if len(state['pages_seen']) >= state['max_pages']:
+                        end_reason = 'page_limit'
+                        break
+                    if not backend.next_page():
+                        end_reason = 'no_next_button'
+                        break
+                elif not backend.next_page():
+                    raise CrawlError('checkpoint_list_changed')
+                continue
             if signature in state['pages_seen']:
                 end_reason = 'repeated_page'
                 break
@@ -883,6 +960,7 @@ class GuidedService:
                 end_reason = 'repeated_cursor'
                 break
             state['pages_seen'].append(signature)
+            state['checkpoint_list_url'] = page.url
             if cursor is not None:
                 state.setdefault('cursors_seen', []).append(cursor)
             existing = {r['id'] for r in state['cards']}
@@ -1102,6 +1180,11 @@ class GuidedService:
         adapter = self.registry.get(state['platform'])
         ensure_compatible(state, adapter)
         self._selected_records(state)
+        resume_list = (action in {'resume', 'search', 'capture', 'resume_returned_search'}
+                       and state['phase'] != 'collect'
+                       and bool(state.get('pages_seen') or state.get('cursors_seen')))
+        if resume_list:
+            self._list_resume_checkpoint(state, adapter)
         if action in {'login', 'login_password'}:
             try:
                 self.ledger.reserve(adapter.key, 'login')
@@ -1174,7 +1257,7 @@ class GuidedService:
             if hasattr(backend, 'collection_mode'):
                 backend.collection_mode()
             submit_search(backend, secret.keyword)
-            self._gather(state, backend, adapter)
+            self._gather(state, backend, adapter, resume=resume_list)
             self._save(state, login_continuation='resumed_search')
         elif action == 'resume_returned_detail':
             if self._cancel.is_set():
@@ -1196,12 +1279,12 @@ class GuidedService:
             self._collect(state, backend, adapter, returned_detail=(secret.target.row_id, page))
             self._save(state, login_continuation='resumed_detail')
         elif action in {'capture','more','search'}:
-            self._gather(state,backend,adapter,navigate=action=='search',more=action=='more')
+            self._gather(state,backend,adapter,navigate=action=='search',more=action=='more',resume=resume_list)
         elif action in {'collect','resume'}:
             if state['phase'] == 'collect':
                 self._collect(state,backend,adapter)
             else:
-                self._gather(state,backend,adapter,navigate=action=='resume')
+                self._gather(state,backend,adapter,navigate=action=='resume',resume=resume_list)
         if action in {'search', 'capture', 'resume', 'resume_returned_search'}:
             self._auto_collect_ready(state, backend, adapter)
         if (pending_login and action in {'capture', 'search', 'resume', 'collect', 'resume_returned_detail', 'resume_returned_search'}
