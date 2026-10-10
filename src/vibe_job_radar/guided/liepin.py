@@ -105,11 +105,21 @@ def _english_incomplete_prompt(body: str) -> bool:
     visibility = (r'(?:is|are)\s+(?:(?:only\s+)?(?:available|visible|accessible|displayed|shown|revealed)'
                    r'\s+(?:only\s+)?(?:to\s+' + members + r'|after\s+' + authentication + r')|'
                    r'(?:limited|restricted)\s+to\s+' + members + r')')
-    account_requirement = (
-        r'(?:requires?|needs?)\s+(?:(?:(?:a|an|your)\s+)?'
-        r'(?:(?:registered|active|valid|free|paid)\s+)?(?:account|membership)|'
-        + authentication + r'|(?:you\s+to\s+)?' + accounts + r')')
+    account_entity = (r'(?:(?:a|an|your)\s+)?'
+                      r'(?:(?:registered|active|valid|free|paid|personal)\s+)?(?:account|membership)')
+    account_requirement = (r'(?:requires?|needs?)\s+(?:' + account_entity + r'|'
+                           + authentication + r'|(?:you\s+to\s+)?' + accounts + r')')
     restriction = r'(?:' + visibility + r'|' + account_requirement + r')'
+    # A notice can state a requirement instead of issuing a login command.
+    # Keep the entire clause anchored, including any job-content purpose, so
+    # technical duties about authentication still pass through verbatim.
+    auth_noun = (r'(?:(?:(?:a|an|your|user|account)\s+)?' + authentication
+                 + r'|' + account_entity + r')')
+    required = auth_noun + r'(?:\s+is)?\s+(?:required|needed|necessary|mandatory|essential)'
+    user_requirement = (r'you\s+(?:(?:need|require)\s+|'
+                        r'(?:must|need\s+to|have\s+to|are\s+required\s+to)\s+have\s+)'
+                        + account_entity)
+    declaration = r'(?:' + required + r'|' + user_requirement + r')'
     for line in body.splitlines():
         line = re.sub(r'^[-•]\s*', '', line.strip())
         # An account-introduction question can precede the actual prompt.
@@ -119,6 +129,11 @@ def _english_incomplete_prompt(body: str) -> bool:
             if re.fullmatch(
                     r'(?:' + login + r'\s+' + access + r'|'
                     + access + r'\s*[,;:]?\s+' + login + r')' + ending,
+                    prompt, re.I):
+                return True
+            if re.fullmatch(
+                    r'(?:' + declaration + r'(?:\s+(?:in\s+order\s+)?' + access + r')?|'
+                    + access + r'\s*[,;:]?\s+' + declaration + r')' + ending,
                     prompt, re.I):
                 return True
             if re.fullmatch(prefix + expansion + ending, prompt, re.I):

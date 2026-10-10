@@ -114,3 +114,6 @@ logged in、signed in、registered、authenticated，以及前置目的从句、
 requires you to be、available after being形式。只有整句匹配账户/正文访问关系才拒绝，
 正常运维登录职责和描述界面设计的技术要求继续逐字保留。
 新增12种门槛×3条既有布局共36项旧代码负对照，再补5种职责保真；不声称覆盖任意英文语义。
+
+
+声明式认证门槛按相同整句边界处理：Login/Sign-in/Authentication/Registration等名词或账户主语，配合required/necessary/mandatory等必需条件；也涵盖you need an account、must have an account与前置查看目的。18种提示在3个既有入口的54项旧代码反例先失败；6类生产监控、测试环境、专业机构注册和界面开发职责保真。只匹配完整的账户或职位内容访问条款，不把普通技术句中的认证词当作网页门槛。

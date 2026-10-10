@@ -62,6 +62,48 @@ class EnglishSectionTests(unittest.TestCase):
             with self.subTest(duty=duty):
                 self.assertEqual(self.parse(body)['text'], body)
 
+    def test_declarative_authentication_requirements_are_incomplete(self):
+        prompts = (
+            "Login is required to view the complete job description.",
+            "Sign-in required to view the full qualifications.",
+            "Authentication is necessary to access the full job details.",
+            "Registration is mandatory to read the complete description.",
+            "Logging in is needed to see the remaining requirements.",
+            "Signing in is required for the full job description.",
+            "Being authenticated is required to continue reading.",
+            "Account registration is required to view more.",
+            "User authentication required to view the full qualifications.",
+            "A registered account is required to view the full description.",
+            "An active membership is necessary to read the full job details.",
+            "To view the complete job description, login is required.",
+            "For the full qualifications, registration is mandatory.",
+            "Login required.",
+            "Authentication is required.",
+            "To access the full description, you need an account.",
+            "You must have an account to view the full qualifications.",
+            "You are required to have a registered account to view the full description.",
+        )
+        for prompt in prompts:
+            for body, layout in ((BODY, {}), (BODY.replace("Qualifications:", "任职资格"), {}),
+                                 (BODY, {'anchor': False, 'raw_breaks': False})):
+                with self.subTest(prompt=prompt, layout=layout):
+                    with self.assertRaises(CrawlError) as failure:
+                        self.parse(body+"\n- "+prompt, **layout)
+                    self.assertEqual(failure.exception.code, 'jd_incomplete')
+
+    def test_technical_authentication_requirements_are_preserved(self):
+        for duty in (
+            "Login is required to access production monitoring during incident response.",
+            "Authentication is required when testing the internal billing service.",
+            "Design interfaces that explain login is required to view the full job description.",
+            "Registration is mandatory with the local professional engineering body.",
+            "You must have an account in the staging environment for software release checks.",
+            "Knowledge of authentication requirements for protected deployment systems.",
+        ):
+            body = BODY+"\n- "+duty
+            with self.subTest(duty=duty):
+                self.assertEqual(self.parse(body)['text'], body)
+
     def test_complete_sections_preserve_authored_text_and_identity(self):
         for raw in (True, False):
             for body in (BODY, BODY.replace('Tasks:', 'TASKS:').replace('Qualifications:', 'QUALIFICATIONS:')):
