@@ -89,13 +89,18 @@ def _english_incomplete_prompt(body: str) -> bool:
                  r'for\s+' + more + r'|read\s+on|continue(?:\s+reading)?(?:\s+for\s+' + more + r')?)')
     # Interface notices may resemble qualifications. Require a job-content
     # subject and an account visibility predicate, never words within a duty.
-    subject = (r'(?:' + content + r'|ability\s+to\s+' + reading
+    subject = (r'(?:(?:access\s+to\s+)?' + content + r'|ability\s+to\s+' + reading
                + r'|experience\s+in\s+(?:this|the)\s+(?:role|position|job))')
     members = r'(?:(?:registered|authenticated|logged[\s-]*in|signed[\s-]*in)\s+)?(?:account\s+holders|users|members)'
     authentication = r'(?:authentication|registration|log[\s-]*in|sign[\s-]*in|logging\s+in|signing\s+in)'
-    restriction = (r'(?:is|are)\s+(?:(?:only\s+)?(?:available|visible|accessible|displayed|shown|revealed)'
+    visibility = (r'(?:is|are)\s+(?:(?:only\s+)?(?:available|visible|accessible|displayed|shown|revealed)'
                    r'\s+(?:only\s+)?(?:to\s+' + members + r'|after\s+' + authentication + r')|'
                    r'(?:limited|restricted)\s+to\s+' + members + r')')
+    account_requirement = (
+        r'(?:requires?|needs?)\s+(?:(?:(?:a|an|your)\s+)?'
+        r'(?:(?:registered|active|valid|free|paid)\s+)?(?:account|membership)|'
+        + authentication + r'|(?:you\s+to\s+)?' + accounts + r')')
+    restriction = r'(?:' + visibility + r'|' + account_requirement + r')'
     for line in body.splitlines():
         line = re.sub(r'^[-•]\s*', '', line.strip())
         # An account-introduction question can precede the actual prompt.
@@ -218,9 +223,11 @@ def semantic_detail(markup: str) -> dict:
                 raise CrawlError('structure_changed')
             fragments.append(_text(child))
         body = _clean('\n'.join(fragments))
+        if len(body) > 150_000:
+            raise CrawlError('structure_changed')
         if (_INCOMPLETE.search(body) or _english_incomplete_prompt(body)):
             raise CrawlError('jd_incomplete')
-        if (_FOREIGN.search(body) or len(body) < 40 or len(body) > 150_000
+        if (_FOREIGN.search(body) or len(body) < 40
                 or not _JOB_CONTENT.search(body)):
             raise CrawlError('structure_changed')
         return {'title': titles[0], 'text': body, 'parser': 'liepin:semantic_intro:v1'}
@@ -334,6 +341,8 @@ def structured_intro_detail(markup: str, url: str,
             raise CrawlError('structure_changed')
         title = unescape(title).strip()
         description = _clean(plain_text(description))
+        if len(description) > 150_000:
+            raise CrawlError('structure_changed')
         if not title or len(title) > 500 or len(description) < 20:
             raise CrawlError('jd_incomplete')
         body = description
@@ -344,6 +353,8 @@ def structured_intro_detail(markup: str, url: str,
             if id(anchor) not in visible_ids:
                 raise CrawlError('jd_incomplete')
             body = _clean(_text(anchor))
+            if len(body) > 150_000:
+                raise CrawlError('structure_changed')
             # A visible complete introduction can extend a structured prefix;
             # incompatible descriptions must not mix metadata from another job.
             compact_body = re.sub(r'\s+', '', body)
@@ -362,7 +373,7 @@ def structured_intro_detail(markup: str, url: str,
                               and (_numbered_qualifications(body)
                                    or _labelled_duties_and_qualifications(body)
                                    or _english_duties_and_qualifications(body)))
-        if (len(body) < 40 or len(body) > 150_000 or _FOREIGN.search(body)
+        if (len(body) < 40 or _FOREIGN.search(body)
                 or not (_JOB_CONTENT.search(body) or corroborated_intro)):
             raise CrawlError('structure_changed')
         org = posting.get('hiringOrganization')
@@ -454,6 +465,8 @@ class LiepinAdapter(DOMAdapter):
             return intro
         try:
             parsed = super().detail(page)
+            if len(parsed['text']) > 150_000:
+                raise CrawlError('structure_changed')
             if (_INCOMPLETE.search(parsed['text']) or _english_incomplete_prompt(parsed['text'])):
                 raise CrawlError('jd_incomplete')
             return parsed

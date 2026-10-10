@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from vibe_job_radar.guided.adapters import builtins
 from vibe_job_radar.guided.contracts import CrawlError, PageSnapshot
@@ -236,6 +237,12 @@ class EnglishSectionTests(unittest.TestCase):
         for notice in (
                 "Ability to view the remaining qualifications is limited to account holders.",
                 "Experience in this role is visible only after authentication.",
+                "Ability to view the remaining qualifications requires an account.",
+                "Ability to view the remaining qualifications requires registration.",
+                "Ability to view the remaining qualifications requires logging in.",
+                "Access to the full description requires you to sign in.",
+                "The complete job description needs a registered account.",
+
                 "The remaining qualifications are only available to registered users.",
                 "The full job description is available only after logging in.",
         ):
@@ -253,3 +260,24 @@ class EnglishSectionTests(unittest.TestCase):
             body=BODY+"\n- "+duty
             with self.subTest(duty=duty):
                 self.assertEqual(self.parse(body)['text'], body)
+
+    def test_oversized_job_bodies_are_rejected_before_line_scanning(self):
+        from vibe_job_radar.guided import liepin
+        original=liepin._english_incomplete_prompt
+        huge="岗位职责：\n"+"x\n"*76000+"任职要求：合成限界回归，不是真实职位。"
+        # This assertion detects worker work on an out-of-contract body; it
+        # does not depend on wall-clock speed or an arbitrary short timeout.
+        def bounded_scan(body):
+            self.assertLessEqual(len(body), 150_000)
+            return original(body)
+        with patch.object(liepin, '_english_incomplete_prompt', side_effect=bounded_scan):
+            for layout in ({}, {'anchor':False}, {'anchor':False, 'raw_breaks':False},
+                           {'description':BODY}):
+                with self.subTest(layout=layout):
+                    with self.assertRaises(CrawlError) as failure:
+                        self.parse(huge, **layout)
+                    self.assertEqual(failure.exception.code, 'structure_changed')
+            html='<h1>合成架构师</h1><dl><dt>职位介绍</dt><dd>'+huge+'</dd></dl>'
+            with self.assertRaises(CrawlError) as failure:
+                liepin.semantic_detail(html)
+            self.assertEqual(failure.exception.code, 'structure_changed')
