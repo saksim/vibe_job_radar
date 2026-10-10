@@ -90,12 +90,19 @@ def binding(state, adapter):
         query['query_scope_version'] = state['query_scope_version']
     mode = state.get('backend', 'bridge')
     backend = _digest(asdict(contract_for(adapter))) if mode == 'native' else 'bridge:v1'
+    if mode == 'native' and adapter.key == 'liepin':
+        from .liepin_search import LIST_READER_VERSION
+        backend += ':' + LIST_READER_VERSION
     return {'version': 1, 'adapter': f'{adapter.key}:{getattr(adapter, "version", "custom")}',
             'backend': mode + ':' + backend, 'query': _digest(query), 'consent': CONSENT_VERSION}
 
 
 def ensure_compatible(state, adapter):
     saved = state.get('execution_binding')
+    if saved is None and adapter.key == 'liepin' and state.get('backend') == 'native':
+        # An unversioned native selection can also contain old hidden rows.
+        # Never rewrite it, submit a selected detail, or infer a migration.
+        raise CrawlError('checkpoint_incompatible')
     if saved is not None and saved != binding(state, adapter):
         raise CrawlError('checkpoint_incompatible')
     # Validate URLs through the current adapter even for an unversioned task.

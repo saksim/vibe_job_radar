@@ -21,6 +21,9 @@ _QUERY_FIELDS = _FIELDS | _PASS_THROUGH | {'suggestId', 'init'}
 # These publisher pass-through fields identify the search interaction, not a
 # mainSearchPcConditionForm filter. Suggestion IDs remain search constraints.
 SEARCH_INTERACTION_FIELDS = frozenset({'scene', 'skId', 'fkId', 'ckId'})
+# A saved native selection from the old reader may contain publisher-hidden
+# rows. Keep that task intact, but do not silently resume it with this reader.
+LIST_READER_VERSION = 'publisher-visible-v1'
 
 
 def _same_scalar(value, expected):
@@ -128,6 +131,39 @@ def request_context(adapter, operation, request, page_url):
         raise CrawlError('liepin_search_query_mismatch') from None
 
 
+
+def _publisher_hides_job(job):
+    """Mirror only the publisher's explicit hidden-card predicate.
+
+    Official module 30569 compares module 50620's lower-case MD5 with job.j.
+    Its hash consumes the low byte of each UTF-16 code unit, not UTF-8.
+    This is display metadata, never an access token or an HTTP signature.
+    Fields remain in memory and never become part of Card or diagnostics.
+    """
+    if not isinstance(job, dict):
+        raise ValueError()
+    marker, seed = job.get('j'), job.get('g')
+    # The publisher uses strict equality with a lower-case 32-digit string.
+    # Other markers cannot match; in particular advertising is not hiding.
+    if not isinstance(marker, str) or re.fullmatch(r'[0-9a-f]{32}', marker) is None:
+        return False
+    if seed is None or seed is False or seed == 0 or seed == '':
+        return False
+    if not isinstance(seed, str) or len(seed) > 4096:
+        raise ValueError()
+    fields = []
+    for name in ('jobId', 'jobKind'):
+        value = job.get(name)
+        if type(value) is int and abs(value) <= 9007199254740991:
+            value = str(value)
+        if not isinstance(value, str) or len(value) > 256:
+            raise ValueError()
+        fields.append(value)
+    # seed is a string, so both JavaScript additions concatenate strings.
+    raw = (seed + ''.join(fields)).encode('utf-16-le', errors='surrogatepass')[::2]
+    return hashlib.md5(raw, usedforsecurity=False).hexdigest() == marker
+
+
 def _records(adapter, payload, context, source):
     try:
         if not isinstance(payload, dict) or type(payload.get('flag')) is not int or payload['flag'] != 1:
@@ -142,6 +178,8 @@ def _records(adapter, payload, context, source):
         cards, seen = [], set()
         for item in items:
             job = item['job']
+            if _publisher_hides_job(job):
+                continue
             title, link = job['title'], job['link']
             if not isinstance(title, str) or not title.strip() or len(title) > 500 or not isinstance(link, str):
                 raise ValueError()
