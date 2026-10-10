@@ -33,6 +33,7 @@ CALLS=[]
 MANUAL_LOGIN=threading.Event()
 PAUSE_LIST=threading.Event()
 LIST_BOUNDARY=threading.Event()
+EXPIRE_LIST_SESSION=threading.Event()
 
 
 class FixtureWire:
@@ -52,10 +53,11 @@ class FixtureWire:
         self.reserve('request')
         p=urlsplit(url);CALLS.append((method,p.path))
         cookie=(headers or {}).get('cookie','')
-        logged='fixture_login=yes' in cookie
+        logged='fixture_login=yes' in cookie and not EXPIRE_LIST_SESSION.is_set()
         response_headers={'content-type':'text/html; charset=utf-8'}
         if p.path=='/robots.txt':return WireResponse(200,{'content-type':'text/plain'},b'User-agent: *\nAllow: /')
         if p.path=='/login' and method=='POST':
+            EXPIRE_LIST_SESSION.clear()
             return WireResponse(302,{'location':'/search'},b'',('fixture_login=yes; Path=/; Secure; HttpOnly',))
         if p.path=='/login':
             text='''<!doctype html><h1>人工测试登录页</h1><form action="/login" method="post">
@@ -489,6 +491,51 @@ def main():
                     'prior_tasks_and_reports_preserved':True,'reload_requests':0,
                     'additional_login_posts':0,'resumed_task_report_completed':True}
                 result['checks'].append('actual Pause, service/browser close and offline reload preserve the first page; explicit Resume reaches the unread second page and its selected JD/report without another fixture login')
+
+                # The returned-list watcher submits Capture, not Resume.
+                # Expire only this synthetic supplier session after pausing a
+                # new list; the automatic return must still read page two.
+                form=page.locator('#search-form')
+                form.locator('[name=max_pages]').select_option('2')
+                if not form.locator('[name=list_url]').is_visible():
+                    form.locator('details:has(input[name=list_url]) > summary').click()
+                form.locator('[name=list_url]').fill('https://jobs.fixture.test/search')
+                form.locator('[name=rights_note]').fill('人工会话过期及原列表自动恢复验收；非实际账号。')
+                form.locator('[name=persist_session]').check()
+                form.locator('[name=consent]').check()
+                LIST_BOUNDARY.clear();PAUSE_LIST.set()
+                page.locator('#find').click()
+                expect(page.locator('#task')).not_to_have_value(paused_id,timeout=30000)
+                expect(page.locator('#cards .card')).to_have_count(2,timeout=30000)
+                assert LIST_BOUNDARY.wait(5)
+                reauth_id=page.locator('#task').input_value()
+                page.locator('#pause').click()
+                expect(page.locator('#task-status')).to_contain_text('已暂停',timeout=30000)
+                reauth_before=server.guided._load(reauth_id)
+                EXPIRE_LIST_SESSION.set()
+                page.locator('#resume').click()
+                expect(page.locator('#task-status')).to_contain_text('需要你操作',timeout=30000)
+                page.locator('#auto-login-return').check()
+                page.locator('#login').click()
+                expect(page.locator('#task-status')).to_contain_text('已打开平台登录页面',timeout=30000)
+                MANUAL_LOGIN.set()
+                # No second Resume/Capture click: the real watcher must submit
+                # its ordinary Capture action on the matching returned list.
+                expect(page.locator('#cards .card')).to_have_count(3,timeout=30000)
+                expect(page.locator('#task-status')).to_contain_text('可以选择岗位',timeout=30000)
+                reauthenticated=server.guided._load(reauth_id)
+                assert reauthenticated['cards'][:2]==reauth_before['cards']
+                assert reauthenticated['login_continuation']=='resumed'
+                assert reauthenticated['authentication']=='user_resumed'
+                assert reauthenticated['list_end']=='page_limit' and len(reauthenticated['pages_seen'])==2
+                assert CALLS.count(('POST','/login'))==login_posts+1
+                assert server.guided._load(paused_id)['report_id']==resumed_report['report_id']
+                assert all(p.read_bytes()==data for p,data in prior_tasks.items())
+                assert all(p.read_bytes()==data for p,data in prior_reports.items())
+                result['login_list_resume']={'paused_pages':1,'resumed_pages':2,'cards':3,
+                    'automatic_capture':True,'additional_fixture_login_posts':1,
+                    'original_cards_and_reports_preserved':True,'live_account':False}
+                result['checks'].append('synthetic session expiry after a paused first page requires one fixture login; automatic returned-list Capture continues to page two without another Resume/Capture click')
 
                 page.once('dialog',lambda dialog:dialog.accept())
                 page.locator('#forget-session').click()

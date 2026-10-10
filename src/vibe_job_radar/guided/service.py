@@ -1159,7 +1159,10 @@ class GuidedService:
         adapter = self.registry.get(state['platform'])
         ensure_compatible(state, adapter)
         self._selected_records(state)
-        if action == 'resume' and state['phase'] != 'collect':
+        resume_list = (action in {'resume', 'search', 'capture', 'resume_returned_search'}
+                       and state['phase'] != 'collect'
+                       and bool(state.get('pages_seen') or state.get('cursors_seen')))
+        if resume_list:
             self._list_resume_checkpoint(state, adapter)
         if action in {'login', 'login_password'}:
             try:
@@ -1233,7 +1236,7 @@ class GuidedService:
             if hasattr(backend, 'collection_mode'):
                 backend.collection_mode()
             submit_search(backend, secret.keyword)
-            self._gather(state, backend, adapter)
+            self._gather(state, backend, adapter, resume=resume_list)
             self._save(state, login_continuation='resumed_search')
         elif action == 'resume_returned_detail':
             if self._cancel.is_set():
@@ -1255,12 +1258,12 @@ class GuidedService:
             self._collect(state, backend, adapter, returned_detail=(secret.target.row_id, page))
             self._save(state, login_continuation='resumed_detail')
         elif action in {'capture','more','search'}:
-            self._gather(state,backend,adapter,navigate=action=='search',more=action=='more')
+            self._gather(state,backend,adapter,navigate=action=='search',more=action=='more',resume=resume_list)
         elif action in {'collect','resume'}:
             if state['phase'] == 'collect':
                 self._collect(state,backend,adapter)
             else:
-                self._gather(state,backend,adapter,navigate=action=='resume',resume=action=='resume')
+                self._gather(state,backend,adapter,navigate=action=='resume',resume=resume_list)
         if action in {'search', 'capture', 'resume', 'resume_returned_search'}:
             self._auto_collect_ready(state, backend, adapter)
         if (pending_login and action in {'capture', 'search', 'resume', 'collect', 'resume_returned_detail', 'resume_returned_search'}

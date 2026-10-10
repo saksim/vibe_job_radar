@@ -28,14 +28,14 @@ class GatherCheckpointBoundaryTests(unittest.TestCase):
         self.addCleanup(self.service.close)
         self.service._submit = Mock()
 
-    def create(self, max_pages=5):
+    def create(self, max_pages=5, **changes):
         ident = self.service.create(dict(platform='liepin', keyword='时间序列',
             roles=['time_series'], consent=True, rights_note='ARTIFICIAL CHECKPOINT TEST',
-            max_pages=max_pages, max_jobs=2))['id']
+            max_pages=max_pages, max_jobs=2, **changes))['id']
         return self.service._load(ident)
 
-    def paused_listing(self, count=1, max_pages=3):
-        state = self.create(max_pages=max_pages)
+    def paused_listing(self, count=1, max_pages=3, **changes):
+        state = self.create(max_pages=max_pages, **changes)
         pages = [replace(listing(job(i+1)), url=SEARCH+'&currentPage='+str(i))
                  for i in range(count)]
         class InterruptedPages(Pages):
@@ -179,6 +179,61 @@ class GatherCheckpointBoundaryTests(unittest.TestCase):
             self.assert_saved_prefix(before)
         finally:
             self.service._cancel.clear()
+
+    def test_login_watcher_capture_continues_saved_prefix_without_refetch(self):
+        from vibe_job_radar.guided.login_return import LoginReturnManager
+        # Keep both the saved and returned DOM cursor explicit and identical;
+        # the return watcher must observe the exact originally requested URL.
+        state, pages = self.paused_listing(list_url=SEARCH+'&currentPage=0')
+        self.service._save(state, status='waiting_manual', authentication='manual_pending',
+                           auto_continue_after_login=True)
+        before = copy.deepcopy(state)
+        backend = Pages(pages+[replace(listing(job(2)), url=SEARCH+'&currentPage=1')])
+        backend.open_search = Mock()
+        backend.open = Mock()
+        clock = [0.]
+        manager = LoginReturnManager(clock=lambda:clock[0])
+        self.service._submit.reset_mock()
+        with patch.dict(self.service._backends, {state['id']:backend}), patch.object(
+                self.service, '_backend', return_value=backend):
+            self.assertTrue(manager.arm(state, backend))
+            manager.tick(self.service);clock[0]+=1.;manager.tick(self.service)
+            self.service._submit.assert_called_once_with('capture', state['id'])
+            self.service._run('capture', self.service._load(state['id']), None)
+        resumed = self.service._load(state['id'])
+        self.assertEqual([c['url'] for c in resumed['cards']], [job(1),job(2)])
+        self.assertEqual(resumed['cards'][:1], before['cards'])
+        self.assertEqual(resumed['list_end'], 'no_next_button')
+        self.assertEqual(resumed['authentication'], 'user_resumed')
+        backend.open.assert_not_called();backend.open_search.assert_not_called()
+
+    def test_search_and_returned_search_continue_the_unfinished_saved_list(self):
+        from vibe_job_radar.guided.login_return import ReturnedSearch
+        for action in ('search','resume_returned_search'):
+            with self.subTest(action=action):
+                state, pages = self.paused_listing()
+                self.service._save(state, authentication='manual_pending')
+                before = copy.deepcopy(state)
+                backend = Pages(pages+[replace(listing(job(2)), url=SEARCH+'&currentPage=1')])
+                backend.open_search = Mock();backend.open = Mock()
+                handoff = ReturnedSearch(SEARCH, state['keyword'], 'observed-entry', backend)
+                with patch.dict(self.service._backends, {state['id']:backend}), patch.object(
+                        self.service, '_backend', return_value=backend), patch(
+                        'vibe_job_radar.guided.liepin_form.matching_search_entry_signature',
+                        return_value='observed-entry'), patch(
+                        'vibe_job_radar.guided.liepin_form.submit_search') as submit:
+                    self.service._run(action, state, handoff if action=='resume_returned_search' else None)
+                resumed = self.service._load(state['id'])
+                self.assertEqual([c['url'] for c in resumed['cards']], [job(1),job(2)])
+                self.assertEqual(resumed['cards'][:1], before['cards'])
+                self.assertEqual(resumed['list_end'], 'no_next_button')
+                backend.open.assert_not_called()
+                if action=='resume_returned_search':
+                    backend.open_search.assert_not_called()
+                    submit.assert_called_once_with(backend, state['keyword'])
+                else:
+                    backend.open_search.assert_called_once_with(SEARCH, keyword=state['keyword'])
+                    submit.assert_not_called()
 
     def test_terminal_state_is_complete_at_the_first_committed_write(self):
         state = self.create(max_pages=1)
