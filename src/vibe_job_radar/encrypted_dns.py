@@ -46,6 +46,7 @@ class PublicResolver:
         self.clock = clock
         self.permission = permission
         self._cache = {}
+        self._name_cooldowns = {}
         self._lock = threading.Lock()
         self._cooldown = 0.0
         self._cooldown_reason = 'encrypted_dns_cooldown'
@@ -54,7 +55,7 @@ class PublicResolver:
         self._requests = []
 
     def clear(self):
-        # Revocation clears answers but does not reset resolver rate limits.
+        # Revocation clears answers, not name/provider backoff or request limits.
         with self._lock:
             self._cache.clear()
             self._cooldown_diagnostic = None
@@ -126,6 +127,10 @@ class PublicResolver:
                     details['reused_failure'] = True
                     details['matches_current_policy'] = details.get('policy_id') == policy.fingerprint
                 raise ResolutionError(self._cooldown_reason, diagnostic=details)
+            self._name_cooldowns = {k: until for k, until in self._name_cooldowns.items()
+                                    if now < until}
+            if key in self._name_cooldowns:
+                raise ResolutionError('encrypted_dns_name_not_found')
             self._requests = [stamp for stamp in self._requests if now-stamp < 300]
             if len(self._requests) >= 60:
                 raise ResolutionError('encrypted_dns_budget')
@@ -168,7 +173,15 @@ class PublicResolver:
                     self._cache[key] = snapshot
                 return snapshot
             except ResolutionError as exc:
-                if exc.code not in {'paused', 'encrypted_dns_disabled'}:
+                if exc.code == 'encrypted_dns_name_not_found':
+                    # An NXDOMAIN is about this name, not every host using the
+                    # resolver. Keep the existing 30s retry backoff and original
+                    # failure, scoped to the same name, policy and provider.
+                    # This is local throttling, not an authoritative negative TTL.
+                    if len(self._name_cooldowns) >= 256:
+                        self._name_cooldowns.pop(next(iter(self._name_cooldowns)))
+                    self._name_cooldowns[key] = self.clock()+30
+                elif exc.code not in {'paused', 'encrypted_dns_disabled'}:
                     self._cooldown = max(self._cooldown, self.clock()+30)
                     # Preserve hard failures across subsequent attempts. Relabelling
                     # a certificate/private-answer error as temporary could allow
