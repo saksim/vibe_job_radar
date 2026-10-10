@@ -276,8 +276,67 @@ class EnglishSectionTests(unittest.TestCase):
                 with self.subTest(layout=layout):
                     with self.assertRaises(CrawlError) as failure:
                         self.parse(huge, **layout)
-                    self.assertEqual(failure.exception.code, 'structure_changed')
+                    expected = 'invalid_job_data' if layout == {'anchor':False, 'raw_breaks':False} else 'structure_changed'
+                    self.assertEqual(failure.exception.code, expected)
             html='<h1>合成架构师</h1><dl><dt>职位介绍</dt><dd>'+huge+'</dd></dl>'
             with self.assertRaises(CrawlError) as failure:
                 liepin.semantic_detail(html)
             self.assertEqual(failure.exception.code, 'structure_changed')
+
+    def test_account_creation_joined_login_and_learning_controls_are_incomplete(self):
+        for prompt in (
+                "Log into your account to view the complete job description.",
+                "Please create an account to view the full job description.",
+                "To view the full job description, please create an account.",
+                "Please sign up for a free account to read the complete description.",
+                "Click here to learn more.",
+                "Learn more about this job.",
+                "Please click here to find out more.",
+        ):
+            for layout in ({}, {'anchor':False, 'raw_breaks':False}):
+                with self.subTest(prompt=prompt, layout=layout):
+                    with self.assertRaises(CrawlError) as failure:
+                        self.parse(BODY+"\n- "+prompt, **layout)
+                    self.assertEqual(failure.exception.code, 'jd_incomplete')
+        for duty in (
+                "Create an account in staging and validate the registration process.",
+                "Log into your account and run the synthetic database migration.",
+                "Learn more complex software patterns and explain their tradeoffs.",
+                "Design a company profile editor and a similar jobs recommendation system.",
+        ):
+            body=BODY+"\n- "+duty
+            with self.subTest(duty=duty):
+                self.assertEqual(self.parse(body)['text'], body)
+
+    def test_english_foreign_panel_labels_are_rejected_as_separate_lines(self):
+        for label in (
+                "Similar jobs: Senior Software Architect at another company.",
+                "Company profile: We build products around the world.",
+                "Recommended positions: A different unrelated vacancy.",
+                "About the company: A synthetic corporate introduction.",
+        ):
+            for layout in ({}, {'anchor':False, 'raw_breaks':False}):
+                with self.subTest(label=label, layout=layout):
+                    with self.assertRaises(CrawlError) as failure:
+                        self.parse(BODY+"\n- "+label, **layout)
+                    self.assertEqual(failure.exception.code, 'structure_changed')
+        for duty in (
+                "Experience designing company profile interfaces and content storage.",
+                "Build recommendation systems that display similar jobs to applicants.",
+        ):
+            body=BODY+"\n- "+duty
+            with self.subTest(duty=duty):
+                self.assertEqual(self.parse(body)['text'], body)
+
+    def test_generic_size_error_is_fatal_and_preserves_existing_batch_status(self):
+        adapter=builtins().get('liepin')
+        huge="原文"*80000
+        shorter='<dl><dt>职位介绍</dt><dd>'+fixtures.BODY+'</dd></dl>'
+        # A successful primary parse must not silently switch to a smaller
+        # body after validation fails, even when a second layout is present.
+        for tail in ('', shorter):
+            html='<h1>合成架构师</h1><div class="job-description">'+huge+'</div>'+tail
+            with self.subTest(secondary=bool(tail)):
+                with self.assertRaises(CrawlError) as failure:
+                    adapter.detail(PageSnapshot(fixtures.URL,html))
+                self.assertEqual(failure.exception.code,'invalid_job_data')

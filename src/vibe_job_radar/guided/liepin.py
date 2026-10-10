@@ -22,7 +22,12 @@ _OMIT = {'script', 'style', 'nav', 'footer', 'aside', 'noscript', 'template', 'i
 _HEADINGS = {'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'dt'}
 # The observed phrase 公司信息部 names a department inside a duty, not an
 # employer-information panel. Keep the exception limited to that exact phrase.
-_FOREIGN = re.compile(r'推荐职位|相似职位|猜你喜欢|公司简介|公司信息(?!部)|猎聘温馨提示')
+_FOREIGN = re.compile(
+    r'推荐职位|相似职位|猜你喜欢|公司简介|公司信息(?!部)|猎聘温馨提示|'
+    r'^[ \t]*(?:[-•][ \t]*)?(?:(?:similar|recommended|related|other)\s+'
+    r'(?:jobs|positions|vacancies)|(?:company|employer)\s+(?:profile|information)|'
+    r'about\s+(?:the\s+)?(?:company|employer))'
+    r'(?:[ \t]*[:：][^\n]*|[ \t]*)$', re.I | re.M)
 _INCOMPLETE = re.compile(r'登录后.{0,8}(?:查看|浏览)|查看完整.{0,4}(?:职位|描述)|展开(?:全部|更多)|安全验证|滑动.{0,8}验证')
 _JOB_CONTENT = re.compile(r'职责|要求|岗位描述|职位描述|工作内容|工作职能|任职资格')
 _ENGLISH_QUALIFICATION = re.compile(
@@ -71,18 +76,20 @@ def _english_incomplete_prompt(body: str) -> bool:
     """Recognize whole access/control clauses, not professional prose."""
     prefix = (r'(?:please\s+)?(?:you\s+(?:must|need\s+to|have\s+to)\s+)?'
               r'(?:(?:click|tap)\s+(?:here\s+)?(?:to\s+)?)?')
-    auth = r'(?:log[\s-]*in|sign[\s-]*in|register|sign[\s-]*up)'
+    account_name = r'(?:(?:your|an?)\s+)?(?:(?:free|new|registered|personal)\s+)?account'
+    auth = (r'(?:log[\s-]*in(?:to)?|sign[\s-]*in|register|sign[\s-]*up|'
+            r'(?:create|set\s+up)\s+' + account_name + r')')
     accounts = auth + r'(?:\s+or\s+' + auth + r'){0,2}'
-    account = r'(?:\s+(?:to|with)\s+(?:(?:your|an?)\s+)?account)?'
+    account = r'(?:\s+(?:(?:to|with|for)\s+)?' + account_name + r')?'
     login = prefix + accounts + account + r'(?:\s+(?:now|first|again))?'
     object_ = r'(?:job(?:\s+(?:description|details))?|description|details|qualifications|requirements|posting)'
     ending = r'(?:\s+(?:now|here))?[.!…?]*'
-    action = r'(?:view|read|see|show|access|unlock|expand|open|reveal|(?:get|gain)\s+access\s+to|continue\s+(?:reading|to\s+read))'
+    action = r'(?:view|read|see|show|learn|find\s+out|access|unlock|expand|open|reveal|(?:get|gain)\s+access\s+to|continue\s+(?:reading|to\s+read))'
     article = r'(?:(?:the|this)\s+)?'
     extent = r'(?:(?:full|complete|remaining|additional|further|entire|more|all)\s+|rest\s+of\s+(?:the|this)\s+)'
     content = article + r'(?:' + extent + r')?' + object_
     expanded = article + extent + object_
-    more = r'more(?:\s+' + object_ + r')?'
+    more = r'more(?:\s+(?:about\s+)?' + content + r')?'
     reading = action + r'\s+(?:' + content + r'|' + more + r')'
     access = r'(?:to\s+' + reading + r'|for\s+' + content + r'|to\s+continue(?:\s+reading)?)'
     expansion = (r'(?:' + action + r'\s+(?:' + expanded + r'|' + more + r')|'
@@ -465,14 +472,19 @@ class LiepinAdapter(DOMAdapter):
             return intro
         try:
             parsed = super().detail(page)
-            if len(parsed['text']) > 150_000:
-                raise CrawlError('structure_changed')
-            if (_INCOMPLETE.search(parsed['text']) or _english_incomplete_prompt(parsed['text'])):
-                raise CrawlError('jd_incomplete')
-            return parsed
         except CrawlError as exc:
             if exc.code != 'structure_changed':
                 raise
             if _has_structured_job(Document(page.html).root):
                 raise
             return semantic_detail(page.html)
+        # Parsing succeeded. Validation errors are fatal: a second layout must
+        # not replace an oversized or incomplete body selected by the parser.
+        # Keep the established batch status previously supplied by JobRecord.
+        if len(parsed['text']) > 150_000:
+            raise CrawlError('invalid_job_data')
+        if (_INCOMPLETE.search(parsed['text']) or _english_incomplete_prompt(parsed['text'])):
+            raise CrawlError('jd_incomplete')
+        if _FOREIGN.search(parsed['text']):
+            raise CrawlError('structure_changed')
+        return parsed
