@@ -174,3 +174,33 @@ class EnglishSectionTests(unittest.TestCase):
             body = "\n".join(lines[:-1]+["- "+control])
             with self.subTest(control=control), self.assertRaises(CrawlError):
                 self.parse(body)
+
+    def test_access_gates_preserve_clause_order_and_account_qualifiers(self):
+        prompts = (
+            "To view the complete job description, please sign in.",
+            "Please sign in to your account to view the complete job description.",
+            "To read the full description, sign in with your account.",
+            "To continue reading, please log in to your account.",
+            "For the full job description, please log in.",
+            "You must sign in to see the full qualifications.",
+            "Please sign in with your account to access the full job details.",
+        )
+        for prompt in prompts:
+            for body, layout in (
+                    (BODY, {}),
+                    (BODY.replace("Qualifications:", "任职资格"), {}),
+                    (BODY, {'anchor':False, 'raw_breaks':False})):
+                with self.subTest(prompt=prompt, layout=layout, body=body[:6]):
+                    with self.assertRaises(CrawlError) as failure:
+                        self.parse(body+"\n- "+prompt, **layout)
+                    self.assertEqual(failure.exception.code, 'jd_incomplete')
+        for duty in (
+                "To view production metrics, sign in to the monitoring account.",
+                "Sign in to your account to validate the employee qualifications.",
+                "To view the complete job lifecycle, maintain production dashboards.",
+                "Explain how to sign in to view the full job description to applicants.",
+                "Implement a form where applicants sign in to view the full job description.",
+        ):
+            body = BODY+"\n- "+duty
+            with self.subTest(duty=duty):
+                self.assertEqual(self.parse(body)['text'], body)

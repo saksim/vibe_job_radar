@@ -1,6 +1,6 @@
 # 已有取数证据与待验收项
 
-更新日期：2026-10-10 UTC（本机America/Denver为10月9日）。新增原工作台两次正常关键词搜索：一份机电架构师完整正文及同任务报告、另一份软件架构师详情失败；正常账号登录仍未执行。各次原始失败与独立诊断分别保留，不以离线重解析增加实采成功数。当前代码、首次CI、真正主干及便携程序包的资格以对应PR验收记录为准，历史开发实例不代表当前用户工作台。
+更新日期：2026-10-10 UTC。下列两次搜索实测对应America/Denver的10月9日。新增原工作台两次正常关键词搜索：一份机电架构师完整正文及同任务报告、另一份软件架构师详情失败；正常账号登录仍未执行。各次原始失败与独立诊断分别保留，不以离线重解析增加实采成功数。当前代码、首次CI、真正主干及便携程序包的资格以对应PR验收记录为准，历史开发实例不代表当前用户工作台。
 
 本页作为实站观察的统一入口；当前提交的源码、CI、主干与程序包资格分别在对应PR中记录，不能互相替代。[GAP 审计](PROJECT_GAP_AUDIT_2026_09_26.md)和[39行历史目标追溯](PROJECT_GOAL_TRACE_2026_09_26.md)冻结于2026年9月26日；其中104个Issue、105个PR及76个开放PR是当时统计，不是实时队列。
 
@@ -36,6 +36,6 @@
 
 ## 仍需独立验收
 
-[正常账号、会话及恢复](https://github.com/saksim/vibe_job_radar/issues/50)、[当前软件目标的正常搜索到正文闭环](https://github.com/saksim/vibe_job_radar/issues/63)、[身份/全文人工审核及阈值](https://github.com/saksim/vibe_job_radar/issues/54)、[BOSS](https://github.com/saksim/vibe_job_radar/issues/55)和[51job](https://github.com/saksim/vibe_job_radar/issues/56)各保留自己的结果与未决条件。公开分类、人工夹具、源码CI和实际便携程序资格互不替代实站或账号认证；三站不因此自动获得pilot_verified/live_verified。
+[正常账号、会话及恢复](https://github.com/saksim/vibe_job_radar/issues/50)、[当前软件目标的正常搜索到正文闭环](https://github.com/saksim/vibe_job_radar/issues/49)、[身份/全文人工审核及阈值](https://github.com/saksim/vibe_job_radar/issues/54)、[BOSS](https://github.com/saksim/vibe_job_radar/issues/55)和[51job](https://github.com/saksim/vibe_job_radar/issues/56)各保留自己的结果与未决条件。#63已按原范围完成当前Windows/Chrome的正常查询与结果配对验收；旧Edge页面清空的触发原因仍由#45/#23保留。公开分类、人工夹具、源码CI和实际便携程序资格互不替代实站或账号认证；三站不因此自动获得pilot_verified/live_verified。
 
 当前汇总见[专项总控](https://github.com/saksim/vibe_job_radar/issues/46)、[总线](https://github.com/saksim/vibe_job_radar/issues/57)和[GAP汇总](https://github.com/saksim/vibe_job_radar/issues/210)。本页不记录过期的登录冷却时间，不改变访问许可、配额、浏览器默认值、角色规则或历史报告。

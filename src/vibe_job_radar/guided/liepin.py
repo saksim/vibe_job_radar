@@ -69,24 +69,29 @@ def _labelled_duties_and_qualifications(body: str) -> bool:
 
 def _english_incomplete_prompt(body: str) -> bool:
     """Recognize complete access/expansion prompts, not ordinary login duties."""
-    prefix = r'(?:please\s+)?(?:(?:click|tap)\s+(?:here\s+)?(?:to\s+)?)?'
+    prefix = (r'(?:please\s+)?(?:you\s+(?:must|need\s+to|have\s+to)\s+)?'
+              r'(?:(?:click|tap)\s+(?:here\s+)?(?:to\s+)?)?')
     auth = r'(?:log[\s-]*in|sign[\s-]*in|register|sign[\s-]*up)'
     accounts = auth + r'(?:\s+or\s+' + auth + r'){0,2}'
+    account = r'(?:\s+(?:to|with)\s+(?:(?:your|an?)\s+)?account)?'
+    login = prefix + accounts + account + r'(?:\s+(?:now|first|again))?'
     object_ = r'(?:job(?:\s+(?:description|details))?|description|details|qualifications|posting)'
     ending = r'(?:\s+(?:now|here))?[.!…?]*'
     action = r'(?:view|read|see|show|access|unlock|expand|open|reveal|(?:get|gain)\s+access\s+to|continue\s+(?:reading|to\s+read))'
+    content = r'(?:(?:the|this)\s+)?(?:(?:full|complete)\s+)?' + object_
+    access = r'(?:to\s+' + action + r'\s+' + content + r'|for\s+' + content + r'|to\s+continue(?:\s+reading)?)'
     for line in body.splitlines():
         line = re.sub(r'^[-•]\s*', '', line.strip())
         # An account-introduction question can precede the actual prompt.
         for prompt in re.split(r'(?<=[.!?])\s+', line):
-            if re.fullmatch(prefix + accounts + r'(?:\s+to\s+continue)?' + ending, prompt, re.I):
+            if re.fullmatch(login + ending, prompt, re.I):
                 return True
-            # Bind authentication to the job/qualification object, rather than
-            # treating arbitrary following words as an access instruction.
+            # Bind both clause orders to an access request for job content.
+            # The account qualifier belongs to login, never arbitrary prose.
             if re.fullmatch(
-                    prefix + accounts + r'(?:\s+(?:now|first|again))?\s+(?:to\s+'
-                    + action + r'\s+|for\s+)(?:(?:the|this)\s+)?'
-                    r'(?:(?:full|complete)\s+)?' + object_ + ending, prompt, re.I):
+                    r'(?:' + login + r'\s+' + access + r'|'
+                    + access + r'\s*[,;:]?\s+' + login + r')' + ending,
+                    prompt, re.I):
                 return True
             if re.fullmatch(
                     prefix + r'(?:(?:show|read)\s+more|read\s+on|continue(?:\s+reading)?|'
