@@ -197,6 +197,9 @@ class NetworkPolicy:
                           code=self.error or 'pac_not_evaluated')
             if hasattr(self.pac, 'sha256'):
                 result['pac_sha256'] = self.pac.sha256
+            elif getattr(self.pac, 'kind', None) == 'wpad':
+                result.update(pac_scope='explicit_windows_wpad_confirmed_source',
+                              wpad_config_id=self.pac.binding, pac_content_frozen_per_session=True)
             else:
                 result.update(pac_scope='explicit_windows_configured_pac_url',
                               system_pac_config_id=self.pac.binding, pac_content_frozen_per_session=True)

@@ -1,4 +1,4 @@
-/* Shared same-origin workspace preferences. No credentials or network probes. */
+/* Shared same-origin workspace preferences; discovery/checks require explicit actions. */
 (() => {
   'use strict';
   const panel = document.getElementById('network-preferences');
@@ -27,7 +27,7 @@
   proxy.innerHTML = `<legend>本工作区的代理</legend>
     <p>自动模式沿用应用或系统配置。固定入口支持匿名本机代理，或已授权给此来宾的宿主机代理；更换后请停止并重开已有采集会话。</p>
     <label for="workspace-proxy-mode">连接方式</label>
-    <select id="workspace-proxy-mode"><option value="auto">自动发现</option><option value="http">固定本机 HTTP</option><option value="socks5">固定本机 SOCKS5</option><option value="vm_http">宿主机 HTTP</option><option value="vm_socks5">宿主机 SOCKS5</option><option value="pac" disabled>已导入的 PAC</option><option value="system_pac" disabled>已许可的系统 PAC</option></select>
+    <select id="workspace-proxy-mode"><option value="auto">自动发现</option><option value="http">固定本机 HTTP</option><option value="socks5">固定本机 SOCKS5</option><option value="vm_http">宿主机 HTTP</option><option value="vm_socks5">宿主机 SOCKS5</option><option value="pac" disabled>已导入的 PAC</option><option value="system_pac" disabled>已许可的系统 PAC</option><option value="wpad" disabled>已确认的 WPAD</option></select>
     <label for="workspace-proxy-endpoint">已配置的代理地址和端口</label>
     <input id="workspace-proxy-endpoint" type="text" autocomplete="off" spellcheck="false" style="max-width:100%;box-sizing:border-box" placeholder="填写你的本机代理入口，不含账号密码" disabled>
     <p id="workspace-proxy-scope"></p>
@@ -59,6 +59,59 @@
     <p>检查会下载当前来源脚本并对内置域名求值，不连接岗位网站。新会话会重新读取该来源；来源地址变化须再次确认。撤销时在上方选择“自动发现”并保存。</p>
     <p id="system-pac-status" role="status" aria-live="polite"></p>`;
   controls.append(systemPac);
+  const wpad = document.createElement('fieldset');
+  wpad.style.cssText = 'min-width:0;max-width:100%;overflow-wrap:anywhere';
+  wpad.innerHTML = `<legend>发现并确认 Windows WPAD</legend>
+    <p id="wpad-disclosure"></p>
+    <label><input id="wpad-discovery-consent" type="checkbox">同意向当前网络发现PAC地址；此步不会下载或执行脚本</label>
+    <button id="discover-wpad" type="button">发现来源</button>
+    <button id="cancel-wpad" type="button" disabled>取消发现／清除预览</button>
+    <p id="wpad-origin"></p>
+    <label><input id="wpad-trust-consent" type="checkbox" disabled>我已核对来源站点，信任此完整地址现在和后续提供的脚本，并同意上述执行与DNS说明</label>
+    <button id="save-wpad" type="button" disabled>确认并使用此来源</button>
+    <button id="check-wpad" type="button" disabled>重新发现并检查脚本</button>
+    <p>检查会重新发现、核对已确认地址并下载脚本，只对内置域名求值，不连接招聘网站。换网后请停止并重开会话。撤销许可时在上方选择“自动发现”并保存。</p>
+    <p id="wpad-status" role="status" aria-live="polite"></p>`;
+  controls.append(wpad);
+  const wpadDiscoveryConsent = wpad.querySelector('#wpad-discovery-consent');
+  const wpadTrustConsent = wpad.querySelector('#wpad-trust-consent');
+  const wpadDiscover = wpad.querySelector('#discover-wpad');
+  const wpadCancel = wpad.querySelector('#cancel-wpad');
+  const wpadSave = wpad.querySelector('#save-wpad');
+  const wpadCheck = wpad.querySelector('#check-wpad');
+  const wpadMessage = wpad.querySelector('#wpad-status');
+  let wpadCandidate = '', wpadPolling = null;
+  function renderWpad(value) {
+    const source = value.wpad || {};
+    wpad.querySelector('#wpad-disclosure').textContent = value.wpad_disclosure || '';
+    const nextCandidate = source.candidate || '';
+    if (nextCandidate !== wpadCandidate) wpadTrustConsent.checked = false;
+    wpadCandidate = nextCandidate;
+    wpad.querySelector('#wpad-origin').textContent = wpadCandidate
+      ? '发现的来源站点：'+source.origin+'（完整地址摘要 '+source.config_id+'；路径和参数隐藏）'
+      : '当前没有待确认的来源预览。';
+    const available = source.available === true && value.pac_available === true;
+    wpadDiscover.disabled = wpadDiscoveryConsent.disabled = !available || source.discovery_running === true;
+    wpadTrustConsent.disabled = wpadSave.disabled = !available || !wpadCandidate || source.discovery_running === true;
+    wpadCancel.disabled = !source.discovery_running && !wpadCandidate;
+    wpadCheck.disabled = !available || value.proxy_mode !== 'wpad' || source.discovery_running === true;
+    wpadMessage.textContent = (value.proxy_mode === 'wpad'
+      ? '已确认来源；本次状态读取未探测、下载或执行。新会话会重新核对。 ' : '') + (source.message || '');
+    if (!available) wpadMessage.textContent += ' 当前系统不支持此Windows功能。';
+    clearTimeout(wpadPolling);
+    if (source.discovery_running) wpadPolling = setTimeout(pollWpad, 300);
+  }
+  async function pollWpad() {
+    try {
+      const value = await call('/api/network/state');
+      if (value.revision !== revision) render(value);
+      else renderWpad(value);
+    } catch (error) {
+      wpadCandidate = ''; wpadTrustConsent.checked = false;
+      wpadTrustConsent.disabled = wpadSave.disabled = true;
+      wpadMessage.textContent = error.message+'；请重新载入页面核对状态。';
+    }
+  }
   const systemConsent = systemPac.querySelector('#system-pac-consent');
   const systemButton = systemPac.querySelector('#save-system-pac');
   const systemCheck = systemPac.querySelector('#check-system-pac');
@@ -77,8 +130,8 @@
   const proxyMessage = proxy.querySelector('#workspace-proxy-status');
   let revision = null, busy = false;
   function selection() {
-    endpoint.disabled = consent.disabled = ['auto', 'pac', 'system_pac'].includes(mode.value);
-    proxyButton.disabled = ['pac', 'system_pac'].includes(mode.value);
+    endpoint.disabled = consent.disabled = ['auto', 'pac', 'system_pac', 'wpad'].includes(mode.value);
+    proxyButton.disabled = ['pac', 'system_pac', 'wpad'].includes(mode.value);
     consent.checked = false;
     const vm = mode.value.startsWith('vm_');
     endpoint.placeholder = vm ? '填写宿主机已授权监听的 RFC1918 IPv4 和端口' : '填写你的本机代理入口，不含账号密码';
@@ -114,6 +167,7 @@
       : (mode.value === 'auto' ? '采用自动发现；尚未进行网络测试。'
         : mode.value === 'pac' ? '按已导入PAC选择域名路线；尚未进行网络测试。'
         : mode.value === 'system_pac' ? '按已许可系统PAC选择域名路线；尚未进行网络测试。'
+        : mode.value === 'wpad' ? '按已确认WPAD来源选择域名路线；尚未进行网络测试。'
         : '已保存 '+endpoint.value+'，仅对本工作区生效；尚未进行网络测试。');
     pac.querySelector('#workspace-pac-disclosure').textContent = value.pac_disclosure || '';
     pacFile.disabled = pacConsent.disabled = pacButton.disabled = value.pac_available !== true;
@@ -137,13 +191,15 @@
       ? (source.config_id === value.system_pac_config_id ? '已许可此来源；本次状态读取没有下载或执行。'
         : '来源已改变或不可用，联网停止。请核对当前来源后重新确认，或选择自动发现撤销。')
       : '未启用系统PAC；读取配置不会下载脚本。';
+    wpadDiscoveryConsent.checked = wpadTrustConsent.checked = false;
+    renderWpad(value);
   }
   async function save(path, data, output) {
     if (revision === null || busy) return;
     busy = true;controls.disabled = true;
     try {
       const value = await call(path, {...data, revision});
-      render(value);output.textContent = value.message;
+      render(value);if (typeof value.message === 'string') output.textContent = value.message;
     } catch (error) { output.textContent = error.message; }
     finally { busy = false;controls.disabled = false; }
   }
@@ -190,6 +246,36 @@
     systemMessage.textContent = '正在读取已许可来源，并执行内置域名检查…';
     try { const value = await call('/api/network/pac/check', {revision}); systemMessage.textContent = value.message; }
     catch (error) { systemMessage.textContent = error.message; }
+    finally { busy = false; controls.disabled = false; }
+  });
+  wpadDiscover.addEventListener('click', () => {
+    if (!wpadDiscoveryConsent.checked) {
+      wpadMessage.textContent = '请先勾选同意向当前网络发现地址。'; return;
+    }
+    wpadCandidate = ''; wpadTrustConsent.checked = false;
+    save('/api/network/wpad/discover', {consent:true}, wpadMessage);
+    wpadDiscoveryConsent.checked = false;
+  });
+  wpadCancel.addEventListener('click', async () => {
+    if (busy) return;
+    busy = true; controls.disabled = true;
+    try { render(await call('/api/network/wpad/cancel', {})); }
+    catch (error) { wpadMessage.textContent = error.message; }
+    finally { busy = false; controls.disabled = false; }
+  });
+  wpadSave.addEventListener('click', () => {
+    if (!wpadTrustConsent.checked || !wpadCandidate) {
+      wpadMessage.textContent = '请核对来源并单独勾选信任说明。'; return;
+    }
+    save('/api/network/wpad', {candidate:wpadCandidate, consent:true}, wpadMessage);
+    wpadTrustConsent.checked = false;
+  });
+  wpadCheck.addEventListener('click', async () => {
+    if (busy || revision === null) return;
+    busy = true; controls.disabled = true;
+    wpadMessage.textContent = '正在重新发现并核对来源，再读取和检查脚本…';
+    try { const value = await call('/api/network/pac/check', {revision}); wpadMessage.textContent = value.message; }
+    catch (error) { wpadMessage.textContent = error.message; }
     finally { busy = false; controls.disabled = false; }
   });
   call('/api/network/state').then(value => {
