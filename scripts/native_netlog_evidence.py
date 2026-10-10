@@ -166,12 +166,14 @@ class NativeNetLog:
             '--net-log-capture-mode=Default', '--net-log-max-size-mb=16']}
 
     def finish(self):
-        if self.result is not None:
+        if self.result is not None and self.result.get('private_cleanup') == 'removed':
             return self.result
-        try:
-            self.result = read_netlog(self.path, self.endpoint, self.hosts)
-        except Exception:
-            self.result = unavailable('observer_error')
+        if self.result is None:
+            try:
+                self.result = read_netlog(self.path, self.endpoint, self.hosts)
+            except Exception:
+                self.result = unavailable('observer_error')
+        self.result['cleanup_attempts'] = self.result.get('cleanup_attempts', 0) + 1
         # Only our newly created directory, never a browser/user profile.
         try:
             resolved = self.directory.resolve()

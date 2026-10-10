@@ -107,3 +107,10 @@ main 5ac76a09ab7d541530126ec6ad26d95590180ab7 的正常“软件架构师”搜�
 
 
 858da84候选自身首轮24/25；七组2758项、六类原生32检查和Windows程序23检查均通过，但另一个安装原生依赖的Windows全套2758项有一项失败：test_public_hybrid的重复提交用例在2秒内未进入模拟请求。首次线程证据停在RateLedger.reserve的SQLite commit，未知机器级存储原因保留。该断言将任务并发约束误绑到启动耗时；修正用已接收queued回执、同一活跃worker、重复HTTP409、最终同任务completed和唯一模拟请求验收。模拟请求仅由测试finally释放，且在mock有效期间等待原worker结束；产品限额、超时和同步策略均不改变。受控准备阶段屏障先稳定复现旧断言失败，再核验同一调度下新断言通过；这不冒充原CI机器速度重现，也未重跑原失败工作流。GitHub自动复审额度耗尽已留机器人原记录，按用户授权继续自行审查，不将旧自动审查当当前通过。
+
+
+被动账号前置条件也按完整访问短句检查：must/need to/have to/are required to be
+logged in、signed in、registered、authenticated，以及前置目的从句、
+requires you to be、available after being形式。只有整句匹配账户/正文访问关系才拒绝，
+正常运维登录职责和描述界面设计的技术要求继续逐字保留。
+新增12种门槛×3条既有布局共36项旧代码负对照，再补5种职责保真；不声称覆盖任意英文语义。

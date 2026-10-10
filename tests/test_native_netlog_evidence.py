@@ -11,7 +11,7 @@ from unittest.mock import Mock, patch
 ROOT = Path(__file__).resolve().parents[1]
 with patch.object(sys, 'path', [str(ROOT / 'scripts'), *sys.path]):
     import native_netlog_evidence as log
-    from run_native_liepin_probe import SearchObserver
+    from run_native_liepin_probe import SearchObserver, finish_client_logs
     from run_native_auth_probe import ObservedBackend
 
 SECRET = 'PRIVATE_PASSWORD_URL_HEADER_BODY'
@@ -114,7 +114,7 @@ class NativeNetLogEvidenceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder, patch.object(log, 'require_ci') as gate:
             root = Path(folder)
             neighbour = root / 'keep.txt'
-            neighbour.write_text(SECRET)
+            neighbour.write_text(SECRET, encoding='utf8')
             one = log.NativeNetLog(root, ENDPOINT, {HOST})
             two = log.NativeNetLog(root, ENDPOINT, {HOST})
             self.assertNotEqual(one.directory, two.directory)
@@ -133,9 +133,31 @@ class NativeNetLogEvidenceTests(unittest.TestCase):
             self.assertIs(one.finish(), first)
             self.assertFalse(one.directory.exists())
             self.assertTrue(two.directory.exists())
-            self.assertEqual(neighbour.read_text(), SECRET)
+            self.assertEqual(neighbour.read_text(encoding='utf8'), SECRET)
             self.assertFalse(two.finish()['available'])
             self.assertEqual(gate.call_count, 2)
+
+    def test_final_pass_retries_pending_cleanup_without_rereading_private_bytes(self):
+        with tempfile.TemporaryDirectory() as folder, patch.object(log, 'require_ci'):
+            observer = log.NativeNetLog(Path(folder), ENDPOINT, {HOST})
+            observer.path.write_text(json.dumps(fixture()), encoding='utf8')
+            with patch.object(log.shutil, 'rmtree', side_effect=PermissionError(SECRET)):
+                first = observer.finish()
+            self.assertEqual(first['private_cleanup'], 'pending')
+            self.assertEqual(first['cleanup_attempts'], 1)
+            self.assertTrue(observer.path.exists())
+            metadata = {}
+            with patch.object(log, 'read_netlog', side_effect=AssertionError('must not reread')):
+                finish_client_logs([(metadata, observer)])
+            result = metadata['client_connection_log']
+            self.assertIs(result, first)
+            self.assertTrue(result['available'])
+            self.assertEqual(result['private_cleanup'], 'removed')
+            self.assertEqual(result['cleanup_attempts'], 2)
+            self.assertFalse(observer.directory.exists())
+            self.assertNotIn(SECRET, json.dumps(result))
+            self.assertIs(observer.finish(), result)
+            self.assertEqual(result['cleanup_attempts'], 2)
 
     def test_ci_gate_precedes_creating_any_private_directory(self):
         with tempfile.TemporaryDirectory() as folder:

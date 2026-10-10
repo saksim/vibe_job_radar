@@ -15,6 +15,19 @@ from native_netlog_evidence import NativeNetLog, unavailable
 from native_wait_diagnostics import Stages, capture, observed_backend, observed_wait, observe_io, require_ci
 
 
+# Keep only our CI captures for a final cleanup pass after all browser owners
+# have finished; raw files remain outside the artifact directory.
+CONNECTION_LOGS = []
+
+
+def finish_client_logs(entries):
+    for probe, observer in entries:
+        try:
+            probe['client_connection_log'] = observer.finish()
+        except Exception:
+            probe['client_connection_log'] = unavailable('observer_error')
+
+
 class SearchObserver(ObservedBackend):
     def _launch_options(self, options):
         configured = super()._launch_options(options)
@@ -22,6 +35,7 @@ class SearchObserver(ObservedBackend):
             self._connection_log = NativeNetLog(
                 acceptance.ROOT / '.verify' / 'native-netlog-private',
                 self.tunnel.endpoint, self.contract.hosts)
+            CONNECTION_LOGS.append((self.probe, self._connection_log))
             return self._connection_log.options(configured)
         except Exception:
             self.probe['client_connection_log'] = unavailable('setup_failed')
@@ -65,6 +79,7 @@ def main():
                 patch.object(acceptance, 'wait', observed_wait(acceptance.wait, stages, out, 'search-wait')):
             acceptance.main()
     finally:
+        finish_client_logs(CONNECTION_LOGS)
         out = acceptance.ROOT / 'browser-acceptance' / 'native'
         out.mkdir(parents=True, exist_ok=True)
         (out / 'search-probe.json').write_text(json.dumps({

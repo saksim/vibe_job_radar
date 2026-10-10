@@ -74,11 +74,12 @@ def _labelled_duties_and_qualifications(body: str) -> bool:
 
 def _english_incomplete_prompt(body: str) -> bool:
     """Recognize whole access/control clauses, not professional prose."""
-    prefix = (r'(?:please\s+)?(?:you\s+(?:must|need\s+to|have\s+to)\s+)?'
+    prefix = (r'(?:please\s+)?(?:you\s+(?:must|need\s+to|have\s+to|are\s+required\s+to)\s+)?'
               r'(?:(?:click|tap)\s+(?:here\s+)?(?:to\s+)?)?')
     account_name = r'(?:(?:your|an?)\s+)?(?:(?:free|new|registered|personal)\s+)?account'
+    auth_state = r'(?:logged[\s-]*in(?:to)?|signed[\s-]*in(?:to)?|registered|authenticated)'
     auth = (r'(?:log[\s-]*in(?:to)?|sign[\s-]*in|register|sign[\s-]*up|'
-            r'(?:create|set\s+up)\s+' + account_name + r')')
+            r'be\s+' + auth_state + r'|(?:create|set\s+up)\s+' + account_name + r')')
     accounts = auth + r'(?:\s+or\s+' + auth + r'){0,2}'
     account = r'(?:\s+(?:(?:to|with|for)\s+)?' + account_name + r')?'
     login = prefix + accounts + account + r'(?:\s+(?:now|first|again))?'
@@ -99,7 +100,8 @@ def _english_incomplete_prompt(body: str) -> bool:
     subject = (r'(?:(?:access\s+to\s+)?' + content + r'|ability\s+to\s+' + reading
                + r'|experience\s+in\s+(?:this|the)\s+(?:role|position|job))')
     members = r'(?:(?:registered|authenticated|logged[\s-]*in|signed[\s-]*in)\s+)?(?:account\s+holders|users|members)'
-    authentication = r'(?:authentication|registration|log[\s-]*in|sign[\s-]*in|logging\s+in|signing\s+in)'
+    authentication = (r'(?:authentication|registration|log[\s-]*in|sign[\s-]*in|'
+                      r'logging\s+in|signing\s+in|being\s+' + auth_state + r')')
     visibility = (r'(?:is|are)\s+(?:(?:only\s+)?(?:available|visible|accessible|displayed|shown|revealed)'
                    r'\s+(?:only\s+)?(?:to\s+' + members + r'|after\s+' + authentication + r')|'
                    r'(?:limited|restricted)\s+to\s+' + members + r')')

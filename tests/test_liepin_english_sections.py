@@ -29,6 +29,39 @@ class EnglishSectionTests(unittest.TestCase):
         html = fixtures.markup(data, body=body, **layout)
         return builtins().get('liepin').detail(PageSnapshot(fixtures.URL, html))
 
+    def test_passive_account_prerequisites_are_incomplete_but_duties_are_preserved(self):
+        prompts = (
+            "You must be logged in to view the complete job description.",
+            "You need to be signed in to see the full qualifications.",
+            "You have to be logged-in to read the full description.",
+            "To view the complete job description, you must be signed in.",
+            "You are required to be signed-in to see the full job details.",
+            "Access to the full description requires you to be logged in.",
+            "The full qualifications need you to be signed in.",
+            "The full job description is available only after being logged in.",
+            "Please be logged into your account to read the full description.",
+            "To read the full description, be authenticated.",
+            "You must be registered to view the complete job description.",
+            "Please be signed into your account to view the full job description.",
+        )
+        for prompt in prompts:
+            for body, layout in ((BODY, {}), (BODY.replace("Qualifications:", "任职资格"), {}),
+                                 (BODY, {'anchor': False, 'raw_breaks': False})):
+                with self.subTest(prompt=prompt, layout=layout):
+                    with self.assertRaises(CrawlError) as failure:
+                        self.parse(body+"\n- "+prompt, **layout)
+                    self.assertEqual(failure.exception.code, 'jd_incomplete')
+        for duty in (
+            "Maintain audit trails for users who must be logged in to view financial records.",
+            "Ability to keep technicians signed in while they inspect hardware failures.",
+            "Design a sign-in form that says users must be logged in to view the full job description.",
+            "You must be logged in to production monitoring to inspect deployment failures.",
+            "Be registered with the professional engineering body before approving safety reviews.",
+        ):
+            body = BODY+"\n- "+duty
+            with self.subTest(duty=duty):
+                self.assertEqual(self.parse(body)['text'], body)
+
     def test_complete_sections_preserve_authored_text_and_identity(self):
         for raw in (True, False):
             for body in (BODY, BODY.replace('Tasks:', 'TASKS:').replace('Qualifications:', 'QUALIFICATIONS:')):
