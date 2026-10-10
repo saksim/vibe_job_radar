@@ -214,6 +214,49 @@ class EnglishSectionTests(unittest.TestCase):
                 with self.subTest(duty=duty, layout=layout):
                     self.assertEqual(self.parse(value, **layout)['text'], value)
 
+    def test_established_company_panels_do_not_enter_the_job_body(self):
+        for label in ("Company overview", "Company description", "About us", "Who we are"):
+            for body, layout in ((BODY, {}), (BODY.replace("Qualifications:", "任职资格"), {}),
+                                 (BODY, {'anchor': False, 'raw_breaks': False})):
+                with self.subTest(label=label, layout=layout):
+                    with self.assertRaises(CrawlError) as failure:
+                        self.parse(body+"\n- "+label+": Synthetic employer background information.", **layout)
+                    self.assertEqual(failure.exception.code, 'structure_changed')
+
+    def test_company_heading_words_inside_technical_duties_are_preserved(self):
+        for duty in (
+            "Experience maintaining company overview pages and editorial tools.",
+            "Design a company description editor with validation and revision history.",
+            "Maintain an About us page for the synthetic development portal.",
+            "Ability to implement Who we are content templates and review workflows.",
+        ):
+            for body, layout in ((BODY, {}), (BODY.replace("Qualifications:", "任职资格"), {}),
+                                 (BODY, {'anchor': False, 'raw_breaks': False})):
+                value = body+"\n- "+duty
+                with self.subTest(duty=duty, layout=layout):
+                    self.assertEqual(self.parse(value, **layout)['text'], value)
+
+    def test_benefits_in_saved_job_text_are_not_candidate_ai_requirements(self):
+        # Benefits can be part of an employer's JD; only requirement extraction
+        # excludes these sections. Full source text and offsets stay unchanged.
+        for label in ("Benefits", "Benefits and perks", "What we offer",
+                      "Compensation and benefits", "福利待遇", "薪酬福利"):
+            value = BODY.replace("Qualifications:", "任职资格")+"\n"+label+":\nWe provide a Cursor subscription."
+            for layout in ({}, {'anchor': False, 'raw_breaks': False}):
+                with self.subTest(label=label, layout=layout):
+                    self.assertEqual(self.parse(value, **layout)['text'], value)
+            parsed = self.parse(value)
+            with tempfile.TemporaryDirectory() as tmp, Store(':memory:') as store:
+                record = JobRecord(**parsed, url=fixtures.URL, platform='liepin',
+                                   source_mode='synthetic', is_synthetic=True)
+                store.add(record)
+                result = analyze(store, Path(tmp), role_filter=['architect'], demo_mode=True)
+                self.assertEqual(result['stats']['full_text_job_groups'], 1)
+                self.assertEqual(result['stats']['vibe_evidence_job_groups'], 0)
+                saved = json.loads((Path(tmp)/'jobs.jsonl').read_text(encoding='utf8'))
+                self.assertEqual(saved['text'], value)
+                self.assertEqual((Path(tmp)/'requirements.jsonl').read_text(encoding='utf8'), '')
+
     def test_complete_sections_preserve_authored_text_and_identity(self):
         for raw in (True, False):
             for body in (BODY, BODY.replace('Tasks:', 'TASKS:').replace('Qualifications:', 'QUALIFICATIONS:')):
