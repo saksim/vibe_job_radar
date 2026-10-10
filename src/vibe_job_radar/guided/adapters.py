@@ -158,7 +158,15 @@ def builtins() -> Registry:
                    'https://www.liepin.com/zhaopin/', 'key',
                    r'^(?:/job/[^/]+\.(?:shtml|html)|/a/[0-9]+\.shtml|/lptjob/[0-9]+)$',
                    'https://www.liepin.com/', ('www.liepin.com', 'passport.liepin.com'),
-                   ('liepin.com', 'liepin.cn', 'concat.lietou-static.com', 'image0.lietou-static.com'), version='3'),
+                   ('liepin.com', 'liepin.cn', 'concat.lietou-static.com', 'image0.lietou-static.com'),
+                   # The observed search pager has an icon-only button. Select
+                   # only the list's next item; parent and button disablement
+                   # both stop before robots, quota reservation or a click.
+                   next_selectors=(
+                       '.list-pagination-box ul.ant-pagination > '
+                       'li.ant-pagination-next:not(.ant-pagination-disabled):not([aria-disabled="true"]) > '
+                       'button.ant-pagination-item-link',
+                       *DOMAdapter.next_selectors), version='3'),
         DOMAdapter('51job', '前程无忧', ('51job.com',),
                    'https://we.51job.com/pc/search', 'keyword', r'(?:/[^/]+/\d+\.html$|^/pc/jobdetail)',
                    'https://login.51job.com/', ('login.51job.com',),

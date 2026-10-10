@@ -100,6 +100,127 @@ def completed_report(page, server, workspace):
     return state
 
 
+
+def check_recorded_liepin_pagination(browser, output):
+    """Real DOM clicks on the observed control shape; no upstream or credentials."""
+    from collections import deque
+    from types import SimpleNamespace
+    from vibe_job_radar.guided.adapters import builtins
+    from vibe_job_radar.guided.native_browser import NativeBackend
+    from vibe_job_radar.guided.rate import RateLimit
+
+    checks=[];network=[]
+    context=browser.new_context()
+    fixture_url='https://www.liepin.com/zhaopin/'
+    def route_fixture(route):
+        if route.request.url==fixture_url and route.request.is_navigation_request():
+            route.fulfill(status=200,content_type='text/html',body='<!doctype html>')
+        else:
+            network.append(route.request.url)
+            route.abort()
+    context.route('**/*',route_fixture)
+    page=context.new_page()
+    page.goto(fixture_url)  # Fulfilled in memory; no upstream request.
+    def backend(kind, refusal=None):
+        reservations=[];settled=[];permissions=[]
+        def ensure_robots(url):
+            permissions.append(url)
+            if refusal=='robots':raise CrawlError('robots_disallowed')
+        def reserve(value):
+            reservations.append(value)
+            if refusal=='quota':raise RateLimit(60,'daily_limit')
+        b=kind.__new__(kind)
+        b.adapter=builtins().get('liepin');b.page=page
+        b.error=b.wait_error=None;b.cancelled=threading.Event()
+        b.auth_mode=False;b.redirects=0;b._pagination_page=None
+        b.wire=SimpleNamespace(ensure_robots=ensure_robots,reserve=reserve)
+        b._settle=lambda:settled.append(True)
+        b._epoch=7;b._observations=deque(['prior-page'])
+        b._latest_business={'liepin_search':7};b._observed_bytes=40
+        # Supply owned-document state so production native permission checks
+        # run too. This fixture does not establish a CDP/network session.
+        if kind is NativeBackend:
+            document=SimpleNamespace(url=page.url,document_url=fixture_url,target='pager-fixture')
+            b._bound_pages={page:'fixture-session'}
+            b._page_sessions={'fixture-session':object()}
+            b._sessions={'fixture-session':document.target}
+            b._page_documents={'fixture-session':document}
+        return b,reservations,settled,permissions
+
+    def control(*, parent='', button='', scope='list-pagination-box', jump=False, transition=False):
+        classes='ant-pagination-jump-next' if jump else 'ant-pagination-next'
+        title='Next 5 Pages' if jump else 'Next Page'
+        change=("this.disabled=true;this.parentElement.setAttribute('aria-disabled','true');"
+                "this.parentElement.classList.add('ant-pagination-disabled');" if transition else '')
+        return ('<div class="'+scope+'"><ul class="ant-pagination">'
+                '<li class="ant-pagination-prev ant-pagination-disabled" aria-disabled="true">'
+                '<button disabled type="button">previous</button></li>'
+                '<li class="'+classes+'" title="'+title+'" '+parent+'>'
+                '<button type="button" class="ant-pagination-item-link" '+button+
+                ' onclick="window.pagerEvents.push(\'next\');'+change+'">'
+                '<span role="img" aria-label="right" class="anticon anticon-right">'
+                '<svg width="14" height="14"><path d="M 3 1 L 11 7 L 3 13"/></svg></span>'
+                '</button></li></ul></div>')
+    cases=[
+        ('enabled icon-only button',control(parent='aria-disabled="false"'),True,None),
+        ('disabled child button',control(parent='aria-disabled="false"',button='disabled'),False,None),
+        ('disabled parent ARIA',control(parent='aria-disabled="true"'),False,None),
+        ('disabled parent class',control(parent='aria-disabled="false"').replace(
+            'class="ant-pagination-next"','class="ant-pagination-next ant-pagination-disabled"'),False,None),
+        ('hidden pager',control(parent='aria-disabled="false" style="display:none"'),False,None),
+        ('jump-five control is not next-page',control(jump=True),False,None),
+        ('unrelated pager is not the list pager',control(scope='unrelated-carousel'),False,None),
+        ('legacy next link remains available','<a rel="next" href="#next" onclick="window.pagerEvents.push(\'next\')">下一页</a>',True,None),
+        ('robots refusal precedes quota and click',control(parent='aria-disabled="false"'),False,'robots'),
+        ('quota refusal precedes click',control(parent='aria-disabled="false"'),False,'quota'),
+    ]
+    try:
+        for kind in (PlaywrightBackend,NativeBackend):
+            for name,markup,clicks,refused in cases:
+                page.set_content('<!doctype html><meta charset="utf-8"><style>button{width:40px;height:32px}</style>'
+                                 '<script>window.pagerEvents=[];</script>'+markup)
+                b,reservations,settled,permissions=backend(kind,refused)
+                if refused:
+                    try:b.next_page()
+                    except CrawlError as error:
+                        assert error.code==('daily_limit' if refused=='quota' else 'robots_disallowed')
+                    else:raise AssertionError('refusal did not reach the caller')
+                else:
+                    assert b.next_page() is clicks,(kind.__name__,name)
+                assert page.evaluate('window.pagerEvents')==(['next'] if clicks else []),(kind.__name__,name)
+                assert reservations==(['page'] if clicks or refused=='quota' else []),(kind.__name__,name)
+                assert len(permissions)==int(bool(clicks or refused)),(kind.__name__,name)
+                assert settled==([True] if clicks else []) and b._pagination_page is None
+                if kind is NativeBackend:
+                    assert b._epoch==(8 if clicks else 7)
+                    assert list(b._observations)==([] if clicks else ['prior-page'])
+                    assert b._latest_business==({} if clicks else {'liepin_search':7})
+                    assert b._observed_bytes==(0 if clicks else 40)
+                checks.append({'backend':kind.__name__,'case':name,'passed':True})
+            # A real click changes the same DOM control into a disabled end.
+            page.set_content('<script>window.pagerEvents=[];</script>'+control(
+                parent='aria-disabled="false"',transition=True))
+            b,reservations,settled,permissions=backend(kind)
+            assert b.next_page() is True
+            if kind is NativeBackend:
+                b._observations.append('second-page');b._latest_business={'liepin_search':8};b._observed_bytes=44
+                before_epoch=b._epoch
+            assert b.next_page() is False
+            assert page.evaluate('window.pagerEvents')==['next'] and reservations==['page'] and settled==[True]
+            assert len(permissions)==1
+            if kind is NativeBackend:
+                assert list(b._observations)==['second-page'] and b._epoch==before_epoch
+                assert b._latest_business=={'liepin_search':8} and b._observed_bytes==44
+            checks.append({'backend':kind.__name__,'case':'same control becomes disabled without another click or quota reservation','passed':True})
+        assert not network
+        page.screenshot(path=str(output/'liepin-pagination-disabled.png'),full_page=True)
+        value={'success':True,'checks':checks,'external_requests':0,
+            'scope':'actual browser DOM and production next_page methods; synthetic control interaction, not site pagination or native network certification'}
+        (output/'liepin-pagination.json').write_text(json.dumps(value,ensure_ascii=False,indent=2),encoding='utf8')
+        return value
+    finally:context.close()
+
+
 def main():
     from playwright.sync_api import sync_playwright, expect
     output=ROOT/'browser-acceptance'/'guided';output.mkdir(parents=True,exist_ok=True)
@@ -132,6 +253,8 @@ def main():
         try:
             with sync_playwright() as pw:
                 browser=pw.chromium.launch(**options)
+                pager=check_recorded_liepin_pagination(browser,output)
+                result['checks'].append('observed icon-only Liepin pager: '+str(len(pager['checks']))+' bridge/native DOM, disabled-end, scope and quota checks')
                 context=browser.new_context(viewport={'width':1360,'height':1000},accept_downloads=True)
                 context.route('**/*',lambda r:r.continue_() if r.request.url.startswith(server.origin+'/') else r.abort())
                 page=context.new_page();page.on('pageerror',lambda e:result['page_errors'].append(str(e)))

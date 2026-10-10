@@ -9,11 +9,13 @@
 |---|---|---|---|---|
 | BOSS直聘 / 1 | bridge / 默认 | implemented | [2026-09-18 人工夹具](https://github.com/saksim/vibe_job_radar/actions/runs/35358529040) | not_verified；[#55](https://github.com/saksim/vibe_job_radar/issues/55) |
 | BOSS直聘 / 1 | native / 不可用 | blocked | 无匹配记录 | not_verified；[#55](https://github.com/saksim/vibe_job_radar/issues/55) |
-| 猎聘 / 3 | bridge / 默认 | implemented | [2026-09-23 人工夹具](https://github.com/saksim/vibe_job_radar/actions/runs/35891758001) | blocked；[#54](https://github.com/saksim/vibe_job_radar/issues/54) / [#63](https://github.com/saksim/vibe_job_radar/issues/63) |
+| 猎聘 / 3 | bridge / 默认 | implemented | 无匹配记录 | blocked；[#54](https://github.com/saksim/vibe_job_radar/issues/54) / [#63](https://github.com/saksim/vibe_job_radar/issues/63) |
 | 猎聘 / 3 | native / 显式实验 | implemented | 无匹配记录 | blocked；[#54](https://github.com/saksim/vibe_job_radar/issues/54) / [#63](https://github.com/saksim/vibe_job_radar/issues/63) |
 | 前程无忧 / 1 | bridge / 默认 | implemented | [2026-09-18 人工夹具](https://github.com/saksim/vibe_job_radar/actions/runs/35358529040) | not_verified；[#56](https://github.com/saksim/vibe_job_radar/issues/56) |
 | 前程无忧 / 1 | native / 不可用 | blocked | 无匹配记录 | not_verified；[#56](https://github.com/saksim/vibe_job_radar/issues/56) |
 <!-- acquisition-status:end -->
+
+本次猎聘分页选择器定义改变，因此旧猎聘夹具记录不再显示为匹配；没有把旧记录改写到新定义。新控件回归与实站边界见[分页记录](LIEPIN_NORMAL_PAGINATION.md)。
 
 表中的受控验证记录分别绑定历史源码 `cde1e1c`（2026-09-18）或猎聘定义 `0d85f554`（2026-09-23）、适配定义与访问契约，保留对应 CI、日期、浏览器/OS、网络和人工页面范围。它不证明修改后的全部代码、当前用户环境或真实平台。定义变化会撤下匹配的受控记录，不能只沿用同名平台的旧成功。报告中的软件快照不改变某条岗位的来源方式或证据等级；真实正文仍以逐条原文、采集时间和来源链判断。
 
