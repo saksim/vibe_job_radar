@@ -81,6 +81,11 @@ class NetworkPolicy:
     pac: object | None = field(default=None, repr=False, compare=False)
     pac_id: str = ''
     pac_route_host: str = field(default='', repr=False)
+    public_dns: bool = False
+
+    def __post_init__(self):
+        if type(self.public_dns) is not bool or (self.public_dns and self.encrypted_dns is not True):
+            raise ValueError('public DNS requires an explicit encrypted DNS policy')
 
     @classmethod
     def capture(cls, *, discover=None) -> NetworkPolicy:
@@ -161,6 +166,8 @@ class NetworkPolicy:
     def fingerprint(self) -> str:
         value = [self.source, self.transport_name(self.proxy), self.proxy.host if self.proxy else None,
                  self.proxy.port if self.proxy else None, self.bypass, self.error, self.encrypted_dns]
+        if self.public_dns:
+            value.append('explicit_public_doh_v1')
         if self.proxy and self.proxy.credentials is not None:
             value.append(self.proxy.credentials.binding)
         if self.pac is not None:
@@ -169,12 +176,14 @@ class NetworkPolicy:
 
     def describe(self, host: str | None = None) -> dict:
         result = {'mode': 'auto', 'source': self.source, 'policy_id': self.fingerprint,
-                  'resolution': 'system_then_opt_in_doh' if self.encrypted_dns else 'local_validated_public_ip', 'direct_fallback': False,
+                  'resolution': ('explicit_public_doh' if self.public_dns else
+                                 'system_then_opt_in_doh' if self.encrypted_dns else 'local_validated_public_ip'),
+                  'direct_fallback': False,
                   'automatic_static_http': True, 'automatic_static_socks5': True,
                   'pac_supported': self.pac is not None and self.error is None,
                   'pac_scope': 'explicit_windows_trusted_domain_script',
                   'socks_supported': True, 'fake_ip_supported': self.encrypted_dns,
-                  'fake_ip_scope': 'opt_in_198.18.0.0/15_only',
+                  'fake_ip_scope': 'target_system_dns_not_used' if self.public_dns else 'opt_in_198.18.0.0/15_only',
                   'encrypted_dns_provider': 'Cloudflare' if self.encrypted_dns else None,
                   'proxy_credentials_supported': True,
                   'proxy_credentials_scope': 'explicit_application_loopback_only',

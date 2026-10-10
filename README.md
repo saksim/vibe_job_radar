@@ -50,6 +50,8 @@ BOSS、猎聘、51job 的浏览器采集仍需逐站现场验收，不能因入�
 
 登录态、简历、本人证据和私人报告默认留本地，生产 Linux 部署后置。已合并的匿名本机 HTTP/SOCKS5 静态策略和明确同意的 198.18/15 加密解析保留；PR76已合入[显式本机代理认证](docs/LOCAL_PROXY_AUTH.md)，高级采集与CLI也已由PR66接入工作区策略。#109增加默认关闭的[Windows本地PAC导入](docs/WINDOWS_DOMAIN_PAC.md)，#135另接入[确认后使用系统已配置PAC地址](docs/WINDOWS_SYSTEM_PAC.md)，每个新会话读取一次并冻结，默认与状态读取不下载；按域名保留明确的原始选路，失败不推进至直连。其他剩余网络范围见 [网络状态](docs/NETWORK_COMPATIBILITY_STATUS.md)。不要关闭 TLS 校验或删除配额库来制造成功。
 
+可单独选择[公共域名加密解析](docs/PUBLIC_DNS.md)：目标域名不先依赖本机 DNS，解析沿原选路线，目标仍须通过公网地址和 TLS 校验。默认关闭、单独同意；原有仅修复映射地址的授权不会自动扩大。
+
 主干已合入[工作区网页代理偏好](docs/WORKSPACE_PROXY_SETTINGS.md)：三个工作台入口可保存匿名本机HTTP/SOCKS5入口，DNS与代理共享修订号，其他工作区不受影响。已有应用专用代理/凭据冲突时停止；保存不联网测试，更换后需停止并重开采集会话。首次保存代理写入v2网络偏好，旧源码会明确拒绝，回退需先备份并恢复原v1偏好。本次 #83/#84 增加[明确指定的宿主机代理](docs/VM_HOST_PROXY.md)，使用独立模式和许可；不把来宾loopback当宿主机，不猜网关或扫描入口，实际虚拟化产品环境仍待实测。
 
 当前项目提供 Python 3.10+ 源码和 [Windows x64 便携候选包](docs/WINDOWS_PORTABLE.md)的构建与实际 exe 验收，包含 Python/Chromium，须以对应提交的成功 CI 产物为准，尚非正式签名发行或自动升级。源码用户在 Windows 可双击 `start_windows.bat`，其他系统使用原启动入口。新增的 `research_brief.md` 便于带走本批结论；底层完整原文、复核队列和历史报告保留。

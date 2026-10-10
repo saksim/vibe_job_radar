@@ -4,7 +4,9 @@
 #guided-startup{border:0;margin:0;padding:0;min-width:0}
 </style><script src="/guided.js" defer></script><script src="/network-settings.js" defer></script>
 </head><body><main><p id="guided-initializing" class="notice" role="status">正在读取本机任务，完成后即可操作。若长时间未完成，可重新载入或返回工作台。</p><fieldset id="guided-startup" disabled aria-busy="true" aria-label="岗位采集操作"><section id="network-preferences"><details><summary>网络自动适配（不必关闭 VPN/TUN）</summary>
-<p>仅在系统返回映射地址时，可使用 Cloudflare 加密解析目标域名。解析服务可看到域名和网络出口，不接收职位正文、URL 查询参数、Cookie、密码或个人材料。普通公网 DNS 不额外请求它，不修改系统 DNS，也不扫描代理端口。</p>
+<label for="network-dns-scope">加密解析范围</label>
+<select id="network-dns-scope"><option value="fake_ip_doh">仅修复系统映射地址</option><option value="public_doh">公共域名使用 Cloudflare</option></select>
+<p id="network-dns-disclosure">默认保持系统 DNS。仅修复映射地址时，普通公网 DNS 不额外请求解析商。选择公共域名模式后，目标域名不先查询本机 DNS；不适用于企业内部域名。Cloudflare 可看到域名和网络出口，不接收职位正文、URL 路径与参数、Cookie、密码或个人材料。请阅读所选范围的说明后明确同意。</p>
 <label class="check"><input id="encrypted-dns-consent" type="checkbox">我同意上述解析方式，并在此本机工作区记住选择</label>
 <button id="save-network-preferences" type="button" disabled>保存网络偏好</button><p role="status" aria-live="polite">正在读取本机偏好（不联网测试）。</p>
 <p>新公开查询及新浏览器会话生效；已有会话不会偷偷换网络。关闭后不再发起新的加密解析。特定企业网络或解析服务不可用时仍会说明失败，不绕过权限或证书错误。</p></details></section>

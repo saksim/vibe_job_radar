@@ -3,7 +3,15 @@
   'use strict';
   const panel = document.getElementById('network-preferences');
   if (!panel) return;
-  const toggle = panel.querySelector('input');
+  const toggle = panel.querySelector('#encrypted-dns-consent');
+  const dnsScope = panel.querySelector('#network-dns-scope');
+  const dnsDisclosure = panel.querySelector('#network-dns-disclosure');
+  let dnsDisclosures = {};
+  dnsScope.addEventListener('change', () => {
+    toggle.checked = false;
+    dnsDisclosure.textContent = dnsDisclosures[dnsScope.value] || '';
+    message.textContent = '解析范围已选择但尚未保存；启用此范围请重新勾选同意。';
+  });
   const button = panel.querySelector('button');
   const message = panel.querySelector('[role=status]');
   message.id = 'network-dns-status';
@@ -93,7 +101,10 @@
     return value;
   }
   function render(value) {
-    toggle.checked = value.mode === 'fake_ip_doh';
+    toggle.checked = value.mode !== 'system';
+    dnsScope.value = value.mode === 'public_doh' ? 'public_doh' : 'fake_ip_doh';
+    dnsDisclosures = value.dns_disclosures || {fake_ip_doh:value.disclosure || ''};
+    dnsDisclosure.textContent = dnsDisclosures[dnsScope.value] || '';
     revision = value.revision;
     mode.value = value.proxy_mode || 'auto';
     endpoint.value = value.proxy_endpoint || '';
@@ -137,7 +148,7 @@
     finally { busy = false;controls.disabled = false; }
   }
   button.addEventListener('click', () => save('/api/network/preferences',
-    {mode: toggle.checked ? 'fake_ip_doh' : 'system', consent: toggle.checked}, message));
+    {mode: toggle.checked ? dnsScope.value : 'system', consent: toggle.checked}, message));
   proxyButton.addEventListener('click', () => save('/api/network/proxy',
     {mode: mode.value, endpoint: mode.value === 'auto' ? '' : endpoint.value,
       consent: mode.value === 'auto' ? false : consent.checked}, proxyMessage));
@@ -183,7 +194,9 @@
   });
   call('/api/network/state').then(value => {
     render(value);
-    message.textContent = toggle.checked ? '已同意仅在映射地址时采用加密解析。尚未进行网络测试。' : '未开启额外解析；普通公网DNS不受影响。';
+    message.textContent = !toggle.checked ? '未开启额外解析；继续使用系统DNS。'
+      : value.mode === 'public_doh' ? '已同意公共域名使用Cloudflare；尚未进行网络测试。'
+      : '已同意仅在映射地址时采用加密解析。尚未进行网络测试。';
     button.disabled = false;controls.disabled = false;
   }).catch(error => { message.textContent = error.message;proxyMessage.textContent = '设置未就绪；请核对原配置后重新载入。'; });
 })();

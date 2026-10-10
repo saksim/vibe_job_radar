@@ -82,7 +82,7 @@ class Workspace:
             if not hasattr(self, '_dns_resolver'):
                 from .encrypted_dns import PublicResolver
                 from .network_settings import read_settings
-                self._dns_resolver = PublicResolver(permission=lambda: read_settings(self)['mode'] == 'fake_ip_doh')
+                self._dns_resolver = PublicResolver(mode_permission=lambda: read_settings(self)['mode'])
             return self._dns_resolver
 
     def network_policy(self):

@@ -33,6 +33,7 @@ from vibe_job_radar.workspace import Workspace
 class EncryptedRoundTripTests(unittest.TestCase):
     def setUp(self):
         self.dials=[];self.posts=[];self.targets=[];self.sni=[];self.connects=[]
+        self.system_dns_unavailable=False;self.target_dns_queries=[]
         self.status=200;self.mime='application/dns-message';self.age='0';self.cache='max-age=60'
         self.private=False;self.denied=False;self.target_status=200;self.cookies=[];self.socks=False
         self.real_dial=socket.create_connection;self.real_dns=socket.getaddrinfo;owner=self
@@ -108,7 +109,10 @@ class EncryptedRoundTripTests(unittest.TestCase):
 
     def perform(self, callback, *, proxy=False, trust=True):
         def gai(host,*a,**kw):
-            if host==HOST:return fake_answers('198.18.0.42')
+            if host==HOST:
+                self.target_dns_queries.append(host)
+                if self.system_dns_unavailable:raise socket.gaierror('test-only unavailable target DNS')
+                return fake_answers('198.18.0.42')
             if host==DOH_HOST:raise AssertionError('bootstrap must not recurse into system DNS')
             return self.real_dns(host,*a,**kw)
         def dial(endpoint,*a,**kw):
@@ -204,6 +208,55 @@ class EncryptedRoundTripTests(unittest.TestCase):
     def test_no_store_responses_not_cached(self):
         self.cache='no-store';self.get()
         self.assertEqual(self.resolver._cache,{})
+
+    def test_public_dns_uses_http_proxy_without_target_system_lookup(self):
+        self.policy=replace(self.policy,public_dns=True);self.system_dns_unavailable=True
+        self.assertEqual(self.get(proxy=True)['fixture'],'verified-target')
+        self.assertEqual(self.target_dns_queries,[])
+        self.assertEqual(self.dials,[self.proxy.server_address]*3)
+        self.assertEqual(self.sni,[DOH_HOST,DOH_HOST,HOST])
+        self.assertEqual(len(self.posts),2)
+        for path,body,headers in self.posts:
+            self.assertEqual(path,'/dns-query');self.assertNotIn(b'PRIVATE-QUERY',body)
+            self.assertNotIn('Cookie',headers);self.assertNotIn('Authorization',headers)
+
+    def test_public_dns_uses_socks_proxy_and_refusal_never_dials_direct(self):
+        self.policy=replace(self.policy,public_dns=True);self.system_dns_unavailable=True;self.socks=True
+        self.assertEqual(self.get(proxy=True)['fixture'],'verified-target')
+        self.assertEqual(self.target_dns_queries,[])
+        self.assertEqual(self.dials,[self.proxy.server_address]*3)
+        self.assertTrue(all(line.startswith('SOCKS5 ') for line in self.connects))
+        self.assertEqual(self.sni,[DOH_HOST,DOH_HOST,HOST])
+        # A new resolver removes only this artificial answer cache so the same
+        # unchanged selected proxy must receive (and reject) a fresh DNS tunnel.
+        self.resolver=PublicResolver();self.policy=replace(self.policy,resolver=self.resolver)
+        self.denied=True
+        with self.assertRaisesRegex(FetchError,'encrypted_dns_route_failed'):self.get(proxy=True)
+        self.assertEqual(self.dials,[self.proxy.server_address]*4)
+        self.assertEqual(len(self.posts),2);self.assertEqual(len(self.targets),1)
+
+    def test_public_dns_keeps_target_tls_and_private_answer_rejection(self):
+        self.policy=replace(self.policy,public_dns=True);self.system_dns_unavailable=True
+        with self.assertRaisesRegex(FetchError,'tls_verification_failed'):self.get(trust='resolver-only')
+        self.assertEqual(len(self.posts),2);self.assertEqual(self.targets,[])
+        self.resolver=PublicResolver();self.policy=replace(self.policy,resolver=self.resolver)
+        self.private=True
+        with self.assertRaisesRegex(FetchError,'encrypted_dns_non_public_answer'):self.get()
+        self.assertEqual(len(self.posts),3);self.assertEqual(self.targets,[])
+        self.assertEqual(self.target_dns_queries,[])
+
+    def test_public_dns_browser_bridge_preserves_same_proxy_and_target(self):
+        self.policy=replace(self.policy,public_dns=True);self.system_dns_unavailable=True
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger=RateLedger(Path(tmp)/'rate.sqlite',Limits(request_interval=0))
+            def run():
+                with use_policy(self.policy):
+                    transport=PinnedTransport(SimpleNamespace(key='fixture',domains=(HOST,),resource_domains=()),ledger,threading.Event())
+                    return transport.fetch('https://'+HOST+'/job')
+            self.assertEqual(self.perform(run,proxy=True).status,200)
+        self.assertEqual(self.target_dns_queries,[])
+        self.assertEqual(self.dials,[self.proxy.server_address]*3)
+        self.assertEqual(len(self.posts),2);self.assertEqual(len(self.targets),1)
 
     def test_browser_bridge_same_real_repair_and_target_tls(self):
         with tempfile.TemporaryDirectory() as tmp:
