@@ -6,6 +6,7 @@ import re
 import secrets
 
 from .contracts import CrawlError
+from .acquisition_results import FINISHED_DETAIL_STATUSES
 
 STATUSES = frozenset({502, 503, 504})
 MAX_RETRIES = 2
@@ -91,7 +92,7 @@ def action_for(state, failure, *, search_entry=None):
         raise CrawlError('read_retry_unavailable')
     if state.get('phase') == 'collect':
         selected = set(state['selection'])
-        pending = next((c for c in state['cards'] if c['id'] in selected and c['status'] != 'ok'), None)
+        pending = next((c for c in state['cards'] if c['id'] in selected and c['status'] not in FINISHED_DETAIL_STATUSES), None)
         if pending and pending['url'] == failure.url:
             return 'resume'
     elif failure.url == state['search_url'] or (search_entry is not None and failure.url == search_entry):

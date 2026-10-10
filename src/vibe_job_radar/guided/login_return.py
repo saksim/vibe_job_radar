@@ -13,6 +13,7 @@ import time
 from urllib.parse import parse_qsl, urlsplit
 
 from .contracts import CrawlError, PageSnapshotChanged
+from .acquisition_results import FINISHED_DETAIL_STATUSES
 
 
 def matching_list_signature(adapter, expected_url, page, *, scope=None):
@@ -85,14 +86,14 @@ class ReturnedSearch:
 def pending_detail_target(state):
     """Only the next unfinished explicit selection can consume a returned JD.
 
-    Preserve the collector's order. Do not skip a failed earlier item to adopt
-    a recommended/unselected/later job merely because its page is readable.
+    Preserve the collector's order, skipping successful and closed items whose
+    attempts are finished. Other failures still block adoption of later pages.
     """
     if state.get('phase') != 'collect':
         return None
     selection = set(state.get('selection', ()))
     for row in state.get('cards', ()):
-        if row['id'] not in selection or row.get('status') == 'ok':
+        if row['id'] not in selection or row.get('status') in FINISHED_DETAIL_STATUSES:
             continue
         if row.get('status') in {'discovered', 'opening', 'manual_required', 'paused'}:
             return DetailTarget(row['id'], row['url'])
