@@ -284,7 +284,10 @@ class DetailReturnServiceTests(unittest.TestCase):
             diagnostic['worker_fsync']={'before_wait':before,'at_timeout':probe.snapshot()}
         self.fail(f'guided action remained busy after {timeout:g}s: '+json.dumps(diagnostic))
     def await_state(self,key,value):
-        end=time.monotonic()+5
+        # A returned detail saves the complete durable report before it is
+        # complete. This functional wait is separate from the explicit 5s
+        # diagnostic controls in wait_idle().
+        end=time.monotonic()+30
         while time.monotonic()<end:
             # One locked view: reading JSON before a separate busy check can
             # return the prior completed/manual_pending snapshot while the
@@ -385,6 +388,43 @@ class DetailReturnServiceTests(unittest.TestCase):
         self.assertEqual(state['report_id'], self.partial_report)
 
 class DetailReturnFixtureTests(unittest.TestCase):
+    def test_returned_detail_waits_for_its_real_report_write_before_completion(self):
+        import os
+        original_fsync=os.fsync
+        case=DetailReturnServiceTests('test_login_returned_full_jd_enters_report_without_second_fetch')
+        entered=threading.Event();guard=threading.Lock();held=[]
+        try:
+            case.setUp()
+            observed_fsync=os.fsync
+            def fsync(descriptor):
+                owner=case.service._thread
+                ours=(owner is not None and owner.ident is not None and
+                      threading.current_thread().name.startswith(f'radar-report-{owner.ident}_'))
+                first=False
+                if ours:
+                    with guard:
+                        if not entered.is_set():
+                            entered.set();first=True
+                if first:
+                    # Count from the owned writer's actual fsync, never from
+                    # task setup; all other threads and writes keep their I/O.
+                    begin=time.monotonic()
+                    threading.Event().wait(6.5)
+                    held.append(time.monotonic()-begin)
+                return observed_fsync(descriptor)
+            with patch.object(os,'fsync',side_effect=fsync):
+                # Preserve the original source identity, no-second-fetch,
+                # prior-report, full-body, audit and login-return assertions.
+                case.test_login_returned_full_jd_enters_report_without_second_fetch()
+            self.assertTrue(entered.is_set())
+            self.assertEqual(len(held),1)
+            self.assertGreaterEqual(held[0],6.5)
+        finally:
+            self.assertTrue(case.doCleanups())
+            self.assertIs(os.fsync,original_fsync)
+        self.assertFalse(case.workspace.root.exists())
+        self.assertIsNone(case.service._ownership.lease)
+
     def test_setup_failure_closes_live_worker_and_releases_ownership_before_removing_workspace(self):
         import os
         original_fsync=os.fsync
