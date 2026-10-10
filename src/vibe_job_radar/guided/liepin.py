@@ -20,12 +20,13 @@ from .page_surface import surface_text
 
 _OMIT = {'script', 'style', 'nav', 'footer', 'aside', 'noscript', 'template', 'iframe', 'svg'}
 _HEADINGS = {'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'dt'}
-# The observed phrase 公司信息部 names a department inside a duty, not an
-# employer-information panel. Keep the exception limited to that exact phrase.
+# Foreign material is identified by its panel label, never by a word occurring
+# inside a professional duty (for example, 公司信息安全 or recommendation design).
+# A sentence delimiter can separate a panel label when the page omits a newline.
 _FOREIGN = re.compile(
-    r'推荐职位|相似职位|猜你喜欢|公司简介|公司信息(?!部)|猎聘温馨提示|'
-    r'^[ \t]*(?:[-•][ \t]*)?(?:(?:similar|recommended|related|other)\s+'
-    r'(?:jobs|positions|vacancies)|(?:company|employer)\s+(?:profile|information)|'
+    r'(?:^|(?<=[。！？；.!?;]))[ \t]*(?:[-•][ \t]*)?(?:推荐职位|相似职位|猜你喜欢|公司简介|公司信息|猎聘温馨提示|'
+    r'(?:similar|recommended|related|other)\s+(?:jobs|positions|vacancies)|'
+    r'(?:company|employer)\s+(?:profile|information)|'
     r'about\s+(?:the\s+)?(?:company|employer))'
     r'(?:[ \t]*[:：][^\n]*|[ \t]*)$', re.I | re.M)
 _INCOMPLETE = re.compile(r'登录后.{0,8}(?:查看|浏览)|查看完整.{0,4}(?:职位|描述)|展开(?:全部|更多)|安全验证|滑动.{0,8}验证')

@@ -104,6 +104,33 @@ class EnglishSectionTests(unittest.TestCase):
             with self.subTest(duty=duty):
                 self.assertEqual(self.parse(body)['text'], body)
 
+    def test_chinese_panel_words_in_professional_prose_are_preserved(self):
+        for duty in (
+            "负责公司信息安全体系设计，维护数据库访问权限与审计流程。",
+            "负责公司信息化平台建设，设计可靠的内部数据服务。",
+            "编写公司简介编辑器，支持内容校验、版本控制和发布审核。",
+            "设计推荐职位检索系统，维护离线索引与相关性评估。",
+            "维护相似职位比较功能，负责测试数据和异常诊断。",
+            "实现猜你喜欢推荐模块，记录可复核的算法评估结果。",
+            "分析猎聘温馨提示展示组件的兼容性和可访问性要求。",
+        ):
+            for body, layout in ((BODY, {}), (BODY.replace("Qualifications:", "任职资格"), {}),
+                                 (BODY, {'anchor': False, 'raw_breaks': False})):
+                value = body+"\n- "+duty
+                with self.subTest(duty=duty, layout=layout):
+                    self.assertEqual(self.parse(value, **layout)['text'], value)
+
+    def test_chinese_foreign_panel_labels_are_rejected_across_layouts(self):
+        for label in ("推荐职位", "相似职位", "猜你喜欢", "公司简介", "公司信息", "猎聘温馨提示"):
+            for suffix in ("\n"+label, "\n- "+label+"：其他无关的介绍或推荐内容。",
+                           "。"+label+"：其他无关的介绍或推荐内容。"):
+                for body, layout in ((BODY, {}), (BODY.replace("Qualifications:", "任职资格"), {}),
+                                     (BODY, {'anchor': False, 'raw_breaks': False})):
+                    with self.subTest(label=label, suffix=suffix, layout=layout):
+                        with self.assertRaises(CrawlError) as failure:
+                            self.parse(body+suffix, **layout)
+                        self.assertEqual(failure.exception.code, 'structure_changed')
+
     def test_complete_sections_preserve_authored_text_and_identity(self):
         for raw in (True, False):
             for body in (BODY, BODY.replace('Tasks:', 'TASKS:').replace('Qualifications:', 'QUALIFICATIONS:')):
