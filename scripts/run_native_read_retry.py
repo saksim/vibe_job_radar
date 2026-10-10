@@ -15,6 +15,21 @@ from run_native_browser_acceptance import (ROOT, Fixture, trust_fixture, HOST,
     NetworkPolicy, use_policy)
 
 
+
+def stop_retained_task(service, ident, wait):
+    # A retry-exhausted task deliberately retains its browser. Exercise its
+    # ordinary stop action before leaving the fixture, using the same bounded
+    # functional wait as every preceding action. service.close() remains a
+    # five-second shutdown request, not a promise that slow cleanup has ended.
+    service.action({'id':ident,'action':'stop'})
+    state=wait(ident,lambda s:s['status']=='stopped')
+    view=service.state()
+    if (state['status']!='stopped' or view['busy'] or view['closure_uncertain']
+            or ident in service._backends):
+        raise AssertionError('native fixture stop did not finish cleanly')
+    return state
+
+
 def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--controlled',action='store_true')
@@ -95,6 +110,16 @@ def main():
                 count=len(fixture.requests);time.sleep(.3);assert len(fixture.requests)==count
                 assert hashlib.sha256(report.read_bytes()).hexdigest()==digest
                 result['checks'].append('three failed native GETs exhaust two retry slots, mark the JD failed and preserve previous report without extra requests')
+                rates_before_stop=ledger.summary('fixture')
+                closed=stop_retained_task(service,ident,wait)
+                assert closed['outcome']==stopped['outcome'] and closed['read_retry']==stopped['read_retry']
+                assert ledger.summary('fixture')==rates_before_stop
+                assert hashlib.sha256(report.read_bytes()).hexdigest()==digest
+                assert len(fixture.requests)==count
+                result['checks'].append('explicitly stop the retained exhausted browser and await actual closure before fixture teardown, preserving retry outcome, quota and prior report without any extra request')
+                result['cleanup']={'explicit_stop_completed':True,'retained_backend_removed':True,
+                    'closure_uncertain':False,'outcome_and_retry_preserved':True,
+                    'prior_report_preserved':True,'quota_preserved':True,'additional_requests':len(fixture.requests)-count}
                 result.update(success=True,browser_versions=versions,
                     native_requests=len(fixture.requests))
     finally:
