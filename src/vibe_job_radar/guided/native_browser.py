@@ -29,7 +29,7 @@ from .native_documents import continue_document_response
 from .rate import RateLimit
 from .read_retry import TransientReadFailure, document_failure, read_attempt
 from .transport import PinnedTransport, WireResponse
-from ..network import USER_AGENT
+from ..network import USER_AGENT, FetchError
 
 
 @dataclass(frozen=True)
@@ -87,6 +87,7 @@ class NativeBackend(PlaywrightBackend):
         self._latest_business = {}
         self._closing = self._halted = self._loading_robots = False
         self._robots_url = ''
+        self._unresolved_origins = set()
         self._auth_attempts = set()
         self._adopting = set()
         self._page_sessions, self._bound_pages = {}, {}
@@ -602,6 +603,19 @@ class NativeBackend(PlaywrightBackend):
                 except Exception:
                     self._fatal('native_protocol_error')
 
+    def _unresolved_dependency(self, session, event, rule, origin):
+        if not (rule.handles_dns_failure
+                and origin in self.__dict__.get('_unresolved_origins', ())):
+            return False
+        # A fresh resolver result, not tunnel.last_error or a publisher refusal.
+        # No HTTP is authorized, no robots permission/configuration is invented.
+        # Deliver failure to the untouched page so its own logic can decide.
+        notify(getattr(self, '_diagnostics', None), 'mark', code='encrypted_dns_name_not_found')
+        self.native_counts['blocked'] += 1
+        self._send(session, 'Fetch.failRequest',
+                   {'requestId':event['requestId'], 'errorReason':'NameNotResolved'})
+        return True
+
     def _request_paused(self, session, event):
         if self.__dict__.get('_direct_cdp', False):
             return self._request_paused_direct(session, event)
@@ -616,6 +630,8 @@ class NativeBackend(PlaywrightBackend):
             rule=self.contract.match(url,r['method'],kind,authentication=self.auth_mode)
             rule.validate_headers(r['method'], r.get('headers', {}))
             role,operation=rule.role,rule.key
+            if self._unresolved_dependency(session, event, rule, 'https://' + p.netloc):
+                return
             if role != 'asset':
                 self.wire.ensure_robots(url)
         if len(r.get('postData','').encode('utf-8')) > 1_000_000:
@@ -657,6 +673,8 @@ class NativeBackend(PlaywrightBackend):
             rule=self.contract.match(url,r['method'],kind,authentication=self.auth_mode)
             rule.validate_headers(r['method'], r.get('headers', {}))
             role,operation=rule.role,rule.key
+            if self._unresolved_dependency(session, event, rule, 'https://' + p.netloc):
+                return
             if role != 'asset':
                 self.wire.ensure_robots(url)
         if len(r.get('postData','').encode('utf-8')) > 1_000_000:
@@ -865,12 +883,24 @@ class NativeBackend(PlaywrightBackend):
 
     def _load_robots(self):
         main=self.page
+        self._unresolved_origins = set()
         for origin in self.contract.rule_origins:
             if not any('https://' + rule.host == origin and
                        (not rule.authentication or self.auth_mode) for rule in self.contract.rules):
                 continue
             if origin in self.wire.rules:
                 continue
+            if origin in self.contract.dns_failure_origins:
+                self._check_error()
+                try:
+                    self.tunnel.resolve_host(urlsplit(origin).hostname)
+                except FetchError as exc:
+                    self._check_error()  # Revocation/cancel takes precedence.
+                    if exc.code != 'encrypted_dns_name_not_found':
+                        raise CrawlError(exc.code) from exc
+                    self._unresolved_origins.add(origin)
+                    continue
+                self._check_error()
             self._loading_robots=True; self._robots_url=origin+'/robots.txt'
             scratch=None
             try:
