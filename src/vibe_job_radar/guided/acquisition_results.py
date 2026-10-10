@@ -7,6 +7,11 @@ import json
 from ..models import Requirement
 
 
+# A completed attempt need not have yielded a JD. Explicit collect can reopen
+# unavailable selections; ordinary resume/login return/read retry must skip them.
+FINISHED_DETAIL_STATUSES = frozenset({'ok', 'job_unavailable'})
+
+
 def analysis_by_record(folder):
     with (folder / 'input_audit.csv').open(encoding='utf-8-sig', newline='') as stream:
         results = {row['record_id']: {'analysis_status': row['status'], 'requirement_ids': [],

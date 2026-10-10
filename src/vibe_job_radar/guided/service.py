@@ -36,7 +36,7 @@ from ..network_policy import current_policy
 from .contracts import CrawlError
 from .batch_identity import batch_cards, page_signature, strategy as identity_strategy
 from .checkpoint import decode as decode_checkpoint, binding as checkpoint_binding, ensure_compatible
-from .acquisition_results import analysis_by_record, audit_items
+from .acquisition_results import FINISHED_DETAIL_STATUSES, analysis_by_record, audit_items
 from .search_scope import conditions as search_conditions, check_scope
 from .login_return import (LoginReturnManager, ReturnedDetail, ReturnedSearch,
                            matching_detail_signature, pending_detail_target)
@@ -465,6 +465,11 @@ class GuidedService:
             if (not isinstance(ids,list) or not ids or len(ids)>state['max_jobs']
                     or any(not isinstance(i,str) or i not in known for i in ids) or len(set(ids))!=len(ids)):
                 raise InputError('请选择列表中的岗位，不能超过本批数量上限。')
+            # Only a fresh explicit collect rechecks selected unavailable jobs.
+            # Preserve their earlier attempts and every unselected row.
+            for row in state['cards']:
+                if row['id'] in ids and row['status'] == 'job_unavailable':
+                    row['status'] = 'discovered'
             state['selection'] = ids
             state['selection_source'] = 'manual'
             state['report_id'] = ''
@@ -993,7 +998,7 @@ class GuidedService:
         selected = set(state['selection'])
         try:
             for row in state['cards']:
-                if row['id'] not in selected or row['status'] == 'ok':
+                if row['id'] not in selected or row['status'] in FINISHED_DETAIL_STATUSES:
                     continue
                 if self._cancel.is_set():
                     raise CrawlError('paused')
@@ -1043,7 +1048,7 @@ class GuidedService:
                     row['status'] = exc.code
                     attempt_history.finish(attempt, started, error=exc)
                     self._save(state)
-                    if exc.code not in {'structure_changed','not_job_url','invalid_job_data','job_identity_mismatch','jd_incomplete'}:
+                    if exc.code not in {'structure_changed','not_job_url','invalid_job_data','job_identity_mismatch','jd_incomplete','job_unavailable'}:
                         raise
                 except Exception as exc:
                     row['status'] = 'operation_error'
