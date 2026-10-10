@@ -172,6 +172,48 @@ class EnglishSectionTests(unittest.TestCase):
                         self.parse(body+"\n- "+prompt, **layout)
                     self.assertEqual(failure.exception.code, 'jd_incomplete')
 
+    def test_logon_and_definite_accounts_are_incomplete_access_gates(self):
+        prompts = (
+            "Please log on to view the complete job description.",
+            "Please log into the account to view the full job description.",
+            "To view the full description, log on to the account.",
+            "Please sign on to see the full qualifications.",
+            "Please sign into the account to see the full qualifications.",
+            "You must be logged on to view the full job details.",
+            "You must be signed on to see the complete requirements.",
+            "The full job description is available only to logged-on users.",
+            "The full description is visible only to signed-on members.",
+            "Log-on is required to view the full job description.",
+            "Logging on is necessary to see the full qualifications.",
+            "Signing on is required to read the complete description.",
+            "The full job description requires the account.",
+            "The account is required to view the full description.",
+            "Please create the account to view the complete job description.",
+            "Please log onto the account to read the complete description.",
+        )
+        for prompt in prompts:
+            for body, layout in ((BODY, {}), (BODY.replace("Qualifications:", "任职资格"), {}),
+                                 (BODY, {'anchor': False, 'raw_breaks': False})):
+                with self.subTest(prompt=prompt, layout=layout):
+                    with self.assertRaises(CrawlError) as failure:
+                        self.parse(body+"\n- "+prompt, **layout)
+                    self.assertEqual(failure.exception.code, 'jd_incomplete')
+
+    def test_logon_and_definite_account_work_duties_are_preserved(self):
+        for duty in (
+            "Log on to the monitoring server and inspect deployment failures.",
+            "Sign into the account and verify the synthetic database migration.",
+            "Maintain single sign-on integrations and inspect authentication events.",
+            "Experience designing log-on workflows and account recovery interfaces.",
+            "The account is required for production monitoring and release management.",
+            "Design a form saying please log on to view the complete job description.",
+        ):
+            for body, layout in ((BODY, {}), (BODY.replace("Qualifications:", "任职资格"), {}),
+                                 (BODY, {'anchor': False, 'raw_breaks': False})):
+                value = body+"\n- "+duty
+                with self.subTest(duty=duty, layout=layout):
+                    self.assertEqual(self.parse(value, **layout)['text'], value)
+
     def test_complete_sections_preserve_authored_text_and_identity(self):
         for raw in (True, False):
             for body in (BODY, BODY.replace('Tasks:', 'TASKS:').replace('Qualifications:', 'QUALIFICATIONS:')):

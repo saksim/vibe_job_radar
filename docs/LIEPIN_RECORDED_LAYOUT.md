@@ -127,3 +127,6 @@ requires you to be、available after being形式。只有整句匹配账户/正�
 注册或会员资格的声明也可能是正常职业资格要求。对registration/registered/membership这一类含糊声明，只有明确关联查看职位正文/资格或继续阅读的目的才判断为访问门槛；单独的“Registration is mandatory.”或“A valid membership is required.”保留。7种资格×3路径旧代码21错误；27种明确访问/登录反例仍拒绝。普通Login/Sign-in/Authentication必需提示继续识别，不将行业注册等同网站认证。
 
 同类职业资格状态“You must be registered.”也采用相同目的要求；另3种状态×3路径先复现9错误，补全后共10种资格保真、36种明确访问/登录反例拒绝。句子明确关联职位正文访问时仍按jd_incomplete处理。
+
+
+登录短句的in/on变体及the account定冠词使用共享词法：命令、被动状态、可见性与声明式要求保持同一识别范围。16种明确职位访问提示在3个入口先复现48次误接受，修正后统一拒绝；6种运维登录、单点登录与账户流程开发职责在3个入口逐字保留。仍按完整条款和访问目的判定，不扩展网络权限或修改历史正文。

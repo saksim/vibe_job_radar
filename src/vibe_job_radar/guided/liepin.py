@@ -77,9 +77,13 @@ def _english_incomplete_prompt(body: str) -> bool:
     """Recognize whole access/control clauses, not professional prose."""
     prefix = (r'(?:please\s+)?(?:you\s+(?:must|need\s+to|have\s+to|are\s+required\s+to)\s+)?'
               r'(?:(?:click|tap)\s+(?:here\s+)?(?:to\s+)?)?')
-    account_name = r'(?:(?:your|an?)\s+)?(?:(?:free|new|registered|personal)\s+)?account'
-    auth_state = r'(?:logged[\s-]*in(?:to)?|signed[\s-]*in(?:to)?|registered|authenticated)'
-    auth = (r'(?:log[\s-]*in(?:to)?|sign[\s-]*in|register|sign[\s-]*up|'
+    account_name = r'(?:(?:your|the|an?)\s+)?(?:(?:free|new|registered|personal)\s+)?account'
+    # Use the same in/on forms for commands, states and visibility notices.
+    direction = r'(?:in|on)(?:to)?'
+    signed_state = r'(?:logged|signed)[\s-]*' + direction
+    auth_state = r'(?:' + signed_state + r'|registered|authenticated)'
+    auth_action = r'(?:log|sign)[\s-]*' + direction
+    auth = (r'(?:' + auth_action + r'|register|sign[\s-]*up|'
             r'be\s+' + auth_state + r'|(?:create|set\s+up)\s+' + account_name + r')')
     accounts = auth + r'(?:\s+or\s+' + auth + r'){0,2}'
     account = r'(?:\s+(?:(?:to|with|for)\s+)?' + account_name + r')?'
@@ -100,13 +104,14 @@ def _english_incomplete_prompt(body: str) -> bool:
     # subject and an account visibility predicate, never words within a duty.
     subject = (r'(?:(?:access\s+to\s+)?' + content + r'|ability\s+to\s+' + reading
                + r'|experience\s+in\s+(?:this|the)\s+(?:role|position|job))')
-    members = r'(?:(?:registered|authenticated|logged[\s-]*in|signed[\s-]*in)\s+)?(?:account\s+holders|users|members)'
-    authentication = (r'(?:authentication|registration|log[\s-]*in|sign[\s-]*in|'
-                      r'logging\s+in|signing\s+in|being\s+' + auth_state + r')')
+    members = (r'(?:(?:registered|authenticated|' + signed_state
+               + r')\s+)?(?:account\s+holders|users|members)')
+    authentication = (r'(?:authentication|registration|' + auth_action
+                      + r'|(?:logging|signing)\s+(?:in|on)|being\s+' + auth_state + r')')
     visibility = (r'(?:is|are)\s+(?:(?:only\s+)?(?:available|visible|accessible|displayed|shown|revealed)'
                    r'\s+(?:only\s+)?(?:to\s+' + members + r'|after\s+' + authentication + r')|'
                    r'(?:limited|restricted)\s+to\s+' + members + r')')
-    account_entity = (r'(?:(?:a|an|your)\s+)?'
+    account_entity = (r'(?:(?:a|an|your|the)\s+)?'
                       r'(?:(?:registered|active|valid|free|paid|personal)\s+)?(?:account|membership)')
     account_requirement = (r'(?:requires?|needs?)\s+(?:' + account_entity + r'|'
                            + authentication + r'|(?:you\s+to\s+)?' + accounts + r')')
@@ -114,7 +119,7 @@ def _english_incomplete_prompt(body: str) -> bool:
     # A notice can state a requirement instead of issuing a login command.
     # Keep the entire clause anchored, including any job-content purpose, so
     # technical duties about authentication still pass through verbatim.
-    auth_noun = (r'(?:(?:(?:a|an|your|user|account)\s+)?' + authentication
+    auth_noun = (r'(?:(?:(?:a|an|your|the|user|account)\s+)?' + authentication
                  + r'|' + account_entity + r')')
     required = auth_noun + r'(?:\s+is)?\s+(?:required|needed|necessary|mandatory|essential)'
     user_requirement = (r'you\s+(?:(?:need|require)\s+|'
