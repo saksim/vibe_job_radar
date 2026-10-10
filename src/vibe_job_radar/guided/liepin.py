@@ -57,6 +57,32 @@ def _labelled_duties_and_qualifications(body: str) -> bool:
             qualifications.add(line)
     return len(sections) >= 3 and len(qualifications) >= 2
 
+def _english_duties_and_qualifications(body: str) -> bool:
+    """Observed Tasks/Qualifications bullets, only under full DOM agreement."""
+    lines = [line.strip() for line in body.splitlines() if line.strip()]
+    if not 6 <= len(lines) <= 100:
+        return False
+    if re.search(r'\b(?:log|sign)\s+in\s+to\s+(?:view|read)|'
+                 r'\b(?:view|read|show)\s+(?:the\s+)?(?:full|complete)\s+(?:job|description)|'
+                 r'\b(?:show|read)\s+more\b', body, re.I):
+        return False
+    sections = {'tasks:': set(), 'qualifications:': set()}
+    current = None
+    seen = []
+    for line in lines:
+        label = line.casefold()
+        if label in sections:
+            if label in seen or (label == 'qualifications:' and seen != ['tasks:']):
+                return False
+            seen.append(label)
+            current = label
+            continue
+        item = re.fullmatch(r'[-•]\s+(\S.{19,})', line)
+        if current is None or item is None:
+            return False
+        sections[current].add(item[1].casefold())
+    return seen == ['tasks:', 'qualifications:'] and all(len(items) >= 2 for items in sections.values())
+
 
 def _hidden(node: Node) -> bool:
     style = re.sub(r'\s+', '', node.attrs.get('style', '')).lower()
@@ -272,11 +298,12 @@ def structured_intro_detail(markup: str, url: str,
             parser = 'liepin:jsonld_string_whitespace:v1'
         if _INCOMPLETE.search(body) or _INCOMPLETE.search(description):
             raise CrawlError('jd_incomplete')
-        # Unheaded forms require the entire visible introduction to agree
+        # Additional labelled/unheaded forms require the visible introduction to agree
         # with the same job's structured description, never only a prefix.
         corroborated_intro = (bool(anchors) and compact_body == compact_description
                               and (_numbered_qualifications(body)
-                                   or _labelled_duties_and_qualifications(body)))
+                                   or _labelled_duties_and_qualifications(body)
+                                   or _english_duties_and_qualifications(body)))
         if (len(body) < 40 or len(body) > 150_000 or _FOREIGN.search(body)
                 or not (_JOB_CONTENT.search(body) or corroborated_intro)):
             raise CrawlError('structure_changed')
