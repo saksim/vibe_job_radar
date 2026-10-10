@@ -9,6 +9,7 @@ if (fragment.has("token")) {
 let state = null;
 const requestedReport = fragment.get("report") || "";
 let reportPinned = fragment.has("report");
+const reportSources = window.createReportSources($('report-sources'), request);
 function notice(value) { $("notice").textContent = value; }
 async function request(path, data) {
   const options = {headers: {"X-Radar-Token": token}, cache: "no-store"};
@@ -25,7 +26,7 @@ async function request(path, data) {
 async function operation(action) {
   // Startup and queue controls maintain their own state and pending requests.
   const buttons = [...document.querySelectorAll("button")]
-    .filter((button) => !button.closest("#windows-startup, #public-queue"));
+    .filter((button) => !button.closest("#windows-startup, #public-queue, #report-sources"));
   buttons.forEach((button) => { button.disabled = true; });
   notice("正在处理本次操作；请勿重复提交。搜索发现可能需要等待外部服务响应。");
   try { await action(); }
@@ -169,6 +170,7 @@ function showReport(report) {
   reportPinned = true;
   history.replaceState(null, '', location.pathname + '#report=' + report.id);
   renderBrief(report);
+  reportSources.setRun(report.manifest.mode === 'real_sample' ? report.id : '');
   $("report").hidden = false;
   $("report-title").textContent = `${report.manifest.mode === "synthetic_demo" ? "合成演示（不是市场事实）" : "真实输入样本（不是全市场）"} · ${report.id.slice(0, 8)}`;
   $("report-message").textContent = report.message;

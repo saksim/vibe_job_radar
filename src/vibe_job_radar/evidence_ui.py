@@ -152,6 +152,44 @@ class EvidenceService:
         validate(config)
         return manifest, rows, jobs, config
 
+    def _source_jobs(self, data, fields):
+        if not isinstance(data, dict) or set(data) - fields:
+            raise InputError("原文查询含有不支持的字段。")
+        run_id = text_field(data, "run_id", required=True, limit=32)
+        _, _, jobs, _ = self._source(run_id)
+        source = {job.record_id: job for job in jobs}
+        if len(source) != len(jobs):
+            raise InputError("来源报告存在重复岗位标识，无法唯一定位原文。")
+        return run_id, source
+
+    @staticmethod
+    def _source_metadata(job):
+        # Bound the list independently of body size; full JD is fetched only
+        # when the user explicitly opens one report-scoped record.
+        return {"record_id": job.record_id, "title": job.title[:500],
+                "title_is_excerpt": len(job.title) > 500,
+                "company": job.company[:300], "platform": job.platform[:100],
+                "url": job.url[:2048], "evidence_level": job.evidence_level,
+                "collected_at": job.collected_at, "published_at": job.published_at[:100]}
+
+    def sources(self, data):
+        run_id, source = self._source_jobs(data, {"run_id", "page"})
+        page = number(data, "page", 0, 100000)
+        jobs = list(source.values())
+        if page and page * 20 >= len(jobs):
+            raise InputError("原文页码超出本报告范围。")
+        return {"run_id": run_id, "page": page, "page_size": 20,
+                "total": len(jobs),
+                "rows": [self._source_metadata(job) for job in jobs[page*20:page*20+20]]}
+
+    def source(self, data):
+        run_id, source = self._source_jobs(data, {"run_id", "record_id"})
+        record_id = text_field(data, "record_id", required=True, limit=26)
+        if not re.fullmatch(r"j_[a-f0-9]{24}", record_id) or record_id not in source:
+            raise InputError("所选岗位不属于这份报告。")
+        job = source[record_id]
+        return {"run_id": run_id, "record": {**self._source_metadata(job), "text": job.text}}
+
     @staticmethod
     def _reviews_for_run(state, run_id):
         """Read report-scoped keys plus legacy rid-only entries without rewriting history."""
