@@ -133,7 +133,9 @@ class EnglishSectionTests(unittest.TestCase):
                 "Please click here to see the full description.",
                 "Continue reading the full job description.",
                 "Please click here to continue reading.",
-                "Please continue to read the complete description."):
+                "Please continue to read the complete description.",
+                "Register or sign in to view the complete job description.",
+                "Already registered? Sign in to view the complete job description."):
             with self.subTest(prompt=prompt), self.assertRaises(CrawlError):
                 self.parse(BODY+"\n- "+prompt)
 
@@ -143,7 +145,10 @@ class EnglishSectionTests(unittest.TestCase):
                 "Develop dashboards that show more detailed software diagnostics.",
                 "Ability to see the full job lifecycle from architecture to production.",
                 "Read the complete job specification and turn it into a technical design.",
-                "Design sign-in workflows to access internal monitoring dashboards."):
+                "Design sign-in workflows to access internal monitoring dashboards.",
+                "Sign in to staging and validate each release before production rollout.",
+                "Design sign-in forms that let applicants view the full job description.",
+                "Sign in to staging and validate employee qualifications."):
             body = BODY+"\n- "+qualification
             with self.subTest(qualification=qualification):
                 self.assertEqual(self.parse(body)['text'], body)
@@ -159,3 +164,13 @@ class EnglishSectionTests(unittest.TestCase):
                     with self.assertRaises(CrawlError) as failure:
                         self.parse(body+"\n- "+prompt, **layout)
                     self.assertEqual(failure.exception.code, 'jd_incomplete')
+
+    def test_control_text_cannot_supply_a_second_qualification(self):
+        lines = BODY.splitlines()
+        for control in ("The remaining material is available only to account holders.",
+                        "Use your account to uncover the rest of this vacancy.",
+                        "Members may inspect additional details after authentication.",
+                        "The remaining skills are visible only to account holders."):
+            body = "\n".join(lines[:-1]+["- "+control])
+            with self.subTest(control=control), self.assertRaises(CrawlError):
+                self.parse(body)

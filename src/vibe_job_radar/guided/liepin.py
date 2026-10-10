@@ -25,6 +25,15 @@ _HEADINGS = {'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'dt'}
 _FOREIGN = re.compile(r'推荐职位|相似职位|猜你喜欢|公司简介|公司信息(?!部)|猎聘温馨提示')
 _INCOMPLETE = re.compile(r'登录后.{0,8}(?:查看|浏览)|查看完整.{0,4}(?:职位|描述)|展开(?:全部|更多)|安全验证|滑动.{0,8}验证')
 _JOB_CONTENT = re.compile(r'职责|要求|岗位描述|职位描述|工作内容|工作职能|任职资格')
+_ENGLISH_QUALIFICATION = re.compile(
+    r'^(?:(?:(?:proven|hands[\s-]on|relevant|practical|professional)\s+){0,2}'
+    r'experience\s+(?:in|with|of|on|[a-z]+ing)\b|'
+    r'(?:familiar\s+with|knowledge\s+of|understanding\s+of|ability\s+to|'
+    r'proficien(?:t|cy)\s+in|fluen(?:t|cy)\s+in|expertise\s+in|degree\s+in)\b|'
+    r'(?:bachelor|master|doctorate|ph[.]?d)\b|'
+    r'(?:strong|excellent|good|solid|proven|working)\b.{0,80}'
+    r'\b(?:skills?|knowledge|experience|ability|expertise|understanding)\b|'
+    r'(?:熟悉|熟练|经验|学历|本科|硕士|掌握|精通|具备))', re.I)
 
 
 def _numbered_qualifications(body: str) -> bool:
@@ -59,19 +68,31 @@ def _labelled_duties_and_qualifications(body: str) -> bool:
 
 
 def _english_incomplete_prompt(body: str) -> bool:
-    """Recognize authentication commands and complete expansion prompt lines."""
+    """Recognize complete access/expansion prompts, not ordinary login duties."""
     prefix = r'(?:please\s+)?(?:(?:click|tap)\s+(?:here\s+)?(?:to\s+)?)?'
-    action = r'(?:view|read|see|show|access|unlock|expand|continue\s+(?:reading|to\s+read))'
+    auth = r'(?:log[\s-]*in|sign[\s-]*in|register|sign[\s-]*up)'
+    accounts = auth + r'(?:\s+or\s+' + auth + r'){0,2}'
+    object_ = r'(?:job(?:\s+(?:description|details))?|description|details|qualifications|posting)'
+    ending = r'(?:\s+(?:now|here))?[.!…?]*'
+    action = r'(?:view|read|see|show|access|unlock|expand|open|reveal|(?:get|gain)\s+access\s+to|continue\s+(?:reading|to\s+read))'
     for line in body.splitlines():
-        prompt = re.sub(r'^[-•]\s*', '', line.strip())
-        if re.match(prefix + r'(?:log|sign)[\s-]*in\b', prompt, re.I):
-            return True
-        if re.fullmatch(
-                prefix + r'(?:(?:show|read)\s+more|read\s+on|continue(?:\s+reading)?|'
-                + action + r'\s+(?:the\s+)?(?:full|complete)\s+'
-                r'(?:job(?:\s+(?:description|details))?|description|details))'
-                r'(?:\s+(?:now|here))?[.!…]*', prompt, re.I):
-            return True
+        line = re.sub(r'^[-•]\s*', '', line.strip())
+        # An account-introduction question can precede the actual prompt.
+        for prompt in re.split(r'(?<=[.!?])\s+', line):
+            if re.fullmatch(prefix + accounts + r'(?:\s+to\s+continue)?' + ending, prompt, re.I):
+                return True
+            # Bind authentication to the job/qualification object, rather than
+            # treating arbitrary following words as an access instruction.
+            if re.fullmatch(
+                    prefix + accounts + r'(?:\s+(?:now|first|again))?\s+(?:to\s+'
+                    + action + r'\s+|for\s+)(?:(?:the|this)\s+)?'
+                    r'(?:(?:full|complete)\s+)?' + object_ + ending, prompt, re.I):
+                return True
+            if re.fullmatch(
+                    prefix + r'(?:(?:show|read)\s+more|read\s+on|continue(?:\s+reading)?|'
+                    + action + r'\s+(?:the\s+)?(?:full|complete)\s+'
+                    + object_ + r')' + ending, prompt, re.I):
+                return True
     return False
 
 
@@ -95,9 +116,11 @@ def _english_duties_and_qualifications(body: str) -> bool:
         if current is None or item is None:
             return False
         sections[current].add(item[1].casefold())
+    qualifications = sections['qualifications:'] - sections['tasks:']
+    # Unknown control text cannot become a qualification just by being long.
     return (seen == ['tasks:', 'qualifications:']
             and len(sections['tasks:']) >= 2
-            and len(sections['qualifications:'] - sections['tasks:']) >= 2)
+            and sum(bool(_ENGLISH_QUALIFICATION.search(item)) for item in qualifications) >= 2)
 
 
 def _hidden(node: Node) -> bool:
