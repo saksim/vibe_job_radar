@@ -212,6 +212,18 @@ class DiagnosticTrace:
                 frame['local_block'] = True if code in LOCAL_POLICIES else False if code in {'http_401', 'http_403', 'http_429'} else None
                 frame['policy'] = LOCAL_POLICIES.get(code, 'shared_quota' if code in WAITS else '')
 
+    def redirect(self, *, url='', reason='', prior_hops=None):
+        # Metadata only: the caller retains the original redirect decision.
+        # Reuse the existing URL filter; never retain a Location header.
+        with self._lock:
+            if not self.enabled or not self._frames:
+                return
+            self._frames[-1]['redirect'] = {
+                'reason': reason if isinstance(reason, str) and reason in {'cross_origin', 'hop_limit'} else 'unknown',
+                'prior_hops': prior_hops if type(prior_hops) is int and 0 <= prior_hops <= 5 else None,
+                'target': safe_target(url),
+            }
+
     def note(self, code):
         with self._lock:
             if self._frames:
