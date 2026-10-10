@@ -8,6 +8,37 @@ from .contracts import CrawlError, PageSnapshotChanged
 from .search_scope import conditions
 
 
+def search_entry_ready(backend):
+    """An owned query-free entry is ready for input, not for consuming jobs."""
+    adapter, page = backend.adapter, backend.page
+    backend._check_error()
+    identity = backend.document_identity()
+    document = identity[-1]
+    if (adapter.key != 'liepin' or document.url != adapter.search_base
+            or document.document_url != adapter.search_base):
+        raise CrawlError('search_scope_changed')
+
+    def check_document():
+        backend._check_error()
+        if page is not backend.page or backend.document_identity() != identity:
+            raise PageSnapshotChanged()
+
+    backend.ensure_page_access(document.url)
+    body = page.locator('body')
+    if not body.count():
+        check_document()
+        return False
+    text = body.inner_text(timeout=1000)
+    check_document()
+    if adapter.challenged(text, document.url):
+        raise CrawlError('manual_required')
+    field = page.locator('input[type="text"][placeholder="搜索职位、公司"]:visible')
+    ready = (field.count() == 1 and field.is_enabled()
+             and field.get_attribute('readonly') is None)
+    check_document()
+    return ready
+
+
 def matching_search_entry_signature(backend, state, snapshot):
     """Observe the published account/search controls without reading their values.
 

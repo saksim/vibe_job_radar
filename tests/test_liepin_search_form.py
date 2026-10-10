@@ -4,8 +4,8 @@ from dataclasses import replace
 import unittest
 from unittest.mock import Mock, patch
 
-from vibe_job_radar.guided.contracts import CrawlError, PageSnapshot
-from vibe_job_radar.guided.liepin_form import submit_search
+from vibe_job_radar.guided.contracts import CrawlError, PageSnapshot, PageSnapshotChanged
+from vibe_job_radar.guided.liepin_form import search_entry_ready, submit_search
 from vibe_job_radar.guided.native_browser import NativeBackend
 from vibe_job_radar.guided.native_navigation import NativeDocument
 from vibe_job_radar.guided.rate import RateLimit
@@ -205,6 +205,202 @@ class SearchFormTests(unittest.TestCase):
                 self.backend.wire.reserve.assert_called_once_with('page')
                 self.field.press.assert_not_called()
                 self.assertTrue(self.backend._observations)
+
+
+    def prepare_entry(self):
+        b = self.backend
+        b.contract = Mock()
+        b._load_robots = Mock()
+        b.observations = Mock(return_value=[])
+        self.body.count.return_value = 1
+        self.field.is_enabled.return_value = True
+        self.field.get_attribute.return_value = None
+        entry = PageSnapshot(ADAPTER.search_base,
+            '<input type="text" placeholder="搜索职位、公司">', business_required=True)
+        b.snapshot.side_effect = lambda: (entry if b.page.url == ADAPTER.search_base
+                                         else replace(snapshot(), business_required=True))
+        b.page.goto.side_effect = lambda url, **_: setattr(b.page, 'url', url)
+        self.clock = [0.]
+        b.page.wait_for_timeout.side_effect = lambda milliseconds: self.clock.__setitem__(
+            0, self.clock[0]+milliseconds/1000)
+        del b._settle
+        return b
+
+    def open_entry(self, **kwargs):
+        with patch('vibe_job_radar.guided.native_browser.time.monotonic',
+                   side_effect=lambda: self.clock[0]):
+            return self.backend.open_search(SEARCH, keyword='时间序列', **kwargs)
+
+    def test_normal_query_does_not_wait_for_unrequested_entry_recommendations(self):
+        b = self.prepare_entry()
+        observed = self.open_entry()
+        self.assertEqual([card.url for card in ADAPTER.cards(observed)], [JOB])
+        b.page.goto.assert_called_once_with(ADAPTER.search_base, wait_until='domcontentloaded', timeout=90000)
+        self.field.fill.assert_called_once_with('时间序列', timeout=5000)
+        self.field.press.assert_called_once_with('Enter', timeout=90000)
+        b.wire.reserve.assert_called_once_with('page')
+        b.wire.fetch.assert_not_called()
+
+    def test_unusable_entry_field_cannot_be_replaced_by_default_recommendations(self):
+        from test_liepin_native_search import request, payload, request_context
+        from vibe_job_radar.guided.native_browser import BusinessObservation
+        context = request_context(ADAPTER, 'liepin_search', request(key=''), ADAPTER.search_base)
+        response = BusinessObservation(1, 'liepin_search', 1, payload(), context)
+        self.assertTrue(ADAPTER.native_ready((response,)))
+        for unusable in ('absent', 'duplicate', 'disabled', 'readonly'):
+            with self.subTest(unusable=unusable):
+                self.setUp()
+                b = self.prepare_entry()
+                b.observations.return_value = (response,)
+                if unusable in ('absent', 'duplicate'):
+                    self.field.count.return_value = 0 if unusable == 'absent' else 2
+                elif unusable == 'disabled':
+                    self.field.is_enabled.return_value = False
+                else:
+                    self.field.get_attribute.return_value = ''
+                with self.assertRaisesRegex(CrawlError, '^page_not_ready$'):
+                    self.open_entry()
+                self.assertLess(self.clock[0], 15.2)
+                self.field.fill.assert_not_called()
+                self.field.press.assert_not_called()
+                b.wire.reserve.assert_not_called()
+                b.page.goto.assert_called_once()
+
+    def test_late_entry_field_is_observed_within_original_deadline_and_submitted_once(self):
+        b = self.prepare_entry()
+        self.field.count.side_effect = [0, 0, 1, 1]
+        self.assertEqual([card.url for card in ADAPTER.cards(self.open_entry())], [JOB])
+        self.assertAlmostEqual(self.clock[0], 0.2)
+        self.field.press.assert_called_once()
+        b.page.goto.assert_called_once()
+
+    def test_entry_missing_body_does_not_read_text_until_current_body_exists(self):
+        self.prepare_entry()
+        self.body.count.side_effect = [0, 1, 1]
+        self.assertEqual([card.url for card in ADAPTER.cards(self.open_entry())], [JOB])
+        self.assertAlmostEqual(self.clock[0], 0.1)
+        self.field.press.assert_called_once()
+
+    def test_entry_challenge_prevents_keyword_input(self):
+        b = self.prepare_entry()
+        self.body.inner_text.return_value = '请完成安全验证'
+        with self.assertRaisesRegex(CrawlError, '^manual_required$'):
+            self.open_entry()
+        self.field.fill.assert_not_called()
+        b.wire.reserve.assert_not_called()
+
+    def test_entry_permission_refusal_and_cancel_during_field_read_keep_original_reason(self):
+        for code in ('robots_denied', 'paused', 'resource_domain_blocked'):
+            with self.subTest(code=code):
+                self.setUp()
+                b = self.prepare_entry()
+                if code == 'robots_denied':
+                    b.ensure_page_access.side_effect = CrawlError(code)
+                else:
+                    def refuse():
+                        b._check_error.side_effect = CrawlError(code)
+                        return True
+                    self.field.is_enabled.side_effect = refuse
+                with self.assertRaisesRegex(CrawlError, '^'+code+'$'):
+                    self.open_entry()
+                self.field.fill.assert_not_called()
+                b.wire.reserve.assert_not_called()
+
+    def test_entry_same_url_document_or_page_replacement_invalidates_readiness(self):
+        for replacement in ('document', 'page'):
+            with self.subTest(replacement=replacement):
+                self.setUp()
+                b = self.prepare_entry()
+                original = b.document_identity.return_value
+                def change():
+                    if replacement == 'page':
+                        b.page = Mock(url=ADAPTER.search_base, is_closed=Mock(return_value=False))
+                    b.document_identity.return_value = (
+                        original[0], id(b.page), original[2], replace(original[-1], sequence=2))
+                    return True
+                self.field.is_enabled.side_effect = change
+                with self.assertRaises(PageSnapshotChanged):
+                    search_entry_ready(b)
+                self.field.fill.assert_not_called()
+                b.wire.reserve.assert_not_called()
+
+    def test_replaced_body_challenge_is_discarded_before_classification(self):
+        b = self.prepare_entry()
+        original = b.document_identity.return_value
+        def change(**_):
+            b.document_identity.return_value = (*original[:3], replace(original[-1], sequence=2))
+            return '请完成安全验证'
+        self.body.inner_text.side_effect = change
+        with self.assertRaises(PageSnapshotChanged):
+            search_entry_ready(b)
+        self.field.is_enabled.assert_not_called()
+
+    def test_repeated_entry_replacement_does_not_extend_deadline_or_submit(self):
+        b = self.prepare_entry()
+        def change():
+            original = b.document_identity.return_value
+            b.document_identity.return_value = (
+                *original[:3], replace(original[-1], sequence=original[-1].sequence+1))
+            return True
+        self.field.is_enabled.side_effect = change
+        with self.assertRaisesRegex(CrawlError, '^page_not_ready$'):
+            self.open_entry()
+        self.assertLess(self.clock[0], 15.2)
+        self.field.fill.assert_not_called()
+        b.page.goto.assert_called_once()
+
+    def test_ready_form_does_not_satisfy_post_submit_result_wait(self):
+        b = self.prepare_entry()
+        self.field.press.side_effect = None  # Publisher leaves entry displayed; no response.
+        with self.assertRaisesRegex(CrawlError, '^page_not_ready$'):
+            self.open_entry()
+        self.field.press.assert_called_once()
+        b.wire.reserve.assert_called_once_with('page')
+        b.page.goto.assert_called_once()
+
+    def test_explicit_filters_still_require_results_even_with_a_visible_field(self):
+        b = self.prepare_entry()
+        filtered = SEARCH+'&city=010'
+        b.snapshot.side_effect = None
+        b.snapshot.return_value = PageSnapshot(filtered, '<p>合成搜索框</p>', business_required=True)
+        with patch('vibe_job_radar.guided.native_browser.time.monotonic',
+                   side_effect=lambda: self.clock[0]):
+            with self.assertRaisesRegex(CrawlError, '^page_not_ready$'):
+                b.open_search(filtered, keyword='时间序列')
+        b.page.goto.assert_called_once_with(filtered, wait_until='domcontentloaded', timeout=90000)
+        self.field.fill.assert_not_called()
+        b.wire.reserve.assert_not_called()
+
+    def test_late_default_recommendation_cannot_finish_post_submit_wait(self):
+        from test_liepin_native_search import request, payload, request_context
+        from vibe_job_radar.guided.native_browser import BusinessObservation
+        context = request_context(ADAPTER, 'liepin_search', request(key=''), ADAPTER.search_base)
+        default = BusinessObservation(2, 'liepin_search', 1, payload(), context)
+        for empty in (False, True):
+            with self.subTest(empty=empty):
+                self.setUp()
+                b = self.prepare_entry()
+                b.observations.return_value = (default,)
+                def observed():
+                    if b.page.url == SEARCH and self.clock[0] >= 0.1:
+                        return replace(snapshot(payload([]) if empty else payload()), business_required=True)
+                    return PageSnapshot(b.page.url, '<p>等待原查询</p>', (default,), business_required=True)
+                b.snapshot.side_effect = observed
+                b.observations.side_effect = lambda: observed().business
+                page = self.open_entry()
+                self.assertEqual([card.url for card in ADAPTER.cards(page)], [] if empty else [JOB])
+                self.assertAlmostEqual(self.clock[0], 0.1)
+                self.field.press.assert_called_once()
+                b.page.goto.assert_called_once()
+                b.wire.reserve.assert_called_once_with('page')
+
+    def test_login_open_remains_reachable_without_usable_search_field(self):
+        b = self.prepare_entry()
+        self.field.count.return_value = 0
+        observed = self.open_entry(authentication=True)
+        self.assertEqual(observed.url, ADAPTER.search_base)
+        self.field.fill.assert_not_called()
+        b.wire.reserve.assert_not_called()
 
 
 if __name__ == '__main__':
