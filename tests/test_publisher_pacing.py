@@ -232,8 +232,15 @@ class PublisherTaskRecoveryTests(unittest.TestCase):
         self.assertEqual(pending['cards'][0]['status'], 'ok')
         self.assertTrue(pending['auto_resume']); self.assertEqual(pending['next_allowed_at'], now[0]+90)
         now[0] += 90
+        # The five-second condition covers automatic scheduling. Final report
+        # files use the existing service-fixture completion wait, just like the
+        # first collection; they are not a five-second storage benchmark.
         deadline = time.monotonic()+5
-        while self.job(ident)['status'] != 'completed' and time.monotonic() < deadline: time.sleep(.02)
+        while self.job(ident)['status'] == 'waiting_rate' and time.monotonic() < deadline: time.sleep(.02)
+        resumed = self.job(ident)
+        self.assertIn(resumed['status'], {'queued', 'running', 'completed'}, resumed)
+        self.assertFalse(resumed['auto_resume'])
+        self.wait()
         finished = self.job(ident)
         self.assertEqual(finished['status'], 'completed', finished)
         self.assertEqual(sum('/job/1' in url for url in backend.opens), 1)

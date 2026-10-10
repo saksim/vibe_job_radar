@@ -11,3 +11,31 @@ PR72 候选 6a4cfc41 的首次 CI 18/19；Windows headless 的人工 TLS 搜索�
 - search-wait-* 保存到 native，retry-wait-* 保存到 native-read-retry，既有 always 工件步骤保留失败现场。
 
 搜索/有限重试的业务测试源码、原 45 秒断言、生产代码、请求预算及所有权均不变。观察器失败不会吞掉原始业务异常。补丁验证的是诊断能力；即使下一候选通过，也不意味着旧超时的准确根因已查明，更不代表真实账户登录或平台采集认证。
+
+## #263：浏览器到本机守卫的连接事实
+
+393761b 的 Windows Edge headless 首轮在既有“发布者 OPTIONS 拒绝”断言处失败：
+应为 http_403，实际 local_proxy_connection_failed。前13项通过，失败请求尚无源端
+OPTIONS；守卫仍存活、未关闭，29次 accept/dispatch，无记录到的上游 open 异常。
+这些事实不能证明 TCP 失败的物理原因；其他浏览器通过也不能覆盖这次失败。
+
+受控搜索包装器现在为每个隔离浏览器启用 Chromium 的有界 NetLog，关闭浏览器后
+仅输出固定事件名、数字来源/依赖关系、底层网络/系统错误码、相对时间和
+“是否自有代理端点/人工源主机”的布尔分类。URL、地址、请求头、正文、凭据、
+原始 constants 和命令行不会进入工件。原日志在仓库 .verify 下的独立私有临时目录，
+不属于 artifact 路径，处理后仅清理该目录；失败/缺失/截断明确标记，不代表零错误。
+浏览器日志16MiB环形上限、解析20MiB上限、输出最多4096条，始终不声称完整历史。
+只在显式隔离 CI 启用，不改变生产代码、代理/认证、请求、重试、超时或原测试断言。
+新候选通过不自动关闭历史未知根因。
+
+格式依据：[Chromium NetLog](https://chromium.googlesource.com/chromium/src/+/HEAD/net/docs/net-log.md)、
+[网络事件定义](https://chromium.googlesource.com/chromium/src/+/HEAD/net/log/net_log_event_type_list.h)、
+[日志参数](https://chromium.googlesource.com/chromium/src/+/main/services/network/public/cpp/network_switches.cc)。
+
+
+同一393761b的Windows3.11首轮2758项另有1失败：发布者延迟恢复测试已自动恢复，
+两卡均ok，5秒总窗口结束时仍在最终报告analyze等待，两个写入线程在atomic_text/fsync。
+这未确定磁盘延迟原因。用受控“第二份报告等待测试的完成等待阶段”屏障复现旧断言，
+再将原5秒约束收窄为自动调度发生；后续报告使用同fixture既有完成等待。
+仍必须由原后台线程自行到期恢复、保留原选择、首个职位只读取一次并最终completed。
+不手动调用恢复、不加产品重试、不改产品期限；首次CI失败继续保留。

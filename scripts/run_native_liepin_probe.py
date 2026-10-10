@@ -11,10 +11,35 @@ from unittest.mock import patch
 
 import run_native_liepin_search as acceptance
 from run_native_auth_probe import ObservedBackend, PROBES
+from native_netlog_evidence import NativeNetLog, unavailable
 from native_wait_diagnostics import Stages, capture, observed_backend, observed_wait, observe_io, require_ci
 
 
 class SearchObserver(ObservedBackend):
+    def _launch_options(self, options):
+        configured = super()._launch_options(options)
+        try:
+            self._connection_log = NativeNetLog(
+                acceptance.ROOT / '.verify' / 'native-netlog-private',
+                self.tunnel.endpoint, self.contract.hosts)
+            return self._connection_log.options(configured)
+        except Exception:
+            self.probe['client_connection_log'] = unavailable('setup_failed')
+            return configured
+
+    def close(self):
+        try:
+            return super().close()
+        finally:
+            observer = self.__dict__.get('_connection_log')
+            if observer is not None:
+                # Browser shutdown flushes the private log. Preserve any close
+                # exception; auxiliary evidence never alters the test outcome.
+                try:
+                    self.probe['client_connection_log'] = observer.finish()
+                except Exception:
+                    self.probe['client_connection_log'] = unavailable('observer_error')
+
     def _received(self, event):
         message = json.loads(event['message'])
         if message.get('method') == 'Target.attachedToTarget':
