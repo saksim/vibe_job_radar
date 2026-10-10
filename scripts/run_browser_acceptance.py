@@ -65,8 +65,8 @@ def main() -> int:
                         page.locator('summary').filter(has_text='平台接入状态与账号说明').click()
                         liepin=page.locator('#sources tbody tr').filter(has_text='猎聘')
                         expect(liepin).to_contain_text('可选单次密码提交（受控验证）')
-                        # A selector definition change withdraws the old dated proof.
-                        expect(liepin).to_contain_text('当前适配定义没有匹配的已记录验收；需单独验证，实站未认证。')
+                        # Current controlled proof does not certify the default bridge at the live site.
+                        expect(liepin).to_contain_text('浏览器桥已有当前定义的受控验证；真实账号、搜索和完整 JD 链路仍待实站验收。')
                         expect(page.locator('#sources tbody tr').filter(has_text='BOSS直聘')).to_contain_text('在采集浏览器人工登录')
                         expect(page.locator('#sources')).not_to_contain_text('自动登录')
                         assert server.guided.state()['jobs']==[] and not server.workspace.db.exists()
@@ -78,10 +78,15 @@ def main() -> int:
                         result["checks"].append("homepage uses the registered login capability and live-verification message without creating jobs")
                         page.goto(server.origin+'/guided')
                         expect(page.locator('#environment')).to_contain_text('Playwright')
+                        page.get_by_text('各平台当前支持与验证范围',exact=True).click()
+                        native_capability = page.locator('#capability-status p').filter(has_text='猎聘 · 原生实验')
+                        expect(native_capability).to_contain_text('已分别观察到匿名关键词两页列表、两份完整 JD 与各自报告')
+                        expect(native_capability).to_contain_text('真实账号、会话恢复和整体样本验收仍待完成')
                         expect(page.locator('p.notice').filter(has_text='猎聘任务可选用上方单次密码表单')).to_contain_text('实站正常登录尚未验通')
                         expect(page.get_by_text('本次版本不接收或自动填写账号密码',exact=False)).to_have_count(0)
                         page.set_viewport_size({"width":390,"height":844})
                         page.locator('section').filter(has=page.locator('#login')).screenshot(path=str(output/'guided-login-mobile.png'))
+                        page.locator('#capability-status').screenshot(path=str(output/'guided-capability-mobile.png'))
                         assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')
                         page.set_viewport_size({"width":1440,"height":1000})
                         assert server.guided.state()['jobs']==[]

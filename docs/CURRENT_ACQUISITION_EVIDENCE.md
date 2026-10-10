@@ -1,6 +1,6 @@
 # 已有取数证据与待验收项
 
-更新日期：2026-10-10 UTC。下列两次搜索实测对应America/Denver的10月9日。新增原工作台两次正常关键词搜索：一份机电架构师完整正文及同任务报告、另一份软件架构师详情首失败；之后PR287开发候选在同一软件任务恢复取得完整JD和报告。正常账号登录仍未执行。各次原始失败与独立诊断分别保留，不以离线重解析增加实采成功数。当前代码、首次CI、真正主干及便携程序包的资格以对应PR验收记录为准，历史开发实例不代表当前用户工作台。
+更新日期：2026-10-10 UTC。下列两次搜索实测对应America/Denver的10月9日。新增原工作台两次正常关键词搜索：一份机电架构师完整正文及同任务报告、另一份软件架构师详情首失败；之后PR287开发候选在同一软件任务恢复取得完整JD和报告。随后PR290实际main在原工作台Chrome完成相邻两页共84个不同职位卡片的观察，预设两页上限后停止。正常账号登录仍未执行。各次原始失败与独立诊断分别保留，不以离线重解析增加实采成功数。当前代码、首次CI、真正主干及便携程序包的资格以对应PR验收记录为准，历史开发实例不代表当前用户工作台。
 
 本页作为实站观察的统一入口；当前提交的源码、CI、主干与程序包资格分别在对应PR中记录，不能互相替代。[GAP 审计](PROJECT_GAP_AUDIT_2026_09_26.md)和[39行历史目标追溯](PROJECT_GOAL_TRACE_2026_09_26.md)冻结于2026年9月26日；其中104个Issue、105个PR及76个开放PR是当时统计，不是实时队列。
 
@@ -17,8 +17,9 @@
 | 猎聘关键词单页搜索 | 9月25日开发提交1987986经原工作台HTTP接口在Edge取得42张卡，停在选择阶段 | 该提交首次CI为19/21；卡片不是完整JD，未证明账号登录、后续正文及报告闭环，也不代表当前环境可复现 |
 | 10月10日：原任务“架构师”搜索与报告 | 已合并main 5ac76a09，Chrome 157.0.8092.0；原任务恢复一次，正常查询条件匹配，42卡，首个标题匹配项取得585字符完整正文，原Store与同任务报告30份输出校验通过；0登录 | 所选为机电悬架架构师，是否纳入研究范围待确认；不把标题规则的target计数当人工相关性确认。实际原账本新增3page/54request；旧DNS/协议失败和原报告保留 |
 | 10月10日：明确软件方向的正常搜索 | 新关键词“软件架构师”正常查询条件匹配，42卡；首个预定软件职位1次详情导航，page_not_ready，0正文/报告；随后空闲回调出现resource_domain_blocked。账本新增3page/79request，0登录 | 未换另一职位制造成功；同任务已暂停。另一次公开HTML诊断200、无跳转、3030字符DOM/JSON-LD相等，但解析器拒绝英文分节，见[修复范围](LIEPIN_RECORDED_LAYOUT.md)。诊断与离线重放不能代替该浏览器任务的成功 |
-| 10月10日：原软件任务在PR287开发候选恢复 | 固定候选7d208dc，原工作区/任务/选中卡片和共享账本；只恢复collect一次，1个详情导航，3030字符完整正文，与前存档哈希相同，同任务报告30输出通过，AI要求0。账本新增page1/request21，0新搜索/登录 | 06:26:54—06:27:45 UTC完成，71秒后仍completed且没有新协议/就绪观察器错误；原报告与其他任务不变。这是尚未合并的开发候选实测，仍有两项提示识别复审意见需修正，不能当作最终提交CI、真实认证会话或人工质量通过。原page_not_ready及资源拒绝保留，不据后续成功补写旧根因 |
+| 10月10日：原软件任务在PR287开发候选恢复 | 固定候选7d208dc，原工作区/任务/选中卡片和共享账本；只恢复collect一次，1个详情导航，3030字符完整正文，与前存档哈希相同，同任务报告30输出通过，AI要求0。账本新增page1/request21，0新搜索/登录 | 06:26:54—06:27:45 UTC完成，71秒后仍completed且没有新协议/就绪观察器错误；原报告与其他任务不变。实测发生时该开发候选尚未合并，两项提示识别复审意见尚待修正；之后[PR287](https://github.com/saksim/vibe_job_radar/pull/287)已修正、合并且实际main独立通过资格检查。此正文仍归属原开发候选，不能改写成最终提交实采、真实认证会话或人工质量通过。原page_not_ready及资源拒绝保留，不据后续成功补写旧根因 |
 | 10月10日：正常关键词两页上限检查 | main 6dcb32ea、Chrome、原工作区/共享账本；“软件架构师”仅一页42卡，no_next_button，0详情/登录/报告；page2/request39 | 页面实际有可用无文字下一页箭头，原选择器未识别；这不是末页或两页成功。原3任务与原正文/报告/偏好不变，见[控件与修正范围](LIEPIN_NORMAL_PAGINATION.md) |
+| 10月10日：修正后正常关键词相邻两页 | PR290实际main `448fa17e7ea9`、Chrome、原工作区/共享账本；一次“软件架构师”查询，42+42卡、84个不同实体，来源cursor0/1与存储并集一致，page_limit停止；page3/request39，0详情/登录/报告 | 12:33:22—12:34:18 UTC；原4任务、正文、报告与偏好字节不变。仅证明该次相邻两页，不认证重复页、自然末页、旧响应晚到或无href详情；[实测记录](https://github.com/saksim/vibe_job_radar/issues/51#issuecomment-6097544714) |
 | BOSS | 历史所选详情跳向登录/验证，未取得正文 | 原观察不能说明当前站点统一行为；专用链路与普通浏览器对照仍由55跟踪 |
 | 51job规则复查：10月9日 | 22:46 UTC沿用原网络策略和共享账本，仅一次robots GET；200/text/html、7,919字节，与9月23/24日响应哈希一致，现行解析仍为robots_unavailable | 未请求搜索、详情、资源或登录；仍不能区分统一回退与访问限制。不是有效规则或实站取数认证，见[本次原始记录](https://github.com/saksim/vibe_job_radar/issues/56#issuecomment-6090559925) |
 
@@ -38,6 +39,6 @@
 
 ## 仍需独立验收
 
-[正常账号、会话及恢复](https://github.com/saksim/vibe_job_radar/issues/50)、[当前软件目标的正常搜索到正文闭环](https://github.com/saksim/vibe_job_radar/issues/49)、[身份/全文人工审核及阈值](https://github.com/saksim/vibe_job_radar/issues/54)、[BOSS](https://github.com/saksim/vibe_job_radar/issues/55)和[51job](https://github.com/saksim/vibe_job_radar/issues/56)各保留自己的结果与未决条件。#63已按原范围完成当前Windows/Chrome的正常查询与结果配对验收；旧Edge页面清空的触发原因仍由#45/#23保留。公开分类、人工夹具、源码CI和实际便携程序资格互不替代实站或账号认证；三站不因此自动获得pilot_verified/live_verified。
+[正常账号、会话及恢复](https://github.com/saksim/vibe_job_radar/issues/50)、[正常搜索与正文的整体验收](https://github.com/saksim/vibe_job_radar/issues/49)、[分页剩余情形](https://github.com/saksim/vibe_job_radar/issues/51)、[检查点与会话恢复](https://github.com/saksim/vibe_job_radar/issues/52)、[身份/全文人工审核及阈值](https://github.com/saksim/vibe_job_radar/issues/54)、[BOSS](https://github.com/saksim/vibe_job_radar/issues/55)和[51job](https://github.com/saksim/vibe_job_radar/issues/56)各保留自己的结果与未决条件。#63已按原范围完成当前Windows/Chrome的正常查询与结果配对验收；旧Edge页面清空的触发原因仍由#45/#23保留。公开分类、人工夹具、源码CI和实际便携程序资格互不替代实站或账号认证；三站不因此自动获得pilot_verified/live_verified。
 
 当前汇总见[专项总控](https://github.com/saksim/vibe_job_radar/issues/46)、[总线](https://github.com/saksim/vibe_job_radar/issues/57)和[GAP汇总](https://github.com/saksim/vibe_job_radar/issues/210)。本页不记录过期的登录冷却时间，不改变访问许可、配额、浏览器默认值、角色规则或历史报告。

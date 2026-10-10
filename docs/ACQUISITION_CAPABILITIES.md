@@ -1,23 +1,23 @@
 # 当前取数能力与验证范围
 
-文案核对日期 2026-10-08。本源码的流程与历史受控证据分别记录；准确提交的候选、主干和程序包资格见对应PR。本表由 acquisition_status.py 生成，同一份数据进入适配注册表、采集页与新报告的 software_acquisition_capabilities。修改后执行 python scripts/check_acquisition_status.py --write 并核对证据；自动测试检查文字表格未与程序脱节。
+文案核对日期 2026-10-10。本源码的流程与历史受控证据分别记录；准确提交的候选、主干和程序包资格见对应PR。本表由 acquisition_status.py 生成，同一份数据进入适配注册表、采集页与新报告的 software_acquisition_capabilities。修改后执行 python scripts/check_acquisition_status.py --write 并核对证据；自动测试检查文字表格未与程序脱节。
 
-猎聘原生实验已有本机 Edge 正常关键词单页列表观察，但未完成正常账号到相关完整JD和原报告的验收。公开分类历史采样覆盖四个真实日期；较早第二日、第三日记录仍保留各自分母，不能用最新累计数改写旧报告。见[已有取数证据](CURRENT_ACQUISITION_EVIDENCE.md)。这些观察不认证默认浏览器桥、其他环境或其他平台。
+猎聘原生实验已在本机 Chrome 分别完成匿名关键词搜索、585/3030字符完整JD与各自报告，以及相邻两页共84个不同职位卡片的观察；真实账号、会话恢复、人工质量和整体样本验收仍未完成。公开分类历史采样覆盖四个真实日期；较早第二日、第三日记录仍保留各自分母，不能用最新累计数改写旧报告。见[已有取数证据](CURRENT_ACQUISITION_EVIDENCE.md)。这些观察不认证默认浏览器桥、其他环境或其他平台。
 
 <!-- acquisition-status:start -->
 | 平台 / 适配版本 | 后端 / 默认 | 实现 | 最近记录的受控验证 | 实站 / 剩余跟踪 |
 |---|---|---|---|---|
 | BOSS直聘 / 1 | bridge / 默认 | implemented | [2026-09-18 人工夹具](https://github.com/saksim/vibe_job_radar/actions/runs/35358529040) | not_verified；[#55](https://github.com/saksim/vibe_job_radar/issues/55) |
 | BOSS直聘 / 1 | native / 不可用 | blocked | 无匹配记录 | not_verified；[#55](https://github.com/saksim/vibe_job_radar/issues/55) |
-| 猎聘 / 3 | bridge / 默认 | implemented | 无匹配记录 | blocked；[#54](https://github.com/saksim/vibe_job_radar/issues/54) / [#63](https://github.com/saksim/vibe_job_radar/issues/63) |
-| 猎聘 / 3 | native / 显式实验 | implemented | 无匹配记录 | blocked；[#54](https://github.com/saksim/vibe_job_radar/issues/54) / [#63](https://github.com/saksim/vibe_job_radar/issues/63) |
+| 猎聘 / 3 | bridge / 默认 | implemented | [2026-10-10 人工夹具](https://github.com/saksim/vibe_job_radar/actions/runs/38051204590) | not_verified；[#49](https://github.com/saksim/vibe_job_radar/issues/49) / [#50](https://github.com/saksim/vibe_job_radar/issues/50) / [#51](https://github.com/saksim/vibe_job_radar/issues/51) / [#52](https://github.com/saksim/vibe_job_radar/issues/52) / [#54](https://github.com/saksim/vibe_job_radar/issues/54) |
+| 猎聘 / 3 | native / 显式实验 | implemented | [2026-10-10 人工夹具](https://github.com/saksim/vibe_job_radar/actions/runs/38051204635) | not_verified；[#49](https://github.com/saksim/vibe_job_radar/issues/49) / [#50](https://github.com/saksim/vibe_job_radar/issues/50) / [#51](https://github.com/saksim/vibe_job_radar/issues/51) / [#52](https://github.com/saksim/vibe_job_radar/issues/52) / [#54](https://github.com/saksim/vibe_job_radar/issues/54) |
 | 前程无忧 / 1 | bridge / 默认 | implemented | [2026-09-18 人工夹具](https://github.com/saksim/vibe_job_radar/actions/runs/35358529040) | not_verified；[#56](https://github.com/saksim/vibe_job_radar/issues/56) |
 | 前程无忧 / 1 | native / 不可用 | blocked | 无匹配记录 | not_verified；[#56](https://github.com/saksim/vibe_job_radar/issues/56) |
 <!-- acquisition-status:end -->
 
-本次猎聘分页选择器定义改变，因此旧猎聘夹具记录不再显示为匹配；没有把旧记录改写到新定义。新控件回归与实站边界见[分页记录](LIEPIN_NORMAL_PAGINATION.md)。
+猎聘分页选择器改变后，旧定义证据仍留在原日期和源码。当前定义新增独立的2026-10-10受控记录，绑定PR290实际main `448fa17e7ea9`：浏览器控件22项与六种原生环境各32项通过。控件测试中的原生方法使用Playwright页面，不是完整原生CDP/网络测试；原生TLS夹具另行验证。见[分页记录](LIEPIN_NORMAL_PAGINATION.md)。
 
-表中的受控验证记录分别绑定历史源码 `cde1e1c`（2026-09-18）或猎聘定义 `0d85f554`（2026-09-23）、适配定义与访问契约，保留对应 CI、日期、浏览器/OS、网络和人工页面范围。它不证明修改后的全部代码、当前用户环境或真实平台。定义变化会撤下匹配的受控记录，不能只沿用同名平台的旧成功。报告中的软件快照不改变某条岗位的来源方式或证据等级；真实正文仍以逐条原文、采集时间和来源链判断。
+表中的受控验证记录分别绑定历史源码 `cde1e1c`（2026-09-18）、猎聘旧定义 `0d85f554`（2026-09-23）或当前定义 `448fa17e7ea9`（2026-10-10）、适配定义与访问契约，保留对应 CI、日期、浏览器/OS、网络和人工页面范围。它不证明修改后的全部代码、当前用户环境或真实平台。定义变化会撤下匹配的受控记录，不能只沿用同名平台的旧成功。报告中的软件快照不改变某条岗位的来源方式或证据等级；真实正文仍以逐条原文、采集时间和来源链判断。
 
 `implemented` 表示有实现；`controlled_verified` 表示注明范围的人工环境曾验过；`pilot_verified` 应有单独实际环境证据；`live_verified` 应达到对应站点样本、日期和恢复要求；`blocked` 表示条件受阻。**当前三站均没有 pilot/live 认证。** 后端是否允许选择、是否默认和是否实站成功分别记录，选择默认浏览器桥不代表网站已能抓取。
 
@@ -31,7 +31,7 @@ PR60 已合并人工登录返回后的自动接续、当前会话复用与完整
 
 ## 当前实现与实站缺口
 
-- 猎聘单次正常密码表单、人工验证交接、自动接续、小批身份去重、查询检查点和取数结果统计已有实现；真实账号、会话和完整JD验收仍由 #50/#51/#53/#63 跟踪，不能把按钮可用当作站点认证。
+- 猎聘单次正常密码表单、人工验证交接、自动接续、小批身份去重、查询检查点和取数结果统计已有实现；真实账号/会话、分页及整体样本验收仍由 #49/#50/#51/#52/#54 跟踪；#53/#63已按原范围关闭，不能再作为当前阻塞项，不能把按钮可用当作站点认证。
 - 工作区网络偏好、代理认证、有限读取重试、公开任务暂停和重启后明确继续已有实现，各范围以[交付清单](DELIVERY_STATUS.md)及原PR自身验收为准。
 - 公开目录、分类及相邻页的实际采样与浏览器登录链路分别记录；四日期、91个不同完整职位URL来自独立报告，并不代表91个相关目标岗位或一次重算后的报告。
 
