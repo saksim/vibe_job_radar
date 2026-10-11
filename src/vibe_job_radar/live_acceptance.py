@@ -21,7 +21,7 @@ from .collection import writer_lock
 from .config import load_config
 from .guided.adapters import builtins
 from .guided.contracts import CrawlError
-from .guided import attempt_history
+from .guided import attempt_history, environment_history
 from .html_parser import _unique_object
 from .models import JobRecord
 from .utils import atomic_json, parse_time, utc_now
@@ -78,8 +78,11 @@ class AcceptanceLedger:
     def create(self, data):
         fields = {'keyword','roles','search_url','backend','selection_rule','timezone',
                   'source_revision','source_sha256','browser','browser_version','planner_os','network_mode','consent'}
-        if set(data) != fields or data['consent'] is not True:
+        if set(data) not in (fields, fields | {'source_content_sha256'}) or data['consent'] is not True:
             raise InputError('创建验收计划需明确确认全部范围字段；不接受密码、Cookie或附加数据。')
+        if 'source_content_sha256' in data and (not isinstance(data['source_content_sha256'],str)
+                or not HEX64.fullmatch(data['source_content_sha256'])):
+            raise InputError('源码内容指纹无效。')
         adapter = builtins().get('liepin')
         roles = data['roles']
         if (not _text(data['keyword'],100) or not _text(data['selection_rule'],1000)
@@ -105,7 +108,7 @@ class AcceptanceLedger:
         except (ValueError, TypeError, ZoneInfoNotFoundError, CrawlError):
             raise InputError('请选择有效 IANA 时区与同一检索词的猎聘搜索条件；Windows 请安装验收可选依赖 tzdata。') from None
         plan = {k:v for k,v in data.items() if k != 'consent'}
-        plan.update(schema_version=1, id=uuid.uuid4().hex, created_at=self.clock(), platform='liepin',
+        plan.update(schema_version=2 if 'source_content_sha256' in data else 1, id=uuid.uuid4().hex, created_at=self.clock(), platform='liepin',
                     adapter_version=adapter.version, search_url=url,
                     proposed_thresholds={'unique_full_jobs':30,'local_dates':3,'completion_ratio':0.9},
                     threshold_approved=False, environment_scope='operator_declared_not_runtime_attested')
@@ -120,9 +123,12 @@ class AcceptanceLedger:
         folder = self._path(ROOT_NAME,ident)
         plan = self._json(folder/'plan.json')
         copied = dict(plan); expected = copied.pop('sha256',None)
-        if (plan.get('schema_version') != 1 or plan.get('id') != ident
+        if (plan.get('schema_version') not in (1,2) or plan.get('id') != ident
                 or plan.get('platform') != 'liepin' or expected != _hash(_encoded(copied))):
             raise InputError('计划内容已变化或版本不兼容；请保留原计划并新建明确范围。')
+        if plan['schema_version'] == 2 and (not isinstance(plan.get('source_content_sha256'),str)
+                or not HEX64.fullmatch(plan['source_content_sha256'])):
+            raise InputError('计划源码内容指纹缺失或无效。')
         try:
             parse_time(plan['created_at']); ZoneInfo(plan['timezone'])
         except (ValueError, KeyError, TypeError, ZoneInfoNotFoundError):
@@ -215,10 +221,11 @@ class AcceptanceLedger:
         folder,plan = self._plan(ident)
         with writer_lock(folder):
             history,previous = self._history(folder,plan)
-            prior_attempts = {}
+            prior_attempts, prior_environments = {}, {}
             for observed in history:
                 for task in observed['tasks']:
                     prior_attempts[task['id']] = task.get(attempt_history.KEY)
+                    prior_environments[task['id']] = task.get(environment_history.KEY)
             if len(history) >= MAX_CAPTURES: raise InputError('验收观测已达到上限。')
             paths = sorted(self._path('guided').glob('*.json'))
             paths = [p for p in paths if HEX32.fullmatch(p.stem)]
@@ -244,6 +251,8 @@ class AcceptanceLedger:
                 try:
                     attempts = attempt_history.snapshot(state)
                     attempt_history.extends(prior_attempts.get(state['id']), attempts)
+                    environments = environment_history.snapshot(state)
+                    environment_history.extends(prior_environments.get(state['id']), environments)
                 except CrawlError:
                     raise InputError('逐次采集历史损坏、缺失或已覆盖，未忽略早期失败。') from None
                 historical_selected = {i for selection in (attempts or {}).get('selections', []) for i in selection['items']}
@@ -252,7 +261,8 @@ class AcceptanceLedger:
                     try:
                         report = self._report(state.get('report_id'))
                         report_hash = _hash(self._read(self._path('reports',state['report_id'],'run_manifest.json')))
-                    except (InputError,OSError,ValueError,KeyError,TypeError): report_error='report_evidence_invalid'
+                        environment_history.require_report(environments, report[1])
+                    except (InputError,OSError,ValueError,KeyError,TypeError,CrawlError): report_error='report_evidence_invalid'
                 items = []
                 for row in cards:
                     if row['id'] not in set(selection) | historical_selected: continue
@@ -273,9 +283,14 @@ class AcceptanceLedger:
                 tasks.append({'id':state['id'],'created_at':state['created_at'],'status':state['status'],'code':state.get('code',''),
                     'source_sha256':_hash(_encoded(state)),'report_id':state.get('report_id',''),
                     'report_sha256':report_hash,'selected':len(selection),'items':items,
-                    attempt_history.KEY:attempts})
-            unknown = ['runtime_environment','per_request_cost', 'search_login_and_http_attempts_not_recorded',
+                    attempt_history.KEY:attempts, environment_history.KEY:environments})
+            unknown = ['physical_network_route_not_observed','per_request_cost', 'search_login_and_http_attempts_not_recorded',
                        'human_identity_title_full_text_review']
+            if not tasks:
+                unknown.append('runtime_environment')
+            for task in tasks:
+                unknown.extend(environment_history.assessment(plan, task[environment_history.KEY], task[attempt_history.KEY])['gaps'])
+            unknown = sorted(set(unknown))
             if not tasks or any(not task[attempt_history.KEY] or task[attempt_history.KEY]['origin'] != 'task_creation' for task in tasks):
                 unknown += ['per_attempt_latency', 'complete_retry_history_before_capture']
             if any(a['outcome'] == 'unfinished' for task in tasks for a in (task[attempt_history.KEY] or {}).get('attempts', [])):
@@ -297,7 +312,7 @@ class AcceptanceLedger:
         folder,plan = self._plan(ident)
         history,_ = self._history(folder,plan)
         latest,origins,previous_outcomes,unknown = {},{},Counter(),set()
-        attempts_by_task = {}
+        attempts_by_task, environments_by_task = {}, {}
         for capture in history:
             unknown.update(k for k in capture['unknown_evidence']
                            if k != 'unfinished_detail_attempts_have_unknown_outcome_and_duration')
@@ -309,9 +324,14 @@ class AcceptanceLedger:
                     if attempts is not None:
                         attempt_history.validate({'cards': task['items'], attempt_history.KEY: attempts})
                     attempt_history.extends(attempts_by_task.get(task['id']), attempts)
+                    environment = task.get(environment_history.KEY)
+                    environment_history.validate({environment_history.KEY: environment, attempt_history.KEY: attempts})
+                    environment_history.extends(environments_by_task.get(task['id']), environment)
                 except CrawlError:
                     raise InputError('验收观测中的逐次历史缺失或改变，不能删除早期失败。') from None
                 attempts_by_task[task['id']] = attempts
+                environments_by_task[task['id']] = environment
+                unknown.update(environment_history.assessment(plan, environment, attempts)['gaps'])
                 for item in task['items']:
                     key = (task['id'],item['id'])
                     if item.get('historical_selection_only') and key in latest:
@@ -331,6 +351,7 @@ class AcceptanceLedger:
                     raise InputError('原报告已改变。')
                 if report_id not in reports: reports[report_id] = self._report(report_id)
                 report = reports[report_id]
+                environment_history.require_report(task.get(environment_history.KEY), report[1])
                 row = next(r for r in report[1]['items'] if r['id']==item['id'])
                 row = {**row,'title':report[2][item['record_id']].title}
                 checked = self._verified_item({'id':task['id'],'created_at':task['created_at'],
@@ -359,4 +380,6 @@ class AcceptanceLedger:
             'observed_completion_ratio':ratio,'statuses':dict(Counter(i['status'] for i in items)),
             'previous_observed_outcomes':dict(previous_outcomes),'gaps':gaps,
             'detail_attempts':attempt_history.summarize(attempts_by_task),
+            'runtime_environments':{ident:environment_history.assessment(plan, environment, attempts_by_task[ident])
+                                    for ident,environment in environments_by_task.items()},
             'scope':'本机观测的选中条目及历史变化；非全部 HTTP 尝试分母，不能据此自动认证或发布'}

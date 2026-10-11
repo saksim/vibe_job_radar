@@ -66,7 +66,12 @@ def main():
                 second=server.guided.state()['browser_health']
                 assert second['ready'] and second['mode']=='headed' and second['launch_tested']
                 detail=second['blank_page_check']
-                assert detail['step']=='verified' and set(detail['elapsed_ms'])=={'load_inline_page','read_title'}
+                expected_steps={'load_inline_page','read_title'}
+                if detail.get('initial_readiness_timeout'):
+                    assert detail.get('committed_page_continuation')=='dom_ready'
+                    assert detail.get('readiness_budget_ms')==15000
+                    expected_steps.add('wait_committed_page')
+                assert detail['step']=='verified' and set(detail['elapsed_ms'])==expected_steps
                 assert detail['page_closed'] is False and detail['browser_connected'] is True
                 navigation=detail['navigation_before_cleanup']
                 assert navigation['main_frame_commits']>=1 and navigation['other_frame_commits']==0

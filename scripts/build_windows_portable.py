@@ -18,6 +18,7 @@ ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'src'))
 from vibe_job_radar.qualification import check_source,fingerprint,output_directory,require_local_evidence
 from vibe_job_radar.utils import atomic_json
+from vibe_job_radar.runtime_identity import source_stamp
 
 BUILD_VERSIONS={'pyinstaller':'6.22.3','playwright':'1.63.0','packaging':'26.0','truststore':'0.10.4','quickjs-ng':'0.17.0.1'}
 
@@ -148,7 +149,12 @@ def build_candidate(out,evidence_path,*,verify_login_startup=False,verify_system
             '可在首页明确选择登录Windows后启动；默认关闭。移动/升级包前关闭旧登记，再从新包启用。\n'
             '三站实站登录/完整JD仍未认证；包的启动成功不代表网站允许采集。\n'
             '不自动安装开机任务、更新软件、发布服务或修改系统证书。\n',encoding='utf-8')
+        runtime_source=source_stamp(ROOT)
+        if runtime_source['raw_sha256']!=expected['sha256']:
+            raise ValueError('source changed before portable metadata')
+        runtime_source.update(kind='portable_build_manifest',executable_sha256=file_hash(bundle/'VibeJobRadar.exe'))
         atomic_json(bundle/'PORTABLE.json',{'schema_version':1,'status':'portable_candidate_not_release',
+            'runtime_source':runtime_source,
             'version':version,'platform':'windows-x64','source':expected,'python_version':platform.python_version(),
             'components':versions,'build_environment_packages':dependencies,'browser_bundled':True,'live_sites_certified':False,
             'bundled_browser_directory':'browsers','recommended_max_bundle_path_units':110,
@@ -164,7 +170,7 @@ def build_candidate(out,evidence_path,*,verify_login_startup=False,verify_system
         if verify_wpad_dns:verification.append('--verify-wpad-dns')
         subprocess.run(verification,cwd=ROOT,check=True,timeout=240)
         report=json.loads(runtime_evidence.read_text(encoding='utf-8'))
-        validate_runtime_evidence(bundle,report,require_login_startup=verify_login_startup,require_system_pac=verify_system_pac,require_wpad_dns=verify_wpad_dns,require_url_pac=True)
+        validate_runtime_evidence(bundle,report,require_login_startup=verify_login_startup,require_system_pac=verify_system_pac,require_wpad_dns=verify_wpad_dns,require_url_pac=True,require_environment=True)
         if fingerprint(ROOT)!=expected:raise ValueError('source changed during portable build')
         part=stage/'candidate.zip'
         with zipfile.ZipFile(part,'w',zipfile.ZIP_DEFLATED) as archive:
@@ -224,13 +230,15 @@ def native_components_valid(rows):
         and all(native_component_valid(rows[channel],channel) for channel in rows))
 
 
-def validate_runtime_evidence(bundle,report,*,require_login_startup=False,require_system_pac=False,require_wpad_dns=False,require_url_pac=False):
+def validate_runtime_evidence(bundle,report,*,require_login_startup=False,require_system_pac=False,require_wpad_dns=False,require_url_pac=False,require_environment=False):
     if require_wpad_dns:
         from wpad_dns_evidence import valid_wpad_dns_evidence
     if require_url_pac:
         from url_pac_acceptance import valid_evidence as valid_url_pac
     if (not isinstance(report,dict) or report.get('success') is not True
             or report.get('verified_browser')!='bundled'
+            or (require_environment and (report.get('runtime_environment_verified') is not True
+                                         or report.get('runtime_environment_restart_verified') is not True))
             or (require_login_startup and (report.get('startup_registration_verified') is not True
                                           or report.get('startup_worker_verified') is not True))
             or not native_components_valid(report.get('native_components'))

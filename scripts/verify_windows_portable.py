@@ -788,6 +788,16 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
                 if status['counts']['records']!=0:raise AssertionError('packaged application did not use empty test workspace')
                 state=app.json('/api/guided/state')
                 if state['runtime']['kind']!='portable' or Path(state['python']).resolve()!=exe:raise AssertionError('not executing bundled application')
+                environment=state['runtime_environment']
+                from vibe_job_radar.runtime_identity import validate as validate_environment
+                validate_environment(environment)
+                if (environment['source']!=json.loads((bundle/'PORTABLE.json').read_bytes())['runtime_source']
+                        or environment['source']['kind']!='portable_build_manifest'
+                        or environment['freshness']!='startup_only'):
+                    raise AssertionError('frozen process did not bind its executable and source manifest')
+                result['runtime_environment']=environment
+                result['runtime_environment_verified']=True
+                result['checks'].append('frozen process observes its own executable/source manifest before services; a restarted process receives a new identity')
                 public=app.json('/api/public/state')
                 if {source['id'] for source in public['sources']}!={'greenhouse_anthropic','greenhouse_cloudflare','ashby_cursor'}:
                     raise AssertionError('packaged public source registry is incomplete')
@@ -1078,7 +1088,16 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
                 result['public_algorithm_category_next_restart_verified']=True
                 if restarted.json('/api/public/schedule/state')['status']!='disabled':raise AssertionError('portable restart implicitly scheduled work')
                 if restarted.json('/api/guided/state')['browser_health']['ready']:raise AssertionError('portable restart trusted old browser readiness')
-                histories=restarted.json('/api/guided/state')['jobs']
+                restarted_state=restarted.json('/api/guided/state')
+                restarted_environment=restarted_state['runtime_environment']
+                validate_environment(restarted_environment)
+                if (restarted_environment['source']!=environment['source']
+                        or restarted_environment['process_id']==environment['process_id']
+                        or restarted_environment['freshness']!='startup_only'):
+                    raise AssertionError('portable restart lost source identity or reused process identity')
+                result['restarted_process_environment']=restarted_environment
+                result['runtime_environment_restart_verified']=True
+                histories=restarted_state['jobs']
                 history_row=next(row for row in histories if row['id']==history_id)
                 if history_row['detail_attempt_history']!=history_saved or history_row['browser_open']:
                     raise AssertionError('fresh frozen process changed saved detail history')

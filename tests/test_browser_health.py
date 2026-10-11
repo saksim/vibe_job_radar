@@ -178,7 +178,7 @@ class StartupTests(unittest.TestCase):
         wire = factory.call_args.kwargs['transport_factory']()
         self.assertFalse(wire.allowed_resource('https://www.zhipin.com/'))
 
-    def test_blank_page_failure_preserves_exact_step_without_retry_or_timeout_change(self):
+    def test_blank_page_failure_preserves_step_without_unobserved_continuation(self):
         for step in ('load_inline_page', 'read_title', 'verify_title'):
             with self.subTest(step=step):
                 backend=MagicMock();backend.startup_report={'ready':True,'launch_tested':True}
@@ -201,6 +201,63 @@ class StartupTests(unittest.TestCase):
                 self.assertEqual(backend.page.title.call_count,0 if step=='load_inline_page' else 1)
                 backend.page.set_default_timeout.assert_not_called()
                 backend.page.set_content.assert_not_called();backend.close.assert_called_once()
+
+    def delayed_page(self, *, defect=None, wait_error=False, wrong_title=False):
+        from vibe_job_radar.guided import browser_health as health
+        backend=MagicMock();backend.startup_report={'ready':True,'launch_tested':True}
+        page=backend.page;page.url=health.OFFLINE_CHECK_URL
+        page.is_closed.return_value=False;backend.browser.is_connected.return_value=True
+        page.title.return_value='wrong' if wrong_title else 'Vibe Radar browser check'
+        callbacks={};page.on.side_effect=lambda name,fn:callbacks.update({name:fn})
+        clock=[0.0]
+        def goto(*args,**kwargs):
+            if defect!='uncommitted':callbacks['framenavigated'](page.main_frame)
+            clock[0]=16.0 if defect=='budget_exhausted' else 6.0
+            if defect=='different_url':page.url='about:blank'
+            elif defect=='closed':page.is_closed.return_value=True
+            elif defect=='disconnected':backend.browser.is_connected.return_value=False
+            elif defect=='replaced':backend.page=MagicMock()
+            elif defect=='second_document':callbacks['framenavigated'](page.main_frame)
+            elif defect=='crash':callbacks['crash']()
+            raise TimeoutError('artificial cold renderer')
+        def wait(*args,**kwargs):
+            clock[0]+=2.0
+            if wait_error:raise TimeoutError('artificial late DOM')
+            if defect=='replaced_during_wait':backend.page=MagicMock()
+            callbacks['domcontentloaded']()
+        page.goto.side_effect=goto;page.wait_for_load_state.side_effect=wait
+        with patch('vibe_job_radar.guided.browser.PlaywrightBackend',return_value=backend), \
+             patch.object(health.time,'monotonic',side_effect=lambda:clock[0]):
+            result=probe_browser()
+        page.goto.assert_called_once();backend.open.assert_not_called();backend.close.assert_called_once()
+        return result,page
+
+    def test_committed_slow_page_continues_same_dom_wait_with_remaining_budget(self):
+        result,page=self.delayed_page()
+        self.assertTrue(result['ready'])
+        detail=result['blank_page_check']
+        self.assertTrue(detail['initial_readiness_timeout'])
+        self.assertEqual(detail['committed_page_continuation'],'dom_ready')
+        self.assertEqual(detail['elapsed_ms']['load_inline_page'],6000)
+        self.assertEqual(detail['elapsed_ms']['wait_committed_page'],2000)
+        page.wait_for_load_state.assert_called_once_with('domcontentloaded',timeout=9000)
+        page.title.assert_called_once()
+
+    def test_uncommitted_dead_changed_or_overdue_page_gets_no_extra_wait(self):
+        for defect in ('uncommitted','different_url','closed','disconnected','replaced',
+                       'second_document','crash','budget_exhausted'):
+            with self.subTest(defect=defect):
+                result,page=self.delayed_page(defect=defect)
+                self.assertFalse(result['ready']);self.assertEqual(result['error_type'],'TimeoutError')
+                page.wait_for_load_state.assert_not_called();page.title.assert_not_called()
+
+    def test_continuation_still_rejects_dom_timeout_replacement_and_wrong_title(self):
+        for case in ('timeout','replaced_during_wait','title'):
+            with self.subTest(case=case):
+                result,page=self.delayed_page(defect=case,wait_error=case=='timeout',wrong_title=case=='title')
+                self.assertFalse(result['ready'])
+                page.wait_for_load_state.assert_called_once_with('domcontentloaded',timeout=9000)
+                self.assertEqual(page.title.call_count,int(case=='title'))
 
     def test_blank_page_lifecycle_observations_exclude_our_cleanup(self):
         backend=MagicMock();backend.startup_report={'ready':True,'launch_tested':True}

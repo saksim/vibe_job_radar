@@ -246,7 +246,11 @@ class DetailAttemptHistoryTests(unittest.TestCase):
         # An otherwise valid newer task cannot discard an earlier completed
         # attempt observed by the ledger.
         self.state['detail_attempt_history']['attempts'].pop()
-        self.service._save(self.state)
+        # The environment reference now also detects this at the writer. Keep
+        # the independent ledger's corrupt-input case without disabling it.
+        with self.assertRaisesRegex(CrawlError, 'environment_history_invalid'):
+            self.service._save(self.state)
+        atomic_json(self.service._path(self.state['id']), self.state)
         with self.assertRaises(InputError):
             ledger.capture(plan['id'])
 

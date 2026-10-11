@@ -9,7 +9,8 @@ import sys
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'src'))
 from vibe_job_radar.live_acceptance import AcceptanceLedger
-from vibe_job_radar.qualification import fingerprint
+from vibe_job_radar.qualification import fingerprint, source_files, ROOT_FILES, SOURCE_DIRS
+from vibe_job_radar.runtime_identity import content_identity
 from vibe_job_radar.workspace import InputError
 
 
@@ -37,12 +38,19 @@ def main():
         if args.command=='plan':
             if not args.yes: raise InputError('核对范围后加 --yes 保存计划；此操作不联网。')
             revision=subprocess.check_output(['git','-C',str(ROOT),'rev-parse','HEAD'],text=True).strip()
-            dirty=subprocess.check_output(['git','-C',str(ROOT),'status','--porcelain','--untracked-files=normal'],text=True).strip()
+            # Root notes/TEMP are outside the qualification payload. Untracked
+            # source files and tracked edits in every payload directory still block.
+            dirty=subprocess.check_output(['git','-C',str(ROOT),'status','--porcelain','--untracked-files=all',
+                '--',*sorted(ROOT_FILES | SOURCE_DIRS)],text=True).strip()
+            tracked=set(subprocess.check_output(['git','-C',str(ROOT),'ls-files','-z'],text=True).split('\0'))
+            if set(source_files(ROOT))-tracked:
+                dirty='uncommitted_payload'
             if dirty: raise InputError('验收需使用已提交的源码；请先完成开发提交，不能把修改前的 SHA 当作实际源码。')
             data=ledger.create({'keyword':args.keyword,'roles':args.role,'search_url':args.search_url,
                 'backend':args.backend,'selection_rule':args.selection_rule,'timezone':args.timezone,
                 'source_revision':revision,'source_sha256':fingerprint(ROOT)['sha256'],
-                'browser':args.browser,'browser_version':args.browser_version,'planner_os':platform.platform(),
+                'source_content_sha256':content_identity(ROOT)['sha256'],
+                'browser':args.browser,'browser_version':args.browser_version,'planner_os':platform.system()+'/'+platform.release(),
                 'network_mode':args.network_mode,'consent':True})
             print(json.dumps({'plan_id':data['id'],'created_at':data['created_at'],
                 'message':'计划已在本机保存；尚未访问平台，环境为声明值，正式验收仍须实证。'},ensure_ascii=False))

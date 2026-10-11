@@ -17,6 +17,18 @@ class PortablePackagingTests(unittest.TestCase):
         self.root=Path(self.temp.name);self.bundle=self.root/'payload';self.bundle.mkdir()
         (self.bundle/'VibeJobRadar.exe').write_bytes(b'artificial unit fixture, not an executable')
 
+    def test_runtime_identity_and_fresh_process_are_required_for_new_build(self):
+        from test_native_component_portable import good_component
+        proof={'success':True,'verified_browser':'bundled','files':self.builder.inventory(self.bundle),
+               'native_components':{c:good_component(c) for c in ['bundled','chrome']}}
+        with self.assertRaises(ValueError):
+            self.builder.validate_runtime_evidence(self.bundle,proof,require_environment=True)
+        proof['runtime_environment_verified']=True
+        with self.assertRaises(ValueError):
+            self.builder.validate_runtime_evidence(self.bundle,proof,require_environment=True)
+        proof['runtime_environment_restart_verified']=True
+        self.builder.validate_runtime_evidence(self.bundle,proof,require_environment=True)
+
     def test_changed_added_and_removed_payload_invalidates_prior_runtime_check(self):
         from test_native_component_portable import good_component
         proof={'success':True,'verified_browser':'bundled','files':self.builder.inventory(self.bundle),'native_components':{c:good_component(c) for c in ['bundled','chrome']}}
