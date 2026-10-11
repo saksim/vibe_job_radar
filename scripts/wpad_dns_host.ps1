@@ -25,7 +25,10 @@ function Get-WpadRules {
         # assume every adapted property also appears in CimInstanceProperties.
         [ordered]@{Name=[string]$_.Name;Comment=[string]$_.Comment
             DisplayName=[string]$_.DisplayName;Namespace=@($_.Namespace | Sort-Object)
-            NameServers=@($_.NameServers)}
+            NameServers=@($_.NameServers | ForEach-Object { [string]$_ })
+            NameServerValueKinds=@($_.NameServers | ForEach-Object {
+                if ($_ -is [Net.IPAddress]) { 'ip_address' } elseif ($_ -is [string]) { 'string' } else { 'other' }
+            })}
     })
 }
 function Assert-WpadOwnedRule($wpadRow,$wpadInput) {

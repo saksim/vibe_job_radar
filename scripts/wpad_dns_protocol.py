@@ -49,6 +49,9 @@ def rule_facts(rows,tag,names,original_ids):
          'comment_match':r.get('Comment')==tag,'display_name_match':r.get('DisplayName')==tag,
          'names_match':namespace_match(r.get('Namespace'),names),
          'servers_match':r.get('NameServers')==['127.0.0.1'],
+         'server_value_kinds':[k if k in ('ip_address','string','other') else 'unrecognized'
+                               for k in r.get('NameServerValueKinds',[])[:8]]
+                              if isinstance(r.get('NameServerValueKinds'),list) else [],
          'original_identity':isinstance(r.get('Name'),str) and r['Name'] in original_ids,
          'owned':owned_rule(r,tag,names,original_ids)}
         if isinstance(r,dict) else {'mapping':False} for r in rows[:8]]}
