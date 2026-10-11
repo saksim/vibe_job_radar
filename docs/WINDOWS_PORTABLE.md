@@ -4,6 +4,8 @@
 
 ## 使用已验证的候选
 
+维护者可通过[发行草稿准备](PORTABLE_RELEASE.md)复用已通过main CI的候选，保存版本、校验值、来源与升级说明。草稿明确未签名且保持预发行；原CI下载和源码启动继续可用，准备发行不重新构建或重复测试。
+
 在对应提交的 `windows-portable-candidate` 工作流中核对 `build-and-run-executable` 成功，下载 `windows-x64-portable-candidate` 及 `windows-portable-evidence`。这是保留 7 天的 CI 候选产物，尚非 GitHub Release；失败运行不会上传新的候选 ZIP。
 
 1. 按 evidence 中 `manifest.json` 的文件名和 SHA-256 核对 ZIP，可用 PowerShell `Get-FileHash -Algorithm SHA256 "候选文件路径.zip"`。摘要只核对文件一致性，不是发行签名。

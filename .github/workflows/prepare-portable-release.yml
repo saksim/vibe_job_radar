@@ -1,0 +1,47 @@
+name: prepare-portable-release
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_run_id:
+        description: Successful windows-portable-candidate push run on main
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  unsigned-draft:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      actions: read
+    env:
+      PYTHONUTF8: '1'
+      TMPDIR: ${{ github.workspace }}/.release-temp
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Prepare project-local temporary directory
+        run: mkdir -p "$TMPDIR"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Reuse qualified candidate and create unsigned draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+        run: python scripts/prepare_portable_release.py --repository "$GITHUB_REPOSITORY" --run-id "$CANDIDATE_RUN_ID" --out release-draft --create-draft
+      - name: Retain preparation result including partial upload failures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-preparation-result
+          retention-days: 30
+          path: |
+            release-draft/prepared.json
+            release-draft/create-draft-request.json
+            release-draft/created-draft.json
+            release-draft/assets/provenance.json
+            release-draft/assets/SHA256SUMS.txt
