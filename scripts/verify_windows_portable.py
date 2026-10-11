@@ -730,11 +730,14 @@ def verify_startup_registration(app,exe,workspace,cwd,env):
         if registry.read(name) is not None:raise AssertionError('startup acceptance did not clean up')
 
 
-def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=False,verify_system_pac=False):
+def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=False,verify_system_pac=False,verify_wpad_dns=False):
     if verify_login_startup and os.environ.get('GITHUB_ACTIONS')!='true':
         raise ValueError('startup registration acceptance is restricted to ephemeral CI')
     if verify_system_pac and os.environ.get('GITHUB_ACTIONS')!='true':
         raise ValueError('system PAC acceptance is restricted to ephemeral CI')
+    if verify_wpad_dns:
+        from wpad_dns_protocol import require_hosted
+        require_hosted()
     if browser_choice not in ('bundled','msedge'):raise ValueError('unsupported verification browser')
     if sys.platform!='win32':raise ValueError('portable executable verification requires Windows')
     if bundle.is_symlink():raise ValueError('portable bundle is a symlink')
@@ -742,7 +745,7 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
     if not exe.is_file():raise ValueError('portable executable absent')
     before=inventory(bundle)
     result={'success':False,'stage':'doctor','checks':[],'page_errors':[],'external_browser_requests':[],
-        'verified_browser':browser_choice,'startup_registration_verified':False,'startup_worker_verified':False,'system_pac_verified':False,
+        'verified_browser':browser_choice,'startup_registration_verified':False,'startup_worker_verified':False,'system_pac_verified':False,'wpad_dns_verified':False,
         'scope':'Built Windows executable with Python PATH/environment removed, artificial manual JD, original report, explicitly selected browser blank-page check. Only bundled-browser verification can qualify a build. No live recruiting certification.'}
     env={k:v for k,v in os.environ.items() if k not in {'PYTHONPATH','PYTHONHOME','VIRTUAL_ENV','CONDA_PREFIX','PLAYWRIGHT_BROWSERS_PATH'} and not k.startswith('VIBE_RADAR_')}
     env['PATH']=str(Path(os.environ['SystemRoot'])/'System32')
@@ -846,6 +849,33 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
                                 'historical_cause_confirmed':False}
                     result['system_pac_verified']=True
                     result['checks'].append('actual frozen exe reads ephemeral CI current-user PAC URL via WinHTTP, saves v4 offline, downloads once in its own frozen child, evaluates SOCKS5 without target connection and rolls back; independent frozen worker consumes a cached query under the same policy with no extra PAC download; original CI registry value restored')
+                if verify_wpad_dns:
+                    from wpad_dns_acceptance import DnsWpadFixture,verify_app as verify_wpad_app
+                    from wpad_dns_evidence import valid_wpad_dns_evidence
+                    from system_pac_request_trace import FixtureRequestTrace
+                    result['stage']='actual_dns_wpad_setup'
+                    evidence=result['wpad_dns']={'kind':'frozen-dns-wpad-acceptance',
+                        'frozen_executable':True,'success':False,'api':{}}
+                    trace=FixtureRequestTrace()
+                    trace.register('verifier',os.getpid());trace.register('workbench',app.proc.pid)
+                    fixture=DnsWpadFixture(trace.observe)
+                    try:
+                        with fixture:
+                            result['stage']='actual_dns_wpad_api'
+                            verify_wpad_app(app,fixture,trace,evidence['api'])
+                            result['stage']='actual_dns_wpad_restore'
+                            trace.stage('restore')
+                    finally:
+                        # Every outcome keeps post-cleanup evidence. A success
+                        # is published only after the exact lease was removed.
+                        fixture.close()
+                        evidence['fixture']=fixture.snapshot()
+                        evidence['request_trace']=trace.snapshot()
+                    if not valid_wpad_dns_evidence({**evidence,'success':True}):
+                        raise AssertionError('frozen DNS WPAD evidence incomplete')
+                    evidence['success']=True
+                    result['wpad_dns_verified']=True
+                    result['checks'].append('actual frozen exe uses unchanged native DHCP-first/DNS discovery against an owned exact-name DNS fixture, previews without download, grants schema5 offline, rechecks source and downloads once in its attributed frozen child, evaluates SOCKS5 without a target connection, rolls back to schema2 and restores all owned NRPT/HTTP/DNS resources')
                 for mode in ('ensure','reinstall','upgrade','tls'):
                     if app.call('/api/guided/install',{'consent':True,'mode':mode})[0]!=400:
                         raise AssertionError('portable component mutation was not refused')
@@ -1106,8 +1136,9 @@ if __name__=='__main__':
     parser.add_argument('--verify-login-startup',action='store_true',
         help='Explicit ephemeral-CI-only startup register/read/remove acceptance; default is read-only.')
     parser.add_argument('--verify-system-pac',action='store_true',help='Explicit ephemeral-CI-only configured PAC registry fixture; restores its value.')
+    parser.add_argument('--verify-wpad-dns',action='store_true',help='Explicit hosted-Windows-only actual DNS WPAD fixture with exact owned NRPT cleanup.')
     args=parser.parse_args()
-    try:result=verify(args.bundle,args.report,browser_choice=args.browser,verify_login_startup=args.verify_login_startup,verify_system_pac=args.verify_system_pac)
+    try:result=verify(args.bundle,args.report,browser_choice=args.browser,verify_login_startup=args.verify_login_startup,verify_system_pac=args.verify_system_pac,verify_wpad_dns=args.verify_wpad_dns)
     except Exception as exc:
         # Playwright exception text may include the private loopback token URL.
         # Keep detailed stages in the structured report, never raw tracebacks.

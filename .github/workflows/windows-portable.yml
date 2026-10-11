@@ -31,7 +31,7 @@ jobs:
       - name: Qualify exact source with every required check
         run: python scripts/verify_candidate.py
       - name: Freeze, launch, exercise and archive actual executable
-        run: python scripts/build_windows_portable.py --verify-login-startup --verify-system-pac
+        run: python scripts/build_windows_portable.py --verify-login-startup --verify-system-pac --verify-wpad-dns
       - name: Preserve source and executable evidence including failures
         if: always()
         uses: actions/upload-artifact@v4
