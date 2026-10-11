@@ -14,6 +14,8 @@ Windows 通常没有系统 IANA 时区库，先安装可选依赖：`python -m p
 python scripts/check_live_acceptance.py --workspace D:/radar-acceptance plan --keyword "时间序列算法" --role time_series --backend native --selection-rule "在预先选定的检索条件下按列表顺序保留全部选中项和失败项" --timezone Asia/Shanghai --browser msedge --browser-version unknown --network-mode system --yes
 ```
 
+浏览器声明 `--browser` 接受 `msedge`、`bundled` 或 `chrome`，应与实际采集时的选择一致；登记本身不会启动或验证浏览器。
+
 可重复传 `--role`；有地区等筛选时传对应 `--search-url`。只接受猎聘搜索页和与 `--keyword` 一致的检索词，查询字段不得重复。登记后返回 `plan_id`。`--yes` 仅确认本机保存这些范围字段，不能代替平台访问范围确认。
 
 随后在同一工作区正常创建向导任务。任务必须晚于计划，平台、关键词、岗位方向、搜索 URL 与后端必须完全一致。浏览器、OS、网络模式仅是登记者声明，尚未绑定实际采集进程；工具不会将它们当成已实测组合。

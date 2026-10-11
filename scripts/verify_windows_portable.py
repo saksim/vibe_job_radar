@@ -15,12 +15,17 @@ import time
 from urllib.parse import urlsplit
 
 from build_windows_portable import inventory, native_component_valid
+from portable_blank_protocol import BlankNavigationTrace, bounded_lines
 from vibe_job_radar.guided.browser_health import HEALTH_MESSAGES
 from vibe_job_radar.guided.native_startup_diagnostic import startup_failure_facts
 
 
 class RunningApp:
-    def __init__(self,exe,workspace,cwd,env):
+    def __init__(self,exe,workspace,cwd,env,*,blank_trace=None):
+        if blank_trace is not None:
+            # A verifier-owned child only. No PWDEBUG, SDK patch or timeout change;
+            # raw protocol lines are consumed in memory and never written out.
+            env={**env, 'DEBUG':'pw:protocol', 'DEBUG_COLORS':'0'}
         self.proc=subprocess.Popen([str(exe),'--workspace',str(workspace),'--no-browser'],cwd=cwd,env=env,
             stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,
             creationflags=subprocess.CREATE_NO_WINDOW)
@@ -28,11 +33,18 @@ class RunningApp:
         def read():
             # Session tokens exist only in memory and are never written into
             # build logs/artifacts. Retain only the loopback entry for requests.
-            for raw in self.proc.stdout:
-                match=re.search(rb'http://127\.0\.0\.1:\d+/#token=([A-Za-z0-9_-]+)',raw)
-                if match:
-                    try:self.lines.put_nowait(match.group().decode('ascii'))
-                    except queue.Full:pass
+            ended=False
+            try:
+                for raw in bounded_lines(self.proc.stdout):
+                    if blank_trace is not None:blank_trace.feed(raw)
+                    if raw is None:continue
+                    match=re.search(rb'http://127\.0\.0\.1:\d+/#token=([A-Za-z0-9_-]+)',raw)
+                    if match:
+                        try:self.lines.put_nowait(match.group().decode('ascii'))
+                        except queue.Full:pass
+                ended=True
+            finally:
+                if blank_trace is not None:blank_trace.finish(reader_failed=not ended)
         self.reader=threading.Thread(target=read,daemon=True);self.reader.start()
         try:
             self.entry=self.lines.get(timeout=30);parts=urlsplit(self.entry)
@@ -750,6 +762,7 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
     env={k:v for k,v in os.environ.items() if k not in {'PYTHONPATH','PYTHONHOME','VIRTUAL_ENV','CONDA_PREFIX','PLAYWRIGHT_BROWSERS_PATH'} and not k.startswith('VIBE_RADAR_')}
     env['PATH']=str(Path(os.environ['SystemRoot'])/'System32')
     env['PYTHONUTF8']='1'
+    blank_trace=None
     try:
         with tempfile.TemporaryDirectory(prefix='portable-runtime-') as temp:
             root=Path(temp).resolve()
@@ -765,7 +778,8 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
             result['checks'].append('exe runs from a different directory with no Python PATH, Unicode/spaced workspace and working SQLite')
             verify_native_components(exe,cwd,env,result)
             result['stage']='server_start'
-            app=RunningApp(exe,workspace,cwd,env)
+            blank_trace=BlankNavigationTrace()
+            app=RunningApp(exe,workspace,cwd,env,blank_trace=blank_trace)
             try:
                 result['stage']='resources_and_runtime'
                 for path in ('/','/app.js','/guided','/guided.js','/advanced','/advanced.js','/network-settings.js','/public-schedule.js','/public-queue.js','/windows-startup.js'):
@@ -1133,6 +1147,7 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
         result['failure_frames']=failure_frames(exc)
         raise
     finally:
+        if blank_trace is not None:result['blank_page_protocol']=blank_trace.snapshot()
         report_path.parent.mkdir(parents=True,exist_ok=True)
         report_path.write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
     return result
