@@ -99,10 +99,10 @@ class PortableReleaseTests(unittest.TestCase):
                 self.meta,self.proof=old_meta,old_proof
 
     def test_existing_output_is_not_replaced(self):
-        output=self.root/'existing';output.mkdir();(output/'keep.txt').write_text('keep')
+        output=self.root/'existing';output.mkdir();(output/'keep.txt').write_text('keep',encoding='utf8')
         with self.assertRaises(ValueError):
             self.mod.assemble(self.package,self.manifest,self.evidence,self.run,{},self.artifacts,output)
-        self.assertEqual((output/'keep.txt').read_text(),'keep')
+        self.assertEqual((output/'keep.txt').read_text(encoding='utf8'),'keep')
         self.assertEqual(len(list(output.iterdir())),1)
 
     def api_fixture(self,suffix):
