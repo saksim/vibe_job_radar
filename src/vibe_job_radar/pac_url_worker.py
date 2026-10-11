@@ -8,6 +8,7 @@ import threading
 import time
 from .loopback_proxy import LocalProxyError
 from .pac_native import DEADLINE, MAX_RESULT
+from .pac_calendar import CALENDAR_HELPERS
 
 ENGINE_VERSION = '0.17.0.1'
 MEMORY_LIMIT = 16 * 1024 * 1024
@@ -58,7 +59,7 @@ def _evaluate(source, url, host):
     context.set_max_stack_size(STACK_LIMIT)
     context.set_time_limit(CPU_LIMIT)
     try:
-        context.eval(HELPERS)
+        context.eval(HELPERS + '\n' + CALENDAR_HELPERS)
         context.eval(source)
         callback = context.get('FindProxyForURL')
         raw = callback(url, host)
