@@ -73,8 +73,13 @@ class DnsProtocolTests(unittest.TestCase):
         self.assertEqual(state['errors'],0);self.assertTrue(state['listeners_closed'])
         self.assertEqual(state['live_threads'],0);self.assertEqual(state['forwarded_queries'],0)
         self.assertNotIn('fixture.invalid',json.dumps(state))
-        for kind in (socket.SOCK_DGRAM,socket.SOCK_STREAM):
-            with socket.socket(socket.AF_INET,kind) as sock:sock.bind(('127.0.0.1',dns.port))
+        self.assertEqual(len(dns.sockets),2)
+        self.assertEqual([sock.fileno() for sock in dns.sockets],[-1,-1])
+        self.assertTrue(all(not thread.is_alive() for thread in dns.threads))
+        # A closed TCP connection may retain TIME_WAIT on POSIX. Verify the
+        # owned descriptors above; immediate rebinding is only valid for UDP.
+        with socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as sock:
+            sock.bind(('127.0.0.1',dns.port))
 
     def test_only_bounded_exact_wpad_names_are_accepted(self):
         for bad in (['wpad'],['wpad','*.invalid'],['wpad','.fixture.invalid'],
