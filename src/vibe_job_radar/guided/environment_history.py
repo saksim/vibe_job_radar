@@ -34,6 +34,13 @@ def _token(value, limit=100):
     return isinstance(value, str) and bool(re.fullmatch('[a-zA-Z0-9_.+-]{1,'+str(limit)+'}', value))
 
 
+def adapter_version(adapter):
+    value = getattr(adapter, 'version', None)
+    if type(value) is int:
+        value = str(value)
+    return value if _token(value) else 'unknown'
+
+
 def validate(state):
     if KEY not in state or state[KEY] is None:
         return None
@@ -152,7 +159,7 @@ def observe(state, backend, adapter, action):
     runtime = runtime_identity.snapshot()
     obs = {'sequence': len(h['observations'])+1, 'observed_at': utc_now(), 'action': action,
            'session_id': session, 'adapter_key': adapter.key,
-           'adapter_version': getattr(adapter, 'version', 'custom'),
+           'adapter_version': adapter_version(adapter),
            'backend': 'native' if type(backend) is NativeBackend else 'bridge' if known else 'unknown',
            'browser_channel': health.get('browser_channel', 'unknown'),
            'browser_version': runtime_identity._version(version),

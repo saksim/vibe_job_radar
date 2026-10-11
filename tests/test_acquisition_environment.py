@@ -156,6 +156,20 @@ class EnvironmentHistoryTests(unittest.TestCase):
         state=task(); observe(state,backend(policy=policy))
         self.assertEqual(state[env.KEY]['observations'][0]['network'],value)
 
+    def test_custom_adapter_versions_cannot_break_existing_collection(self):
+        for version, expected in ((None, 'unknown'), ('v1 beta', 'unknown'),
+                                  ('x'*101, 'unknown'), (7, '7'), ('v2.1', 'v2.1')):
+            with self.subTest(version=version):
+                state = task()
+                adapter = types.SimpleNamespace(key='custom', version=version)
+                with patch.object(runtime, 'snapshot', return_value=observed_runtime()), \
+                        patch.object(env, 'utc_now', return_value=NOW):
+                    seq = env.observe(state, backend(), adapter, 'collect')
+                start(state, seq)
+                restored = json.loads(json.dumps(state))
+                self.assertEqual(env.validate(restored)['observations'][0]['adapter_version'], expected)
+                self.assertEqual(restored[env.KEY]['attempts'], [{'attempt': 1, 'observation': 1}])
+
     def test_custom_backend_does_not_promote_claimed_browser_metadata(self):
         state=task(); owner=types.SimpleNamespace(startup_report={'browser_channel':'chrome'},
             browser=types.SimpleNamespace(version='123.0'),wire=types.SimpleNamespace(network_policy=NetworkPolicy()))
@@ -310,7 +324,7 @@ class AcceptanceCLISourceTests(unittest.TestCase):
                 raise AssertionError('unexpected Git command')
             def run():
                 with patch.object(cli,'ROOT',root),patch.object(sys,'argv',command), \
-                        patch.object(cli.subprocess,'check_output',side_effect=git_reply),contextlib.redirect_stdout(io.StringIO()):
+                        patch.object(cli,'subprocess',types.SimpleNamespace(check_output=git_reply)),contextlib.redirect_stdout(io.StringIO()):
                     return cli.main()
             (root/'CONTINUE_HERE.md').write_text('keep original notes',encoding='utf8')
             (root/'tmp-generated.txt').write_text('not source',encoding='utf8')
