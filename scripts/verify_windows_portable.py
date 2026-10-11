@@ -894,6 +894,11 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
                 health=state['browser_health']
                 result['browser_health']=browser_health_summary(health)
                 if not health['ready'] or not health['launch_tested']:raise AssertionError('selected browser did not pass real blank-page check')
+                navigation=health['blank_page_check']['navigation_before_cleanup']
+                if (navigation['main_frame_commits']<1 or navigation['other_frame_commits']!=0
+                        or navigation['location']!='fixed_inline' or not navigation['observed_page_is_current']
+                        or navigation['frame_observation_failed']):
+                    raise AssertionError('selected browser blank-page navigation evidence incomplete')
                 if browser_choice=='bundled':
                     browser_exe=Path(health['executable_path']).resolve()
                     if bundle/'browsers' not in browser_exe.parents or not browser_exe.is_file():raise AssertionError('browser is outside portable browser directory')

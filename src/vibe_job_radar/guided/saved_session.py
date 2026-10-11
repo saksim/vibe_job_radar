@@ -97,7 +97,15 @@ def _cookies(value, domains):
 
 class SavedSession:
     """One workspace/platform lease. All methods run on the browser owner thread."""
-    def __init__(self, workspace, adapter, *, backend, browser, network, clock=time.time):
+    @classmethod
+    def for_policy(cls, workspace, adapter, *, backend, browser, policy, clock=time.time):
+        credentials = policy.proxy.credentials if os.name == 'nt' and policy.proxy else None
+        return cls(workspace, adapter, backend=backend, browser=browser,
+                   network=policy._saved_session_network() if credentials is not None else policy.fingerprint,
+                   clock=clock, _credentials=credentials)
+
+    def __init__(self, workspace, adapter, *, backend, browser, network, clock=time.time,
+                 _credentials=None):
         if not re.fullmatch(r'[a-z0-9_]{2,32}', adapter.key):
             raise _error()
         self.clock, self.status, self._lock = clock, 'empty', None
@@ -109,7 +117,13 @@ class SavedSession:
         self.binding = {'workspace': hashlib.sha256(str(Path(workspace).resolve()).encode()).hexdigest(),
                         'platform': adapter.key, 'adapter': str(adapter.version), 'backend': backend,
                         'browser': browser, 'network': network}
-        self.entropy = hashlib.sha256(json.dumps(self.binding, sort_keys=True).encode()).digest()
+        context = json.dumps(self.binding, sort_keys=True).encode()
+        self._version = 2 if _credentials is not None else 1
+        # v2 has no owner-only fallback. Only the Windows policy factory selects
+        # it; the private argument also permits deterministic codec tests.
+        self._protection = 'dpapi' if os.name == 'nt' or self._version == 2 else 'owner_only'
+        self.entropy = (_credentials._saved_session_entropy(context) if _credentials is not None
+                        else hashlib.sha256(context).digest())
         lock_path = self.root / (adapter.key + '.lock')
         try:
             if lock_path.exists() or lock_path.is_symlink():
@@ -138,8 +152,8 @@ class SavedSession:
             raise _error('saved_session_busy')
         _safe_file(self.root, directory=True)
 
-    def restore(self):
-        self._check()
+    def _read_existing(self):
+        """Validate without mutation, including before an automatic replacement."""
         if not self.path.exists() and not self.path.is_symlink():
             return None
         try:
@@ -151,34 +165,53 @@ class SavedSession:
             if len(raw) > MAX_BYTES:
                 raise _error()
             envelope = json.loads(raw)
-            if envelope.get('version') != 1 or envelope.get('binding') != self.binding:
+            if (not isinstance(envelope, dict) or type(envelope.get('version')) is not int
+                    or envelope['version'] != self._version or envelope.get('binding') != self.binding):
                 raise _error('saved_session_incompatible')
-            created = envelope['saved_at']
-            if type(created) not in (int, float) or not math.isfinite(created) or created > self.clock() + 60:
+            if self._version == 2 and set(envelope) != {'version', 'binding', 'saved_at', 'protection', 'payload'}:
                 raise _error()
-            if self.clock() - created > MAX_AGE:
-                self.path.unlink()
-                self.status = 'expired'
-                return None  # Normal login may be needed; never promise account validity.
-            codec = 'dpapi' if os.name == 'nt' else 'owner_only'
-            if envelope.get('protection') != codec:
+            created = envelope['saved_at']
+            self._validate_created(created)
+            if envelope.get('protection') != self._protection:
                 raise _error('saved_session_incompatible')
             data = base64.b64decode(envelope['payload'], validate=True)
-            if os.name == 'nt':
+            if self._protection == 'dpapi':
                 data = _dpapi(data, self.entropy, decrypt=True)
-            cookies = self._usable_cookies(json.loads(data))
-            if not cookies:
-                # No eligible cookie is not an authenticated/restored session.
-                # Remove only this lease's snapshot; records and quota survive.
-                self.forget()
-                self.status = 'empty'
-                return None
-            self.status = 'restored_unverified'
-            return {'cookies': cookies, 'origins': []}
+            payload = json.loads(data)
+            if self._version == 2:
+                if (not isinstance(payload, dict) or set(payload) != {'cookies', 'saved_at'}
+                        or type(payload['saved_at']) not in (int, float)
+                        or payload['saved_at'] != created):
+                    raise _error()
+                payload = payload['cookies']
+            # Decrypt AND validate the payload before trusting public expiry
+            # metadata or permitting logout/filtering to delete an old snapshot.
+            return self._usable_cookies(payload), created
         except CrawlError:
             raise
         except Exception:
             raise _error('saved_session_unreadable') from None
+
+    def _validate_created(self, created):
+        if type(created) not in (int, float) or not math.isfinite(created) or created > self.clock() + 60:
+            raise _error()
+
+    def restore(self):
+        self._check()
+        existing = self._read_existing()
+        if existing is None:
+            return None
+        cookies, created = existing
+        if self.clock() - created > MAX_AGE:
+            self.forget()
+            self.status = 'expired'
+            return None  # Normal login may be needed; never promise account validity.
+        if not cookies:
+            self.forget()
+            self.status = 'empty'
+            return None
+        self.status = 'restored_unverified'
+        return {'cookies': cookies, 'origins': []}
 
     def _usable_cookies(self, cookies):
         # Chromium uses -1 for session cookies; never invent a longer lifetime.
@@ -189,6 +222,9 @@ class SavedSession:
 
     def save(self, cookies):
         self._check()
+        # Every version must guard an existing snapshot, including empty saves
+        # and a legacy/anonymous instance encountering authenticated v2.
+        self._read_existing()
         cookies = self._usable_cookies(cookies)
         if not cookies:
             # A normal logout or domain filtering must not leave an older
@@ -196,13 +232,16 @@ class SavedSession:
             self.forget()
             self.status = 'empty'
             return
-        data = json.dumps(cookies, ensure_ascii=False, allow_nan=False).encode()
+        created = self.clock()
+        self._validate_created(created)
+        payload = {'cookies': cookies, 'saved_at': created} if self._version == 2 else cookies
+        data = json.dumps(payload, ensure_ascii=False, allow_nan=False).encode()
         if len(data) > MAX_BYTES // 2:
             raise _error()
-        if os.name == 'nt':
+        if self._protection == 'dpapi':
             data = _dpapi(data, self.entropy)
-        envelope = {'version': 1, 'binding': self.binding, 'saved_at': self.clock(),
-                    'protection': 'dpapi' if os.name == 'nt' else 'owner_only',
+        envelope = {'version': self._version, 'binding': self.binding, 'saved_at': created,
+                    'protection': self._protection,
                     'payload': base64.b64encode(data).decode('ascii')}
         encoded = json.dumps(envelope, ensure_ascii=False, allow_nan=False).encode()
         if self.path.exists() or self.path.is_symlink():

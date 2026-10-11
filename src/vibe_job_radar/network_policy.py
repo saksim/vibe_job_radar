@@ -176,8 +176,7 @@ class NetworkPolicy:
             return 'loopback_socks5_proxy'
         return 'loopback_http_proxy' if proxy else 'system_route'
 
-    @property
-    def fingerprint(self) -> str:
+    def _identity(self, *, saved_session=False):
         value = [self.source, self.transport_name(self.proxy), self.proxy.host if self.proxy else None,
                  self.proxy.port if self.proxy else None, self.bypass, self.error, self.encrypted_dns]
         if self.public_dns:
@@ -185,10 +184,24 @@ class NetworkPolicy:
         if self.pac_url_mode:
             value.append('explicit_full_url_pac_v1')
         if self.proxy and self.proxy.credentials is not None:
-            value.append(self.proxy.credentials.binding)
+            value.append('authenticated_saved_session_v2' if saved_session
+                         else self.proxy.credentials.binding)
         if self.pac is not None:
             value.extend((self.pac.binding, self.pac_id, self.pac_route_host))
+        return value
+
+    @property
+    def fingerprint(self) -> str:
+        # Public/live policy IDs retain the original process-local credential
+        # binding. Never expose a stable credential-derived value here.
+        value = self._identity()
         return hashlib.sha256(json.dumps(value, separators=(',', ':')).encode()).hexdigest()[:16]
+
+    def _saved_session_network(self) -> str:
+        # Full private route context; credentials are bound by DPAPI entropy,
+        # not by a persistent password hash. Preserve every other identity field.
+        value = self._identity(saved_session=True)
+        return hashlib.sha256(json.dumps(value, separators=(',', ':')).encode()).hexdigest()
 
     def describe(self, host: str | None = None) -> dict:
         result = {'mode': 'auto', 'source': self.source, 'policy_id': self.fingerprint,

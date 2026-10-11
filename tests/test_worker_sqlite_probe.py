@@ -236,16 +236,20 @@ class WorkerSqliteProbeTests(unittest.TestCase):
                             if page_calls == measured_call:
                                 # Delay only the measured action, leaving the
                                 # first retry's preparation budget untouched.
-                                start = time.monotonic()
+                                # Older Windows/Python monotonic() uses
+                                # GetTickCount64; its coarse ticks can undercount
+                                # this interval. Measure the same real delay
+                                # with the high-resolution performance counter.
+                                start = time.perf_counter_ns()
                                 time.sleep(2)
-                                delays.append(time.monotonic() - start)
+                                delays.append(time.perf_counter_ns() - start)
                         return reserve(site, kind, **kwargs)
                     case.ledger.reserve = prepare
                 with patch.object(retry_tests.ReadRetryWorkerTests, 'setUp', setup):
                     getattr(WorkerSqliteProbeTests(name), name)()
                 self.assertEqual(page_calls, measured_call)
                 self.assertEqual(len(delays), 1)
-                self.assertGreaterEqual(delays[0], 2)
+                self.assertGreaterEqual(delays[0], 2_000_000_000)
                 self.assertIs(threading.getprofile(), previous)
 
     def test_shutdown_read_wait_records_scheduler_insert_before_cleanup(self):

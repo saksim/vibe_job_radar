@@ -23,6 +23,8 @@ jobs:
         run: python scripts/run_browser_choice_acceptance.py
       - name: Verify workspace DNS policy inside real Edge request callbacks
         run: python scripts/run_browser_policy_binding.py --channel msedge
+      - name: Verify authenticated Cookie restart through actual Edge and both local proxy protocols
+        run: python scripts/run_proxy_auth_browser.py --channel msedge
       - name: Preserve exact check results
         if: always()
         uses: actions/upload-artifact@v4
@@ -32,6 +34,7 @@ jobs:
           path: |
             browser-acceptance/browser-choice/
             browser-acceptance/policy-binding/
+            browser-acceptance/proxy-auth/
 
   installed-chrome:
     runs-on: windows-latest
@@ -53,6 +56,8 @@ jobs:
         run: python scripts/verify_password_form.py --channel chrome
       - name: Verify the same original forms in Chrome native input
         run: python scripts/verify_password_form.py --channel chrome --native
+      - name: Verify authenticated Cookie restart through actual Chrome and both local proxy protocols
+        run: python scripts/run_proxy_auth_browser.py --channel chrome
       - name: Preserve exact Chrome results including failures
         if: always()
         uses: actions/upload-artifact@v4
@@ -63,3 +68,4 @@ jobs:
             browser-acceptance/browser-choice-chrome/
             browser-acceptance/browser-choice-chrome-native/
             browser-acceptance/policy-binding-chrome/
+            browser-acceptance/proxy-auth/

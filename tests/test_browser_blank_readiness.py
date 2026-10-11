@@ -1,5 +1,6 @@
 """Offline readiness checks retain timeout, DOM verification and first failure."""
 import unittest
+import json
 from types import SimpleNamespace
 from urllib.parse import unquote, urlsplit
 from html.parser import HTMLParser
@@ -101,6 +102,111 @@ class BlankReadinessTests(unittest.TestCase):
             'content':"default-src 'none'; base-uri 'none'; form-action 'none'"})
         self.assertTrue(all(not set(attrs).intersection({'src','href','action'}) for _, attrs in tags))
         self.assertEqual(page.calls[0][1], {'wait_until':'domcontentloaded','timeout':6000})
+
+
+
+class NavigationPage(BlankPage):
+    def __init__(self, mode):
+        super().__init__()
+        self.mode, self.events = mode, {}
+        self._main_frame = object()
+        self.location = 'about:blank'
+    def on(self, name, callback):
+        self.events[name] = callback
+    @property
+    def main_frame(self):
+        if self.mode == 'unavailable':
+            raise RuntimeError('PRIVATE_FRAME_ERROR')
+        return self._main_frame
+    @property
+    def url(self):
+        if self.mode == 'unavailable':
+            raise RuntimeError('PRIVATE_URL_ERROR')
+        return self.location
+    def emit_navigation(self, frame):
+        if 'framenavigated' in self.events:
+            self.events['framenavigated'](frame)
+    def goto(self, url, **options):
+        self.calls.append(('content', options))
+        if self.mode in ('committed', 'success', 'burst'):
+            self.location = url
+            for _ in range(1005 if self.mode == 'burst' else 1):
+                self.emit_navigation(self._main_frame)
+        elif self.mode == 'other':
+            self.location = 'https://PRIVATE.invalid/path?token=PRIVATE'
+            self.emit_navigation(object())
+        elif self.mode == 'unavailable':
+            self.emit_navigation(self._main_frame)
+        if self.mode != 'success':
+            raise TimeoutError('authored inline navigation timeout')
+        self.events['domcontentloaded']()
+        self.events['load']()
+
+
+class BlankNavigationObservationTests(unittest.TestCase):
+    def run_probe(self, mode, *, mutate_cleanup=False):
+        page = NavigationPage(mode)
+        closed = []
+        browser = SimpleNamespace(on=lambda *args: None, is_connected=lambda: True)
+        def close():
+            closed.append(True)
+            if mutate_cleanup:
+                page.location = 'https://PRIVATE.invalid/cleanup'
+                page.emit_navigation(page._main_frame)
+        backend = SimpleNamespace(page=page, browser=browser, close=close,
+            startup_report={'ready':True,'launch_tested':True})
+        with patch('vibe_job_radar.guided.browser.PlaywrightBackend', return_value=backend):
+            report = probe_browser()
+        self.assertEqual(closed, [True])
+        self.assertEqual(page.calls[0],
+            ('content', {'wait_until':'domcontentloaded','timeout':6000}))
+        self.assertEqual(len(page.calls), 2 if mode == 'success' else 1)
+        self.assertNotIn('PRIVATE', json.dumps(report))
+        return report
+
+    def observation(self, report):
+        self.assertIn('navigation_before_cleanup', report['blank_page_check'])
+        return report['blank_page_check']['navigation_before_cleanup']
+
+    def test_timeout_distinguishes_no_commit_from_committed_inline_document(self):
+        for mode, commits, location in [('not_committed',0,'about_blank'),
+                                       ('committed',1,'fixed_inline')]:
+            with self.subTest(mode=mode):
+                report = self.run_probe(mode)
+                self.assertFalse(report['ready'])
+                self.assertEqual(report['error_type'], 'TimeoutError')
+                facts = self.observation(report)
+                self.assertEqual(facts, {'main_frame_commits':commits,
+                    'other_frame_commits':0,'frame_observation_failed':False,
+                    'location':location,'observed_page_is_current':True})
+
+    def test_other_frame_and_private_location_cannot_claim_fixed_document_commit(self):
+        report = self.run_probe('other')
+        facts = self.observation(report)
+        self.assertFalse(report['ready'])
+        self.assertEqual(facts['main_frame_commits'], 0)
+        self.assertEqual(facts['other_frame_commits'], 1)
+        self.assertEqual(facts['location'], 'other')
+
+    def test_observation_errors_preserve_original_failure_and_remain_unknown(self):
+        report = self.run_probe('unavailable')
+        self.assertFalse(report['ready'])
+        self.assertEqual(report['error_type'], 'TimeoutError')
+        facts = self.observation(report)
+        self.assertTrue(facts['frame_observation_failed'])
+        self.assertEqual(facts['location'], 'unavailable')
+
+    def test_cleanup_cannot_change_frozen_commit_and_location_observations(self):
+        report = self.run_probe('success', mutate_cleanup=True)
+        self.assertTrue(report['ready'])
+        facts = self.observation(report)
+        self.assertEqual(facts['main_frame_commits'], 1)
+        self.assertEqual(facts['location'], 'fixed_inline')
+
+    def test_navigation_event_counts_are_bounded_without_retrying_the_probe(self):
+        report = self.run_probe('burst')
+        self.assertFalse(report['ready'])
+        self.assertEqual(self.observation(report)['main_frame_commits'], 999)
 
 
 if __name__ == '__main__': unittest.main()
