@@ -49,7 +49,8 @@ from .read_retry import (TransientReadFailure, budget as retry_budget, retry_del
                          retry_after_seconds, action_for as retry_action_for)
 from .transport import diagnose_host
 from .diagnostic_trace import DiagnosticTrace, traced, observe, notify
-from . import attempt_history
+from . import attempt_history, environment_history
+from .. import runtime_identity
 from .browser_health import (BrowserStartupError, HEALTH_MESSAGES, environment_report,
                              failed_report, probe_browser, safe_text, package_version)
 from .browser_install import install_commands, run_command
@@ -58,6 +59,8 @@ from .ownership import Ownership, owned_action, checkpoint_lock, MESSAGE as OWNE
 from .. import tls_context
 
 MESSAGES = {
+    'environment_history_invalid': '采集环境记录损坏或与逐次历史不一致，已停止；原记录保留，请使用兼容版本或恢复备份。',
+    'environment_history_limit': '本任务的采集环境记录已达上限，未开始新访问；已有结果和历史保留。',
     'attempt_history_invalid': '逐次采集记录损坏或不兼容，已停止；请恢复工作区备份，不会清空失败历史后重试。',
     'attempt_history_limit': '本任务的逐次采集记录已达到上限，已停止新采集；已有结果与历史保留。',
     'search_scope_changed': '当前列表的关键词、筛选条件或页码与本批不一致，已保留原进度；请回到原查询，或为新条件另建任务。',
@@ -264,7 +267,9 @@ class GuidedService:
             state.update(changes)
             attempt_history.note_selection(state)
             state['message'] = MESSAGES.get(state.get('code'), '请查看当前状态或回基础工作台处理数据。')
+            before = state.get('updated_at')
             state['updated_at'] = utc_now()
+            environment_history.checkpoint(state, before, state['updated_at'])
             if attempt_history.KEY in state:
                 state[attempt_history.KEY]['checkpoint_at'] = state['updated_at']
             with writer_lock(self.workspace.root):
@@ -322,7 +327,8 @@ class GuidedService:
                 if item['backend'] == 'native' and backend is not None:
                     item['native_requests'] = dict(getattr(backend, 'native_counts', {}))
                 jobs.append(item)
-            view = {'jobs': jobs, 'busy': self._busy, 'active': self._active,
+            view = {'runtime_environment': runtime_identity.snapshot(check_current=False),
+                    'jobs': jobs, 'busy': self._busy, 'active': self._active,
                     'owned_elsewhere':foreign,'ownership_message':OWNER_MESSAGE if foreign else '',
                     'closure_uncertain':self._closure_uncertain,
                     'checkpoint_warnings': list(dict.fromkeys(checkpoint_warnings)),
@@ -414,6 +420,7 @@ class GuidedService:
                 raise InputError('列表地址必须是同一关键词的猎聘搜索页，且筛选参数不能重复；修改条件请另建任务。') from None
             state.update(query_scope_version=1, cursors_seen=[])
         state[attempt_history.KEY] = attempt_history.new_history(checkpoint_at=state['updated_at'])
+        state[environment_history.KEY] = environment_history.new_history(checkpoint_at=state['updated_at'])
         state['execution_binding'] = checkpoint_binding(state, adapter)
         with self._lock:
             if self._busy:
@@ -1038,7 +1045,7 @@ class GuidedService:
                    status='ready' if state['cards'] else 'waiting_manual', phase='select',
                    last_list_url=page.url, list_end=end_reason)
     @traced('collection', 'service', state_index=0)
-    def _collect(self, state, backend, adapter, *, returned_detail=None):
+    def _collect(self, state, backend, adapter, *, returned_detail=None, environment_observation=None):
         self._save(state, 'collecting', status='running', phase='collect')
         selected = set(state['selection'])
         try:
@@ -1049,6 +1056,7 @@ class GuidedService:
                     raise CrawlError('paused')
                 from_current = returned_detail is not None and row['id'] == returned_detail[0]
                 attempt = attempt_history.begin(state, row['id'], returned=from_current)
+                environment_history.bind_attempt(state, attempt['sequence'], environment_observation)
                 row['status'] = 'opening'
                 self._save(state)
                 started = attempt_history.monotonic()
@@ -1200,6 +1208,7 @@ class GuidedService:
                      'backend': state.get('backend', 'bridge'),
                      'identity_strategy': state.get('identity_strategy', 'observed_url_v1'),
                      'detail_attempt_history': attempt_history.snapshot(state),
+                     environment_history.KEY: environment_history.snapshot(state),
                      'outcome': outcome, 'items': audit_items(state, analysis)}
             audit_path = report_root/'guided_acquisition.json'
             atomic_json(audit_path, audit)
@@ -1221,6 +1230,7 @@ class GuidedService:
         if action == 'pause_idle':
             self._cancel.set()
             self._save(state,'paused',status='paused'); return
+        environment_history.require_capacity(state)  # Before login quota or browser creation.
         retry_budget(state)  # Validate saved accounting before creating a browser.
         if isinstance(secret, DeferredResume):
             if self._cancel.is_set():
@@ -1270,6 +1280,7 @@ class GuidedService:
         else:
             backend = (self._backend(state, required=secret.backend)
                        if isinstance(secret, DeferredResume) else self._backend(state))
+        environment_observation = environment_history.observe(state, backend, adapter, action)
         reuse_current_list = (action == 'resume' and resume_list and state['code'] == 'paused'
                               and state.get('authentication') != 'manual_pending'
                               and not getattr(backend, 'auth_mode', False)
@@ -1338,23 +1349,24 @@ class GuidedService:
             if (pending_detail_target(state) != secret.target
                     or matching_detail_signature(adapter, secret.target.expected_url, page) != secret.signature):
                 raise CrawlError('login_return_changed')
-            self._collect(state, backend, adapter, returned_detail=(secret.target.row_id, page))
+            self._collect(state, backend, adapter, returned_detail=(secret.target.row_id, page),
+                          environment_observation=environment_observation)
             self._save(state, login_continuation='resumed_detail')
         elif action in {'capture','more','search'}:
             self._gather(state,backend,adapter,navigate=action=='search',more=action=='more',resume=resume_list)
         elif action in {'collect','resume'}:
             if state['phase'] == 'collect':
-                self._collect(state,backend,adapter)
+                self._collect(state,backend,adapter,environment_observation=environment_observation)
             else:
                 self._gather(state,backend,adapter,navigate=action=='resume',resume=resume_list,
                              reuse_current=reuse_current_list)
         if action in {'search', 'capture', 'resume', 'resume_returned_search'}:
-            self._auto_collect_ready(state, backend, adapter)
+            self._auto_collect_ready(state, backend, adapter, environment_observation=environment_observation)
         if (pending_login and action in {'capture', 'search', 'resume', 'collect', 'resume_returned_detail', 'resume_returned_search'}
                 and state['status'] in {'ready', 'completed'}):
             # This is task progress after a user action, not login certification.
             self._save(state, authentication='user_resumed')
-    def _auto_collect_ready(self, state, backend, adapter):
+    def _auto_collect_ready(self, state, backend, adapter, *, environment_observation=None):
         """Apply the user's bounded query-order selection once, never on a gate.
 
         This is the existing collector, not a second downloader. Interrupted
@@ -1369,7 +1381,7 @@ class GuidedService:
             raise CrawlError('paused')
         self._save(state, selection=ids, selection_source='query_order',
                    auto_selection_applied=True, phase='collect', report_id='')
-        self._collect(state, backend, adapter)
+        self._collect(state, backend, adapter, environment_observation=environment_observation)
 
     def _defer_read_retry(self, state, action, failure):
         backend = self._backends.get(state['id'])

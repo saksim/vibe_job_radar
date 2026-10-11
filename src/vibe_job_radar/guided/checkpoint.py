@@ -15,6 +15,7 @@ from .batch_identity import ENTITY_V1, LEGACY
 from .contracts import CrawlError
 from .native_policy import contract_for
 from .attempt_history import validate as validate_attempt_history
+from .environment_history import validate as validate_environment_history
 
 MAX_BYTES = 2_000_000
 CONSENT_VERSION = 'guided-normal-access-v1'
@@ -74,6 +75,7 @@ def decode(path, ident):
                 or not all(_text(binding[k], 256) for k in ('adapter', 'backend', 'query', 'consent'))):
             raise ValueError()
         validate_attempt_history(state)
+        validate_environment_history(state)
         return state
     except (OSError, ValueError, TypeError, RecursionError, CrawlError):
         raise InputError('任务不存在、文件损坏或版本不兼容；原文件未改动，请从备份恢复或使用兼容版本。') from None

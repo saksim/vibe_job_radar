@@ -49,7 +49,7 @@ def enable(manager, **changes):
 
 class StartupTests(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory(prefix='radar-startup-')
+        self.tmp = tempfile.TemporaryDirectory(prefix='su-')
         self.addCleanup(self.tmp.cleanup)
         self.workspace, self.executable, self.registry, self.manager = fixture(self.tmp.name)
 
@@ -254,7 +254,7 @@ class StartupTests(unittest.TestCase):
 
 class StartupHTTPTests(unittest.TestCase):
     def test_auth_contract_conflict_and_original_schedule(self):
-        with tempfile.TemporaryDirectory(prefix='radar-startup-http-') as temp:
+        with tempfile.TemporaryDirectory(prefix='sh-') as temp:
             workspace, _, registry, manager = fixture(temp)
             server = LocalServer(workspace); server.windows_startup = manager
             thread = threading.Thread(target=server.serve_forever, kwargs={'poll_interval':.01}, daemon=True); thread.start()
@@ -273,7 +273,7 @@ class StartupHTTPTests(unittest.TestCase):
                 body = dict(revision=state['revision'], consent=True, consent_version=CONSENT)
                 self.assertEqual(call('POST','enable',body,False)[0], 403)
                 self.assertEqual(call('POST','enable',{**body,'executable':'arbitrary'})[0], 400)
-                status, changed = call('POST','enable',body); self.assertEqual(status, 200)
+                status, changed = call('POST','enable',body); self.assertEqual(status, 200, changed)
                 self.assertEqual(call('POST','disable',{'revision':state['revision']})[0], 409)
                 self.assertEqual(call('POST','disable',{'revision':changed['revision']})[0], 200)
                 _, state = call('GET','state')
@@ -281,7 +281,7 @@ class StartupHTTPTests(unittest.TestCase):
                 self.assertEqual(call('POST','enable',worker,False)[0], 403)
                 self.assertEqual(call('POST','enable',{**worker,'consent_version':CONSENT})[0], 400)
                 status, changed = call('POST','enable',worker)
-                self.assertEqual(status, 200);self.assertEqual(changed['mode'],'public_worker')
+                self.assertEqual(status, 200, changed);self.assertEqual(changed['mode'],'public_worker')
                 self.assertEqual(call('POST','disable',{'revision':changed['revision']})[0], 200)
                 self.assertEqual(server.public_schedule.state()['status'], 'disabled')
                 self.assertEqual(len(registry.writes), 4)

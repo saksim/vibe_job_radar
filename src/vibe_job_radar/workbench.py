@@ -14,6 +14,9 @@ from importlib.resources import files
 from pathlib import Path
 from urllib.parse import quote, unquote, urlsplit
 
+from .runtime_identity import bootstrap as _bootstrap_runtime
+_bootstrap_runtime()
+
 from .workspace import InputError, Workspace
 from .collection import Collector
 from .collection_runtime import CollectionRunner, CollectionBusy
