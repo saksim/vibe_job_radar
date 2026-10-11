@@ -24,7 +24,7 @@ def main():
     plan.add_argument('--backend',choices=['bridge','native'],default='native')
     plan.add_argument('--selection-rule',required=True)
     plan.add_argument('--timezone',required=True,help='Actual local IANA zone, e.g. America/Denver or Asia/Shanghai')
-    plan.add_argument('--browser',choices=['msedge','bundled'],required=True)
+    plan.add_argument('--browser',choices=['msedge','bundled','chrome'],required=True)
     plan.add_argument('--browser-version',default='unknown',help='Observed browser version; unknown remains an evidence gap')
     plan.add_argument('--network-mode',choices=['direct','system','static_http','static_socks5','unknown'],required=True)
     plan.add_argument('--yes',action='store_true',help='Confirm recording this local scope; does not authorize new network requests')
