@@ -188,4 +188,119 @@ class BrowserPolicyBindingTests(unittest.TestCase):
             Context().run(backend._route,route)
         self.assertEqual(backend.error,'write_not_allowed');fetch.assert_not_called()
 
+
+
+
+class PolicyBindingAcceptanceCleanupTests(unittest.TestCase):
+    def setUp(self):
+        import importlib.util
+        script = Path(__file__).resolve().parents[1]/'scripts/run_browser_policy_binding.py'
+        spec = importlib.util.spec_from_file_location('policy_binding_cleanup_test',script)
+        self.script = importlib.util.module_from_spec(spec);spec.loader.exec_module(self.script)
+        self.temp = tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+
+    def idle(self, service):
+        import time
+        end = time.monotonic()+10
+        while service.state()['busy'] and time.monotonic()<end:
+            time.sleep(.01)
+        self.assertFalse(service.state()['busy'])
+        return service.state()['jobs'][0]
+
+    def service(self):
+        from test_guided import FakeBackend,fixture_adapter
+        from test_guided_ownership import QUERY
+        from vibe_job_radar.guided.adapters import Registry
+        from vibe_job_radar.guided.service import GuidedService
+        workspace = Workspace(self.root/'workspace')
+        service = GuidedService(workspace,registry=Registry([fixture_adapter()]),
+            backend_factory=FakeBackend)
+        self.addCleanup(service.close)
+        ident = service.create(QUERY)['id'];self.idle(service)
+        return service,ident
+
+    def test_explicit_stop_waits_for_browser_and_preserves_task_outputs(self):
+        service,ident = self.service()
+        backend = service._backends[ident];close = backend.close
+        task = service._load(ident)
+        service.action({'id':ident,'action':'collect','selected':[task['cards'][0]['id']]})
+        self.idle(service);task = service._load(ident)
+        self.assertEqual(task['status'],'completed')
+        report = service.workspace.root/'reports'/task['report_id']
+        before = {p.relative_to(report):p.read_bytes() for p in report.rglob('*') if p.is_file()}
+        rates = service.ledger.summary('fixture');requests = list(backend.opens)
+        entered,release = threading.Event(),threading.Event()
+        values,errors = [],[]
+        def held_close():
+            entered.set()
+            if not release.wait(20):raise AssertionError('fixture close was not released')
+            close()
+        def finish():
+            try:values.append(self.script.stop_retained_task(service,ident,self.idle))
+            except BaseException as exc:errors.append(exc)
+        waiter = threading.Thread(target=finish)
+        try:
+            with patch.object(backend,'close',held_close):
+                waiter.start();self.assertTrue(entered.wait(5))
+                self.assertTrue(waiter.is_alive())
+                self.assertIsNotNone(service._ownership.lease)
+                release.set();waiter.join(10)
+                self.assertFalse(waiter.is_alive());self.assertFalse(errors,errors)
+            self.assertEqual(values[0]['status'],'stopped')
+            saved = service._load(ident)
+            self.assertEqual(saved['outcome'],task['outcome'])
+            self.assertEqual(saved['report_id'],task['report_id'])
+            self.assertEqual(before,{p.relative_to(report):p.read_bytes() for p in report.rglob('*') if p.is_file()})
+            self.assertEqual(rates,service.ledger.summary('fixture'))
+            self.assertEqual(requests,backend.opens)
+            self.assertTrue(backend.closed)
+            self.assertFalse(service._backends);self.assertIsNone(service._ownership.lease)
+        finally:
+            release.set();waiter.join(10)
+
+    def test_close_failure_is_rejected_instead_of_counted_as_stopped(self):
+        service,ident = self.service();backend = service._backends[ident]
+        try:
+            with patch.object(backend,'close',side_effect=RuntimeError('artificial close failure')):
+                with self.assertRaises(AssertionError):
+                    self.script.stop_retained_task(service,ident,self.idle)
+            self.assertTrue(service.state()['closure_uncertain'])
+            self.assertIsNotNone(service._ownership.lease)
+        finally:
+            # This artificial backend has no external process. Reclaim only
+            # after the real worker exits, leaving production behavior intact.
+            backend.close();service.close()
+            self.assertIsNone(service._thread)
+            service._ownership.release()
+
+    def test_saved_result_requires_body_and_fixture_cleanup_to_finish(self):
+        import json
+        for failure in (None,'body','cleanup'):
+            with self.subTest(failure=failure):
+                out = self.root/(failure or 'success');out.mkdir()
+                original = object()
+                handler = types.SimpleNamespace(do_GET=object())
+                result = {'success':True,'checks':['original business assertions']}
+                def teardown():
+                    self.assertIs(handler.do_GET,original)
+                    self.assertFalse(result['success'])
+                    self.assertFalse((out/'results.json').exists())
+                    if failure=='cleanup':raise PermissionError('artificial upstream cleanup failure')
+                fixture = types.SimpleNamespace(
+                    origin=types.SimpleNamespace(RequestHandlerClass=handler),tearDown=teardown)
+                def run():
+                    with self.script.record_after_cleanup(result,fixture,original,out):
+                        self.assertFalse(result['success'])
+                        if failure=='body':raise RuntimeError('artificial workspace cleanup failure')
+                if failure is None:run()
+                else:
+                    with self.assertRaises(RuntimeError if failure=='body' else PermissionError):run()
+                saved = json.loads((out/'results.json').read_bytes())
+                self.assertEqual(saved['success'],failure is None)
+                self.assertEqual(saved['checks'],['original business assertions'])
+                if failure=='body':self.assertEqual(saved['error_type'],'RuntimeError')
+                if failure=='cleanup':self.assertEqual(saved['cleanup_error_type'],'PermissionError')
+
+
 if __name__ == '__main__':unittest.main()
