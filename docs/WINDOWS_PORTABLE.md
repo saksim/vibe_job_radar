@@ -17,7 +17,7 @@
 
 ## 维护者构建与证据
 
-工作流使用独立 Windows x64 runner 上的官方 CPython 3.12。固定 PyInstaller 6.22.3、Playwright 1.63.0、packaging 26.0、truststore 0.10.4；其余实际构建环境包版本写入 `PORTABLE.json`，不宣称全部传递依赖锁定或字节可重现。Python、项目及随包主要依赖许可证放入 `licenses/`，Chromium/驱动原目录的许可文件保留。
+工作流使用独立 Windows x64 runner 上的官方 CPython 3.12。固定 PyInstaller 6.22.3、Playwright 1.63.0、packaging 26.0、truststore 0.10.4、quickjs-ng 0.17.0.1；其余实际构建环境包版本写入 `PORTABLE.json`，不宣称全部传递依赖锁定或字节可重现。Python、项目及随包主要依赖许可证放入 `licenses/`，Chromium/驱动原目录的许可文件保留。
 
 先设置 `PLAYWRIGHT_BROWSERS_PATH=0` 并通过该 Playwright 安装 Chromium，再运行 `python scripts/verify_candidate.py`、`python scripts/build_windows_portable.py`。打包器不负责安装构建环境。依据为 [Playwright 官方打包说明](https://playwright.dev/python/docs/library#pyinstaller)和 [PyInstaller 冻结运行时说明](https://pyinstaller.org/en/stable/runtime-information.html)。
 
@@ -26,6 +26,7 @@
 构建门槛与验收：
 
 - 当前源码四步验证全部通过，单测失败、错误、跳过均为零；源码逐文件指纹在构建前后相同。全量单测固定上限为 1200 秒，其余单项保持 180 秒；当前依据和原首失败详见 [源码资格预算](SOURCE_QUALIFICATION.md)。不跳过或减少测试，原 600 秒失败及随后 Windows 整套期限失败仍保留。外层 Windows 作业为 40 分钟，保留四步资格总上限之外原有的 11 分钟安装、冻结、程序验证和上传余量；预算调整不证明耗时根因已解决。
+- [完整网址PAC](FULL_URL_PAC.md)组件随包收集，另验证实际冻结子进程收到完整路径/查询参数/域名，拒绝未提供的DNS助手并撤销许可；门槛检查完整结构化证据，单个成功标记不够。该人工脚本不发目标请求，不扩大原生浏览器支持。
 - 实际冻结 exe，从另一个当前目录启动，在含中文和空格的临时工作区运行；子进程移除 Python 路径和相关环境变量。runner 自身仍有 Python，因此证据不宣称已覆盖完全未安装 Python 的个人电脑或所有 Windows 版本。
 - 实际 exe 完成 SQLite/诊断、所有页面资源、不可变组件拒绝安装、配套 Chromium 真正启动关闭；浏览器必须来自包内，不能借用 runner 缓存或 Edge 冒充。
 - #115增加独立`--public-worker`入口验收：另一实际exe在无Python PATH下运行，确认空计划保持关闭、没有公开任务，随后只终止本次自有空闲进程；这一项不证明Ctrl+C、真实到期请求或长跑。

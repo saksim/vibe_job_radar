@@ -15,7 +15,7 @@ import urllib.request
 from urllib.parse import urlsplit
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from .loopback_proxy import LocalProxyError, LoopbackProxy
 from .loopback_socks import LoopbackSocks5, select_loopback_proxy
@@ -82,8 +82,11 @@ class NetworkPolicy:
     pac_id: str = ''
     pac_route_host: str = field(default='', repr=False)
     public_dns: bool = False
+    pac_url_mode: bool = False
 
     def __post_init__(self):
+        if type(self.pac_url_mode) is not bool:
+            raise ValueError('invalid PAC scope')
         if type(self.public_dns) is not bool or (self.public_dns and self.encrypted_dns is not True):
             raise ValueError('public DNS requires an explicit encrypted DNS policy')
 
@@ -130,6 +133,17 @@ class NetworkPolicy:
             # Keep only a fixed code, never a proxy URL containing credentials.
             return cls('automatic_static', bypass=rules, error='local_proxy_configuration_invalid')
 
+    def for_request(self, url: str):
+        if getattr(self.pac, 'kind', None) == 'full_url_pac':
+            if self.error:
+                raise LocalProxyError(self.error)
+            return replace(self, pac=self.pac.for_url(url))
+        return self
+
+    def require_native_support(self):
+        if self.pac_url_mode or getattr(self.pac, 'kind', None) == 'full_url_pac':
+            raise LocalProxyError('pac_url_native_unsupported')
+
     def for_host(self, host: str) -> LoopbackProxy | None:
         if self.source not in {'explicit_application', 'explicit_workspace'} and _bypasses(host, self.bypass):
             return None
@@ -168,6 +182,8 @@ class NetworkPolicy:
                  self.proxy.port if self.proxy else None, self.bypass, self.error, self.encrypted_dns]
         if self.public_dns:
             value.append('explicit_public_doh_v1')
+        if self.pac_url_mode:
+            value.append('explicit_full_url_pac_v1')
         if self.proxy and self.proxy.credentials is not None:
             value.append(self.proxy.credentials.binding)
         if self.pac is not None:
@@ -191,12 +207,18 @@ class NetworkPolicy:
                   'vm_host_proxy_scope': 'explicit_workspace_anonymous_rfc1918_ipv4',
                   'proxy_authentication_configured': bool(self.proxy and self.proxy.credentials is not None),
                   'network_tested': False}
+        if self.pac_url_mode:
+            result.update(pac_scope='explicit_trusted_full_https_url', native_browser_supported=False)
         if self.pac is not None:
             # Status reads must never execute PAC helpers, including DNS.
             result.update(transport='unavailable' if self.error else 'pac_by_host',
                           code=self.error or 'pac_not_evaluated')
             if hasattr(self.pac, 'sha256'):
                 result['pac_sha256'] = self.pac.sha256
+                if getattr(self.pac, 'kind', None) == 'full_url_pac':
+                    result.update(pac_scope='explicit_trusted_full_https_url',
+                                  transport='unavailable' if self.error else 'pac_by_url',
+                                  native_browser_supported=False)
             elif getattr(self.pac, 'kind', None) == 'wpad':
                 result.update(pac_scope='explicit_windows_wpad_confirmed_source',
                               wpad_config_id=self.pac.binding, pac_content_frozen_per_session=True)

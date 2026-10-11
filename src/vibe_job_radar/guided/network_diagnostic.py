@@ -23,6 +23,7 @@ def diagnose_workspace(workspace, host, *, raw_probe, cancelled, has_sessions=Fa
         'network_scope': 'User-triggered DNS resolution only; no target HTTP/TLS, login or collection certification',
     }
     try:
+        policy = policy.for_request('https://' + host + '/')
         policy.for_host(host)  # Broken explicit route: do not leak DNS first.
     except LocalProxyError as exc:
         result.update(code=exc.code, message='当前代理策略无效，未解析或请求目标；请查看策略错误，不会偷偷直连。')

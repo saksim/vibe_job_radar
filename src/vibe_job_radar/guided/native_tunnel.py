@@ -22,6 +22,10 @@ from ..loopback_proxy import LocalProxyError
 
 class NativeTunnel:
     def __init__(self, hosts, policy, cancelled, *, timeout=20):
+        try:
+            policy.require_native_support()
+        except LocalProxyError as exc:
+            raise FetchError(exc.code) from exc
         self.hosts = frozenset(hosts)
         self.policy, self.cancelled, self.timeout = policy, cancelled, timeout
         self.username, self.password = 'radar', secrets.token_urlsafe(32)

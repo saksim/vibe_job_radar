@@ -1229,6 +1229,12 @@ class GuidedService:
                 raise CrawlError('automatic_resume_unavailable')
         adapter = self.registry.get(state['platform'])
         ensure_compatible(state, adapter)
+        if state.get('backend', 'bridge') == 'native':
+            from ..loopback_proxy import LocalProxyError
+            try:
+                current_policy().require_native_support()
+            except LocalProxyError as exc:
+                raise CrawlError(exc.code) from exc
         self._selected_records(state)
         resume_list = (action in {'resume', 'search', 'capture', 'resume_returned_search'}
                        and state['phase'] != 'collect'

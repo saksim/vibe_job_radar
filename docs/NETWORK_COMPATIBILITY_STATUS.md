@@ -22,6 +22,8 @@ PR76 已合入 #75 的显式本机HTTP Basic/SOCKS5认证，凭据只在指定�
 
 #109增加默认关闭的[Windows明确导入域名PAC](WINDOWS_DOMAIN_PAC.md)，限定匿名本机HTTP、明确SOCKS5或DIRECT，完整验证原始顺序，仅使用第一项且失败不继续直连；接通共享策略及三页面许可和撤销。#135新增[确认后使用系统已配置PAC地址](WINDOWS_SYSTEM_PAC.md)：单独确认来源，每会话读取一次，默认与状态读取不下载，来源改变停止。[Windows WPAD](WINDOWS_WPAD.md)已实现独立发现许可和来源信任，新增一次性Windows CI的真实DNS及冻结exe验收入口；成功结论必须包括精确来源、下载进程归属和临时规则清理。DHCP实际提供PAC地址、其他系统、路径规则与真实企业/VPN现场仍另验；新提交以同提交实际程序和网络夹具产物为准。
 
+本次 #23/N6 补充单独许可的[完整 HTTPS 网址 PAC](FULL_URL_PAC.md)：可信本地文件、固定可选引擎、五个字符串助手、HTTP与请求桥按路径/参数选路。原生 CONNECT 没有完整网址，因此在打开浏览器和预留登录次数前拒绝；旧系统PAC/WPAD许可不扩大。源码、UI、实际冻结进程的结论以本次提交独立证据为准，不代表所有PAC或企业现场通过。
+
 ## 仍待实现或现场验收
 
 其他 Fake-IP 策略、PAC、其他代理认证/代理端DNS、VM实际环境、企业分流/浏览器扩展网络和实际 VPN/TUN 产品矩阵仍未全部覆盖。单独许可的公共域名 DoH 不等于企业分区DNS兼容；SOCKS5数字CONNECT仍不是 socks5h、SOCKS4 或 UDP。
