@@ -1,5 +1,5 @@
 name: windows-portable-candidate
-run-name: WPAD hosted preflight (read only)
+run-name: WPAD owned HTTP namespace control
 on:
   workflow_dispatch:
 permissions:
@@ -13,6 +13,9 @@ jobs:
       - name: Observe hosted Windows WPAD prerequisites without discovery or configuration changes
         shell: pwsh
         run: ./scripts/wpad_host_preflight.ps1 -OutputPath ./release-verification/wpad-host-preflight.json
+      - name: Exercise and release a uniquely named owned HTTP namespace without changing existing services
+        shell: pwsh
+        run: ./scripts/wpad_http_namespace_probe.ps1 -OutputPath ./release-verification/wpad-http-namespace.json
       - name: Preserve bounded read-only host observation
         if: always()
         uses: actions/upload-artifact@v4
@@ -21,3 +24,11 @@ jobs:
           retention-days: 7
           if-no-files-found: error
           path: release-verification/wpad-host-preflight.json
+      - name: Preserve owned HTTP namespace control
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-wpad-http-namespace
+          retention-days: 7
+          if-no-files-found: error
+          path: release-verification/wpad-http-namespace.json
