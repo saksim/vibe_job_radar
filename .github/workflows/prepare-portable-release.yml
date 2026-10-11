@@ -6,6 +6,9 @@ on:
         description: Successful windows-portable-candidate push run on main
         required: true
         type: string
+concurrency:
+  group: prepare-portable-release-${{ inputs.candidate_run_id }}
+  cancel-in-progress: false
 permissions:
   contents: read
 jobs:
