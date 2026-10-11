@@ -146,5 +146,67 @@ class ChoiceFailureEvidenceTests(unittest.TestCase):
         self.assertEqual(len(row['checks']), 3)
 
 
+    def test_second_cold_failure_is_frozen_before_context_close(self):
+        marks = []; state = service(); first = Mock(); second = Mock()
+        for page in (first, second):
+            page.url = 'http://127.0.0.1:12345/'
+            page.goto.return_value.status = 200
+            page.locator.side_effect = lambda selector: SimpleNamespace(selector=selector)
+        callbacks = {}
+        second.on.side_effect = lambda event, callback: callbacks.__setitem__(event, callback)
+        def goto(*args, **kwargs):
+            callbacks['request'](SimpleNamespace(url=first.url+'api/status'))
+            return SimpleNamespace(status=200)
+        second.goto.side_effect = goto
+        count = [0]
+        def expect(locator):
+            def contain(value, **kwargs):
+                if locator.selector == '#counts':
+                    count[0] += 1
+                    if count[0] == 2:
+                        raise AssertionError(SECRET)
+            return SimpleNamespace(to_contain_text=contain, to_be_visible=lambda:None)
+        contexts = [Mock(), Mock()]
+        contexts[0].new_page.return_value = first
+        contexts[1].new_page.return_value = second
+        browser = Mock(); browser.new_context.side_effect = contexts
+        pw = Mock(); pw.chromium.launch.return_value = browser
+        api = Mock(); api.__enter__ = Mock(return_value=pw); api.__exit__ = Mock(return_value=False)
+        fake_module = SimpleNamespace(sync_playwright=lambda:api, expect=expect)
+        server = SimpleNamespace(guided=state, origin=first.url[:-1],
+            entry_url=first.url+'#token='+SECRET, serve_forever=lambda **kwargs:None,
+            shutdown=lambda:None, server_close=lambda:None)
+        evidence = []; original = choice.open_workbench
+        def open_page(*args, **kwargs):
+            evidence[:] = [kwargs['evidence']]
+            return original(*args, **kwargs)
+        def close():
+            snapshot = json.dumps(evidence[0], sort_keys=True)
+            self.assertEqual(evidence[0][1]['outcome'], 'failed')
+            self.assertEqual(evidence[0][1]['routes']['/api/status']['started'], 1)
+            callbacks['requestfailed'](SimpleNamespace(url=first.url+'api/status', failure='net::ERR_ABORTED'))
+            callbacks['close']()
+            self.assertEqual(json.dumps(evidence[0], sort_keys=True), snapshot)
+            marks.append('frozen-before-close')
+        contexts[1].close.side_effect = close
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch.object(choice,'ROOT',root), patch.object(choice,'LocalServer',return_value=server), \
+                 patch.object(choice.sys,'argv',['choice']), \
+                 patch.dict(sys.modules,{'playwright.sync_api':fake_module}), \
+                 patch.object(choice,'open_workbench',side_effect=open_page):
+                with self.assertRaises(RuntimeError):
+                    choice.main()
+            row = json.loads((root/'browser-acceptance/browser-choice/results.json').read_bytes())
+        self.assertEqual(marks, ['frozen-before-close'])
+        self.assertEqual([r['outcome'] for r in row['workbench_readiness']], ['passed','failed'])
+        self.assertEqual(row['workbench_readiness'][1]['phase'], 'authenticated-counts')
+        self.assertNotIn(SECRET, json.dumps(row))
+        self.assertEqual(first.goto.call_count, 1)
+        self.assertEqual(second.goto.call_count, 1)
+        self.assertFalse(row['success'])
+        self.assertEqual(len(row['checks']), 1)
+
+
 if __name__ == '__main__':
     unittest.main()
