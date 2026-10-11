@@ -21,7 +21,7 @@ from .collection import writer_lock
 from .config import load_config
 from .guided.adapters import builtins
 from .guided.contracts import CrawlError
-from .guided import attempt_history, environment_history
+from .guided import attempt_history, environment_history, quota_cost
 from .html_parser import _unique_object
 from .models import JobRecord
 from .utils import atomic_json, parse_time, utc_now
@@ -221,11 +221,12 @@ class AcceptanceLedger:
         folder,plan = self._plan(ident)
         with writer_lock(folder):
             history,previous = self._history(folder,plan)
-            prior_attempts, prior_environments = {}, {}
+            prior_attempts, prior_environments, prior_costs = {}, {}, {}
             for observed in history:
                 for task in observed['tasks']:
                     prior_attempts[task['id']] = task.get(attempt_history.KEY)
                     prior_environments[task['id']] = task.get(environment_history.KEY)
+                    prior_costs[task['id']] = task.get(quota_cost.KEY)
             if len(history) >= MAX_CAPTURES: raise InputError('验收观测已达到上限。')
             paths = sorted(self._path('guided').glob('*.json'))
             paths = [p for p in paths if HEX32.fullmatch(p.stem)]
@@ -253,6 +254,8 @@ class AcceptanceLedger:
                     attempt_history.extends(prior_attempts.get(state['id']), attempts)
                     environments = environment_history.snapshot(state)
                     environment_history.extends(prior_environments.get(state['id']), environments)
+                    costs = quota_cost.snapshot(state)
+                    quota_cost.extends(prior_costs.get(state['id']), costs)
                 except CrawlError:
                     raise InputError('逐次采集历史损坏、缺失或已覆盖，未忽略早期失败。') from None
                 historical_selected = {i for selection in (attempts or {}).get('selections', []) for i in selection['items']}
@@ -262,6 +265,7 @@ class AcceptanceLedger:
                         report = self._report(state.get('report_id'))
                         report_hash = _hash(self._read(self._path('reports',state['report_id'],'run_manifest.json')))
                         environment_history.require_report(environments, report[1])
+                        quota_cost.require_report(costs, report[1])
                     except (InputError,OSError,ValueError,KeyError,TypeError,CrawlError): report_error='report_evidence_invalid'
                 items = []
                 for row in cards:
@@ -283,7 +287,7 @@ class AcceptanceLedger:
                 tasks.append({'id':state['id'],'created_at':state['created_at'],'status':state['status'],'code':state.get('code',''),
                     'source_sha256':_hash(_encoded(state)),'report_id':state.get('report_id',''),
                     'report_sha256':report_hash,'selected':len(selection),'items':items,
-                    attempt_history.KEY:attempts, environment_history.KEY:environments})
+                    attempt_history.KEY:attempts, environment_history.KEY:environments, quota_cost.KEY:costs})
             unknown = ['physical_network_route_not_observed','per_request_cost', 'search_login_and_http_attempts_not_recorded',
                        'human_identity_title_full_text_review']
             if not tasks:
@@ -312,7 +316,7 @@ class AcceptanceLedger:
         folder,plan = self._plan(ident)
         history,_ = self._history(folder,plan)
         latest,origins,previous_outcomes,unknown = {},{},Counter(),set()
-        attempts_by_task, environments_by_task = {}, {}
+        attempts_by_task, environments_by_task, costs_by_task = {}, {}, {}
         for capture in history:
             unknown.update(k for k in capture['unknown_evidence']
                            if k != 'unfinished_detail_attempts_have_unknown_outcome_and_duration')
@@ -327,10 +331,14 @@ class AcceptanceLedger:
                     environment = task.get(environment_history.KEY)
                     environment_history.validate({environment_history.KEY: environment, attempt_history.KEY: attempts})
                     environment_history.extends(environments_by_task.get(task['id']), environment)
+                    costs = task.get(quota_cost.KEY)
+                    quota_cost.validate({quota_cost.KEY: costs, attempt_history.KEY: attempts})
+                    quota_cost.extends(costs_by_task.get(task['id']), costs)
                 except CrawlError:
                     raise InputError('验收观测中的逐次历史缺失或改变，不能删除早期失败。') from None
                 attempts_by_task[task['id']] = attempts
                 environments_by_task[task['id']] = environment
+                costs_by_task[task['id']] = costs
                 unknown.update(environment_history.assessment(plan, environment, attempts)['gaps'])
                 for item in task['items']:
                     key = (task['id'],item['id'])
@@ -352,6 +360,7 @@ class AcceptanceLedger:
                 if report_id not in reports: reports[report_id] = self._report(report_id)
                 report = reports[report_id]
                 environment_history.require_report(task.get(environment_history.KEY), report[1])
+                quota_cost.require_report(task.get(quota_cost.KEY), report[1])
                 row = next(r for r in report[1]['items'] if r['id']==item['id'])
                 row = {**row,'title':report[2][item['record_id']].title}
                 checked = self._verified_item({'id':task['id'],'created_at':task['created_at'],
@@ -380,6 +389,7 @@ class AcceptanceLedger:
             'observed_completion_ratio':ratio,'statuses':dict(Counter(i['status'] for i in items)),
             'previous_observed_outcomes':dict(previous_outcomes),'gaps':gaps,
             'detail_attempts':attempt_history.summarize(attempts_by_task),
+            quota_cost.KEY:quota_cost.summarize(costs_by_task, attempts_by_task),
             'runtime_environments':{ident:environment_history.assessment(plan, environment, attempts_by_task[ident])
                                     for ident,environment in environments_by_task.items()},
             'scope':'本机观测的选中条目及历史变化；非全部 HTTP 尝试分母，不能据此自动认证或发布'}
