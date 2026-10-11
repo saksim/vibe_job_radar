@@ -31,3 +31,9 @@ schema v5 仅保存完整来源地址的 SHA256 与新的许可标识；不保�
 源码控制入口是 scripts/run_wpad_dns_source_control.py；它的证据明确标记非冻结、非产品资格。完整便携工作流使用 --verify-wpad-dns，在已配置系统 PAC 夹具恢复之后，对没有 Python PATH 的实际 exe 重复真实发现、schema v5 离线确认、PAC 检查和 schema v2 回退。独立记录 wpad_dns_verified 和结构化 wpad_dns；打包同时核对 DNS、请求归属、HTTP/DNS 子进程和精确 NRPT 清理证据，单一成功标志不足以生成候选。
 
 当前源码控制已取得一次[完整真实 DNS 与清理成功记录](https://github.com/saksim/vibe_job_radar/actions/runs/38108726199)。正式便携成功仍须看当前 PR/实际 main 的首次产物，源码控制不能替代冻结 exe。DHCP 服务器实际提供 PAC 地址、企业来源、换网以及个人设备现场仍待证据；本工作不关闭 #23/N6，也不证明三站账号登录、完整真实 JD 或旧 CI 故障根因。
+
+## DNS 测试端口与失败范围
+
+普通回环单测使用 port=0，让 UDP 和 TCP 分别申请临时端口。不能假设 UDP 获得的数字也允许 TCP 绑定；Windows 的两个协议可使用不同动态端口范围，见 [Winsock bind 文档](https://learn.microsoft.com/en-us/windows/win32/api/winsock/nf-winsock-bind)。两个 socket 都完成绑定和 TCP 监听准备后才启动服务线程；第二个绑定失败时关闭两个自有 socket，并原样报告错误。实际托管 WPAD 验收仍要求 UDP/TCP 均绑定 127.0.0.1:53，保留独占绑定，不更换端口、不重试或放宽系统权限。
+
+[PR #309 的实际 main 首次检查](https://github.com/saksim/vibe_job_radar/actions/runs/38121414200/job/114416743932)在该普通回环单测的 bind 处得到 WinError 10013。原日志没有记录是哪个传输协议、具体端口及占用者，因此这一修正只证明并消除跨协议复用临时端口的错误假设；不能反推当次 CI 的确切系统原因。回归测试用受控 TCP 拒绝复现旧缺陷，再通过真实 UDP/TCP DNS 报文验证新分配与资源关闭；固定 53 端口被拒绝仍严格失败。

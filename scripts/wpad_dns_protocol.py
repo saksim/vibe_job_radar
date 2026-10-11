@@ -156,18 +156,25 @@ class LoopbackDns:
     def __init__(self,names,*,port=53):
         self.names=frozenset(validate_names(names));self.stop=threading.Event()
         self.lock=threading.Lock();self.counts={};self.errors=0;self.closed=False
-        self.sockets=[];self.threads=[];self.port=port
+        self.sockets=[];self.threads=[];self.port=port;self.ports={}
 
     def start(self):
         try:
+            prepared=[]
             for transport,kind in (('udp',socket.SOCK_DGRAM),('tcp',socket.SOCK_STREAM)):
                 sock=socket.socket(socket.AF_INET,kind);self.sockets.append(sock)
                 if hasattr(socket,'SO_EXCLUSIVEADDRUSE'):
                     sock.setsockopt(socket.SOL_SOCKET,socket.SO_EXCLUSIVEADDRUSE,1)
                 sock.bind(('127.0.0.1',self.port))
-                if self.port==0:self.port=sock.getsockname()[1]
+                # A free UDP port is not necessarily free for TCP. Port zero
+                # asks each protocol to allocate its own ephemeral test port;
+                # the hosted WPAD fixture still requires both fixed port 53s.
+                self.ports[transport]=sock.getsockname()[1]
                 sock.settimeout(.2)
                 if kind==socket.SOCK_STREAM:sock.listen(4)
+                prepared.append((sock,transport))
+            # Do not serve a partial fixture when the second bind/listen fails.
+            for sock,transport in prepared:
                 thread=threading.Thread(target=self._serve,args=(sock,transport),daemon=True)
                 self.threads.append(thread);thread.start()
         except BaseException:
