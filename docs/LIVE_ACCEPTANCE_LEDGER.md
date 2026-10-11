@@ -83,4 +83,4 @@ runtime_environments 显示有记录的动作、已绑定及与计划源码/浏�
 
 运行环境比较中的网络模式只表示已绑定配置：direct/system对应system_route（未配置显式代理），static_http对应HTTP代理，static_socks5对应SOCKS5代理，包含明确的本机或VM宿主机入口。它不证明实际物理直连、VPN/TUN或逐请求PAC/绕过结果；声明unknown保持不可比较。某个字段未知时，其他已知源码、浏览器、适配器或网络差异仍分别报告，不把未知当成匹配。
 
-计划的浏览器版本为unknown时，不能将实际版本计为匹配。planner_os与实际系统家族及可比较的release核对；Linux计划在Windows运行或同系统release不同会列出差异。无法解析的声明、未声明版本，以及macOS营销版本与Darwin内核版本之间无法直接比较的情况保持缺口，不推定匹配。
+计划的浏览器版本为unknown时，不能将实际版本计为匹配。新CLI将planner_os保存为system/release，能直接与运行时核对，包含Darwin内核版本。旧planner_os仍与实际系统家族及可比较的release核对；Linux计划在Windows运行或同系统release不同会列出差异。无法解析的声明、未声明版本，以及macOS营销版本与Darwin内核版本之间无法直接比较的情况保持缺口，不推定匹配。

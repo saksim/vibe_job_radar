@@ -199,21 +199,33 @@ def require_report(current, audit):
 
 
 def _compare_os(declared, runtime):
-    # platform.platform() includes extra machine/build labels. Compare only
-    # fields also observed at runtime; macOS marketing versions cannot attest
-    # Darwin kernel releases.
-    label, _, suffix = str(declared).partition('-')
-    family = {'Windows': 'Windows', 'Linux': 'Linux',
-              'Darwin': 'Darwin', 'macOS': 'Darwin'}.get(label)
+    # New CLI plans use system/release. Older platform.platform() labels are
+    # retained; compare only fields that can be recovered unambiguously.
+    declared = str(declared)
+    if '/' in declared:
+        label, release = declared.split('/', 1)
+        family = label if label in {'Windows', 'Linux', 'Darwin'} else None
+    else:
+        label, _, suffix = declared.partition('-')
+        family = {'Windows': 'Windows', 'Linux': 'Linux',
+                  'Darwin': 'Darwin', 'macOS': 'Darwin'}.get(label)
+        release = None
+        if label in {'Windows', 'Darwin'}:
+            release = suffix.split('-', 1)[0]
+        elif label == 'Linux':
+            # Kernel releases may themselves contain hyphens. Do not accept
+            # a matching prefix as proof that different kernels are equal.
+            match = re.fullmatch(r'(.+?)-(?:x86_64|AMD64|aarch64|arm64|i[3-6]86|'
+                                 r'armv[5-8][a-z0-9]*|ppc64le|s390x|riscv64)(?:-.*)?', suffix)
+            release = match.group(1) if match else None
     if family is None:
         return None, 'planner_os_not_comparable'
     if runtime['os'] != 'unknown' and family != runtime['os']:
         return 'os', None
-    release = runtime['os_release']
-    if (label == 'macOS' or not suffix[:1].isdigit() or release == 'unknown'
+    if (not release or not release[:1].isdigit() or runtime['os_release'] == 'unknown'
             or runtime['os'] == 'unknown'):
         return None, 'os_release_not_comparable'
-    if suffix != release and not suffix.startswith(release + '-'):
+    if release != runtime['os_release']:
         return 'os_release', None
     return None, None
 

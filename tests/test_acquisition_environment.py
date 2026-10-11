@@ -288,6 +288,11 @@ class EnvironmentHistoryTests(unittest.TestCase):
               'browser_version':'157.0.1.0','platform':'liepin',
               'adapter_version':builtins().get('liepin').version,'network_mode':'system'}
         cases=(
+            ('Windows/11','Windows','11',None,None),
+            ('Darwin/25.0.0','Darwin','25.0.0',None,None),
+            ('Linux/6.8.0-64','Linux','6.8.0-64',None,None),
+            ('Linux/6.8.0-64-generic','Linux','6.8.0-64','os_release',None),
+            ('Linux-6.8.0-64-generic-x86_64-with-glibc2.39','Linux','6.8.0-64','os_release',None),
             ('Windows-11-10.0.26100-SP0','Windows','11',None,None),
             ('Windows-10-10.0.19045-SP0','Windows','11','os_release',None),
             ('Windows-110','Windows','11','os_release',None),
@@ -404,6 +409,8 @@ class AcceptanceCLISourceTests(unittest.TestCase):
             plans=list((root/'workspace/.radar-acceptance').glob('*/plan.json'))
             self.assertEqual(len(plans),1)
             self.assertEqual(json.loads(plans[0].read_bytes())['schema_version'],2)
+            import platform
+            self.assertEqual(json.loads(plans[0].read_bytes())['planner_os'],platform.system()+'/'+platform.release())
             dirty[0]=' M src/example.py'
             self.assertEqual(run(),1)
             dirty[0]=''

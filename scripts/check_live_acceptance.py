@@ -50,7 +50,7 @@ def main():
                 'backend':args.backend,'selection_rule':args.selection_rule,'timezone':args.timezone,
                 'source_revision':revision,'source_sha256':fingerprint(ROOT)['sha256'],
                 'source_content_sha256':content_identity(ROOT)['sha256'],
-                'browser':args.browser,'browser_version':args.browser_version,'planner_os':platform.platform(),
+                'browser':args.browser,'browser_version':args.browser_version,'planner_os':platform.system()+'/'+platform.release(),
                 'network_mode':args.network_mode,'consent':True})
             print(json.dumps({'plan_id':data['id'],'created_at':data['created_at'],
                 'message':'计划已在本机保存；尚未访问平台，环境为声明值，正式验收仍须实证。'},ensure_ascii=False))
