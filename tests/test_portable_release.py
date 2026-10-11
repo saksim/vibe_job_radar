@@ -5,6 +5,7 @@ import importlib.util
 import json
 from pathlib import Path
 import shutil
+import sys
 import tempfile
 import unittest
 import zipfile
@@ -16,7 +17,9 @@ SCRIPT = Path(__file__).resolve().parents[1]/'scripts/prepare_portable_release.p
 class PortableReleaseTests(unittest.TestCase):
     def setUp(self):
         spec=importlib.util.spec_from_file_location('release_fixture',SCRIPT)
-        self.mod=importlib.util.module_from_spec(spec);spec.loader.exec_module(self.mod)
+        self.mod=importlib.util.module_from_spec(spec)
+        with patch.object(sys,'path',[str(SCRIPT.parent),*sys.path]):
+            spec.loader.exec_module(self.mod)
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
         self.root=Path(self.temp.name);self.repo='example/research';self.sha='a'*40
         self.runs=[{'id':i,'run_attempt':1,'path':path,'head_sha':self.sha,
@@ -37,6 +40,11 @@ class PortableReleaseTests(unittest.TestCase):
         self.required_flags=('startup_registration_verified','startup_worker_verified',
                              'system_pac_verified','wpad_dns_verified','url_pac_worker_verified')
         self.proof.update({flag:True for flag in self.required_flags})
+        from test_native_component_portable import good_component
+        from test_url_pac_evidence import good_url_proof
+        from test_wpad_dns_evidence import good_evidence
+        self.proof.update(native_components={c:good_component(c) for c in ('bundled','chrome')},
+                          url_pac=good_url_proof(),wpad_dns=good_evidence())
         self.artifacts={name:{'id':i,'digest':None} for i,name in enumerate(self.mod.ARTIFACTS,200)}
         self.package,self.manifest=self.archive()
 
@@ -254,6 +262,23 @@ class PortableReleaseTests(unittest.TestCase):
                         result=self.mod.prepare(self.repo,self.run['id'],output,True)
                         self.assertIn('draft_url',result)
                 self.assertEqual(pages,[1,2])
+
+
+    def test_green_flags_cannot_replace_nested_runtime_acceptance(self):
+        for key in ('native_components','url_pac','wpad_dns'):
+            for defect in ('missing','malformed','failed'):
+                with self.subTest(key=key,defect=defect):
+                    original=copy.deepcopy(self.proof)
+                    if defect=='missing':self.proof.pop(key)
+                    elif defect=='malformed':self.proof[key]={'success':True}
+                    elif key=='native_components':
+                        self.proof[key]['chrome']['cleanup']['bridge_exited']=False
+                    elif key=='url_pac':self.proof[key]['calendar_invalid_rejected']=False
+                    else:self.proof[key]['fixture']['nrpt_cleanup']['restored']=False
+                    package,manifest=self.archive()
+                    with self.assertRaisesRegex(ValueError,'acceptance details'):
+                        self.mod.validate_candidate(package,manifest,self.evidence,self.sha)
+                    self.proof=original
 
 
 if __name__=='__main__':

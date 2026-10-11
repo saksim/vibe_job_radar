@@ -14,6 +14,10 @@ import shutil
 import subprocess
 import zipfile
 
+from build_windows_portable import native_components_valid
+from url_pac_acceptance import valid_evidence as valid_url_pac
+from wpad_dns_evidence import valid_wpad_dns_evidence
+
 WORKFLOWS = {
     '.github/workflows/tests.yml', '.github/workflows/browser.yml',
     '.github/workflows/browser-choice.yml', '.github/workflows/browser-health.yml',
@@ -160,6 +164,11 @@ def validate_candidate(candidate, manifest, source_evidence, sha):
             'Executable qualification failed or omitted bundled browser/runtime binding')
     require(all(proof.get(flag) is True for flag in REQUIRED_PORTABLE_FLAGS),
             'Executable lacks required Windows acceptance evidence')
+    # Use the same structured acceptance gates as the current producer.
+    require(native_components_valid(proof.get('native_components'))
+            and valid_url_pac(proof.get('url_pac'))
+            and valid_wpad_dns_evidence(proof.get('wpad_dns')),
+            'Executable acceptance details are missing or invalid')
     require(runtime.get('executable_sha256') == proof.get('files', {}).get('VibeJobRadar.exe')
             and isinstance(runtime.get('executable_sha256'), str)
             and HEX.fullmatch(runtime['executable_sha256']), 'Executable evidence mismatch')
