@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 import os
 from pathlib import Path
 import sys
@@ -30,6 +30,39 @@ from vibe_job_radar.network_policy import current_policy
 from vibe_job_radar.network import USER_AGENT
 from vibe_job_radar.network_settings import save as save_settings
 from vibe_job_radar.workspace import Workspace
+
+
+def stop_retained_task(service, ident, wait):
+    service.action({'id':ident, 'action':'stop'})
+    stopped = wait(service)
+    view = service.state()
+    if (stopped['status'] != 'stopped' or view['busy'] or view['closure_uncertain']
+            or service._backends or service._ownership.lease is not None):
+        raise AssertionError('policy fixture did not finish its owned browser stop')
+    return stopped
+
+
+@contextmanager
+def record_after_cleanup(result, fixture, original_get, out):
+    """A passed business assertion cannot hide a failed fixture teardown."""
+    result['success'] = False
+    completed = False
+    try:
+        yield
+        completed = True
+    except BaseException as exc:
+        result['error_type'] = type(exc).__name__
+        raise
+    finally:
+        try:
+            fixture.origin.RequestHandlerClass.do_GET = original_get
+            fixture.tearDown()
+            result['success'] = completed
+        except BaseException as exc:
+            result['cleanup_error_type'] = type(exc).__name__
+            raise
+        finally:
+            (out/'results.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
 
 
 def main():
@@ -112,7 +145,7 @@ def main():
     elif os.environ.get('RADAR_TEST_CHROMIUM'): options['executable_path'] = os.environ['RADAR_TEST_CHROMIUM']
     adapter = DOMAdapter('fixture','人工策略验收',(HOST,),f'https://{HOST}/search','q',
         r'^/job/[0-9]+$', f'https://{HOST}/login', (HOST,))
-    try:
+    with record_after_cleanup(result, fixture, original_get, out):
         with tempfile.TemporaryDirectory() as folder, ExitStack() as cleanup:
             root = Path(folder)
             def make(name,consent):
@@ -166,13 +199,25 @@ def main():
                 assert before==(len(fixture.posts),len(fixture.targets))
                 assert workspace.report(task['report_id'])['id']==task['report_id']
                 result['checks'].append('revoked permission stops an existing bound session before any further DoH/target exchange and preserves the earlier report')
-                service.action({'id':task['id'],'action':'stop'});wait(service)
+                stop_retained_task(service, task['id'], wait)
                 _, other = make('not-consented',False)
                 before = (len(fixture.posts),len(fixture.targets))
                 other.create(query); denied = wait(other)
                 assert denied['code']=='non_public_address',denied['code']
                 assert before==(len(fixture.posts),len(fixture.targets))
                 result['checks'].append('separate non-consenting workspace never borrows consent, cache or network settings from the successful workspace')
+                rates = other.ledger.summary('fixture')
+                report_before = {p.relative_to(workspace.root/'reports'):p.read_bytes()
+                    for p in (workspace.root/'reports').rglob('*') if p.is_file()}
+                stop_retained_task(other, denied['id'], wait)
+                assert rates == other.ledger.summary('fixture')
+                assert before == (len(fixture.posts),len(fixture.targets))
+                assert report_before == {p.relative_to(workspace.root/'reports'):p.read_bytes()
+                    for p in (workspace.root/'reports').rglob('*') if p.is_file()}
+                result['cleanup'] = {'explicitly_stopped_tasks':2, 'retained_backends':0,
+                    'ownership_released':True, 'quota_preserved':True,
+                    'prior_report_preserved':True, 'additional_requests':0}
+                result['checks'].append('both retained browsers finish explicit stop before workspace deletion; denied-task quota, previous report and request counts are preserved')
                 assert set(fixture.sni)=={'cloudflare-dns.com',HOST}
                 assert result['stylesheet_rendered']
                 assert result['header_checks']
@@ -181,12 +226,7 @@ def main():
                 result['checks'].append('robots, CSS, document, script, data and detail each arrive with one explicit crawler User-Agent and one identity encoding; stylesheet actually renders')
                 assert not result['page_errors']
                 result['tls_requests']={'doh_posts':len(fixture.posts),'target_requests':len(fixture.targets)}
-                result['success']=True
             fixture.perform(exercise)
-    finally:
-        fixture.origin.RequestHandlerClass.do_GET = original_get
-        fixture.tearDown()
-        (out/'results.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
     print(json.dumps(result,ensure_ascii=True,indent=2))
 
 if __name__=='__main__':main()
