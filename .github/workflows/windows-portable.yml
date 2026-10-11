@@ -1,34 +1,27 @@
 name: windows-portable-candidate
-run-name: WPAD owned HTTP namespace control
+run-name: WPAD actual DNS source control
 on:
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
-  wpad-host-preflight:
+  wpad-dns-source-control:
     runs-on: windows-latest
-    timeout-minutes: 5
+    timeout-minutes: 6
+    env:
+      PYTHONUTF8: '1'
     steps:
       - uses: actions/checkout@v4
-      - name: Observe hosted Windows WPAD prerequisites without discovery or configuration changes
-        shell: pwsh
-        run: ./scripts/wpad_host_preflight.ps1 -OutputPath ./release-verification/wpad-host-preflight.json
-      - name: Exercise and release a uniquely named owned HTTP namespace without changing existing services
-        shell: pwsh
-        run: ./scripts/wpad_http_namespace_probe.ps1 -OutputPath ./release-verification/wpad-http-namespace.json
-      - name: Preserve bounded read-only host observation
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Exercise real DNS WPAD through application API
+        run: python scripts/run_wpad_dns_source_control.py
+      - name: Preserve bounded source control and restoration evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: windows-wpad-host-preflight
+          name: windows-wpad-dns-source-control
           retention-days: 7
           if-no-files-found: error
-          path: release-verification/wpad-host-preflight.json
-      - name: Preserve owned HTTP namespace control
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-wpad-http-namespace
-          retention-days: 7
-          if-no-files-found: error
-          path: release-verification/wpad-http-namespace.json
+          path: release-verification/wpad-dns-source-control/result.json
