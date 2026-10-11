@@ -18,7 +18,7 @@
 
 **路径和查询参数可能包含搜索词或敏感值。** 仅导入自己信任的脚本。本模式不传 Cookie、请求头、正文或个人材料，也不把网址原文放入选路缓存、公开状态或错误信息。它不是面向恶意原生引擎漏洞的安全沙箱。
 
-独立进程中的 JavaScript 环境只额外提供五个字符串助手：
+独立进程中的 JavaScript 环境提供五个字符串助手：
 
 - `isPlainHostName`
 - `dnsDomainIs`
@@ -26,7 +26,23 @@
 - `dnsDomainLevels`
 - `shExpMatch`，其中 `*` 和 `?` 为通配符
 
-没有 Python 回调、网络、文件、DNS 或本机地址接口。`dnsResolve`、`isInNet`、`myIpAddress`、日期/时间 PAC 助手及其他扩展未实现；调用会停止选路，不能把它当作支持所有 PAC 脚本的通用引擎。脚本自己的时间或随机行为在同一会话中仍被首次结果缓存约束。
+另提供 `weekdayRange`、`dateRange`、`timeRange` 三个纯日期时间助手，读取引擎的本地时间；末尾的 `"GMT"` 改用 UTC。每次调用只读取一个时刻，比较精度取决于传入的参数，首尾均包含：
+
+| 助手 | 支持的参数（末尾均可加 `"GMT"`） |
+|---|---|
+| `weekdayRange` | 一个星期名，或起止星期名；使用 `SUN` 至 `SAT` |
+| `dateRange` | 单个日/月/年；同类的两个值；`日,月,日,月`；`月,年,月,年`；`日,月,年,日,月,年` |
+| `timeRange` | 一个小时；起止小时；`时,分,时,分`；`时,分,秒,时,分,秒` |
+
+月份使用大写 `JAN` 至 `DEC`。数值须为整数：日1—31、年份32—9999、小时0—23、分/秒0—59。实际月日组合必须有效；不带年份的2月29日作为每年模式，仅在真正的闰日匹配。
+
+周期范围逆序时跨越周期边界，例如 `weekdayRange("FRI","MON")` 包含周末，`timeRange(23,1)` 包含午夜。带年份的绝对范围必须从早到晚。结束小时包含该小时的全部时间，结束分钟/秒同理；例如 `timeRange(12,13)` 包含13点这一整小时。混合的两个日期参数（例如日+月）、无效日期、非法个数/类型和倒序绝对日期会停止脚本，不猜测含义。
+
+这些是本项目明确支持的规则。参考 [PAC接口说明](https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Proxy_servers_and_tunneling/Proxy_Auto-Configuration_PAC_file)和[Chromium实现](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/services/proxy_resolver/pac_js_library.h)时，须注意旧浏览器对逆序小时、容错转换和结束精度存在差异；不承诺所有浏览器的历史行为一致。
+
+**时间函数仍受会话缓存约束。** 每个规范网址在当前会话仅采用首次求值结果，跨过时段边界不会自动重新选路。需要按新时刻重新求值时，停止并新开会话；旧会话不会因升级而重新发送请求。
+
+没有 Python 回调、网络、文件、DNS 或本机地址接口。`dnsResolve`、`isInNet`、`myIpAddress`及其他扩展未实现；调用会停止选路，不能把它当作支持所有 PAC 脚本的通用引擎。新增助手只组合本来可用的 JavaScript 日期能力，许可的数据范围、原授权标识和会话缓存保持。
 
 返回值沿用原严格规则：最多96个ASCII字符、至多4项，完整校验每项，只使用第一项。支持 DIRECT、匿名本机 PROXY、明确的匿名本机 SOCKS5；不支持认证、远程代理、宿主机地址、socks5h 或模糊的 SOCKS。连接失败不继续下一项或直连。
 

@@ -266,3 +266,30 @@ class UrlPacTests(unittest.TestCase):
         self.assertEqual(first['policy'],'pac_url_scope')
         self.assertNotIn('ONE',json.dumps(trace.snapshot()))
         dial.assert_not_called()
+
+
+    def test_actual_calendar_worker_keeps_host_io_absent_and_invalid_calls_fail(self):
+        if not pac_url_worker.available():
+            with self.assertRaisesRegex(LocalProxyError,'pac_url_unavailable'):
+                pac_url_worker.evaluate(SCRIPT,URL,HOST,lambda:True)
+            return
+        before={c.pid for c in multiprocessing.active_children()}
+        source="""const OriginalDate = Date;
+            Date = function(){ return new OriginalDate('2024-02-29T00:00:05.000Z'); };
+            function FindProxyForURL(url,host) {
+                if (!weekdayRange('THU','GMT') || weekdayRange('FRI','MON','GMT') ||
+                    !dateRange(29,'FEB',29,'FEB','GMT') || dateRange('MAR','GMT') ||
+                    !timeRange(23,1,'GMT') || timeRange(1,2,'GMT') ||
+                    typeof dnsResolve!=='undefined' || typeof fetch!=='undefined')
+                    throw new Error('calendar control');
+                return 'PROXY 127.0.0.1:19081';
+            }"""
+        self.assertEqual(pac_url_worker.evaluate(source,URL,HOST,lambda:True),
+                         'PROXY 127.0.0.1:19081')
+        for invalid in ("weekdayRange('PRIVATE-ONE')", "dateRange(31,'APR',31,'APR')",
+                        "timeRange(24)"):
+            with self.assertRaisesRegex(LocalProxyError,'pac_invalid_script') as caught:
+                pac_url_worker.evaluate('function FindProxyForURL(url,host){'+invalid+
+                                       '; return "DIRECT";}',URL,HOST,lambda:True)
+            self.assertNotIn('ONE',str(caught.exception))
+        self.assertEqual({c.pid for c in multiprocessing.active_children()},before)

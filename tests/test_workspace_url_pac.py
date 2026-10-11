@@ -177,3 +177,49 @@ class WorkspaceUrlPacTests(unittest.TestCase):
                 self.assertEqual(first['code'],'pac_url_native_unsupported')
                 self.assertIs(first['local_block'],True)
                 self.assertEqual(first['policy'],'pac_url_native_scope')
+
+
+    def test_actual_calendar_app_proof_keeps_checks_offline_and_rolls_back(self):
+        if not pac_url_worker.available(): return
+        import socket
+        import importlib.util
+        from pathlib import Path
+        script=Path(__file__).resolve().parents[1]/'scripts/url_pac_acceptance.py'
+        spec=importlib.util.spec_from_file_location('calendar_app_acceptance',script)
+        acceptance=importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(acceptance)
+        server=LocalServer(self.workspace,public_client=None)
+        self.addCleanup(server.server_close)
+        thread=threading.Thread(target=server.serve_forever,
+                                kwargs={'poll_interval':.01},daemon=True)
+        thread.start()
+        self.addCleanup(thread.join,5)
+        self.addCleanup(server.shutdown)
+        outer=self
+        class App:
+            def json(self,path,data=None):
+                connection=http.client.HTTPConnection(server.authority,timeout=15)
+                try:
+                    headers={'X-Radar-Token':server.token,'Origin':server.origin,
+                             'Content-Type':'application/json'}
+                    connection.request('GET' if data is None else 'POST',path,
+                                       None if data is None else json.dumps(data),headers)
+                    response=connection.getresponse()
+                    outer.assertEqual(response.status,200)
+                    return json.loads(response.read())
+                finally:connection.close()
+        original_connect=socket.socket.connect
+        destinations=[]
+        def only_owned_api(sock,address):
+            outer.assertEqual(address,('127.0.0.1',server.server_port))
+            destinations.append(address)
+            return original_connect(sock,address)
+        with patch('socket.socket.connect',only_owned_api):
+            proof=acceptance.verify_app(App())
+        self.assertTrue(acceptance.valid_evidence(proof,require_frozen=False))
+        self.assertTrue(proof['calendar_helpers_checked'])
+        self.assertTrue(proof['calendar_invalid_rejected'])
+        self.assertFalse(proof['frozen_executable'])
+        self.assertEqual(proof['target_request_evidence'],'api-check-response-flags')
+        self.assertTrue(destinations)
+        self.assertEqual(self.workspace.network_state()['proxy_mode'],'auto')
