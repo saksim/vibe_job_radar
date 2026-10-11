@@ -123,6 +123,9 @@ class NavigationPage(BlankPage):
         if self.mode == 'unavailable':
             raise RuntimeError('PRIVATE_URL_ERROR')
         return self.location
+    def wait_for_load_state(self, state, **options):
+        self.calls.append(('continued_dom', {'state':state, **options}))
+        raise TimeoutError('authored committed page still has no DOM readiness')
     def emit_navigation(self, frame):
         if 'framenavigated' in self.events:
             self.events['framenavigated'](frame)
@@ -160,7 +163,14 @@ class BlankNavigationObservationTests(unittest.TestCase):
         self.assertEqual(closed, [True])
         self.assertEqual(page.calls[0],
             ('content', {'wait_until':'domcontentloaded','timeout':6000}))
-        self.assertEqual(len(page.calls), 2 if mode == 'success' else 1)
+        self.assertEqual(len(page.calls), 2 if mode in {'success','committed'} else 1)
+        self.assertEqual(sum(name=='content' for name,_ in page.calls),1)
+        if mode=='committed':
+            self.assertEqual(page.calls[1][0],'continued_dom')
+            self.assertEqual(page.calls[1][1]['state'],'domcontentloaded')
+            self.assertGreater(page.calls[1][1]['timeout'],0)
+            self.assertLessEqual(page.calls[1][1]['timeout'],15000)
+            self.assertTrue(report['blank_page_check']['initial_readiness_timeout'])
         self.assertNotIn('PRIVATE', json.dumps(report))
         return report
 
