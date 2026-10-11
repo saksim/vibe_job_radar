@@ -48,7 +48,7 @@ BOSS、猎聘、51job 的浏览器采集仍需逐站现场验收，不能因入�
 
 ### 本地优先与网络支持
 
-登录态、简历、本人证据和私人报告默认留本地，生产 Linux 部署后置。已合并的匿名本机 HTTP/SOCKS5 静态策略和明确同意的 198.18/15 加密解析保留；PR76已合入[显式本机代理认证](docs/LOCAL_PROXY_AUTH.md)，高级采集与CLI也已由PR66接入工作区策略。#109增加默认关闭的[Windows本地PAC导入](docs/WINDOWS_DOMAIN_PAC.md)，#135另接入[确认后使用系统已配置PAC地址](docs/WINDOWS_SYSTEM_PAC.md)，每个新会话读取一次并冻结，默认与状态读取不下载；按域名保留明确的原始选路，失败不推进至直连。其他剩余网络范围见 [网络状态](docs/NETWORK_COMPATIBILITY_STATUS.md)。不要关闭 TLS 校验或删除配额库来制造成功。
+登录态、简历、本人证据和私人报告默认留本地，生产 Linux 部署后置。已合并的匿名本机 HTTP/SOCKS5 静态策略和明确同意的 198.18/15 加密解析保留；PR76已合入[显式本机代理认证](docs/LOCAL_PROXY_AUTH.md)，高级采集与CLI也已由PR66接入工作区策略。#109增加默认关闭的[Windows本地PAC导入](docs/WINDOWS_DOMAIN_PAC.md)，#135另接入[确认后使用系统已配置PAC地址](docs/WINDOWS_SYSTEM_PAC.md)，每个新会话读取一次并冻结，默认与状态读取不下载；按域名保留明确的原始选路，失败不推进至直连。另有默认关闭的[Windows WPAD发现与来源确认](docs/WINDOWS_WPAD.md)，发现许可与脚本信任分别确认；当前提交的真实DNS和便携程序验收须核对CI证据。其他剩余网络范围见 [网络状态](docs/NETWORK_COMPATIBILITY_STATUS.md)。不要关闭 TLS 校验或删除配额库来制造成功。
 
 可单独选择[公共域名加密解析](docs/PUBLIC_DNS.md)：目标域名不先依赖本机 DNS，解析沿原选路线，目标仍须通过公网地址和 TLS 校验。默认关闭、单独同意；原有仅修复映射地址的授权不会自动扩大。
 

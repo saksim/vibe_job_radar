@@ -95,6 +95,20 @@ class PortablePackagingTests(unittest.TestCase):
                 self.builder.build(self.root/'out',self.root/'source.json',verify_system_pac=True)
             build.assert_not_called()
 
+    def test_wpad_runtime_flag_alone_never_qualifies_a_frozen_bundle(self):
+        from test_native_component_portable import good_component
+        from test_wpad_dns_evidence import good_evidence
+        proof={'success':True,'verified_browser':'bundled','files':self.builder.inventory(self.bundle),
+               'native_components':{c:good_component(c) for c in ['bundled','chrome']},
+               'wpad_dns_verified':True}
+        with self.assertRaises(ValueError):
+            self.builder.validate_runtime_evidence(self.bundle,proof,require_wpad_dns=True)
+        proof['wpad_dns']=good_evidence()
+        self.builder.validate_runtime_evidence(self.bundle,proof,require_wpad_dns=True)
+        proof['wpad_dns']['fixture']['nrpt_cleanup']['restored']=False
+        with self.assertRaises(ValueError):
+            self.builder.validate_runtime_evidence(self.bundle,proof,require_wpad_dns=True)
+
     def test_archive_must_retain_exact_verified_file_names_and_bytes(self):
         expected=self.builder.inventory(self.bundle);path=self.root/'payload.zip'
         with zipfile.ZipFile(path,'w') as archive:

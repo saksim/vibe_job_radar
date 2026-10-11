@@ -4,7 +4,7 @@ import re
 import traceback
 
 SCRIPTS = Path(__file__).resolve().parent
-ALLOWED = frozenset({'verify_windows_portable.py', 'system_pac_acceptance.py'})
+ALLOWED = frozenset({'verify_windows_portable.py', 'system_pac_acceptance.py', 'wpad_dns_acceptance.py', 'wpad_dns_protocol.py'})
 
 
 def failure_frames(error):
