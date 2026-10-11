@@ -64,6 +64,8 @@ class PinnedTransport:
         self.robots = {}
         self.blocked = set()
         self.retry_until = {}
+        self.quota_reservations = {'request': 0, 'page': 0}
+        self.quota_uncertain = 0
 
     def bind_policy(self, policy: NetworkPolicy) -> None:
         """Bind on the session owner's context, before Playwright starts callbacks.
@@ -79,11 +81,28 @@ class PinnedTransport:
         self.network_policy = policy
         policy.bind_cancellation(self.cancelled)
 
+    def _record_reservation(self, kind):
+        counts = getattr(self, 'quota_reservations', None)
+        if isinstance(counts, dict) and type(counts.get(kind)) is int:
+            counts[kind] += 1
+
+    def _reserve_once(self, kind, *, origin=None):
+        try:
+            self.ledger.reserve(self.adapter.key, kind, origin=origin)
+        except RateLimit:
+            raise
+        except Exception:
+            uncertain = getattr(self, 'quota_uncertain', None)
+            if type(uncertain) is int:
+                self.quota_uncertain = uncertain + 1
+            raise
+        self._record_reservation(kind)
+
     def reserve(self, kind: str, *, origin=None) -> None:
         deadline = time.monotonic() + self.max_inline_wait
         while not self.cancelled.is_set():
             try:
-                self.ledger.reserve(self.adapter.key, kind, origin=origin)
+                self._reserve_once(kind, origin=origin)
                 return
             except RateLimit as exc:
                 if exc.code not in {'rate_wait', 'publisher_wait'} or exc.wait > deadline-time.monotonic():

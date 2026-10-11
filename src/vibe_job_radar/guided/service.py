@@ -49,7 +49,7 @@ from .read_retry import (TransientReadFailure, budget as retry_budget, retry_del
                          retry_after_seconds, action_for as retry_action_for)
 from .transport import diagnose_host
 from .diagnostic_trace import DiagnosticTrace, traced, observe, notify
-from . import attempt_history, environment_history
+from . import attempt_history, environment_history, quota_cost
 from .. import runtime_identity
 from .browser_health import (BrowserStartupError, HEALTH_MESSAGES, environment_report,
                              failed_report, probe_browser, safe_text, package_version)
@@ -59,6 +59,7 @@ from .ownership import Ownership, owned_action, checkpoint_lock, MESSAGE as OWNE
 from .. import tls_context
 
 MESSAGES = {
+    'quota_cost_invalid': '采集成本记录损坏或与逐次历史不一致，原记录保留，请使用兼容版本或恢复备份。',
     'environment_history_invalid': '采集环境记录损坏或与逐次历史不一致，已停止；原记录保留，请使用兼容版本或恢复备份。',
     'environment_history_limit': '本任务的采集环境记录已达上限，未开始新访问；已有结果和历史保留。',
     'attempt_history_invalid': '逐次采集记录损坏或不兼容，已停止；请恢复工作区备份，不会清空失败历史后重试。',
@@ -270,6 +271,7 @@ class GuidedService:
             before = state.get('updated_at')
             state['updated_at'] = utc_now()
             environment_history.checkpoint(state, before, state['updated_at'])
+            quota_cost.checkpoint(state, before, state['updated_at'])
             if attempt_history.KEY in state:
                 state[attempt_history.KEY]['checkpoint_at'] = state['updated_at']
             with writer_lock(self.workspace.root):
@@ -421,6 +423,7 @@ class GuidedService:
             state.update(query_scope_version=1, cursors_seen=[])
         state[attempt_history.KEY] = attempt_history.new_history(checkpoint_at=state['updated_at'])
         state[environment_history.KEY] = environment_history.new_history(checkpoint_at=state['updated_at'])
+        state[quota_cost.KEY] = quota_cost.new_history(checkpoint_at=state['updated_at'])
         state['execution_binding'] = checkpoint_binding(state, adapter)
         with self._lock:
             if self._busy:
@@ -1057,6 +1060,7 @@ class GuidedService:
                 from_current = returned_detail is not None and row['id'] == returned_detail[0]
                 attempt = attempt_history.begin(state, row['id'], returned=from_current)
                 environment_history.bind_attempt(state, attempt['sequence'], environment_observation)
+                cost_before = quota_cost.begin(state, attempt, backend)
                 row['status'] = 'opening'
                 self._save(state)
                 started = attempt_history.monotonic()
@@ -1100,16 +1104,19 @@ class GuidedService:
                 except CrawlError as exc:
                     row['status'] = exc.code
                     attempt_history.finish(attempt, started, error=exc)
+                    quota_cost.finish(state, attempt, cost_before, backend)
                     self._save(state)
                     if exc.code not in {'structure_changed','not_job_url','invalid_job_data','job_identity_mismatch','jd_incomplete','job_unavailable'}:
                         raise
                 except Exception as exc:
                     row['status'] = 'operation_error'
                     attempt_history.finish(attempt, started, error=exc)
+                    quota_cost.finish(state, attempt, cost_before, backend)
                     self._save(state)
                     raise
                 else:
                     attempt_history.finish(attempt, started, record_id=record.record_id)
+                    quota_cost.finish(state, attempt, cost_before, backend)
                 self._save(state)
         finally:
             # Keep a usable batch report even if a later selected job blocks.
@@ -1209,6 +1216,7 @@ class GuidedService:
                      'identity_strategy': state.get('identity_strategy', 'observed_url_v1'),
                      'detail_attempt_history': attempt_history.snapshot(state),
                      environment_history.KEY: environment_history.snapshot(state),
+                     quota_cost.KEY: quota_cost.snapshot(state),
                      'outcome': outcome, 'items': audit_items(state, analysis)}
             audit_path = report_root/'guided_acquisition.json'
             atomic_json(audit_path, audit)

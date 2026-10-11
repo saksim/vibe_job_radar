@@ -53,7 +53,7 @@ class NativeControl(PinnedTransport):
     def reserve_request_nowait(self, *, origin):
         if self.cancelled.is_set():
             raise CrawlError('paused')
-        self.ledger.reserve(self.adapter.key, 'request', origin=origin)
+        self._reserve_once('request', origin=origin)
 
 
     def ensure_robots(self, url):
