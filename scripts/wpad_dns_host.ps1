@@ -72,7 +72,7 @@ try {
             $wpadRows=@(Get-DnsClientNrptRule -ErrorAction Stop | Where-Object { $_.Name -ceq $wpadInput.id })
             if ($wpadRows.Count -ne 1) { throw 'owned_rule_identity_missing' }
             Assert-WpadOwnedRule $wpadRows[0] $wpadInput
-            Remove-DnsClientNrptRule -Name $wpadInput.id -Confirm:$false -ErrorAction Stop
+            Remove-DnsClientNrptRule -Name $wpadInput.id -Force -Confirm:$false -ErrorAction Stop
             $wpadResult=@{removed=$true}
         }
     }

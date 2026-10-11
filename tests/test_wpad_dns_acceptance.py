@@ -85,6 +85,15 @@ class DnsProtocolTests(unittest.TestCase):
 
 
 class OwnershipTests(unittest.TestCase):
+    def test_cleanup_failure_retains_only_finite_action_and_source_location(self):
+        error=RuntimeError('SECRET raw host failure')
+        error.detail={'code':'host_operation_failed','line':77,'message':'SECRET','id':'SECRET'}
+        self.assertEqual(protocol.cleanup_error_facts('remove',error),
+                         {'action':'remove','code':'host_operation_failed','line':77})
+        error.detail={'code':'SECRET','line':True}
+        self.assertEqual(protocol.cleanup_error_facts('rules',error),
+                         {'action':'rules','code':'cleanup_operation_failed'})
+
     def test_malformed_rule_values_never_authorize_delete_or_break_finite_diagnostics(self):
         rows=[rule(Name=['SECRET']),rule(Namespace=[1,'SECRET']),None,rule(Comment='SECRET')]*3
         facts=protocol.rule_facts(rows,TAG,NAMES,set())
@@ -180,5 +189,65 @@ class OwnershipTests(unittest.TestCase):
             fixture=acceptance.DnsWpadFixture(lambda *a:None)
             with self.assertRaises(RuntimeError):fixture.__enter__()
         self.assertTrue(fixture.closed);self.assertEqual(calls,['lease','component','component'])
+
+
+class ApiGateTests(unittest.TestCase):
+    def case(self,*,dns=True,source=True,implicit_fetch=False,owner='workbench',target=False):
+        from types import SimpleNamespace
+        counts={};requests=[0];calls=[]
+        fixture=SimpleNamespace(
+            dns=SimpleNamespace(snapshot=lambda:{'queries':dict(counts)}),
+            http=SimpleNamespace(snapshot=lambda:{'requests':requests[0]}),
+            expected_ids=lambda:{'a'*64})
+        trace=SimpleNamespace(stage=lambda name:None,snapshot=lambda:{
+            'requests_observed':requests[0],'events_dropped':0,'root_registration_failures':0,
+            'events':[{'connection_owner_scope':owner,'declared_client':'project_pac'}]})
+        state={'proxy_mode':'auto','schema_version':2,'revision':0,
+               'wpad':{'discovery_running':False,'code':'wpad_not_discovered'}}
+        def call(path,data=None):
+            calls.append(path)
+            if path=='/api/network/state':return copy.deepcopy(state)
+            if path=='/api/network/wpad/discover':
+                if dns:counts['udp_owned_a']=1
+                if implicit_fetch:requests[0]+=1
+                state['wpad']={'discovery_running':False,'code':'wpad_source_ready',
+                               'config_id':('a' if source else 'b')*64,'candidate':'c'*32}
+                return copy.deepcopy(state)
+            if path=='/api/network/wpad':
+                state.update(schema_version=5,proxy_mode='wpad',revision=1)
+                return copy.deepcopy(state)
+            if path=='/api/network/pac/check':
+                requests[0]+=1
+                return {'passed':True,'transport':'loopback_socks5_proxy',
+                        'target_requested':target,'code':'pac_evaluated'}
+            if path=='/api/network/proxy':
+                state.update(schema_version=2,proxy_mode='auto',revision=2)
+                return copy.deepcopy(state)
+            raise AssertionError('unexpected fixture API')
+        return SimpleNamespace(json=call),fixture,trace,calls
+
+    def test_unobserved_dns_or_foreign_source_never_reaches_trust_or_download(self):
+        for options in ({'dns':False},{'source':False},{'implicit_fetch':True}):
+            with self.subTest(options=options):
+                app,fixture,trace,calls=self.case(**options);evidence={}
+                with self.assertRaises(AssertionError):acceptance.verify_app(app,fixture,trace,evidence)
+                self.assertFalse(evidence['success'])
+                self.assertNotIn('/api/network/wpad',calls)
+                self.assertNotIn('/api/network/pac/check',calls)
+
+    def test_unknown_request_owner_or_target_connection_cannot_qualify(self):
+        for options in ({'owner':'unknown'},{'owner':'other_process'},{'target':True}):
+            with self.subTest(options=options):
+                app,fixture,trace,calls=self.case(**options);evidence={}
+                with self.assertRaises(AssertionError):acceptance.verify_app(app,fixture,trace,evidence)
+                self.assertFalse(evidence['success']);self.assertFalse(evidence['rolled_back'])
+
+    def test_known_fixture_flow_requires_both_permissions_and_rollback(self):
+        app,fixture,trace,calls=self.case();evidence={}
+        acceptance.verify_app(app,fixture,trace,evidence)
+        self.assertTrue(evidence['success']);self.assertTrue(evidence['rolled_back'])
+        self.assertLess(calls.index('/api/network/wpad/discover'),calls.index('/api/network/wpad'))
+        self.assertLess(calls.index('/api/network/wpad'),calls.index('/api/network/pac/check'))
+        self.assertEqual(calls[-1],'/api/network/proxy')
 
 if __name__=='__main__':unittest.main(verbosity=2)

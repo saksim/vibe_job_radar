@@ -57,6 +57,16 @@ def rule_facts(rows,tag,names,original_ids):
         if isinstance(r,dict) else {'mapping':False} for r in rows[:8]]}
 
 
+def cleanup_error_facts(action,error):
+    facts={'action':action,'code':'cleanup_operation_failed'}
+    detail=getattr(error,'detail',None)
+    if isinstance(detail,dict):
+        if detail.get('code') in ('host_operation_failed','host_operation_transport_failed'):
+            facts['code']=detail['code']
+        if type(detail.get('line')) is int and 0<detail['line']<2000:facts['line']=detail['line']
+    return facts
+
+
 class NrptLease:
     def __init__(self, operation, tag, names, before):
         self.operation=operation
@@ -65,7 +75,7 @@ class NrptLease:
         # This fixture deliberately supports only the observed policy-free
         # ephemeral host, never adapting an existing enterprise NRPT policy.
         if before:raise ValueError('existing NRPT policy is outside fixture scope')
-        self.original_ids=set();self.attempted=False;self.add_facts=None;self.cleanup_facts=None
+        self.original_ids=set();self.attempted=False;self.add_facts=None;self.cleanup_facts=None;self.cleanup_failures=[]
         self.cleanup={'attempted':False,'removed':0,'errors':0,'restored':False}
 
     def acquire(self):
@@ -79,8 +89,9 @@ class NrptLease:
         if self.cleanup['attempted']:return
         self.cleanup['attempted']=True
         try:rows=self.operation('rules',{})
-        except Exception:
+        except Exception as error:
             self.cleanup['errors']+=1
+            self.cleanup_failures.append(cleanup_error_facts('rules',error))
             return
         self.cleanup_facts=rule_facts(rows,self.tag,self.names,self.original_ids)
         if not isinstance(rows,list):
@@ -92,9 +103,13 @@ class NrptLease:
                 try:
                     self.operation('remove',{'tag':self.tag,'names':self.names,'id':row['Name']})
                     self.cleanup['removed']+=1
-                except Exception:self.cleanup['errors']+=1
+                except Exception as error:
+                    self.cleanup['errors']+=1
+                    if len(self.cleanup_failures)<8:self.cleanup_failures.append(cleanup_error_facts('remove',error))
         try:self.cleanup['restored']=self.operation('rules',{})==self.before
-        except Exception:self.cleanup['errors']+=1
+        except Exception as error:
+            self.cleanup['errors']+=1
+            if len(self.cleanup_failures)<8:self.cleanup_failures.append(cleanup_error_facts('rules',error))
 
 
 def dns_reply(packet, names):
