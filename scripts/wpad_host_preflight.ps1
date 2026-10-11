@@ -32,7 +32,8 @@ $wpadState = [ordered]@{
     administrator=$false; policy_known=$false; policy_present=$false; policy_disabled=$null
     service_known=$false; service_start_type=$null; service_status=$null
     suffix_metadata=@(); usable_suffix_count=0; namespace_conflicts=0; nrpt_rule_count=0
-    ports=@(); errors=@(); ready_for_owned_fixture_setup=$false
+    ports=@(); errors=@(); http_listeners=@(); http_listener_read_known=$false
+    selected_http_loopback=$null; ready_for_owned_fixture_setup=$false
 }
 $wpadErrors = [Collections.Generic.List[string]]::new()
 try {
@@ -101,20 +102,47 @@ try {
 $wpadSockets=[Collections.Generic.List[Net.Sockets.Socket]]::new()
 try {
     $wpadState.ports=@(foreach ($wpadPort in @(
-        @{port=53; protocol='udp'; type=[Net.Sockets.SocketType]::Dgram; proto=[Net.Sockets.ProtocolType]::Udp},
-        @{port=53; protocol='tcp'; type=[Net.Sockets.SocketType]::Stream; proto=[Net.Sockets.ProtocolType]::Tcp},
-        @{port=80; protocol='tcp'; type=[Net.Sockets.SocketType]::Stream; proto=[Net.Sockets.ProtocolType]::Tcp})) {
+        @{address='127.0.0.1'; port=53; protocol='udp'; type=[Net.Sockets.SocketType]::Dgram; proto=[Net.Sockets.ProtocolType]::Udp},
+        @{address='127.0.0.1'; port=53; protocol='tcp'; type=[Net.Sockets.SocketType]::Stream; proto=[Net.Sockets.ProtocolType]::Tcp},
+        @{address='127.0.0.1'; port=80; protocol='tcp'; type=[Net.Sockets.SocketType]::Stream; proto=[Net.Sockets.ProtocolType]::Tcp},
+        @{address='127.0.0.2'; port=80; protocol='tcp'; type=[Net.Sockets.SocketType]::Stream; proto=[Net.Sockets.ProtocolType]::Tcp})) {
         $wpadBound=$false; $wpadCode=$null
         try {
             $wpadSocket=[Net.Sockets.Socket]::new([Net.Sockets.AddressFamily]::InterNetwork,$wpadPort.type,$wpadPort.proto)
             $wpadSockets.Add($wpadSocket)
             $wpadSocket.ExclusiveAddressUse=$true
-            $wpadSocket.Bind([Net.IPEndPoint]::new([Net.IPAddress]::Loopback,$wpadPort.port))
+            $wpadSocket.Bind([Net.IPEndPoint]::new([Net.IPAddress]::Parse($wpadPort.address),$wpadPort.port))
             $wpadBound=$true
-        } catch { $wpadCode='loopback_bind_failed' }
-        [ordered]@{port=$wpadPort.port; protocol=$wpadPort.protocol; bound=$wpadBound; error=$wpadCode}
+        } catch {
+            $wpadFailure=$_.Exception
+            while ($wpadFailure -and $wpadFailure -isnot [Net.Sockets.SocketException]) { $wpadFailure=$wpadFailure.InnerException }
+            $wpadCode=if ($wpadFailure) { [string]$wpadFailure.SocketErrorCode } else { 'loopback_bind_failed' }
+        }
+        [ordered]@{address=$wpadPort.address; port=$wpadPort.port; protocol=$wpadPort.protocol; bound=$wpadBound; error=$wpadCode}
     })
 } finally { foreach ($wpadSocket in $wpadSockets) { $wpadSocket.Dispose() } }
+
+try {
+    $wpadTcp = @(Get-NetTCPConnection -State Listen -ErrorAction Stop | Where-Object { $_.LocalPort -eq 80 })
+    $wpadState.http_listeners=@(foreach ($wpadConnection in $wpadTcp) {
+        $wpadProcessClass='unavailable'
+        try {
+            $wpadProcessName=[string](Get-Process -Id $wpadConnection.OwningProcess -ErrorAction Stop).ProcessName
+            $wpadProcessClass=if ($wpadProcessName -in @('System','w3wp','svchost','nginx','httpd','node','dotnet','iisexpress')) { $wpadProcessName } else { 'other' }
+        } catch {}
+        $wpadListenIP=[Net.IPAddress]::Parse($wpadConnection.LocalAddress)
+        [ordered]@{
+            family=[string]$wpadListenIP.AddressFamily
+            loopback=[Net.IPAddress]::IsLoopback($wpadListenIP)
+            wildcard=($wpadConnection.LocalAddress -in @('0.0.0.0','::'))
+            process_class=$wpadProcessClass
+        }
+    })
+    $wpadState.http_listener_read_known=$true
+} catch { $wpadErrors.Add('http_listener_read_failed') }
+$wpadAvailableHTTP=@($wpadState.ports | Where-Object { $_.port -eq 80 -and $_.bound })
+if ($wpadAvailableHTTP.Count -gt 0) { $wpadState.selected_http_loopback=$wpadAvailableHTTP[0].address }
+
 $wpadState.errors=@($wpadErrors.ToArray())
 $wpadState.observation_complete=($wpadErrors.Count -eq 0)
 $wpadState.ready_for_owned_fixture_setup=(
@@ -122,7 +150,8 @@ $wpadState.ready_for_owned_fixture_setup=(
     $wpadState.policy_known -and -not $wpadState.policy_disabled -and
     $wpadState.service_known -and $wpadState.service_start_type -ne 'Disabled' -and
     $wpadState.usable_suffix_count -gt 0 -and $wpadState.namespace_conflicts -eq 0 -and
-    @($wpadState.ports | Where-Object { -not $_.bound }).Count -eq 0)
+    @($wpadState.ports | Where-Object { $_.port -eq 53 -and -not $_.bound }).Count -eq 0 -and
+    $null -ne $wpadState.selected_http_loopback)
 New-Item -ItemType Directory -Path $wpadParent -Force -ErrorAction Stop | Out-Null
 [IO.File]::WriteAllText($wpadOutput,($wpadState | ConvertTo-Json -Depth 8),[Text.UTF8Encoding]::new($false))
 $wpadState | ConvertTo-Json -Depth 8
