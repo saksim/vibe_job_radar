@@ -22,7 +22,7 @@ jobs:
       - name: Install developer-only browser test tools
         timeout-minutes: 8
         run: |
-          python -m pip install playwright "packaging>=24.2"
+          python -m pip install playwright "packaging>=24.2" "quickjs-ng==0.17.0.1"
           python -m playwright install --with-deps chromium
       - name: Exercise actual browser onboarding and downloads
         timeout-minutes: 10
@@ -95,7 +95,7 @@ jobs:
           python-version: '3.12'
       - name: Install source qualification dependencies
         run: |
-          python -m pip install playwright "packaging>=24.2"
+          python -m pip install playwright "packaging>=24.2" "quickjs-ng==0.17.0.1"
           python -m playwright install --with-deps chromium
       - name: Verify exact source before building candidate
         run: python scripts/verify_candidate.py

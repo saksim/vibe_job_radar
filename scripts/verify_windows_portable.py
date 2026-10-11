@@ -814,6 +814,11 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
                     raise AssertionError('portable PAC rollback failed')
                 result['pac_worker_verified']=True
                 result['checks'].append('frozen exe spawns native WinHTTP PAC worker with Python PATH removed, preserves SOCKS5 return, checks only fixed domain and rolls back without any proxy or target connection')
+                result['stage']='full_url_pac_worker'
+                from url_pac_acceptance import verify_app as verify_url_pac
+                result['url_pac']=verify_url_pac(app,frozen_executable=True)
+                result['url_pac_worker_verified']=True
+                result['checks'].append('frozen exe executes the optional full-URL worker with path/query/host intact, rejects unavailable DNS helpers without fallback, and rolls schema6 back to automatic mode without target requests')
                 if verify_system_pac:
                     from system_pac_acceptance import configured_source,verify_app
                     result['stage']='configured_system_pac_setup'

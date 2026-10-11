@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'src'))
-from vibe_job_radar import pac_native
+from vibe_job_radar import pac_native, pac_url_worker
 from vibe_job_radar.workbench import LocalServer
 from vibe_job_radar.workspace import Workspace
 
@@ -20,8 +20,8 @@ def main():
     from playwright.sync_api import sync_playwright,expect
     out=ROOT/'browser-acceptance'/'windows-pac';out.mkdir(parents=True,exist_ok=True)
     result={'success':False,'checks':[],'external_requests':[],'page_errors':[],
-        'native_evaluator':os.name=='nt',
-        'scope':'Authored local PAC and actual workbench UI. No proxy, source request, personal PAC or OS setting changes. Non-Windows uses a controlled evaluator seam.'}
+        'native_evaluator':os.name=='nt','full_url_success':False,'full_url_checks':[],
+        'scope':'Authored local PAC and actual workbench UI. No proxy, source request, personal PAC or OS setting changes. Only the legacy Windows domain evaluator is substituted on non-Windows; the full-URL worker uses the actual optional engine on all tested systems.'}
     real_evaluate=pac_native.evaluate
     def evaluate(source,url,permitted):
         if os.name=='nt':return real_evaluate(source,url,permitted)
@@ -54,7 +54,7 @@ def main():
                         page.locator('#workspace-pac-file').set_input_files({'name':name,'mimeType':'application/x-ns-proxy-autoconfig','buffer':body})
                     def save():
                         page.locator('#workspace-pac-consent').check()
-                        with page.expect_response(lambda r:r.url.endswith('/api/network/pac')) as response:
+                        with page.expect_response(lambda r:r.url.endswith(('/api/network/pac','/api/network/pac-url'))) as response:
                             page.locator('#save-workspace-pac').click()
                         assert response.value.status==200
                         expect(page.locator('#save-workspace-pac')).to_be_enabled()
@@ -100,7 +100,42 @@ def main():
                     assert calls.call_count==2 and not workspace.db.exists()
                     assert not result['external_requests'] and not result['page_errors']
                     result['checks'].append('unknown directive plus DIRECT fails; 390px has no horizontal overflow; rollback revokes old grant and preserves DNS without jobs/requests')
-                    result.update(success=True,browser_version=browser.version)
+                    assert pac_url_worker.available(), 'required optional URL PAC test component missing'
+                    real_url_evaluate=pac_url_worker.evaluate
+                    with patch.object(pac_url_worker,'evaluate',wraps=real_url_evaluate) as url_calls:
+                        page.locator('#workspace-pac-consent').check()
+                        page.locator('#workspace-pac-kind').select_option('url')
+                        expect(page.locator('#workspace-pac-consent')).not_to_be_checked()
+                        expect(page.locator('#workspace-pac-disclosure')).to_contain_text('完整HTTPS路径和查询参数')
+                        full_script=b'function FindProxyForURL(url,host){return url==="https://pac-check.invalid/path?probe=explicit" && host==="pac-check.invalid" ? "PROXY 127.0.0.1:19081" : "UNKNOWN missing-path:9; DIRECT";}'
+                        file(full_script,'完整网址.pac');save()
+                        expect(page.locator('#workspace-proxy-mode')).to_have_value('pac_url')
+                        assert workspace.network_state()['schema_version']==6
+                        old_url=workspace.network_policy()
+                        url_calls.assert_not_called()
+                        result['full_url_checks'].append('scope change clears consent; separate full-path disclosure and schema6 grant; import does not execute')
+                        for path in ('/guided','/advanced','/'):
+                            page.goto(server.origin+path);expand()
+                            expect(page.locator('#workspace-pac-kind')).to_have_value('url')
+                            expect(page.locator('#workspace-proxy-mode')).to_have_value('pac_url')
+                        url_calls.assert_not_called()
+                        assert check(True)['transport']=='loopback_http_proxy'
+                        assert url_calls.call_args.args[1:3]==('https://pac-check.invalid/path?probe=explicit','pac-check.invalid')
+                        result['full_url_checks'].append('all three pages preserve full URL scope; actual isolated optional engine receives path and query; no target connection')
+                        assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
+                        page.locator('#network-preferences').screenshot(path=str(out/'pac-url-mobile.png'))
+                        file(b'function FindProxyForURL(url,host){dnsResolve(host);return "DIRECT";}','unsupported-helper.pac');save()
+                        assert check(False)['code']=='pac_invalid_script'
+                        result['full_url_checks'].append('unprovided DNS helper fails without DIRECT fallback; 390px no horizontal overflow')
+                        page.locator('#workspace-proxy-mode').select_option('auto')
+                        with page.expect_response(lambda r:r.url.endswith('/api/network/proxy')):
+                            page.locator('#save-workspace-proxy').click()
+                        expect(page.locator('#workspace-proxy-mode')).to_have_value('auto')
+                        assert not old_url.pac.permitted() and workspace.network_state()['schema_version']==2
+                        assert url_calls.call_count==2 and calls.call_count==2
+                        assert not workspace.db.exists() and not result['external_requests'] and not result['page_errors']
+                        result['full_url_checks'].append('rollback revokes URL grant; old domain evaluator count unchanged; zero jobs or external requests')
+                    result.update(success=True,full_url_success=True,url_engine_version=pac_url_worker.ENGINE_VERSION,browser_version=browser.version)
                 finally:browser.close()
         finally:
             server.shutdown();server.server_close();thread.join(5)

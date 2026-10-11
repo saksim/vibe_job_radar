@@ -27,7 +27,7 @@
   proxy.innerHTML = `<legend>本工作区的代理</legend>
     <p>自动模式沿用应用或系统配置。固定入口支持匿名本机代理，或已授权给此来宾的宿主机代理；更换后请停止并重开已有采集会话。</p>
     <label for="workspace-proxy-mode">连接方式</label>
-    <select id="workspace-proxy-mode"><option value="auto">自动发现</option><option value="http">固定本机 HTTP</option><option value="socks5">固定本机 SOCKS5</option><option value="vm_http">宿主机 HTTP</option><option value="vm_socks5">宿主机 SOCKS5</option><option value="pac" disabled>已导入的 PAC</option><option value="system_pac" disabled>已许可的系统 PAC</option><option value="wpad" disabled>已确认的 WPAD</option></select>
+    <select id="workspace-proxy-mode"><option value="auto">自动发现</option><option value="http">固定本机 HTTP</option><option value="socks5">固定本机 SOCKS5</option><option value="vm_http">宿主机 HTTP</option><option value="vm_socks5">宿主机 SOCKS5</option><option value="pac" disabled>已导入的域名 PAC</option><option value="pac_url" disabled>已导入的完整网址 PAC</option><option value="system_pac" disabled>已许可的系统 PAC</option><option value="wpad" disabled>已确认的 WPAD</option></select>
     <label for="workspace-proxy-endpoint">已配置的代理地址和端口</label>
     <input id="workspace-proxy-endpoint" type="text" autocomplete="off" spellcheck="false" style="max-width:100%;box-sizing:border-box" placeholder="填写你的本机代理入口，不含账号密码" disabled>
     <p id="workspace-proxy-scope"></p>
@@ -38,14 +38,16 @@
   controls.append(proxy);
   const pac = document.createElement('fieldset');
   pac.style.cssText = 'min-width:0;max-width:100%';
-  pac.innerHTML = `<legend>导入可信的 Windows PAC</legend>
+  pac.innerHTML = `<legend>导入可信的 PAC 文件</legend>
+    <label for="workspace-pac-kind">脚本执行范围</label>
+    <select id="workspace-pac-kind"><option value="domain">Windows 域名 PAC</option><option value="url">完整网址 PAC（HTTP／请求桥）</option></select>
     <p id="workspace-pac-disclosure"></p>
     <label for="workspace-pac-file">本地 PAC 文件</label>
     <input id="workspace-pac-file" type="file" accept=".pac,.js" style="max-width:100%;box-sizing:border-box">
-    <label><input id="workspace-pac-consent" type="checkbox">我信任此文件，并同意上述脚本执行和DNS说明</label>
+    <label><input id="workspace-pac-consent" type="checkbox"><span id="workspace-pac-consent-label">我信任此文件，并同意上述脚本执行和DNS说明</span></label>
     <button id="save-workspace-pac" type="button">导入并启用 PAC</button>
     <button id="check-workspace-pac" type="button" disabled>检查脚本</button>
-    <p>检查仅对内置域名执行脚本，不连接代理或招聘网站。撤销时在上方选择“自动发现”并保存；已有连接不会被强行中断。</p>
+    <p>检查使用内置的虚构网址，不连接代理或招聘网站。完整网址模式不支持原生浏览器通道。撤销时在上方选择“自动发现”并保存；已有连接不会被强行中断。</p>
     <p id="workspace-pac-status" role="status" aria-live="polite" style="overflow-wrap:anywhere">尚未读取 PAC 状态。</p>`;
   controls.append(pac);
   const systemPac = document.createElement('fieldset');
@@ -117,12 +119,34 @@
   const systemCheck = systemPac.querySelector('#check-system-pac');
   const systemMessage = systemPac.querySelector('#system-pac-status');
   let systemConfigId = '';
+  const pacKind = pac.querySelector('#workspace-pac-kind');
+  let pacState = {};
   const pacFile = pac.querySelector('#workspace-pac-file');
   const pacConsent = pac.querySelector('#workspace-pac-consent');
   const pacButton = pac.querySelector('#save-workspace-pac');
   const pacCheck = pac.querySelector('#check-workspace-pac');
   const pacMessage = pac.querySelector('#workspace-pac-status');
   pacFile.addEventListener('change', () => { pacConsent.checked = false; });
+  function renderPacScope() {
+    const full = pacKind.value === 'url';
+    const available = full ? pacState.pac_url_available === true : pacState.pac_available === true;
+    pac.querySelector('#workspace-pac-disclosure').textContent =
+      (full ? pacState.pac_url_disclosure : pacState.pac_disclosure) || '';
+    pac.querySelector('#workspace-pac-consent-label').textContent = full
+      ? '我信任此文件，同意向脚本提供完整HTTPS路径和查询参数，并知悉此模式不支持原生浏览器'
+      : '我信任此文件，并同意上述脚本执行和DNS说明';
+    pacFile.disabled = pacConsent.disabled = pacButton.disabled = !available;
+    pacCheck.disabled = !available || pacState.proxy_mode !== (full ? 'pac_url' : 'pac');
+    pacConsent.checked = false;
+    pacMessage.textContent = pacState.proxy_mode === (full ? 'pac_url' : 'pac')
+      ? '已导入 '+pacState.pac_name+'（SHA256 '+pacState.pac_sha256+'）。尚未执行检查。'
+        + (pacState.policy?.code === 'pac_file_invalid' ? ' 副本缺失或校验失败，联网已停止；可选择自动模式撤销。' : '')
+      : '当前范围尚未启用；选择文件或范围不会执行脚本。';
+    if (!available) pacMessage.textContent += full
+      ? ' 当前程序缺少完整网址PAC组件，请使用包含此组件的版本。'
+      : ' 当前系统不支持此Windows功能。';
+  }
+  pacKind.addEventListener('change', renderPacScope);
   const mode = proxy.querySelector('#workspace-proxy-mode');
   const endpoint = proxy.querySelector('#workspace-proxy-endpoint');
   const consent = proxy.querySelector('#workspace-proxy-consent');
@@ -130,8 +154,8 @@
   const proxyMessage = proxy.querySelector('#workspace-proxy-status');
   let revision = null, busy = false;
   function selection() {
-    endpoint.disabled = consent.disabled = ['auto', 'pac', 'system_pac', 'wpad'].includes(mode.value);
-    proxyButton.disabled = ['pac', 'system_pac', 'wpad'].includes(mode.value);
+    endpoint.disabled = consent.disabled = ['auto', 'pac', 'pac_url', 'system_pac', 'wpad'].includes(mode.value);
+    proxyButton.disabled = ['pac', 'pac_url', 'system_pac', 'wpad'].includes(mode.value);
     consent.checked = false;
     const vm = mode.value.startsWith('vm_');
     endpoint.placeholder = vm ? '填写宿主机已授权监听的 RFC1918 IPv4 和端口' : '填写你的本机代理入口，不含账号密码';
@@ -166,18 +190,13 @@
       ? '工作区代理与应用专用环境配置冲突，联网已停止。请清除冲突或改用自动模式。'
       : (mode.value === 'auto' ? '采用自动发现；尚未进行网络测试。'
         : mode.value === 'pac' ? '按已导入PAC选择域名路线；尚未进行网络测试。'
+        : mode.value === 'pac_url' ? '按已导入PAC选择完整网址路线，仅支持HTTP和请求桥；尚未进行网络测试。'
         : mode.value === 'system_pac' ? '按已许可系统PAC选择域名路线；尚未进行网络测试。'
         : mode.value === 'wpad' ? '按已确认WPAD来源选择域名路线；尚未进行网络测试。'
         : '已保存 '+endpoint.value+'，仅对本工作区生效；尚未进行网络测试。');
-    pac.querySelector('#workspace-pac-disclosure').textContent = value.pac_disclosure || '';
-    pacFile.disabled = pacConsent.disabled = pacButton.disabled = value.pac_available !== true;
-    pacCheck.disabled = value.pac_available !== true || mode.value !== 'pac';
-    pacConsent.checked = false;
-    pacMessage.textContent = mode.value === 'pac'
-      ? '已导入 '+value.pac_name+'（SHA256 '+value.pac_sha256+'）。尚未执行检查。'
-        + (value.policy?.code === 'pac_file_invalid' ? ' 副本缺失或校验失败，联网已停止；可选择自动模式撤销。' : '')
-      : '未启用PAC；选择文件不会执行脚本。';
-    if (!value.pac_available) pacMessage.textContent += ' 当前系统不支持此Windows功能。';
+    pacState = value;
+    pacKind.value = mode.value === 'pac_url' ? 'url' : 'domain';
+    renderPacScope();
     systemPac.querySelector('#system-pac-disclosure').textContent = value.system_pac_disclosure || '';
     const source = value.system_pac || {};
     systemConfigId = source.config_id || '';
@@ -213,17 +232,19 @@
     const file = pacFile.files[0];
     if (!file || !pacConsent.checked) { pacMessage.textContent = '请选择可信文件并勾选执行说明。'; return; }
     if (file.size > 65536 || !/\.(pac|js)$/i.test(file.name)) { pacMessage.textContent = '请选择最多64KiB的.pac或.js文件。'; return; }
-    const selectedRevision = revision;
+    const selectedRevision = revision, selectedKind = pacKind.value;
     try {
       const script = new TextDecoder('utf-8', {fatal:true}).decode(await file.arrayBuffer());
-      if (pacFile.files[0] !== file || !pacConsent.checked || selectedRevision !== revision || busy) return;
-      await save('/api/network/pac', {name:file.name, script, consent:true}, pacMessage);
+      if (pacFile.files[0] !== file || !pacConsent.checked || selectedRevision !== revision ||
+          selectedKind !== pacKind.value || busy) return;
+      await save(selectedKind === 'url' ? '/api/network/pac-url' : '/api/network/pac',
+        {name:file.name, script, consent:true}, pacMessage);
     } catch (_) { pacMessage.textContent = '无法读取UTF-8文件；原设置保留。'; }
   });
   pacCheck.addEventListener('click', async () => {
     if (busy || revision === null) return;
     busy = true; controls.disabled = true;
-    pacMessage.textContent = '正在执行内置域名的脚本检查…';
+    pacMessage.textContent = '正在执行内置虚构网址的脚本检查…';
     try { const value = await call('/api/network/pac/check', {revision}); pacMessage.textContent = value.message; }
     catch (error) { pacMessage.textContent = error.message; }
     finally { busy = false; controls.disabled = false; }

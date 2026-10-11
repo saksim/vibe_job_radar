@@ -19,6 +19,7 @@ from urllib.parse import urlsplit
 from ..network import FetchError, PinnedHTTPSConnection, validate_public_url, validate_url_target
 from ..utils import domain_matches
 from ..network_policy import NetworkPolicy, current_policy, use_policy
+from ..loopback_proxy import LocalProxyError
 from .contracts import CrawlError
 from .rate import RateLedger, RateLimit
 from .request_headers import browser_headers
@@ -116,20 +117,24 @@ class PinnedTransport:
         if self.network_policy is None:
             self.bind_policy(current_policy())
         try:
-            if not self.network_policy.encrypted_dns:
+            request_policy = self.network_policy.for_request(url)
+        except LocalProxyError as exc:
+            raise CrawlError(exc.code) from exc
+        try:
+            if not request_policy.encrypted_dns:
                 host, ip, target = validate_public_url(url, self.domains, all_addresses=True,
-                                                     network_policy=self.network_policy)
+                                                     network_policy=request_policy)
             self.reserve('request', origin='https://' + host)
-            if self.network_policy.encrypted_dns:
+            if request_policy.encrypted_dns:
                 # A fresh snapshot is obtained after publisher waits, not before.
                 host, ip, target = validate_public_url(url, self.domains, all_addresses=True,
-                    network_policy=self.network_policy, cancelled=self.cancelled)
+                    network_policy=request_policy, cancelled=self.cancelled)
         except FetchError as exc:
             raise CrawlError(exc.code) from exc
         try:
             if self.network_policy is None:
                 self.bind_policy(current_policy())
-            with use_policy(self.network_policy):
+            with use_policy(request_policy):
                 conn = PinnedHTTPSConnection(host, ip, 20)
         except FetchError as exc:
             raise CrawlError(exc.code) from exc

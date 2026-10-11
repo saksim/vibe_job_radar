@@ -254,6 +254,7 @@ class Handler(BaseHTTPRequestHandler):
                    "/api/discover": "discover", "/api/analyze": "analyze", "/api/network/preferences": "network_preferences",
                    "/api/network/proxy": "network_proxy_preferences",
                    "/api/network/pac": "network_pac_preferences",
+                   "/api/network/pac-url": "network_url_pac_preferences",
                    "/api/network/system-pac": "network_system_pac_preferences",
                    "/api/network/wpad/discover": "network_wpad_discover",
                    "/api/network/wpad/cancel": "network_wpad_cancel",

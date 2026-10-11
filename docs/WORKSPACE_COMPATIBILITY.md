@@ -16,4 +16,6 @@ python scripts/check_workspace_compatibility.py --old-source <已检出的ec4587
 
 用户更新时先退出旧工作台终端，备份完整工作区（包含原文、报告、个人证据、配额和自行选择保存的会话），用原有可用解释器启动完整新源码。无需删库或重装环境。回退使用已核验的旧源码；如果跨越其他数据库或来源格式变更，则使用对应完整备份。仅刷新旧网页不能切换正在运行的服务代码。
 
+完整网址PAC使用独立的网络偏好 schema 6；旧源码会拒绝。启用过该模式时，先在新版本停止任务并显式保存自动或固定代理，确认回到 schema 2，再备份并回退；仅查看状态或未启用不会迁移偏好。具体范围见[完整网址PAC](FULL_URL_PAC.md)。
+
 本次只给新报告添加 `software_acquisition_capabilities`，不改历史报告，不改 jobs.sqlite schema 1、Cookie 文件或检查点 schema，不升格岗位真实性。比 `ec458799` 更旧的版本可能不认识 `browser_fetch` 或其他来源字段，本验证不能代替它们的单独回退验收。

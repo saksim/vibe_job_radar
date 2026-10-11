@@ -16,6 +16,8 @@ Issue #109 承接 #23/N6；本地 PAC 已合入 main，当前资格以对应提�
 
 HTTP、公开数据、高级采集、浏览器请求桥及原生 CONNECT 隧道使用同一 NetworkPolicy。加密解析沿用目标已经选定的路线，不因解析商域名而重新选 PAC 路线。目标公网地址固定、TLS、robots、频次库和登录许可保持原约束；返回 DIRECT 不会绕过这些检查。
 
+需要完整 HTTPS 路径/参数的 HTTP 或请求桥采集，可另行选择[完整网址 PAC](FULL_URL_PAC.md)，使用独立组件和许可。本页的 WinHTTP 域名模式和原生浏览器支持范围不变。
+
 ## 原生接口的返回值与进程边界
 
 本机人工探针发现，旧同步 `WinHttpGetProxyForUrl` 会把 SOCKS/SOCKS5 结果归成 DIRECT；异步接口也会删除未知指令，并将 SOCKS5 解析成 SOCKS 与带 `5 ` 的主机。因此不能直接把原生结果当作原脚本返回值。

@@ -17,7 +17,7 @@ from .html_parser import _unique_object
 from .utils import atomic_json, atomic_text, utc_now
 from .workspace import InputError
 from .pac import PacSnapshot, CONSENT as PAC_CONSENT, MESSAGES as PAC_MESSAGES, validate_script
-from . import pac_native
+from . import pac_native, pac_url, pac_url_worker
 from . import system_pac, wpad, wpad_native
 
 CONSENT = 'cloudflare-doh-v1'
@@ -92,10 +92,10 @@ def read_settings(workspace):
         if path.stat().st_size > 4096:
             raise ValueError
         value = json.loads(path.read_text(encoding='utf-8'), object_pairs_hook=_unique_object)
-        if not isinstance(value, dict) or type(value.get('schema_version')) is not int or value['schema_version'] not in (1, 2, 3, 4, 5):
+        if not isinstance(value, dict) or type(value.get('schema_version')) is not int or value['schema_version'] not in (1, 2, 3, 4, 5, 6):
             raise ValueError
         expected = set(default) | (set(PROXY_DEFAULT) if value['schema_version'] >= 2 else set())
-        if value['schema_version'] == 3:
+        if value['schema_version'] in (3, 6):
             expected |= PAC_FIELDS
         if value['schema_version'] == 4:
             expected |= SYSTEM_PAC_FIELDS
@@ -111,9 +111,10 @@ def read_settings(workspace):
             if (value['proxy_endpoint'] != _endpoint(value['proxy_mode'], proxy)
                     or value['proxy_consent_version'] != _proxy_consent(value['proxy_mode'])):
                 raise ValueError
-        elif value['schema_version'] == 3:
-            if (value['proxy_mode'] != 'pac' or value['proxy_endpoint'] != ''
-                    or value['proxy_consent_version'] != PAC_CONSENT
+        elif value['schema_version'] in (3, 6):
+            url_scope = value['schema_version'] == 6
+            if (value['proxy_mode'] != ('pac_url' if url_scope else 'pac') or value['proxy_endpoint'] != ''
+                    or value['proxy_consent_version'] != (pac_url.CONSENT if url_scope else PAC_CONSENT)
                     or not _pac_name(value['pac_name'])
                     or not isinstance(value['pac_sha256'], str) or not re.fullmatch('[0-9a-f]{64}', value['pac_sha256'])
                     or not isinstance(value['pac_id'], str) or not re.fullmatch('[0-9a-f]{32}', value['pac_id'])):
@@ -170,21 +171,26 @@ def capture_policy(workspace, *, settings=None):
                     None if pac_native.available() else 'pac_unavailable')
         except LocalProxyError as exc:
             policy = NetworkPolicy('explicit_workspace', error=exc.code, pac_id=settings['pac_id'])
-    elif mode == 'pac':
+    elif mode in {'pac', 'pac_url'}:
         try:
             source = _pac_source(workspace, settings)
         except InputError:
-            return NetworkPolicy('explicit_workspace', error='pac_file_invalid', pac_id=settings['pac_id'])
+            return NetworkPolicy('explicit_workspace', error='pac_file_invalid', pac_id=settings['pac_id'],
+                                 pac_url_mode=mode == 'pac_url')
         def permitted():
             current = read_settings(workspace)
             return (current.get('pac_id') == settings['pac_id']
                     and current.get('pac_sha256') == settings['pac_sha256']
-                    and current.get('proxy_mode') == 'pac'
+                    and current.get('proxy_mode') == mode
+                    and (mode != 'pac_url' or not workspace._network_closed.is_set())
                     and not _environment_conflict()
                     and _pac_source(workspace, current) == source)
-        policy = NetworkPolicy('explicit_workspace', pac=PacSnapshot(source, permitted), pac_id=settings['pac_id'],
+        url_scope = mode == 'pac_url'
+        available = pac_url_worker.available() if url_scope else pac_native.available()
+        snapshot = pac_url.UrlPacSnapshot(source, permitted) if url_scope else PacSnapshot(source, permitted)
+        policy = NetworkPolicy('explicit_workspace', pac=snapshot, pac_id=settings['pac_id'], pac_url_mode=url_scope,
             error='workspace_proxy_environment_conflict' if _environment_conflict() else
-                  None if pac_native.available() else 'pac_unavailable')
+                  None if available else 'pac_url_unavailable' if url_scope else 'pac_unavailable')
     elif (proxy := _proxy(mode, settings.get('proxy_endpoint', ''))) is None:
         policy = NetworkPolicy.capture()
     elif _environment_conflict():
@@ -200,6 +206,7 @@ def state(workspace):
     return {**PROXY_DEFAULT, **settings, 'disclosure': DISCLOSURE, 'provider': 'Cloudflare',
             'dns_disclosures': {'fake_ip_doh': DISCLOSURE, 'public_doh': PUBLIC_DNS_DISCLOSURE},
             'pac_available': pac_native.available(), 'pac_disclosure': PAC_DISCLOSURE,
+            'pac_url_available': pac_url_worker.available(), 'pac_url_disclosure': pac_url.DISCLOSURE,
             'system_pac': system_pac.preview(), 'system_pac_disclosure': system_pac.DISCLOSURE,
             'wpad': workspace.wpad_discovery.state(settings['revision']), 'wpad_disclosure': wpad.DISCLOSURE,
             'network_tested': False, 'policy': capture_policy(workspace, settings=settings).describe()}
@@ -274,12 +281,14 @@ def _pac_source(workspace, settings):
         raise InputError('PAC副本缺失或校验失败，已停止联网；可重新导入或选择自动模式。') from None
 
 
-def save_pac(workspace, data):
+def save_pac(workspace, data, *, full_url=False):
     if (not isinstance(data, dict) or set(data) != {'name', 'script', 'revision', 'consent'}
             or type(data['revision']) is not int or data['consent'] is not True
             or not _pac_name(data['name'])):
         raise InputError('请选择本地PAC文件并明确同意执行说明；不接受远程URL或额外参数。')
-    if not pac_native.available(): raise InputError(PAC_MESSAGES['pac_unavailable'])
+    available = pac_url_worker.available() if full_url else pac_native.available()
+    if not available:
+        raise InputError(pac_url.MESSAGES['pac_url_unavailable'] if full_url else PAC_MESSAGES['pac_unavailable'])
     if _environment_conflict(): raise InputError(PROXY_CONFLICT)
     try: raw = validate_script(data['script'])
     except ValueError: raise InputError('PAC必须为非空UTF-8文本且不超过64KiB，不能包含空字符。') from None
@@ -298,9 +307,9 @@ def save_pac(workspace, data):
         else:
             atomic_text(path, data['script'])
         value = {**{k:v for k,v in previous.items() if k not in ALL_PAC_FIELDS},
-            'schema_version': 3, 'revision': previous['revision']+1,
-            'updated_at': utc_now(), 'proxy_mode': 'pac', 'proxy_endpoint': '',
-            'proxy_consent_version': PAC_CONSENT, 'pac_name': data['name'],
+            'schema_version': 6 if full_url else 3, 'revision': previous['revision']+1,
+            'updated_at': utc_now(), 'proxy_mode': 'pac_url' if full_url else 'pac', 'proxy_endpoint': '',
+            'proxy_consent_version': pac_url.CONSENT if full_url else PAC_CONSENT, 'pac_name': data['name'],
             'pac_sha256': sha, 'pac_id': secrets.token_hex(16)}
         atomic_json(workspace.root/'network-preferences.json', value)
     workspace.dns_resolver.clear()
@@ -390,14 +399,14 @@ def check_pac(workspace, data):
     if not isinstance(data, dict) or set(data) != {'revision'} or type(data['revision']) is not int:
         raise InputError('仅接受当前网络偏好修订号。')
     settings = read_settings(workspace)
-    if settings['revision'] != data['revision'] or settings.get('proxy_mode') not in {'pac', 'system_pac', 'wpad'}:
+    if settings['revision'] != data['revision'] or settings.get('proxy_mode') not in {'pac', 'pac_url', 'system_pac', 'wpad'}:
         raise InputError('PAC设置已改变或尚未导入，请刷新后重试。')
     policy = capture_policy(workspace, settings=settings)
     try:
-        selected = policy.for_host('pac-check.invalid')
+        selected = policy.for_request('https://pac-check.invalid/path?probe=explicit').for_host('pac-check.invalid')
     except LocalProxyError as exc:
         return {'passed': False, 'code': exc.code, 'target_requested': False,
-                'message': {**PAC_MESSAGES, **system_pac.MESSAGES, **wpad.MESSAGES}.get(exc.code, PROXY_CONFLICT)}
+                'message': {**pac_url.MESSAGES, **system_pac.MESSAGES, **wpad.MESSAGES}.get(exc.code, PROXY_CONFLICT)}
     finally:
         policy.close()
     return {'passed': True, 'code': 'pac_evaluated', 'transport': policy.transport_name(selected),
@@ -407,7 +416,7 @@ def check_pac(workspace, data):
 
 DNS_MESSAGES = {
     **VM_MESSAGES,
-    **PAC_MESSAGES,
+    **pac_url.MESSAGES,
     **system_pac.MESSAGES,
     **wpad.MESSAGES,
     'workspace_proxy_environment_conflict': PROXY_CONFLICT,

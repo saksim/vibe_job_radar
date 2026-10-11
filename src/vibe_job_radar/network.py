@@ -280,9 +280,13 @@ class SafeHTTP:
             time.sleep(wait)
         # Resolve AFTER pacing: a short DNS TTL must not expire while waiting.
         self.last_resolution = {}
+        try:
+            request_policy = self.network_policy.for_request(url)
+        except LocalProxyError as exc:
+            raise FetchError(exc.code) from exc
         host, ip, target = validate_public_url(url, self.allowed_domains, all_addresses=True,
-            network_policy=self.network_policy, resolver=self.resolver, resolution_info=self.last_resolution)
-        with use_policy(self.network_policy):
+            network_policy=request_policy, resolver=self.resolver, resolution_info=self.last_resolution)
+        with use_policy(request_policy):
             conn = PinnedHTTPSConnection(host, ip, self.timeout)
         request_headers = {"User-Agent": USER_AGENT, "Accept-Encoding": "identity"}
         request_headers.update(headers or {})
