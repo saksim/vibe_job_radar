@@ -218,26 +218,34 @@ class WorkerSqliteProbeTests(unittest.TestCase):
         from unittest.mock import patch
         original = retry_tests.ReadRetryWorkerTests.setUp
         previous = threading.getprofile()
-        for name in ('test_read_retry_timeout_records_pending_sqlite_before_cleanup',
-                     'test_second_retry_wait_retains_pending_sqlite_and_original_budget'):
+        scenarios = (
+            'test_read_retry_timeout_records_pending_sqlite_before_cleanup',
+            'test_second_retry_wait_retains_pending_sqlite_and_original_budget',
+        )
+        for measured_call, name in enumerate(scenarios, start=1):
             with self.subTest(wait=name):
                 delays = []
+                page_calls = 0
                 def setup(case):
                     original(case)
                     reserve = case.ledger.reserve
                     def prepare(site, kind, **kwargs):
+                        nonlocal page_calls
                         if threading.current_thread() is case.service._thread and kind == 'page':
-                            # Real preparation consumes part of the original 5s
-                            # wait but is outside the observed SQLite C call.
-                            start = time.monotonic()
-                            time.sleep(2)
-                            delays.append(time.monotonic() - start)
+                            page_calls += 1
+                            if page_calls == measured_call:
+                                # Delay only the measured action, leaving the
+                                # first retry's preparation budget untouched.
+                                start = time.monotonic()
+                                time.sleep(2)
+                                delays.append(time.monotonic() - start)
                         return reserve(site, kind, **kwargs)
                     case.ledger.reserve = prepare
                 with patch.object(retry_tests.ReadRetryWorkerTests, 'setUp', setup):
                     getattr(WorkerSqliteProbeTests(name), name)()
-                self.assertTrue(delays)
-                self.assertTrue(all(delay >= 2 for delay in delays))
+                self.assertEqual(page_calls, measured_call)
+                self.assertEqual(len(delays), 1)
+                self.assertGreaterEqual(delays[0], 2)
                 self.assertIs(threading.getprofile(), previous)
 
     def test_shutdown_read_wait_records_scheduler_insert_before_cleanup(self):
