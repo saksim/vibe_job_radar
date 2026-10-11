@@ -27,14 +27,31 @@ def validate_names(names):
     return sorted(names)
 
 
+def namespace_match(value,names):
+    return (isinstance(value,list) and all(isinstance(n,str) for n in value)
+            and sorted(value)==sorted(names))
+
+
 def owned_rule(row, tag, names, original_ids):
     """A returned ID alone never authorizes deletion."""
-    return (isinstance(row,dict) and row.get('Name') not in original_ids
-            and isinstance(row.get('Name'),str) and row['Name']
+    return bool(isinstance(row,dict) and isinstance(row.get('Name'),str)
+            and row['Name'] and row['Name'] not in original_ids
             and row.get('Comment')==tag and row.get('DisplayName')==tag
-            and isinstance(row.get('Namespace'),list)
-            and sorted(row['Namespace'])==sorted(names)
+            and namespace_match(row.get('Namespace'),names)
             and row.get('NameServers')==['127.0.0.1'])
+
+
+def rule_facts(rows,tag,names,original_ids):
+    """Finite mismatches, never actual rule IDs, values or namespace text."""
+    if not isinstance(rows,list):return {'list':False,'rows':[]}
+    return {'list':True,'count':len(rows),'rows':[
+        {'id_present':isinstance(r.get('Name'),str) and bool(r['Name']),
+         'comment_match':r.get('Comment')==tag,'display_name_match':r.get('DisplayName')==tag,
+         'names_match':namespace_match(r.get('Namespace'),names),
+         'servers_match':r.get('NameServers')==['127.0.0.1'],
+         'original_identity':isinstance(r.get('Name'),str) and r['Name'] in original_ids,
+         'owned':owned_rule(r,tag,names,original_ids)}
+        if isinstance(r,dict) else {'mapping':False} for r in rows[:8]]}
 
 
 class NrptLease:
@@ -45,12 +62,13 @@ class NrptLease:
         # This fixture deliberately supports only the observed policy-free
         # ephemeral host, never adapting an existing enterprise NRPT policy.
         if before:raise ValueError('existing NRPT policy is outside fixture scope')
-        self.original_ids=set();self.attempted=False
+        self.original_ids=set();self.attempted=False;self.add_facts=None;self.cleanup_facts=None
         self.cleanup={'attempted':False,'removed':0,'errors':0,'restored':False}
 
     def acquire(self):
         self.attempted=True  # mutation can precede missing/malformed output
         rows=self.operation('add',{'tag':self.tag,'names':self.names})
+        self.add_facts=rule_facts(rows,self.tag,self.names,self.original_ids)
         if not isinstance(rows,list) or len(rows)!=1 or not owned_rule(rows[0],self.tag,self.names,self.original_ids):
             raise ValueError('NRPT addition not confirmed')
 
@@ -61,6 +79,7 @@ class NrptLease:
         except Exception:
             self.cleanup['errors']+=1
             return
+        self.cleanup_facts=rule_facts(rows,self.tag,self.names,self.original_ids)
         if not isinstance(rows,list):
             self.cleanup['errors']+=1
             return

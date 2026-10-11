@@ -85,6 +85,14 @@ class DnsProtocolTests(unittest.TestCase):
 
 
 class OwnershipTests(unittest.TestCase):
+    def test_malformed_rule_values_never_authorize_delete_or_break_finite_diagnostics(self):
+        rows=[rule(Name=['SECRET']),rule(Namespace=[1,'SECRET']),None,rule(Comment='SECRET')]*3
+        facts=protocol.rule_facts(rows,TAG,NAMES,set())
+        self.assertEqual(facts['count'],12);self.assertEqual(len(facts['rows']),8)
+        self.assertNotIn('SECRET',json.dumps(facts))
+        self.assertTrue(all(not protocol.owned_rule(r,TAG,NAMES,set()) for r in rows))
+        self.assertEqual(protocol.rule_facts('SECRET',TAG,NAMES,set()),{'list':False,'rows':[]})
+
     def test_partial_add_then_transport_failure_removes_exact_owned_rule(self):
         rows=[];calls=[]
         def operation(action,payload):

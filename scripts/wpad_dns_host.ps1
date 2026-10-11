@@ -21,14 +21,11 @@ function Get-OwnedWpadNames {
 }
 function Get-WpadRules {
     @(Get-DnsClientNrptRule -ErrorAction Stop | Sort-Object Name | ForEach-Object {
-        $wpadRule=[ordered]@{}
-        foreach ($wpadProperty in ($_.CimInstanceProperties | Sort-Object Name)) {
-            $wpadRule[$wpadProperty.Name]=$wpadProperty.Value
-        }
-        # Normalize scalar/array output for ownership comparisons.
-        $wpadRule['Namespace']=@($_.Namespace | Sort-Object)
-        $wpadRule['NameServers']=@($_.NameServers)
-        $wpadRule
+        # Get-DnsClientNrptRule exposes these public properties. Do not
+        # assume every adapted property also appears in CimInstanceProperties.
+        [ordered]@{Name=[string]$_.Name;Comment=[string]$_.Comment
+            DisplayName=[string]$_.DisplayName;Namespace=@($_.Namespace | Sort-Object)
+            NameServers=@($_.NameServers)}
     })
 }
 function Assert-WpadOwnedRule($wpadRow,$wpadInput) {
@@ -68,7 +65,7 @@ try {
             $null=Add-DnsClientNrptRule -Namespace $wpadNames -NameServers @('127.0.0.1') -Comment $wpadInput.tag -DisplayName $wpadInput.tag -ErrorAction Stop
             $wpadResult=@(Get-WpadRules)
         } else {
-            if ($wpadInput.id -cnotmatch '^\{[0-9a-fA-F-]{36}\}$') { throw 'invalid_rule_identity' }
+            if ($wpadInput.id -isnot [string] -or $wpadInput.id -cnotmatch '^\{?[0-9a-fA-F-]{36}\}?$') { throw 'invalid_rule_identity' }
             $wpadRows=@(Get-DnsClientNrptRule -ErrorAction Stop | Where-Object { $_.Name -ceq $wpadInput.id })
             if ($wpadRows.Count -ne 1) { throw 'owned_rule_identity_missing' }
             Assert-WpadOwnedRule $wpadRows[0] $wpadInput

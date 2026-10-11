@@ -215,6 +215,8 @@ class DnsWpadFixture:
                 'dns':self.dns.snapshot() if self.dns else None,
                 'http':self.http.snapshot() if self.http else None,
                 'nrpt_cleanup':dict(self.lease.cleanup) if self.lease else None,
+                'nrpt_add_facts':self.lease.add_facts if self.lease else None,
+                'nrpt_cleanup_facts':self.lease.cleanup_facts if self.lease else None,
                 'changes':'owned exact-name local NRPT rules and HTTP prefixes only',
                 'adapter_dns_or_suffix_changes':False,'global_proxy_or_security_changes':False}
 
