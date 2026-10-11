@@ -198,6 +198,7 @@ class GuidedService:
         self._owner_depth=0
         self._record_depth=0
         self._closure_uncertain=False
+        self._closing_backends=0
         self._queue = queue.Queue(maxsize=1)
         self._cancel = threading.Event()
         self._shutdown = threading.Event()
@@ -234,7 +235,8 @@ class GuidedService:
         return p
 
     def _release_owner_if_idle(self):
-        if not self._owner_depth and not self._busy and not self._backends and not self._closure_uncertain:
+        if (not self._owner_depth and not self._busy and not self._backends
+                and not self._closing_backends and not self._closure_uncertain):
             self._ownership.release()
 
     @contextmanager
@@ -712,19 +714,31 @@ class GuidedService:
                             network=current_policy().fingerprint)
 
     def _close_backend(self, ident):
-        backend = self._backends.pop(ident, None)
+        with self._lock:
+            backend = self._backends.pop(ident, None)
+            lease = self._session_leases.pop(ident, None)
+            if backend is None and lease is None:
+                return
+            # A timed-out close() can observe an empty backend map while this
+            # worker is still closing. Keep ownership until both handles finish.
+            # Remove each handle only once, preserving reentrant close behavior.
+            self._closing_backends += 1
         try:
-            if backend:
-                backend.close()
+            try:
+                if backend:
+                    backend.close()
+            finally:
+                if lease:
+                    lease.close()
         except Exception:
-            # A close exception does not prove that the browser process ended.
-            # Keep this process's ownership instead of handing off a live login.
-            self._closure_uncertain=True
+            # Neither a browser nor a session-close exception proves safe
+            # handoff. Preserve ownership after a late cleanup failure too.
+            with self._lock:
+                self._closure_uncertain=True
             raise
         finally:
-            lease = self._session_leases.pop(ident, None)
-            if lease:
-                lease.close()
+            with self._lock:
+                self._closing_backends -= 1
 
     def _checkpoint_session(self, state):
         lease = self._session_leases.get(state['id'])

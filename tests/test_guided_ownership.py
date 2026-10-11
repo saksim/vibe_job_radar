@@ -146,6 +146,110 @@ class GuidedOwnershipTests(unittest.TestCase):
             # stands for process exit; the separate subprocess test checks OS release.
             backend.close();self.first._ownership.release()
 
+    def close_idle_with_barrier(self, *, session_lease=False, fail=False):
+        ident=self.start();self.release.set();self.idle(self.first)
+        backend=self.first._backends[ident]
+        entered,release=threading.Event(),threading.Event()
+        worker=self.first._thread;original_join=worker.join
+        close=backend.close
+        def held_close():
+            entered.set()
+            if not release.wait(30):raise AssertionError('owned cleanup not released')
+            if fail:raise RuntimeError('artificial close failure')
+            if not session_lease:close()
+        if session_lease:
+            from types import SimpleNamespace
+            self.first._session_leases[ident]=SimpleNamespace(close=held_close)
+        def exhausted_join(timeout):
+            # Model the existing five-second wait ending while cleanup is
+            # still pending, without adding a five-second sleep to every CI.
+            self.assertEqual(timeout,5)
+            self.assertTrue(entered.wait(10))
+        before=self.first._path(ident).read_bytes()
+        try:
+            with patch.object(backend,'close',close if session_lease else held_close):
+                with patch.object(worker,'join',side_effect=exhausted_join):
+                    self.first.close()
+                self.assertTrue(entered.is_set())
+                self.assertTrue(worker.is_alive())
+                self.assertTrue(self.other.state()['owned_elsewhere'])
+                with self.assertRaises(GuidedTaskBusy):
+                    self.other.action({'id':ident,'action':'search'})
+                self.assertEqual(self.first._path(ident).read_bytes(),before)
+                release.set();original_join(timeout=10)
+                self.assertFalse(worker.is_alive())
+                self.assertEqual(self.first.state()['closure_uncertain'],fail)
+                self.assertEqual(self.other.state()['owned_elsewhere'],fail)
+                self.assertFalse(self.first._backends)
+        finally:
+            release.set();original_join(timeout=10)
+            # Artificial failed handles have no external process. Release
+            # only this fixture's lease after the worker is fully gone.
+            if not worker.is_alive():self.first._ownership.release()
+
+    def test_idle_shutdown_keeps_owner_until_browser_close_finishes(self):
+        self.close_idle_with_barrier()
+
+    def test_late_close_failure_keeps_original_owner_after_join_returns(self):
+        self.close_idle_with_barrier(fail=True)
+
+    def test_idle_shutdown_keeps_owner_during_session_lease_cleanup(self):
+        for failed in (False,True):
+            with self.subTest(failed=failed):
+                # Each subcase needs an independent owner and shutdown state.
+                if failed:
+                    self.first.close();self.other.close()
+                    self.first=GuidedService(self.workspace,registry=Registry([fixture_adapter()]),backend_factory=FakeBackend)
+                    self.other=GuidedService(self.workspace,registry=Registry([fixture_adapter()]),backend_factory=self.factory)
+                    # start() expects the original fixture's open notification.
+                self.close_idle_with_barrier(session_lease=True,fail=failed)
+
+    def test_retry_acceptance_waits_for_explicit_stop_and_preserves_report(self):
+        scripts=Path(__file__).resolve().parents[1]/'scripts'
+        sys.path.insert(0,str(scripts))
+        try:
+            from run_native_read_retry import stop_retained_task
+        finally:
+            sys.path.remove(str(scripts))
+        ident=self.start();self.release.set();self.idle(self.first)
+        state=self.first._load(ident)
+        self.first.action({'id':ident,'action':'collect','selected':[state['cards'][0]['id']]})
+        self.idle(self.first);original=self.first._load(ident)
+        self.assertEqual(original['status'],'completed')
+        report=self.workspace.root/'reports'/original['report_id']
+        before={p.relative_to(report):p.read_bytes() for p in report.rglob('*') if p.is_file()}
+        rates=self.first.ledger.summary('fixture')
+        backend=self.first._backends[ident];close=backend.close
+        requests=list(backend.opens);entered,release=threading.Event(),threading.Event()
+        values,errors=[],[]
+        def held_close():
+            entered.set()
+            if not release.wait(30):raise AssertionError('test stop not released')
+            close()
+        def wait(task,predicate):
+            self.idle(self.first);state=self.first._load(task)
+            self.assertTrue(predicate(state));return state
+        def finish():
+            try:values.append(stop_retained_task(self.first,ident,wait))
+            except BaseException as error:errors.append(error)
+        waiter=threading.Thread(target=finish)
+        try:
+            with patch.object(backend,'close',held_close):
+                waiter.start();self.assertTrue(entered.wait(10))
+                self.assertTrue(waiter.is_alive())
+                self.assertTrue(self.other.state()['owned_elsewhere'])
+                release.set();waiter.join(timeout=10)
+                self.assertFalse(waiter.is_alive());self.assertFalse(errors,errors)
+            self.assertEqual(values[0]['status'],'stopped')
+            self.assertEqual(values[0]['outcome'],original['outcome'])
+            self.assertEqual(values[0]['report_id'],original['report_id'])
+            self.assertEqual(before,{p.relative_to(report):p.read_bytes() for p in report.rglob('*') if p.is_file()})
+            self.assertEqual(self.first.ledger.summary('fixture'),rates)
+            self.assertEqual(backend.opens,requests)
+            self.assertTrue(backend.closed);self.assertFalse(self.first._backends)
+        finally:
+            release.set();waiter.join(timeout=10)
+
     def test_waiting_observer_enters_before_next_checkpoint_replacement(self):
         # Synchronize on the existing fair admission queue, then verify the
         # real service reader/writer order rather than relying on sleeps.
