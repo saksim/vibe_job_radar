@@ -147,7 +147,13 @@ class WorkerSqliteProbeTests(unittest.TestCase):
             self.assertEqual(pending[0]['operation'], 'connection.execute')
             self.assertEqual(pending[0]['caller']['file'], 'rate.py')
             self.assertEqual(pending[0]['caller']['function'], 'reserve')
-            self.assertGreaterEqual(pending[0]['elapsed_ms'], 4000)
+            # The 5s observation also includes preparation before SQLite.
+            # Verify a real unfinished C call without inventing its duration.
+            self.assertGreater(pending[0]['elapsed_ms'], 0)
+            executes = evidence['worker_sqlite']['at_timeout']['operations']['connection.execute']
+            self.assertEqual(executes['calls_started'] - executes['calls_completed'], 1)
+            self.assertEqual(executes['failed_calls'], 0)
+            self.assertIn('before_wait', evidence['worker_sqlite'])
             self.assertEqual(evidence['worker_sqlite']['at_timeout']['nested_calls_omitted'], 0)
             self.assertIn('worker_fsync', evidence)
             self.assertNotIn(str(case.ledger.path), message)
@@ -191,7 +197,13 @@ class WorkerSqliteProbeTests(unittest.TestCase):
             self.assertEqual(pending[0]['operation'], 'connection.execute')
             self.assertEqual(pending[0]['caller']['file'], 'rate.py')
             self.assertEqual(pending[0]['caller']['function'], 'reserve')
-            self.assertGreaterEqual(pending[0]['elapsed_ms'], 4000)
+            # The 5s observation also includes preparation before SQLite.
+            # Verify a real unfinished C call without inventing its duration.
+            self.assertGreater(pending[0]['elapsed_ms'], 0)
+            executes = evidence['worker_sqlite']['at_timeout']['operations']['connection.execute']
+            self.assertEqual(executes['calls_started'] - executes['calls_completed'], 1)
+            self.assertEqual(executes['failed_calls'], 0)
+            self.assertIn('before_wait', evidence['worker_sqlite'])
             self.assertIn('worker_fsync', evidence)
             self.assertNotIn(str(case.ledger.path), message)
         finally:
@@ -200,6 +212,33 @@ class WorkerSqliteProbeTests(unittest.TestCase):
                 holder.close()
             case.doCleanups()
 
+
+    def test_retry_diagnostics_allow_real_preparation_before_sqlite_blocking(self):
+        import test_read_retry as retry_tests
+        from unittest.mock import patch
+        original = retry_tests.ReadRetryWorkerTests.setUp
+        previous = threading.getprofile()
+        for name in ('test_read_retry_timeout_records_pending_sqlite_before_cleanup',
+                     'test_second_retry_wait_retains_pending_sqlite_and_original_budget'):
+            with self.subTest(wait=name):
+                delays = []
+                def setup(case):
+                    original(case)
+                    reserve = case.ledger.reserve
+                    def prepare(site, kind, **kwargs):
+                        if threading.current_thread() is case.service._thread and kind == 'page':
+                            # Real preparation consumes part of the original 5s
+                            # wait but is outside the observed SQLite C call.
+                            start = time.monotonic()
+                            time.sleep(2)
+                            delays.append(time.monotonic() - start)
+                        return reserve(site, kind, **kwargs)
+                    case.ledger.reserve = prepare
+                with patch.object(retry_tests.ReadRetryWorkerTests, 'setUp', setup):
+                    getattr(WorkerSqliteProbeTests(name), name)()
+                self.assertTrue(delays)
+                self.assertTrue(all(delay >= 2 for delay in delays))
+                self.assertIs(threading.getprofile(), previous)
 
     def test_shutdown_read_wait_records_scheduler_insert_before_cleanup(self):
         import test_public_worker as worker_tests

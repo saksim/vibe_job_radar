@@ -1,6 +1,8 @@
 """Actual UI and owned PAC downloader; OS discovery is a synthetic fixture."""
 import json
 import os
+import re
+from urllib.parse import urlsplit
 from pathlib import Path
 import sys
 import tempfile
@@ -16,10 +18,67 @@ from vibe_job_radar.workspace import Workspace
 from vibe_job_radar.workbench import LocalServer
 
 
+PAGE_ERROR_PHASES = frozenset({
+    'startup', 'open-home', 'discovery-consent', 'trust-consent', 'stale-page',
+    'confirm-main', 'confirm-stale', 'open-guided', 'open-advanced',
+    'check-script', 'changed-source', 'renew-trust', 'cancel-discovery',
+    'mobile-layout', 'rollback', 'complete',
+})
+PAGE_ERROR_SCRIPTS = frozenset({
+    '/app.js', '/network-settings.js', '/public-schedule.js', '/public-queue.js',
+    '/windows-startup.js', '/report-sources.js', '/guided.js', '/advanced.js',
+    '/collection-help.js',
+})
+
+
+def record_page_error(result, error, origin, phase, page):
+    """Keep finite source locations; never retain exception text or full URLs."""
+    errors = result['page_errors']
+    if len(errors) >= 16:
+        result['page_error_details_truncated'] = True
+        return
+    # The original error gate stays failed even when inspection itself fails.
+    errors.append('Error')
+    row = {'phase':phase if phase in PAGE_ERROR_PHASES else 'unknown',
+           'page':page if page in {'main', 'stale'} else 'unknown',
+           'name':'unknown', 'message_code':'unknown', 'frames':[]}
+    result['page_error_details'].append(row)
+    try:
+        name = error.name
+        if name in {'Error', 'TypeError', 'ReferenceError', 'SyntaxError',
+                    'RangeError', 'EvalError', 'URIError'}:
+            row['name'] = name
+        message = error.message[:512]
+        for needle, code in (
+                ('Failed to fetch', 'fetch_failed'), ('Cannot read properties', 'property_read'),
+                ('Cannot access', 'temporal_dead_zone'), ('is not defined', 'undefined_name'),
+                ('is not a function', 'not_callable')):
+            if needle in message:
+                row['message_code'] = code
+                break
+        expected = urlsplit(origin)
+        stack = (error.stack or '')[:8192]
+        for address, line, column in re.findall(r'(https?://[^\s()]+):(\d{1,7}):(\d{1,7})', stack):
+            source = urlsplit(address)
+            if (source.scheme, source.netloc) != (expected.scheme, expected.netloc):
+                continue
+            if source.path not in PAGE_ERROR_SCRIPTS:
+                continue
+            if not 0 < int(line) <= 1000000 or not 0 < int(column) <= 1000000:
+                continue
+            row['frames'].append({'script':source.path[1:], 'line':int(line), 'column':int(column)})
+            if len(row['frames']) == 8:
+                break
+    except Exception:
+        result['page_error_observer_failed'] = True
+
+
 def main():
     from playwright.sync_api import sync_playwright,expect
     out=ROOT/'browser-acceptance'/'wpad';out.mkdir(parents=True,exist_ok=True)
+    phase='startup'
     result={'success':False,'checks':[],'page_errors':[],'external_requests':[],
+        'page_error_details':[],'page_error_details_truncated':False,'page_error_observer_failed':False,
         'native_evaluator':os.name=='nt','real_wpad_discovery':False,
         'scope':'Synthetic OS discovery. Actual UI, owned PAC download and Windows native evaluation. No LAN WPAD, personal settings or job requests.'}
     fixture=SourceServer()
@@ -52,7 +111,7 @@ def main():
                             else:result['external_requests'].append('nonlocal');route.abort()
                         context.route('**/*',local_only)
                         page=context.new_page()
-                        page.on('pageerror',lambda error:result['page_errors'].append(type(error).__name__))
+                        page.on('pageerror',lambda error:record_page_error(result,error,server.origin,phase,'main'))
                         def open_page(target,path='/'):
                             target.goto(server.entry_url if path=='/' else server.origin+path)
                             expect(target.locator('#discover-wpad')).to_be_enabled()
@@ -71,38 +130,52 @@ def main():
                                 target.locator('#save-wpad').click()
                             assert response.value.status==expected
                             expect(target.locator('#wpad-trust-consent')).not_to_be_checked()
+                        phase='open-home'
                         open_page(page);discovery.assert_not_called()
+                        phase='discovery-consent'
                         page.locator('#discover-wpad').click()
                         expect(page.locator('#wpad-status')).to_contain_text('勾选')
                         discovery.assert_not_called()
                         preview()
+                        phase='trust-consent'
                         expect(page.locator('#wpad-origin')).not_to_contain_text('SYNTHETIC')
                         assert not fixture.requests
                         page.locator('#save-wpad').click()
                         expect(page.locator('#wpad-status')).to_contain_text('单独勾选')
-                        stale=context.new_page();open_page(stale)
-                        confirm(page);confirm(stale,400)
+                        phase='stale-page'
+                        stale=context.new_page()
+                        stale.on('pageerror',lambda error:record_page_error(result,error,server.origin,phase,'stale'))
+                        open_page(stale)
+                        phase='confirm-main'
+                        confirm(page)
+                        phase='confirm-stale'
+                        confirm(stale,400)
                         assert not fixture.requests and discovery.call_count==1
                         result['checks'].append('separate discovery/trust consent, no default probe or download during confirmation, sanitized source, stale-tab rejection')
                         old=workspace.network_policy()
                         for path in ('/guided','/advanced','/'):
+                            phase={'/guided':'open-guided','/advanced':'open-advanced','/':'open-home'}[path]
                             open_page(page,path)
                             expect(page.locator('#workspace-proxy-mode')).to_have_value('wpad')
                         assert discovery.call_count==1 and not fixture.requests
+                        phase='check-script'
                         with page.expect_response(lambda r:r.url.endswith('/api/network/pac/check')) as response:
                             page.locator('#check-wpad').click()
                         check=response.value.json()
                         assert check['passed'] and check['transport']=='loopback_socks5_proxy' and not check['target_requested']
                         assert discovery.call_count==2 and len(fixture.requests)==1
                         result['checks'].append('three read-only pages; explicit check rediscovers once and uses real download child and Windows native SOCKS5 evaluation')
+                        phase='changed-source'
                         discovery.return_value=system_pac.Source(fixture.url+'&version=2')
                         with page.expect_response(lambda r:r.url.endswith('/api/network/pac/check')) as response:
                             page.locator('#check-wpad').click()
                         check=response.value.json()
                         assert not check['passed'] and check['code']=='wpad_source_changed' and len(fixture.requests)==1
+                        phase='renew-trust'
                         preview();confirm(page)
                         assert not old.pac.permitted() and len(fixture.requests)==1
                         result['checks'].append('changed full source URL blocks download and requires renewed preview/trust')
+                        phase='cancel-discovery'
                         entered=threading.Event()
                         def pending(permitted):
                             entered.set()
@@ -120,23 +193,29 @@ def main():
                         expect(page.locator('#save-wpad')).to_be_disabled()
                         assert len(fixture.requests)==1
                         result['checks'].append('UI cancels asynchronous discovery; owned permission closes without download')
+                        phase='mobile-layout'
                         page.set_viewport_size({'width':390,'height':844})
                         assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
                         page.locator('#discover-wpad').locator('..').screenshot(path=str(out/'wpad-mobile.png'))
+                        phase='rollback'
                         page.locator('#workspace-proxy-mode').select_option('auto')
                         with page.expect_response(lambda r:r.url.endswith('/api/network/proxy')):
                             page.locator('#save-workspace-proxy').click()
                         expect(page.locator('#check-wpad')).to_be_disabled()
                         assert workspace.network_state()['schema_version']==2
-                        assert not result['page_errors'] and not result['external_requests'] and len(fixture.requests)==1
+                        assert not result['page_errors'] and not result['page_error_observer_failed'] and not result['external_requests'] and len(fixture.requests)==1
                         result['checks'].append('390px layout fits; explicit rollback writes strict v2 with no extra request')
+                        phase='complete'
                         result.update(success=True,browser_version=browser.version,
                             source_downloads=len(fixture.requests),synthetic_discoveries=discovery.call_count)
                     finally:browser.close()
             finally:server.shutdown();server.server_close();thread.join(5)
     finally:
         fixture.close()
+        if result['page_errors'] or result['page_error_observer_failed']:
+            result['success']=False
         (out/'results.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
+    assert result['success']
     print(json.dumps(result,ensure_ascii=False,indent=2))
 
 
