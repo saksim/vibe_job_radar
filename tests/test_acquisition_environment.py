@@ -225,7 +225,7 @@ class EnvironmentHistoryTests(unittest.TestCase):
     def test_content_browser_and_unknown_environment_are_distinct(self):
         state=task();start(state,observe(state,backend()))
         adapter=builtins().get('liepin')
-        plan={'source_sha256':'b'*64,'source_content_sha256':'c'*64,'backend':'native','browser':'chrome',
+        plan={'planner_os':'Windows-11-10.0.26100-SP0','source_sha256':'b'*64,'source_content_sha256':'c'*64,'backend':'native','browser':'chrome',
               'browser_version':'157.0.1.0','platform':'liepin','adapter_version':adapter.version,'network_mode':'system'}
         result=env.assessment(plan,state[env.KEY],state[attempt_history.KEY])
         self.assertEqual(result['matching_detail_attempts'],1);self.assertEqual(result['gaps'],[])
@@ -238,7 +238,7 @@ class EnvironmentHistoryTests(unittest.TestCase):
 
     def test_network_plan_modes_match_configuration_and_keep_unknown_explicit(self):
         state=task();start(state,observe(state,backend()))
-        plan={'source_sha256':'b'*64,'source_content_sha256':'c'*64,'backend':'native','browser':'chrome',
+        plan={'planner_os':'Windows-11-10.0.26100-SP0','source_sha256':'b'*64,'source_content_sha256':'c'*64,'backend':'native','browser':'chrome',
               'browser_version':'157.0.1.0','platform':'liepin','adapter_version':builtins().get('liepin').version}
         for mode,transport,matched,different in (
                 ('system','system_route',True,False), ('direct','system_route',True,False),
@@ -257,7 +257,7 @@ class EnvironmentHistoryTests(unittest.TestCase):
 
     def test_missing_fields_do_not_hide_other_known_environment_differences(self):
         state=task();start(state,observe(state,backend()))
-        plan={'source_sha256':'b'*64,'source_content_sha256':'d'*64,'backend':'native','browser':'msedge',
+        plan={'planner_os':'Windows-11-10.0.26100-SP0','source_sha256':'b'*64,'source_content_sha256':'d'*64,'backend':'native','browser':'msedge',
               'browser_version':'157.0.1.0','platform':'liepin','adapter_version':builtins().get('liepin').version,
               'network_mode':'system'}
         for unknown_field in ('transport','os','adapter'):
@@ -271,6 +271,42 @@ class EnvironmentHistoryTests(unittest.TestCase):
                 self.assertIn('runtime_environment',result['gaps'])
                 self.assertIn('runtime_environment_differs_from_plan',result['gaps'])
                 self.assertEqual(result['matching_detail_attempts'],0)
+
+    def test_unknown_planned_browser_never_counts_as_matching(self):
+        state=task();start(state,observe(state,backend()))
+        plan={'planner_os':'Windows-11-10.0.26100-SP0','source_sha256':'b'*64,
+              'backend':'native','browser':'chrome','browser_version':'unknown',
+              'platform':'liepin','adapter_version':builtins().get('liepin').version,'network_mode':'system'}
+        result=env.assessment(plan,state[env.KEY],state[attempt_history.KEY])
+        self.assertEqual(result['matching_detail_attempts'],0)
+        self.assertEqual(result['mismatched_fields'],[])
+        self.assertIn('runtime_environment',result['gaps'])
+
+    def test_planned_os_family_release_and_noncomparable_labels(self):
+        state=task();start(state,observe(state,backend()))
+        plan={'source_sha256':'b'*64,'backend':'native','browser':'chrome',
+              'browser_version':'157.0.1.0','platform':'liepin',
+              'adapter_version':builtins().get('liepin').version,'network_mode':'system'}
+        cases=(
+            ('Windows-11-10.0.26100-SP0','Windows','11',None,None),
+            ('Windows-10-10.0.19045-SP0','Windows','11','os_release',None),
+            ('Windows-110','Windows','11','os_release',None),
+            ('Linux-6.8.0-x86_64-with-glibc2.39','Windows','11','os',None),
+            ('Linux-6.8.0-64-generic-x86_64-with-glibc2.39','Linux','6.8.0-64-generic',None,None),
+            ('Darwin-25.0.0-arm64','Darwin','25.0.0',None,None),
+            ('macOS-15.0-arm64-arm-64bit','Darwin','24.0.0',None,'os_release_not_comparable'),
+            ('macOS-15.0-arm64','Windows','11','os',None),
+            ('Windows','Windows','11',None,'os_release_not_comparable'),
+            ('unknown','Windows','11',None,'planner_os_not_comparable'),
+            ('Windows-11','Windows','unknown',None,'os_release_not_comparable'))
+        for declared,system,release,difference,gap in cases:
+            with self.subTest(declared=declared,system=system,release=release):
+                observed=state[env.KEY]['observations'][0]['runtime']
+                observed.update(os=system,os_release=release)
+                result=env.assessment({**plan,'planner_os':declared},state[env.KEY],state[attempt_history.KEY])
+                self.assertEqual(result['matching_detail_attempts'],int(not difference and not gap))
+                self.assertEqual(result['mismatched_fields'],[difference] if difference else [])
+                if gap:self.assertIn(gap,result['gaps'])
 
     def test_report_keeps_original_refs_and_rejects_missing_or_changed_copy(self):
         state=task();start(state,observe(state,backend()));report=copy.deepcopy(state)
@@ -292,7 +328,7 @@ class LedgerEnvironmentTests(unittest.TestCase):
         return value
 
     def recorded(self, fixture):
-        fixture.plan=fixture.ledger.create({**fixture.data,'source_content_sha256':'c'*64,'browser_version':'157.0.1.0'})
+        fixture.plan=fixture.ledger.create({**fixture.data,'source_content_sha256':'c'*64,'browser_version':'157.0.1.0','planner_os':'Windows-11-10.0.26100-SP0'})
         state=fixture.batch()
         owner=backend(channel=fixture.plan['browser'],version='157.0.1.0')
         with patch.object(runtime,'snapshot',return_value=observed_runtime()),patch.object(env,'utc_now',return_value=NOW):

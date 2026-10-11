@@ -198,6 +198,26 @@ def require_report(current, audit):
             raise CrawlError('environment_history_invalid')
 
 
+def _compare_os(declared, runtime):
+    # platform.platform() includes extra machine/build labels. Compare only
+    # fields also observed at runtime; macOS marketing versions cannot attest
+    # Darwin kernel releases.
+    label, _, suffix = str(declared).partition('-')
+    family = {'Windows': 'Windows', 'Linux': 'Linux',
+              'Darwin': 'Darwin', 'macOS': 'Darwin'}.get(label)
+    if family is None:
+        return None, 'planner_os_not_comparable'
+    if runtime['os'] != 'unknown' and family != runtime['os']:
+        return 'os', None
+    release = runtime['os_release']
+    if (label == 'macOS' or not suffix[:1].isdigit() or release == 'unknown'
+            or runtime['os'] == 'unknown'):
+        return None, 'os_release_not_comparable'
+    if suffix != release and not suffix.startswith(release + '-'):
+        return 'os_release', None
+    return None, None
+
+
 def assessment(plan, history, attempts):
     """No certification: source/browser comparison and missing refs are facts."""
     observations = (history or {}).get('observations', [])
@@ -219,7 +239,8 @@ def assessment(plan, history, attempts):
         }.get(plan.get('network_mode'))
         missing = (runtime['freshness'] != 'unchanged' or source['kind'] == 'unknown'
                    or obs['backend'] == 'unknown' or obs['browser_channel'] == 'unknown'
-                   or obs['browser_version'] == 'unknown' or runtime['os'] == 'unknown'
+                   or plan['browser_version'] == 'unknown' or obs['browser_version'] == 'unknown'
+                   or runtime['os'] == 'unknown' or runtime['os_release'] == 'unknown'
                    or runtime['python_version'] == 'unknown' or runtime['playwright_version'] == 'unknown'
                    or obs['adapter_key'] == 'unknown' or obs['adapter_version'] == 'unknown'
                    or net['transport'] in {'unknown', 'unavailable'} or net['dns'] == 'unknown'
@@ -233,6 +254,12 @@ def assessment(plan, history, attempts):
         # field. Compare configured transport only, not an unobserved VPN/TUN
         # route or per-request PAC/bypass decision.
         fields = []
+        os_difference, os_gap = _compare_os(plan.get('planner_os'), runtime)
+        if os_difference:
+            fields.append(os_difference)
+        if os_gap:
+            missing = True
+            unknown.add(os_gap)
         expected = plan.get('source_content_sha256')
         if source['kind'] != 'unknown' and (
                 source['content_sha256'] != expected if expected else source['raw_sha256'] != plan['source_sha256']):
