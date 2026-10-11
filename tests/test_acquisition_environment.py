@@ -226,7 +226,7 @@ class EnvironmentHistoryTests(unittest.TestCase):
         state=task();start(state,observe(state,backend()))
         adapter=builtins().get('liepin')
         plan={'source_sha256':'b'*64,'source_content_sha256':'c'*64,'backend':'native','browser':'chrome',
-              'browser_version':'157.0.1.0','platform':'liepin','adapter_version':adapter.version}
+              'browser_version':'157.0.1.0','platform':'liepin','adapter_version':adapter.version,'network_mode':'system'}
         result=env.assessment(plan,state[env.KEY],state[attempt_history.KEY])
         self.assertEqual(result['matching_detail_attempts'],1);self.assertEqual(result['gaps'],[])
         result=env.assessment({**plan,'source_content_sha256':'d'*64,'browser':'msedge'},state[env.KEY],state[attempt_history.KEY])
@@ -235,6 +235,42 @@ class EnvironmentHistoryTests(unittest.TestCase):
         result=env.assessment(plan,state[env.KEY],state[attempt_history.KEY])
         self.assertIn('runtime_environment',result['gaps'])
         self.assertEqual(result['matching_detail_attempts'],0)
+
+    def test_network_plan_modes_match_configuration_and_keep_unknown_explicit(self):
+        state=task();start(state,observe(state,backend()))
+        plan={'source_sha256':'b'*64,'source_content_sha256':'c'*64,'backend':'native','browser':'chrome',
+              'browser_version':'157.0.1.0','platform':'liepin','adapter_version':builtins().get('liepin').version}
+        for mode,transport,matched,different in (
+                ('system','system_route',True,False), ('direct','system_route',True,False),
+                ('static_http','loopback_http_proxy',True,False), ('static_http','vm_host_http_proxy',True,False),
+                ('static_socks5','loopback_socks5_proxy',True,False), ('static_socks5','vm_host_socks5_proxy',True,False),
+                ('static_socks5','system_route',False,True), ('static_http','loopback_socks5_proxy',False,True),
+                ('direct','pac_by_host',False,True), ('system','pac_by_url',False,True),
+                ('unknown','system_route',False,False), ('static_http','unavailable',False,False)):
+            with self.subTest(mode=mode,transport=transport):
+                state[env.KEY]['observations'][0]['network']['transport']=transport
+                result=env.assessment({**plan,'network_mode':mode},state[env.KEY],state[attempt_history.KEY])
+                self.assertEqual(result['matching_detail_attempts'],int(matched))
+                self.assertEqual('network_mode' in result['mismatched_fields'],different)
+                if mode=='unknown':self.assertIn('network_mode_not_comparable',result['gaps'])
+        self.assertEqual(state[env.KEY]['observations'][0]['network']['physical_route'],'unknown')
+
+    def test_missing_fields_do_not_hide_other_known_environment_differences(self):
+        state=task();start(state,observe(state,backend()))
+        plan={'source_sha256':'b'*64,'source_content_sha256':'d'*64,'backend':'native','browser':'msedge',
+              'browser_version':'157.0.1.0','platform':'liepin','adapter_version':builtins().get('liepin').version,
+              'network_mode':'system'}
+        for unknown_field in ('transport','os','adapter'):
+            with self.subTest(unknown_field=unknown_field):
+                changed=copy.deepcopy(state);obs=changed[env.KEY]['observations'][0]
+                if unknown_field=='transport':obs['network']['transport']='unavailable'
+                elif unknown_field=='os':obs['runtime']['os']='unknown'
+                else:obs['adapter_version']='unknown'
+                result=env.assessment(plan,changed[env.KEY],changed[attempt_history.KEY])
+                self.assertEqual(result['mismatched_fields'],['browser','source'])
+                self.assertIn('runtime_environment',result['gaps'])
+                self.assertIn('runtime_environment_differs_from_plan',result['gaps'])
+                self.assertEqual(result['matching_detail_attempts'],0)
 
     def test_report_keeps_original_refs_and_rejects_missing_or_changed_copy(self):
         state=task();start(state,observe(state,backend()));report=copy.deepcopy(state)

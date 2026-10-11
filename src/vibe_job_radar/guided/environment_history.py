@@ -211,29 +211,48 @@ def assessment(plan, history, attempts):
         unknown.add('runtime_environment')
     for obs in observations:
         runtime = obs['runtime']; source = runtime['source']
+        net = obs['network']
+        expected_transports = {
+            'direct': {'system_route'}, 'system': {'system_route'},
+            'static_http': {'loopback_http_proxy', 'vm_host_http_proxy'},
+            'static_socks5': {'loopback_socks5_proxy', 'vm_host_socks5_proxy'},
+        }.get(plan.get('network_mode'))
         missing = (runtime['freshness'] != 'unchanged' or source['kind'] == 'unknown'
                    or obs['backend'] == 'unknown' or obs['browser_channel'] == 'unknown'
                    or obs['browser_version'] == 'unknown' or runtime['os'] == 'unknown'
                    or runtime['python_version'] == 'unknown' or runtime['playwright_version'] == 'unknown'
-                   or obs['network']['transport'] in {'unknown', 'unavailable'})
+                   or obs['adapter_key'] == 'unknown' or obs['adapter_version'] == 'unknown'
+                   or net['transport'] in {'unknown', 'unavailable'} or net['dns'] == 'unknown'
+                   or net['policy_id'] is None)
         if missing:
             unknown.add('runtime_environment')
-            continue
+        if expected_transports is None:
+            missing = True
+            unknown.add('network_mode_not_comparable')
+        # Missing one observation never erases a difference in another known
+        # field. Compare configured transport only, not an unobserved VPN/TUN
+        # route or per-request PAC/bypass decision.
         fields = []
         expected = plan.get('source_content_sha256')
-        if (source['content_sha256'] != expected if expected else source['raw_sha256'] != plan['source_sha256']):
+        if source['kind'] != 'unknown' and (
+                source['content_sha256'] != expected if expected else source['raw_sha256'] != plan['source_sha256']):
             fields.append('source')
-        if obs['backend'] != plan['backend']:
+        if obs['backend'] != 'unknown' and obs['backend'] != plan['backend']:
             fields.append('backend')
-        if obs['browser_channel'] != plan['browser']:
+        if obs['browser_channel'] != 'unknown' and obs['browser_channel'] != plan['browser']:
             fields.append('browser')
-        if plan['browser_version'] != 'unknown' and obs['browser_version'] != plan['browser_version']:
+        if (plan['browser_version'] != 'unknown' and obs['browser_version'] != 'unknown'
+                and obs['browser_version'] != plan['browser_version']):
             fields.append('browser_version')
-        if obs['adapter_key'] != plan['platform'] or obs['adapter_version'] != plan['adapter_version']:
+        if ((obs['adapter_key'] != 'unknown' and obs['adapter_key'] != plan['platform'])
+                or (obs['adapter_version'] != 'unknown' and obs['adapter_version'] != plan['adapter_version'])):
             fields.append('adapter')
+        if expected_transports is not None and net['transport'] not in {'unknown', 'unavailable'}:
+            if net['transport'] not in expected_transports:
+                fields.append('network_mode')
         if fields:
             mismatches.update(fields)
-        else:
+        elif not missing:
             matched.add(obs['sequence'])
     bound = sum(refs.get(a['sequence']) is not None for a in total)
     matching = sum(refs.get(a['sequence']) in matched for a in total)
