@@ -5,6 +5,7 @@ by this script. No real account, profile, site navigation or automated fallback.
 """
 from __future__ import annotations
 import argparse
+from contextlib import contextmanager
 import json
 import sys
 import tempfile
@@ -86,19 +87,109 @@ def record_choice_failure(result, service, error):
         row['observer_failed'] = True
 
 
-def open_workbench(page, server, expect):
-    """Check application readiness, not a late browser-wide load event.
+# Finite developer evidence, scoped to one readiness attempt. The first window's
+# polling cannot consume the second window's budget; no URL/body/header is saved.
+READINESS_ROUTES = frozenset({
+    '/', '/app.js', '/report-sources.js', '/api/status',
+    '/network-settings.js', '/public-schedule.js', '/public-queue.js',
+    '/windows-startup.js',
+})
+READINESS_NETWORK_ERRORS = frozenset({
+    'net::ERR_FAILED', 'net::ERR_ABORTED', 'net::ERR_CONNECTION_REFUSED',
+    'net::ERR_CONNECTION_RESET', 'net::ERR_CONNECTION_CLOSED',
+    'net::ERR_CONNECTION_TIMED_OUT', 'net::ERR_TIMED_OUT',
+    'net::ERR_EMPTY_RESPONSE', 'net::ERR_CONTENT_LENGTH_MISMATCH',
+    'net::ERR_INCOMPLETE_CHUNKED_ENCODING', 'net::ERR_NETWORK_CHANGED',
+    'net::ERR_INTERNET_DISCONNECTED', 'net::ERR_NAME_NOT_RESOLVED',
+    'net::ERR_BLOCKED_BY_CLIENT', 'net::ERR_INVALID_RESPONSE',
+})
 
-    One navigation, no retry/fallback. A 200 alone cannot pass: the real JS must
-    authenticate, populate counts and remove the fragment before proceeding.
-    """
-    response = page.goto(server.entry_url, wait_until='domcontentloaded', timeout=30000)
-    if response is None or response.status != 200:
-        raise AssertionError('workbench document did not return HTTP 200')
-    expect(page.locator('#counts')).to_contain_text('真实记录 0', timeout=30000)
-    if page.url != server.origin + '/':
-        raise AssertionError('workbench authentication initialization incomplete')
-    expect(page.locator('a[href="/guided"]')).to_be_visible()
+
+@contextmanager
+def observe_workbench_readiness(page, server, evidence):
+    row = {'phase': 'navigation', 'outcome': 'pending', 'routes': {},
+           'page_errors': 0, 'crashes': 0, 'page_closed': 0,
+           'observer_failed': False, 'counter_saturated': False}
+    if evidence is None:
+        yield row
+        return
+    evidence.append(row)
+    active = True
+    listeners = []
+
+    def increment(target, key):
+        value = target.get(key, 0)
+        if value < 999:
+            target[key] = value + 1
+        else:
+            row['counter_saturated'] = True
+
+    def observe(kind, item=None):
+        if not active:
+            return
+        try:
+            if kind in {'page_errors', 'crashes', 'page_closed'}:
+                increment(row, kind)
+                return
+            parsed = urlsplit(item.url)
+            local = parsed.scheme + '://' + parsed.netloc == server.origin
+            route = (parsed.path if parsed.path in READINESS_ROUTES else 'other_local') if local else 'external'
+            counts = row['routes'].setdefault(route, {
+                'started': 0, 'responses': 0, 'finished': 0, 'failed': 0,
+                'last_status': None, 'last_network_error': None})
+            increment(counts, kind)
+            if kind == 'responses':
+                status = item.status
+                counts['last_status'] = status if type(status) is int and 100 <= status <= 599 else None
+            elif kind == 'failed':
+                code = item.failure
+                counts['last_network_error'] = code if isinstance(code, str) and code in READINESS_NETWORK_ERRORS else 'unknown'
+        except Exception:
+            row['observer_failed'] = True
+
+    for event, kind in (('request', 'started'), ('response', 'responses'),
+                        ('requestfinished', 'finished'), ('requestfailed', 'failed'),
+                        ('pageerror', 'page_errors'), ('crash', 'crashes'),
+                        ('close', 'page_closed')):
+        callback = lambda item=None, kind=kind: observe(kind, item)
+        try:
+            page.on(event, callback)
+            listeners.append((event, callback))
+        except Exception:
+            row['observer_failed'] = True
+    try:
+        yield row
+    except BaseException:
+        row['outcome'] = 'failed'
+        raise
+    else:
+        row['outcome'] = 'passed'
+    finally:
+        # Freeze before caller closes the page/context: cleanup cancellation must
+        # never overwrite the original pending/failed request facts.
+        active = False
+        for event, callback in listeners:
+            try:
+                page.remove_listener(event, callback)
+            except Exception:
+                row['observer_failed'] = True
+
+
+def open_workbench(page, server, expect, *, evidence=None):
+    """One navigation; the real JS must authenticate and populate the UI."""
+    with observe_workbench_readiness(page, server, evidence) as row:
+        response = page.goto(server.entry_url, wait_until='domcontentloaded', timeout=30000)
+        row['phase'] = 'document-status'
+        if response is None or response.status != 200:
+            raise AssertionError('workbench document did not return HTTP 200')
+        row['phase'] = 'authenticated-counts'
+        expect(page.locator('#counts')).to_contain_text('真实记录 0', timeout=30000)
+        row['phase'] = 'token-free-url'
+        if page.url != server.origin + '/':
+            raise AssertionError('workbench authentication initialization incomplete')
+        row['phase'] = 'guided-link'
+        expect(page.locator('a[href="/guided"]')).to_be_visible()
+        row['phase'] = 'complete'
 
 
 def main():
@@ -115,6 +206,7 @@ def main():
     result={'success':False,'stage':'startup','ui_events':[],'checks':[],'page_errors':[], 'external_ui_requests':[],
             'channel':channel, 'backend':args.backend, 'ui_channel':ui_channel, 'scope':'Real selected installed browser headed collector and local UI; bundled native exception is artificial. Not user-PC crash reproduction or site certification.'}
     result['failure_observer_installed'] = True
+    result['workbench_readiness'] = []
     result['checkpoint'] = 'startup'
     fixture=failed_report({**environment_report(),'stage':'launch'},RuntimeError(
         '<launched> pid=123\n[pid=123] <process did exit: exitCode=3221226356, signal=null>'))
@@ -149,7 +241,7 @@ def main():
                                 result['ui_events'].append({'route':route_name,'status':response.status})
                         page.on('response', observe_response)
                         result['stage'] = 'workbench-readiness'
-                        open_workbench(page, server, expect)
+                        open_workbench(page, server, expect, evidence=result['workbench_readiness'])
                         result['checks'].append('local document 200, JS authenticated status and token-free URL are ready before navigation')
                         result['stage'] = 'second-cold-workbench-readiness'
                         second = browser.new_context(viewport={'width':1280,'height':960})
@@ -158,7 +250,7 @@ def main():
                             second_page = second.new_page()
                             second_page.on('pageerror', lambda e: result['page_errors'].append(str(e)))
                             second_page.on('response', observe_response)
-                            open_workbench(second_page, server, expect)
+                            open_workbench(second_page, server, expect, evidence=result['workbench_readiness'])
                             result['checks'].append('second independent cold UI context authenticates without reload or retry')
                         finally:
                             second.close()
