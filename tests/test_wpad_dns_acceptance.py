@@ -7,7 +7,7 @@ import socket
 import struct
 import sys
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'scripts'))
 import wpad_dns_protocol as protocol
@@ -59,10 +59,10 @@ class DnsProtocolTests(unittest.TestCase):
         try:
             udp=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
             with udp:
-                udp.settimeout(3);udp.sendto(query(),('127.0.0.1',dns.port))
+                udp.settimeout(3);udp.sendto(query(),('127.0.0.1',dns.ports['udp']))
                 actual,_=udp.recvfrom(4096)
                 self.assertEqual(actual,protocol.dns_reply(query(),set(NAMES))[0])
-            with socket.create_connection(('127.0.0.1',dns.port),timeout=3) as tcp:
+            with socket.create_connection(('127.0.0.1',dns.ports['tcp']),timeout=3) as tcp:
                 wire=query(kind=28);tcp.sendall(struct.pack('!H',len(wire))+wire)
                 size=struct.unpack('!H',dns._exact(tcp,2))[0]
                 actual=dns._exact(tcp,size)
@@ -79,7 +79,63 @@ class DnsProtocolTests(unittest.TestCase):
         # A closed TCP connection may retain TIME_WAIT on POSIX. Verify the
         # owned descriptors above; immediate rebinding is only valid for UDP.
         with socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as sock:
-            sock.bind(('127.0.0.1',dns.port))
+            sock.bind(('127.0.0.1',dns.ports['udp']))
+
+    def test_ephemeral_udp_port_is_not_assumed_available_to_tcp(self):
+        # Model a TCP reservation at the number assigned to UDP. All successful
+        # binds and the subsequent DNS exchanges still use real loopback sockets.
+        real_socket=socket.socket;udp_port=None;attempts=[]
+        class ReservedTcpPort:
+            def __init__(self,family,kind):
+                self.inner=real_socket(family,kind);self.kind=kind
+            def __getattr__(self,name):return getattr(self.inner,name)
+            def bind(self,address):
+                nonlocal udp_port
+                attempts.append((self.kind,address))
+                if self.kind==socket.SOCK_STREAM and address[1]==udp_port:
+                    raise PermissionError(10013,'UDP-selected number is unavailable to TCP')
+                self.inner.bind(address)
+                if self.kind==socket.SOCK_DGRAM:udp_port=self.inner.getsockname()[1]
+        dns=protocol.LoopbackDns(NAMES,port=0)
+        with patch.object(protocol.socket,'socket',side_effect=ReservedTcpPort):
+            dns.start()
+        try:
+            self.assertEqual(attempts,[(socket.SOCK_DGRAM,('127.0.0.1',0)),
+                                      (socket.SOCK_STREAM,('127.0.0.1',0))])
+            with socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as udp:
+                udp.settimeout(3);udp.sendto(query(),('127.0.0.1',dns.ports['udp']))
+                actual,_=udp.recvfrom(4096)
+                self.assertEqual(actual,protocol.dns_reply(query(),set(NAMES))[0])
+            with socket.create_connection(('127.0.0.1',dns.ports['tcp']),timeout=3) as tcp:
+                wire=query(kind=28);tcp.sendall(struct.pack('!H',len(wire))+wire)
+                size=struct.unpack('!H',dns._exact(tcp,2))[0]
+                self.assertEqual(dns._exact(tcp,size),protocol.dns_reply(wire,set(NAMES))[0])
+        finally:dns.close()
+        self.assertEqual(dns.snapshot()['queries'],{'udp_owned_a':1,'tcp_owned_aaaa':1})
+        self.assertEqual(dns.snapshot()['errors'],0)
+        self.assertTrue(dns.snapshot()['listeners_closed'])
+        self.assertEqual([sock.fileno() for sock in dns.sockets],[-1,-1])
+        self.assertTrue(all(not thread.is_alive() for thread in dns.threads))
+
+    def test_fixed_dns_port_failure_closes_both_sockets_before_serving(self):
+        # The actual hosted fixture must still use UDP and TCP port 53. A denied
+        # fixed port fails once; it must not fall back to another port or serve
+        # a partially initialized DNS listener.
+        udp=Mock();tcp=Mock();failure=PermissionError(10013,'fixed port denied')
+        udp.getsockname.return_value=('127.0.0.1',53)
+        tcp.bind.side_effect=failure
+        dns=protocol.LoopbackDns(NAMES)
+        with patch.object(protocol.socket,'socket',side_effect=[udp,tcp]) as factory,\
+                patch.object(protocol.threading,'Thread') as thread:
+            with self.assertRaises(PermissionError) as raised:dns.start()
+            self.assertIs(raised.exception,failure)
+            thread.assert_not_called()
+        self.assertEqual(factory.call_count,2)
+        udp.bind.assert_called_once_with(('127.0.0.1',53))
+        tcp.bind.assert_called_once_with(('127.0.0.1',53))
+        udp.close.assert_called_once_with();tcp.close.assert_called_once_with()
+        self.assertTrue(dns.stop.is_set());self.assertTrue(dns.closed)
+        self.assertEqual(dns.threads,[])
 
     def test_only_bounded_exact_wpad_names_are_accepted(self):
         for bad in (['wpad'],['wpad','*.invalid'],['wpad','.fixture.invalid'],
