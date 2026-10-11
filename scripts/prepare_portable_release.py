@@ -21,6 +21,10 @@ WORKFLOWS = {
     '.github/workflows/windows-native-tls.yml', '.github/workflows/windows-portable.yml',
 }
 ARTIFACTS = ('windows-x64-portable-candidate', 'windows-portable-evidence')
+REQUIRED_PORTABLE_FLAGS = (
+    'startup_registration_verified', 'startup_worker_verified',
+    'system_pac_verified', 'wpad_dns_verified', 'url_pac_worker_verified',
+)
 HEX = re.compile(r'[0-9a-f]{64}')
 REPO = re.compile(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+')
 
@@ -106,6 +110,8 @@ def validate_candidate(candidate, manifest, source_evidence, sha):
             and manifest.get('runtime_verified') is True
             and manifest.get('live_sites_certified') is False
             and manifest.get('platform') == 'windows-x64', 'Candidate is not verified')
+    require(all(manifest.get(flag) is True for flag in REQUIRED_PORTABLE_FLAGS),
+            'Candidate lacks required Windows acceptance evidence')
     require(source_evidence.get('success') is True
             and source_evidence.get('source_unchanged') is True, 'Source qualification failed')
     with zipfile.ZipFile(candidate) as archive:
@@ -128,6 +134,8 @@ def validate_candidate(candidate, manifest, source_evidence, sha):
             and proof.get('runtime_environment_verified') is True
             and proof.get('runtime_environment_restart_verified') is True,
             'Executable qualification failed or omitted bundled browser/runtime binding')
+    require(all(proof.get(flag) is True for flag in REQUIRED_PORTABLE_FLAGS),
+            'Executable lacks required Windows acceptance evidence')
     require(runtime.get('executable_sha256') == proof.get('files', {}).get('VibeJobRadar.exe')
             and isinstance(runtime.get('executable_sha256'), str)
             and HEX.fullmatch(runtime['executable_sha256']), 'Executable evidence mismatch')

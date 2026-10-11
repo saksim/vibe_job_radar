@@ -33,6 +33,9 @@ class PortableReleaseTests(unittest.TestCase):
         self.proof={'success':True,'verified_browser':'bundled',
                     'runtime_environment_verified':True,'runtime_environment_restart_verified':True,
                     'files':{'VibeJobRadar.exe':'d'*64}}
+        self.required_flags=('startup_registration_verified','startup_worker_verified',
+                             'system_pac_verified','wpad_dns_verified','url_pac_worker_verified')
+        self.proof.update({flag:True for flag in self.required_flags})
         self.artifacts={name:{'id':i,'digest':None} for i,name in enumerate(self.mod.ARTIFACTS,200)}
         self.package,self.manifest=self.archive()
 
@@ -47,6 +50,7 @@ class PortableReleaseTests(unittest.TestCase):
         manifest={'file':dest.name,'sha256':sha,'source_sha256':'b'*64,'size_bytes':dest.stat().st_size,
                   'status':'portable_candidate_not_release','runtime_verified':True,
                   'live_sites_certified':False,'platform':'windows-x64'}
+        manifest.update({flag:True for flag in self.required_flags})
         return dest,manifest
 
     def test_reuse_candidate_keeps_bytes_unsigned_scope_and_rollback(self):
@@ -97,6 +101,28 @@ class PortableReleaseTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     self.mod.validate_candidate(package,manifest,self.evidence,self.sha)
                 self.meta,self.proof=old_meta,old_proof
+
+    def test_historical_manifest_missing_or_failed_current_acceptance_is_rejected(self):
+        for flag in self.required_flags:
+            for missing in (True,False):
+                with self.subTest(flag=flag,missing=missing):
+                    manifest=copy.deepcopy(self.manifest)
+                    if missing:manifest.pop(flag)
+                    else:manifest[flag]=False
+                    with self.assertRaises(ValueError):
+                        self.mod.validate_candidate(self.package,manifest,self.evidence,self.sha)
+
+    def test_green_manifest_does_not_replace_structured_windows_acceptance(self):
+        for flag in self.required_flags:
+            for missing in (True,False):
+                with self.subTest(flag=flag,missing=missing):
+                    original=copy.deepcopy(self.proof)
+                    if missing:self.proof.pop(flag)
+                    else:self.proof[flag]=False
+                    package,manifest=self.archive()
+                    with self.assertRaises(ValueError):
+                        self.mod.validate_candidate(package,manifest,self.evidence,self.sha)
+                    self.proof=original
 
     def test_existing_output_is_not_replaced(self):
         output=self.root/'existing';output.mkdir();(output/'keep.txt').write_text('keep',encoding='utf8')
