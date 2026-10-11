@@ -11,9 +11,9 @@ permissions:
 jobs:
   browser-exercises:
     runs-on: ubuntu-latest
-    # Installation and the full browser suite have separate bounded budgets.
-    # Keep two minutes outside their 8m + 10m limits for checkout and evidence.
-    timeout-minutes: 20
+    # Keep installation and both sequential browser phases separately bounded.
+    # Reserve two minutes outside 8m + 10m + 10m for checkout and evidence.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -24,7 +24,7 @@ jobs:
         run: |
           python -m pip install playwright "packaging>=24.2" "quickjs-ng==0.17.0.1"
           python -m playwright install --with-deps chromium
-      - name: Exercise actual browser onboarding and downloads
+      - name: Exercise browser onboarding and network routes
         timeout-minutes: 10
         run: |
           python scripts/run_browser_acceptance.py
@@ -48,6 +48,9 @@ jobs:
           python scripts/run_pac_browser.py
           python scripts/run_system_pac_browser.py
           python scripts/run_wpad_browser.py
+      - name: Exercise browser collection, reports and policy binding
+        timeout-minutes: 10
+        run: |
           python scripts/run_public_schedule_browser.py
           python scripts/run_public_outcomes_browser.py
           python scripts/run_public_worker_browser.py
