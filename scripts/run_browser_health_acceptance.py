@@ -68,6 +68,10 @@ def main():
                 detail=second['blank_page_check']
                 assert detail['step']=='verified' and set(detail['elapsed_ms'])=={'load_inline_page','read_title'}
                 assert detail['page_closed'] is False and detail['browser_connected'] is True
+                navigation=detail['navigation_before_cleanup']
+                assert navigation['main_frame_commits']>=1 and navigation['other_frame_commits']==0
+                assert navigation['location']=='fixed_inline' and navigation['observed_page_is_current']
+                assert navigation['frame_observation_failed'] is False
                 assert not any(detail['events_before_cleanup'][name] for name in ('crash','close','disconnected'))
                 result['blank_page_check']=detail
                 result['checks'].append('same-process recheck starts actual headed collection backend and clears stale not-ready state')

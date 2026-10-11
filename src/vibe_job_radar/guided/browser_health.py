@@ -211,7 +211,18 @@ def probe_browser(*, headless: bool = False, executable_path: str | None = None,
     from .browser import PlaywrightBackend
     backend = None
     detail = None
+    probe_page = None
+    navigation = {'main_frame_commits':0, 'other_frame_commits':0,
+                  'frame_observation_failed':False}
     events = {name:0 for name in ('domcontentloaded', 'load', 'crash', 'close', 'disconnected')}
+    def navigated(frame):
+        # Public event/cached properties only: no extra browser command or URL
+        # collection, and observation errors never replace the check result.
+        try:
+            key = 'main_frame_commits' if frame is probe_page.main_frame else 'other_frame_commits'
+            navigation[key] = min(navigation[key] + 1, 999)
+        except Exception:
+            navigation['frame_observation_failed'] = True
     def observed(name):
         def count(*unused):
             events[name] = min(events[name] + 1, 999)
@@ -231,6 +242,11 @@ def probe_browser(*, headless: bool = False, executable_path: str | None = None,
         backend.startup_report['stage'] = 'blank_page_content'
         detail = {'step':'observe', 'elapsed_ms':{}}
         backend.startup_report['blank_page_check'] = detail
+        probe_page = backend.page
+        try:
+            probe_page.on('framenavigated', navigated)
+        except Exception:
+            navigation['frame_observation_failed'] = True
         # Fixed names/counts only. Do not retain page URLs, console messages,
         # exception arguments, event payloads or the title returned by the page.
         for name in ('domcontentloaded', 'load', 'crash', 'close'):
@@ -260,6 +276,16 @@ def probe_browser(*, headless: bool = False, executable_path: str | None = None,
                 # Freeze observations before our own intentional close so that
                 # cleanup cannot be mistaken for a browser crash/disconnection.
                 detail['events_before_cleanup'] = dict(events)
+                try:
+                    location = probe_page.url
+                    location_kind = ('unavailable' if not isinstance(location, str) else
+                                     'fixed_inline' if location == OFFLINE_CHECK_URL else
+                                     'about_blank' if location == 'about:blank' else 'other')
+                except Exception:
+                    location_kind = 'unavailable'
+                detail['navigation_before_cleanup'] = {
+                    **navigation, 'location':location_kind,
+                    'observed_page_is_current':backend.page is probe_page}
                 for key, read in (('page_closed', lambda: backend.page is None or backend.page.is_closed()),
                                   ('browser_connected', lambda: backend.browser is not None and backend.browser.is_connected())):
                     try:
