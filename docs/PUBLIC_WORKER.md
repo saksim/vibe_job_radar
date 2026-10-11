@@ -38,7 +38,7 @@ python scripts/run_public_worker.py --workspace "D:\Radar\workspace"
 
 Windows CI以实际冻结exe、无Python PATH启动空计划worker，确认独立入口和默认关闭；只终止该次自有空闲进程，不把它算作正常Ctrl+C或真实长跑证明。当前head结果以Issue/PR记录为准。
 
-首轮#116的独立exe worker/PAC检查通过，但其后的包内Chromium空白页超时，单独由#117跟踪。原离线探针与便携工件现在记录`set_content`、`read_title`、`verify_title`/`verified`，每步耗时以及主动清理前的加载/崩溃/关闭事件计数。只记录固定事实，不记录页面正文、标题内容、URL或事件参数。本次整合保留当前主干已合并的[空白页DOM检查](BROWSER_BLANK_CHECK.md)：明确等待`domcontentloaded`、6000ms和原标题比较；新增诊断不再改变完成条件或增加重试。原历史版本的默认等待与当前实现分别保留。新增证据不等于最初超时根因已解决。
+首轮#116的独立exe worker/PAC检查通过，但其后的包内Chromium空白页超时，单独由#117跟踪。原离线探针与便携工件现在记录`set_content`、`read_title`、`verify_title`/`verified`，每步耗时以及主动清理前的加载/崩溃/关闭事件计数。只记录固定事实，不记录页面正文、标题内容、URL或事件参数。本次整合保留当前主干已合并的[空白页DOM检查](BROWSER_BLANK_CHECK.md)：明确等待`domcontentloaded`和原标题比较；初始6秒超时后，仅已确认提交且存活的同页可在总15秒预算内继续等待；新增诊断不再改变完成条件或增加重试。原历史版本的默认等待与当前实现分别保留。新增证据不等于最初超时根因已解决。
 
 本分支#131新增有限持久待办：每条只尝试一次、24小时许可、至少30秒间隔、失败/过期缓存/未知结果暂停；原共享额度与任务锁不变。Windows CI新增实际冻结worker读取人工缓存、零请求生成原完整JD报告的验收，同head结果见PR。这仍不是Windows Service或无人登录全天保证。#120的[Windows登录启动](WINDOWS_LOGIN_STARTUP.md)可明确选择此进程；默认关闭，已有登记不自动改变，登记不创建或重新同意计划/待办。生产服务、签名发行、跨设备权限/配额、实际24小时/重登录长跑和中国三站正常登录→完整JD仍独立验收。
 

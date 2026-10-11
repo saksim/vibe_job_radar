@@ -227,6 +227,17 @@ def probe_browser(*, headless: bool = False, executable_path: str | None = None,
         def count(*unused):
             events[name] = min(events[name] + 1, 999)
         return count
+    def same_committed_page():
+        try:
+            return (backend.page is probe_page and probe_page.url == OFFLINE_CHECK_URL
+                    and navigation['main_frame_commits'] == 1
+                    and navigation['other_frame_commits'] == 0
+                    and not navigation['frame_observation_failed']
+                    and not any(events[k] for k in ('crash', 'close', 'disconnected'))
+                    and probe_page.is_closed() is False
+                    and backend.browser.is_connected() is True)
+        except Exception:
+            return False  # An unavailable observation cannot authorize extra waiting.
     def check_step(name, operation):
         detail['step'] = name
         started = time.monotonic()
@@ -254,9 +265,28 @@ def probe_browser(*, headless: bool = False, executable_path: str | None = None,
         backend.browser.on('disconnected', observed('disconnected'))
         # A fixed data document uses native navigation/lifecycle completion.
         # It does not depend on set_content's console-tag/document.write barrier.
-        # Keep DOM readiness, the original 6s bound and the later title check.
-        check_step('load_inline_page', lambda: backend.page.goto(
-            OFFLINE_CHECK_URL, wait_until='domcontentloaded', timeout=6000))
+        # Allow cold renderer initialization after a confirmed commit without
+        # navigating again. Preserve the initial timeout and bound all readiness
+        # waiting to15s; unknown/dead/replaced pages get no extension.
+        readiness_deadline = time.monotonic() + 15
+        try:
+            check_step('load_inline_page', lambda: backend.page.goto(
+                OFFLINE_CHECK_URL, wait_until='domcontentloaded', timeout=6000))
+        except Exception as exc:
+            if type(exc).__name__ != 'TimeoutError':
+                raise
+            detail['initial_readiness_timeout'] = True
+            detail['readiness_budget_ms'] = 15000
+            remaining = max(0, int((readiness_deadline - time.monotonic())*1000))
+            detail['committed_page_continuation'] = 'unavailable'
+            if not remaining or not same_committed_page():
+                raise
+            detail['committed_page_continuation'] = 'waiting'
+            check_step('wait_committed_page', lambda: probe_page.wait_for_load_state(
+                'domcontentloaded', timeout=remaining))
+            if not same_committed_page():
+                raise RuntimeError('blank page changed during readiness check')
+            detail['committed_page_continuation'] = 'dom_ready'
         backend.startup_report['stage'] = 'blank_page_verify'
         title = check_step('read_title', backend.page.title)
         detail['step'] = 'verify_title'
