@@ -165,8 +165,15 @@ class WorkspaceUrlPacTests(unittest.TestCase):
                 if missing:
                     (self.workspace.root/'network-pac'/(state['pac_sha256']+'.js')).unlink()
                 policy=self.workspace.network_policy()
+                from vibe_job_radar.guided.diagnostic_trace import DiagnosticTrace
+                trace=DiagnosticTrace(task['id'],'liepin')
+                service._trace_for=MagicMock(return_value=trace)
                 with use_policy(policy),patch.object(service.ledger,'reserve') as reserve,\
                      patch.object(service,'_backend') as backend,patch('socket.getaddrinfo') as dns:
                     with self.assertRaisesRegex(CrawlError,'pac_url_native_unsupported'):
                         service._run('login',service._load(task['id']),None)
                 reserve.assert_not_called();backend.assert_not_called();dns.assert_not_called()
+                first=trace.snapshot()['first_failure']
+                self.assertEqual(first['code'],'pac_url_native_unsupported')
+                self.assertIs(first['local_block'],True)
+                self.assertEqual(first['policy'],'pac_url_native_scope')

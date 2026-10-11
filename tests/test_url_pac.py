@@ -223,3 +223,46 @@ class UrlPacTests(unittest.TestCase):
             finally:
                 for value in acquired:
                     if value:pac_url_worker._SLOTS.release()
+
+    def test_actual_bridge_pac_failures_keep_codes_policy_and_redaction(self):
+        from vibe_job_radar.guided.diagnostic_trace import DiagnosticTrace
+        from vibe_job_radar.guided.contracts import CrawlError
+        cases=(('pac_url_unavailable','pac_url_component'),
+               ('pac_url_invalid_target','url_validation'),
+               ('pac_url_cache_limit','pac_url_session_limit'))
+        for code,scope in cases:
+            with self.subTest(code=code):
+                policy=self.policy()
+                if code=='pac_url_cache_limit':
+                    with patch.object(pac_url_worker,'evaluate',return_value='DIRECT'):
+                        for i in range(128):policy.for_request('https://example.com/'+str(i))
+                adapter=SimpleNamespace(key='test',domains=[HOST],resource_domains=[])
+                ledger=MagicMock()
+                wire=PinnedTransport(adapter,ledger,threading.Event());wire.bind_policy(policy)
+                trace=DiagnosticTrace('a'*32,'test');wire._diagnostics=trace
+                target=URL+' WITH SPACE' if code=='pac_url_invalid_target' else URL
+                with patch.object(pac_url_worker,'available',return_value=False),\
+                     patch('socket.getaddrinfo') as dns,patch('socket.create_connection') as dial:
+                    with self.assertRaisesRegex(CrawlError,code):wire.fetch(target)
+                first=trace.snapshot()['first_failure']
+                self.assertEqual(first['stage'],'http_request')
+                self.assertEqual(first['code'],code)
+                self.assertIs(first['local_block'],True)
+                self.assertEqual(first['policy'],scope)
+                self.assertEqual(trace.snapshot()['first_content_candidate']['code'],code)
+                self.assertNotIn('ONE',json.dumps(trace.snapshot()))
+                ledger.reserve.assert_not_called();dns.assert_not_called();dial.assert_not_called()
+
+    def test_unbound_pac_connection_exports_local_requirement_without_private_url(self):
+        from vibe_job_radar.guided.diagnostic_trace import DiagnosticTrace,observe
+        trace=DiagnosticTrace('b'*32,'test')
+        with patch('socket.create_connection') as dial,\
+             self.assertRaisesRegex(FetchError,'pac_url_required'):
+            with observe(trace,'http_request','transport',url=URL):
+                PinnedHTTPSConnection(HOST,('93.184.216.34',),1,network_policy=self.policy())
+        first=trace.snapshot()['first_failure']
+        self.assertEqual(first['code'],'pac_url_required')
+        self.assertIs(first['local_block'],True)
+        self.assertEqual(first['policy'],'pac_url_scope')
+        self.assertNotIn('ONE',json.dumps(trace.snapshot()))
+        dial.assert_not_called()
