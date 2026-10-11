@@ -1,4 +1,5 @@
 """Small authored archives, never executables or live-release certification."""
+import argparse
 import copy
 import importlib.util
 import json
@@ -139,7 +140,7 @@ class PortableReleaseTests(unittest.TestCase):
             return {'total_count':2,'artifacts':[{'name':name,'expired':False,**row}
                                                for name,row in self.artifacts.items()]}
         if suffix.startswith('git/matching-refs/tags/'):return []
-        if suffix=='releases?per_page=100':return []
+        if suffix=='releases?per_page=100&page=1':return []
         raise AssertionError(suffix)
 
     def gh_fixture(self,*args):
@@ -191,7 +192,7 @@ class PortableReleaseTests(unittest.TestCase):
             with self.subTest(existing=existing):
                 def response(repo,suffix):
                     if existing=='tag' and suffix.startswith('git/matching-refs/tags/'):return [{'ref':'existing'}]
-                    if existing=='draft' and suffix=='releases?per_page=100':
+                    if existing=='draft' and suffix=='releases?per_page=100&page=1':
                         prepared=json.loads((self.root/existing/'prepared.json').read_text(encoding='utf8'))
                         return [{'tag_name':prepared['tag']}]
                     return self.api_fixture(suffix)
@@ -201,6 +202,58 @@ class PortableReleaseTests(unittest.TestCase):
                     self.mod.prepare(self.repo,self.run['id'],self.root/existing,True)
                 self.assertTrue((self.root/existing/'prepared.json').is_file())
                 self.assertTrue(all(call.args[:2]==('run','download') for call in command.call_args_list))
+
+
+    def test_run_selection_rejects_noncanonical_concurrency_aliases(self):
+        self.assertEqual(self.mod.canonical_run_id('123'),123)
+        for value in ('00123','+123',' 123','123 ','1_23','0','-1','１２３','1.23'):
+            with self.subTest(value=value),self.assertRaises(argparse.ArgumentTypeError):
+                self.mod.canonical_run_id(value)
+
+    def test_other_ci_rerun_during_download_stops_before_draft(self):
+        for defect in ('pending','failed','new_successful_attempt'):
+            with self.subTest(defect=defect):
+                queries=[0]
+                def response(repo,suffix):
+                    result=self.api_fixture(suffix)
+                    if suffix.startswith('actions/runs?'):
+                        queries[0]+=1
+                        if queries[0]>1:
+                            run=next(r for r in result['workflow_runs'] if r['id']!=self.run['id'])
+                            run['run_attempt']+=1
+                            if defect=='pending':run.update(status='in_progress',conclusion=None)
+                            elif defect=='failed':run['conclusion']='failure'
+                    return result
+                with patch.object(self.mod,'api',side_effect=response), \
+                     patch.object(self.mod,'gh',side_effect=self.gh_fixture) as command, \
+                     self.assertRaises(ValueError):
+                    self.mod.prepare(self.repo,self.run['id'],self.root/defect,True)
+                self.assertTrue(all(c.args[:2]==('run','download') for c in command.call_args_list))
+
+    def test_release_inventory_after_first_hundred_can_create_or_detect_collision(self):
+        for collision in (False,True):
+            with self.subTest(collision=collision):
+                output=self.root/str(collision)
+                pages=[]
+                def response(repo,suffix):
+                    if suffix.startswith('releases?per_page=100&page='):
+                        page=int(suffix.rsplit('=',1)[1]);pages.append(page)
+                        if page==1:return [{'tag_name':f'old-{i}'} for i in range(100)]
+                        if page==2:
+                            prepared=json.loads((output/'prepared.json').read_text(encoding='utf8'))
+                            return [{'tag_name':prepared['tag'] if collision else 'older-release'}]
+                        raise AssertionError('Unexpected extra release page')
+                    return self.api_fixture(suffix)
+                with patch.object(self.mod,'api',side_effect=response), \
+                     patch.object(self.mod,'gh',side_effect=self.gh_fixture) as command:
+                    if collision:
+                        with self.assertRaises(ValueError):
+                            self.mod.prepare(self.repo,self.run['id'],output,True)
+                        self.assertTrue(all(c.args[:2]==('run','download') for c in command.call_args_list))
+                    else:
+                        result=self.mod.prepare(self.repo,self.run['id'],output,True)
+                        self.assertIn('draft_url',result)
+                self.assertEqual(pages,[1,2])
 
 
 if __name__=='__main__':

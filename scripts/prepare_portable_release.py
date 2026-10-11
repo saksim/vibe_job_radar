@@ -34,6 +34,12 @@ def require(condition, message):
         raise ValueError(message)
 
 
+def canonical_run_id(value):
+    if not re.fullmatch(r'[1-9][0-9]*', value):
+        raise argparse.ArgumentTypeError('Run ID must use canonical positive decimal digits')
+    return int(value)
+
+
 def file_hash(path):
     digest = hashlib.sha256()
     with Path(path).open('rb') as source:
@@ -89,6 +95,24 @@ def validate_runs(repo, selected, runs):
             and selected['run_attempt'] == qualified[selected['path']]['attempt'],
             'Selected run is not the qualified main candidate')
     return qualified
+
+
+def qualified_runs(repo, selected):
+    listing = api(repo, f"actions/runs?head_sha={selected['head_sha']}&per_page=100")
+    require(listing['total_count'] == len(listing['workflow_runs']), 'Too many CI runs; narrow selection')
+    return validate_runs(repo, selected, listing['workflow_runs'])
+
+
+def require_unused_release(repo, tag):
+    require(not api(repo, f"git/matching-refs/tags/{tag}"), 'Release tag already exists')
+    page = 1
+    while True:
+        releases = api(repo, f'releases?per_page=100&page={page}')
+        require(isinstance(releases, list), 'Invalid release inventory')
+        require(all(r['tag_name'] != tag for r in releases), 'Release draft already exists')
+        if len(releases) < 100:
+            return
+        page += 1
 
 
 def zip_json(archive, name):
@@ -204,9 +228,7 @@ def prepare(repo, run_id, out, create_draft=False):
     selected = api(repo, f'actions/runs/{run_id}')
     require(isinstance(selected.get('head_sha'), str) and re.fullmatch('[0-9a-f]{40}', selected['head_sha']),
             'Invalid selected source revision')
-    listing = api(repo, f"actions/runs?head_sha={selected['head_sha']}&per_page=100")
-    require(listing['total_count'] == len(listing['workflow_runs']), 'Too many CI runs; narrow selection')
-    qualified = validate_runs(repo, selected, listing['workflow_runs'])
+    qualified = qualified_runs(repo, selected)
     listing = api(repo, f'actions/runs/{run_id}/artifacts?per_page=100')
     require(listing['total_count'] == len(listing['artifacts']), 'Incomplete artifact listing')
     artifacts = {}
@@ -236,10 +258,11 @@ def prepare(repo, run_id, out, create_draft=False):
     if create_draft:
         # Never edit/overwrite a tag or an existing draft, including after an
         # uncertain prior attempt. A failed upload leaves that draft inspectable.
-        require(not api(repo, f"git/matching-refs/tags/{result['tag']}"), 'Release tag already exists')
-        releases = api(repo, 'releases?per_page=100')
-        require(len(releases) < 100 and all(r['tag_name'] != result['tag'] for r in releases),
-                'Existing draft or incomplete release inventory')
+        require_unused_release(repo, result['tag'])
+        current = api(repo, f'actions/runs/{run_id}')
+        require(current['head_sha'] == selected['head_sha']
+                and qualified_runs(repo, current) == qualified,
+                'Qualifying CI changed during preparation')
         body = (payload/'UPGRADE_AND_LIMITATIONS.md').read_text(encoding='utf-8')
         request = {'tag_name': result['tag'], 'target_commitish': selected['head_sha'],
                    'name': f"Windows portable {result['tag']} (unsigned candidate)",
@@ -256,7 +279,7 @@ def prepare(repo, run_id, out, create_draft=False):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--repository', required=True)
-    parser.add_argument('--run-id', required=True, type=int)
+    parser.add_argument('--run-id', required=True, type=canonical_run_id)
     parser.add_argument('--out', type=Path, default=Path('release-draft'))
     parser.add_argument('--create-draft', action='store_true')
     args = parser.parse_args()
