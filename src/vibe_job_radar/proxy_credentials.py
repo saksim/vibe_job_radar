@@ -65,6 +65,12 @@ class ProxyCredentials:
     def binding(self):
         return self._binding
 
+    def _saved_session_entropy(self, context: bytes) -> bytes:
+        """Private DPAPI entropy; never a public ID or persisted verifier."""
+        return hmac.new(self._username + b'\0' + self._password,
+                        b'vibe-job-radar/saved-session/dpapi/v2\0' + context,
+                        hashlib.sha256).digest()
+
     def basic_header(self):
         return 'Basic ' + base64.b64encode(self._username + b':' + self._password).decode('ascii')
 

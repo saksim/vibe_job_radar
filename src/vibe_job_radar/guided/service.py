@@ -83,7 +83,7 @@ MESSAGES = {
     'automatic_resume_unavailable': '无法确认原采集会话仍可继续，已暂停自动接续；已有结果和等待时间保留。请明确继续或重新正常登录。',
     'saved_session_invalid': '保存的会话格式无效。未启动新的采集；请清除该平台保存的会话后正常登录。',
     'saved_session_incompatible': '保存会话的工作区、平台版本、后端、浏览器或网络设置不匹配。未自动换身份重试；请明确清除该平台保存的会话。',
-    'saved_session_unreadable': '保存的会话无法读取或解密。请使用原 Windows 用户，或清除后重新正常登录。',
+    'saved_session_unreadable': '保存的会话无法读取或解密。请先核对原 Windows 用户、代理凭据和网络配置；仍无法恢复时可明确清除后重新正常登录。',
     'saved_session_unsafe': '会话目录或文件权限不安全，或存在链接。未读取登录资料；请检查本机 .radar-sessions 目录。',
     'saved_session_busy': '另一个程序正在使用此平台保存的会话，或无法取得文件锁。不会并发复用身份。',
     'saved_session_cleared': '该平台保存的会话已清除，当前会话已关闭。岗位、报告、个人证据与配额保留。',
@@ -709,9 +709,9 @@ class GuidedService:
                 'events': [], 'scope': '诊断未启用或不可用；没有读取浏览器、联网或导出任务正文。'}
 
     def _new_session_lease(self, state):
-        return SavedSession(self.workspace.root, self.registry.get(state['platform']),
-                            backend=state.get('backend', 'bridge'), browser=self._selected_browser,
-                            network=current_policy().fingerprint)
+        return SavedSession.for_policy(self.workspace.root, self.registry.get(state['platform']),
+                                       backend=state.get('backend', 'bridge'), browser=self._selected_browser,
+                                       policy=current_policy())
 
     def _close_backend(self, ident):
         with self._lock:
