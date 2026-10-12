@@ -65,10 +65,56 @@ class NativeRedirectEvidenceTests(unittest.TestCase):
             'reason': 'hop_limit', 'prior_hops': 5,
             'target': {'host': fixture.HOST, 'path_template': '/search', 'query_names': []}})
 
-    def test_existing_authority_comparison_still_refuses_an_explicit_port(self):
+    def test_equivalent_https_origins_continue_and_charge_the_next_hop(self):
+        locations = (fixture.URL + ':443/search',
+                     'https://' + fixture.HOST.upper() + '/search',
+                     'https://' + fixture.HOST.upper() + ':443/search')
+        for location in locations:
+            with self.subTest(location=location):
+                f = self.backend()
+                f.b._paused('session', f.req('/redirect', 'GET', 'Document'))
+                f.b._paused('session', f.response(302, {'location': location},
+                                                 path='/redirect', method='GET', kind='Document'))
+                self.assertIsNone(f.b.error)
+                f.b._send.assert_called_with('session', 'Fetch.continueResponse', {'requestId': 'fetch-1'})
+                # CDP reports the browser-normalized URL for the actual next hop.
+                f.b._paused('session', f.req('/search', 'GET', 'Document', requestId='fetch-2'))
+                self.assertIsNone(f.b.error)
+                self.assertEqual(f.b.native_counts['document'], 2)
+                self.assertEqual(f.b.native_counts['responses'], 1)
+                self.assertEqual(f.b._hops[('session', 'net-1')], 1)
+                with sqlite3.connect(f.b.wire.ledger.path) as db:
+                    self.assertEqual(dict(db.execute('SELECT kind,COUNT(*) FROM visits GROUP BY kind')),
+                                     {'page': 2, 'request': 2})
+
+    def test_different_scheme_host_or_port_still_stops_before_next_hop(self):
+        for location in ('http://' + fixture.HOST + '/search',
+                         'https://sub.' + fixture.HOST + '/search',
+                         fixture.URL + ':444/search', fixture.URL + ':0/search'):
+            with self.subTest(location=location):
+                f = self.backend()
+                self.refuse(f, location)
+                self.assertEqual(f.b._diagnostics.snapshot()['first_failure']['redirect']['reason'],
+                                 'cross_origin')
+
+    def test_equivalent_origin_does_not_bypass_target_validation(self):
+        locations = (('https://user:secret@' + fixture.HOST + ':443/search', 'resource_domain_blocked'),
+                     (fixture.URL + ':443/%252e%252e/search', 'invalid_url'),
+                     (fixture.URL + ':invalid/search', 'invalid_url'))
+        for location, code in locations:
+            with self.subTest(location=location):
+                f = self.backend()
+                f.b._paused('session', f.req('/redirect', 'GET', 'Document'))
+                f.b._paused('session', f.response(302, {'location': location},
+                                                 path='/redirect', method='GET', kind='Document'))
+                self.assertEqual(f.b.error, code)
+                self.assertEqual(f.b._send.call_args.args[1], 'Fetch.failRequest')
+                self.assertEqual(f.b.native_counts['responses'], 0)
+
+    def test_equivalent_origin_keeps_hop_limit(self):
         f = self.backend()
-        self.refuse(f, fixture.URL + ':443/search')
-        self.assertEqual(f.b._diagnostics.snapshot()['first_failure']['redirect']['reason'], 'cross_origin')
+        self.refuse(f, fixture.URL + ':443/search', 5)
+        self.assertEqual(f.b._diagnostics.snapshot()['first_failure']['redirect']['reason'], 'hop_limit')
 
     def test_allowed_same_origin_redirect_is_not_recorded_as_a_refusal(self):
         f = self.backend()
