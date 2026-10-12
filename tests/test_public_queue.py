@@ -13,6 +13,7 @@ import unittest
 from unittest.mock import Mock,patch
 
 from test_local_public import payload,query
+from public_owner_diagnostics import hold_reader_through_worker_commit
 from vibe_job_radar.local_public import LocalPublicDataClient,SCOPE
 from vibe_job_radar.network import FetchError
 from vibe_job_radar.guided.rate import RateLimit
@@ -46,6 +47,11 @@ class QueueTests(unittest.TestCase):
 
     def finish(self):
         result=self.wait();self.queue.tick();return result
+
+    def wait_entered(self):
+        # Functional setup includes the ledger's real 10s SQLite busy allowance.
+        # Match the owner tests' bounded setup wait; operation deadlines stay put.
+        self.assertTrue(self.entered.wait(30), 'task did not enter held fixture within 30s')
 
     def hold(self,url):
         self.entered.set()
@@ -157,16 +163,23 @@ with patch('urllib.request.getproxies',return_value={}):
 
     def test_busy_manual_task_is_not_overwritten_or_cancelled(self):
         self.wire.json.side_effect=self.hold
-        manual=self.tasks.search({'consent':True,'query':query().payload()});self.assertTrue(self.entered.wait(5))
+        manual=self.tasks.search({'consent':True,'query':query().payload()});self.wait_entered()
         self.enqueue('Engineer');self.queue.tick()
         self.assertEqual(self.tasks.snapshot()['id'],manual['id']);self.assertFalse(self.tasks._cancel.is_set())
         self.assertEqual(self.queue.state()['items'][0]['phase'],'pending')
         self.release.set();previous=self.wait();self.queue.tick();self.finish()
         self.assertTrue(self.workspace.report(previous['report_id']));self.assertEqual(self.wire.json.call_count,1)
 
+    def test_busy_manual_task_survives_commit_within_SQLite_wait_budget(self):
+        self.client._prepare()
+        # Hold a real reader for 6.5s from the actual worker COMMIT.
+        with hold_reader_through_worker_commit(
+                self.client.ledger.path, lambda: self.tasks._thread):
+            self.test_busy_manual_task_is_not_overwritten_or_cancelled()
+
     def test_pause_cancels_only_original_active_task_and_never_replays_it_on_resume(self):
         self.wire.json.side_effect=self.hold;self.enqueue();self.enqueue('Engineer');self.queue.tick()
-        self.assertTrue(self.entered.wait(5));state=self.queue.state()
+        self.wait_entered();state=self.queue.state()
         with self.assertRaises(InputError):self.queue.remove({'revision':state['revision'],'id':state['items'][0]['id']})
         self.queue.pause({'revision':state['revision']})
         with self.assertRaises(InputError):self.queue.resume({'revision':self.queue.state()['revision'],'consent':True})
@@ -177,7 +190,7 @@ with patch('urllib.request.getproxies',return_value={}):
         self.assertEqual(self.queue.state()['status'],'idle');self.assertEqual(len(self.queue.state()['history']),2)
 
     def test_observer_pause_is_seen_by_owner_without_cross_process_task_cancellation(self):
-        self.wire.json.side_effect=self.hold;self.enqueue();self.queue.tick();self.assertTrue(self.entered.wait(5))
+        self.wire.json.side_effect=self.hold;self.enqueue();self.queue.tick();self.wait_entered()
         other_tasks=PublicTasks(self.workspace,hybrid_client=self.client);self.addCleanup(other_tasks.close)
         other=PublicQueue(self.workspace,other_tasks,clock=lambda:self.now[0])
         other.pause({'revision':other.state()['revision']});self.assertFalse(self.tasks._cancel.is_set())
@@ -261,7 +274,7 @@ with patch('urllib.request.getproxies',return_value={}):
             real(*args,**kwargs)
             raise InputError('fixture rejection after task creation')
         with patch.object(self.tasks,'scheduled_search',side_effect=uncertain):self.queue.tick()
-        self.assertTrue(self.entered.wait(5));state=self.queue.state()
+        self.wait_entered();state=self.queue.state()
         self.assertEqual((state['status'],state['code']),('paused','interrupted'))
         self.assertEqual((state['history'][0]['id'],state['history'][0]['status']),(first,'interrupted'))
         self.assertEqual(len(state['items']),1);self.assertFalse(self.tasks._cancel.is_set())
@@ -334,7 +347,7 @@ with patch('urllib.request.getproxies',return_value={}):
 
     def test_pause_does_not_cancel_same_id_manually_resumed_attempt(self):
         self.wire.json.side_effect=self.hold;self.enqueue();self.enqueue('Engineer');self.queue.tick()
-        self.assertTrue(self.entered.wait(5));original=self.tasks.snapshot();self.tasks.cancel({'id':original['id']})
+        self.wait_entered();original=self.tasks.snapshot();self.tasks.cancel({'id':original['id']})
         self.release.set();self.assertEqual(self.wait()['status'],'cancelled')
         self.entered.clear();self.release.clear();original_import=self.tasks._import
         def held(*args):
@@ -342,7 +355,7 @@ with patch('urllib.request.getproxies',return_value={}):
             if not self.release.wait(15):raise AssertionError('manual attempt fixture not released')
             return original_import(*args)
         with patch.object(self.tasks,'_import',side_effect=held):
-            self.tasks.resume({'id':original['id'],'consent':True});self.assertTrue(self.entered.wait(5))
+            self.tasks.resume({'id':original['id'],'consent':True});self.wait_entered()
             self.queue.pause({'revision':self.queue.state()['revision']});self.queue.tick()
             self.assertFalse(self.tasks._cancel.is_set());self.release.set();manual=self.wait()
         state=self.queue.state();self.assertEqual(state['status'],'paused')
