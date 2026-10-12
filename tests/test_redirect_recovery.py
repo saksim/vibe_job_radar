@@ -95,6 +95,33 @@ class RedirectTests(unittest.TestCase):
         with self.assertRaisesRegex(FetchError,'robots_redirect_cross_origin'):SiteFetcher({'zhipin.com'},wire).fetch(A)
         self.assertEqual(len(wire.calls),1)
 
+    def test_robots_redirect_accepts_equivalent_https_origins(self):
+        for job, destination in ((A, BASE + ':443/static/robots.txt'),
+                                 (BASE + ':443/job_detail/a.html', BASE + '/static/robots.txt')):
+            with self.subTest(job=job, destination=destination):
+                wire = Wire(response(301, location=destination), robots(), response())
+                client = SiteFetcher({'zhipin.com'}, wire)
+                result = client.fetch(job)
+                origin = job.rsplit('/job_detail/', 1)[0]
+                self.assertEqual(wire.calls, [origin + '/robots.txt', destination, job])
+                self.assertEqual(result.url, job)
+                self.assertEqual(client.last_diagnostic['http_attempts'], 3)
+                self.assertEqual(client.last_diagnostic['redirects'][0]['result'], 'followed')
+
+    def test_equivalent_robots_origin_still_applies_the_returned_rules(self):
+        destination = BASE + ':443/static/robots.txt'
+        wire = Wire(response(301, location=destination), robots('User-agent: *\nDisallow: /'))
+        with self.assertRaisesRegex(FetchError, 'robots_denied'):
+            SiteFetcher({'zhipin.com'}, wire).fetch(A)
+        self.assertEqual(wire.calls, [BASE + '/robots.txt', destination])
+
+    def test_equivalent_robots_origin_cannot_turn_html_into_rules(self):
+        destination = BASE + ':443/static/robots.txt'
+        wire = Wire(response(301, location=destination), response(content='<html><div id="app"></div></html>'))
+        with self.assertRaisesRegex(FetchError, 'robots_unavailable'):
+            SiteFetcher({'zhipin.com'}, wire).fetch(A)
+        self.assertEqual(wire.calls, [BASE + '/robots.txt', destination])
+
     def test_loop_and_total_hop_budget(self):
         wire=Wire(robots(),response(302,location=A))
         with self.assertRaisesRegex(FetchError,'redirect_loop'):SiteFetcher({'zhipin.com'},wire).fetch(A)
