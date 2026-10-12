@@ -999,13 +999,17 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
                 from playwright.sync_api import sync_playwright,expect
                 with sync_playwright() as pw:
                     browser=pw.chromium.launch(headless=True,**browser_options)
+                    from portable_failure_diagnostics import BrowserUiObservation
+                    ui_observation=BrowserUiObservation(browser)
                     try:
                         context=browser.new_context(viewport={'width':390,'height':844})
+                        ui_observation.watch_context(context)
                         def local_only(route):
                             if route.request.url.startswith(app.origin+'/'):route.continue_()
                             else:result['external_browser_requests'].append('unexpected_nonlocal_request');route.abort()
                         context.route('**/*',local_only)
                         page=context.new_page();page.on('pageerror',lambda exc:result['page_errors'].append(type(exc).__name__))
+                        ui_observation.watch_page(page)
                         page.goto(app.entry+'&report='+ident)
                         expect(page.locator('#report')).to_be_visible();expect(page.locator('#brief-capabilities')).to_contain_text('Cursor')
                         # The source catalogue loads independently of the report.
@@ -1034,7 +1038,11 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
                         if not page.evaluate('document.documentElement.scrollWidth<=innerWidth'):raise AssertionError('portable UI overflows')
                         page.screenshot(path=str(report_path.parent/'portable-guided-mobile.png'),full_page=True)
                         if result['page_errors'] or result['external_browser_requests']:raise AssertionError('portable browser UI failed')
-                    finally:browser.close()
+                    finally:
+                        # Preserve an unexpected close before our own close emits
+                        # the same lifecycle events. No retry or new page command.
+                        result['real_browser_ui_before_cleanup']=ui_observation.snapshot()
+                        browser.close()
                 result['checks'].append('built application accepts artificial JD and produces original report/CSV; selected real browser renders report and portable guidance at 390px without external page requests')
                 result['checks'].append('packaged three-source registry and both ownership states present; source selection submits no job; daily plan stays off')
                 if verify_login_startup:
