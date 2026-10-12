@@ -70,8 +70,14 @@ def redirect_target(current: str, location: str | None, domains: set[str],
         if AUTH_PATH.search(p.path) or host.split('.')[0].lower() in {'login', 'passport', 'auth', 'sso'}:
             raise FetchError('redirect_login_required')
         target = validate_target(target, domains)
-        if robots and urlsplit(target).netloc != urlsplit(current).netloc:
-            raise FetchError('robots_redirect_cross_origin')
+        if robots:
+            source = urlsplit(current)
+            destination = urlsplit(target)
+            # validate_target already requires HTTPS and its default port.
+            # An explicit :443 or host case change is still the same origin.
+            if (source.scheme != destination.scheme or source.hostname != destination.hostname
+                    or source.port not in (None, 443)):
+                raise FetchError('robots_redirect_cross_origin')
         return target
     except (ValueError, UnicodeError) as exc:
         raise FetchError('redirect_invalid') from exc
