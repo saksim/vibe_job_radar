@@ -764,7 +764,17 @@ class NativeBackend(PlaywrightBackend):
             target=urljoin(url,headers.get('location',''))
             # Same-origin redirects keep native browser cookie/method semantics.
             # Cross-origin redirects need a site-specific credential contract.
-            if urlsplit(target).netloc != urlsplit(url).netloc:
+            # The reviewed contracts allow HTTPS on its default port only.
+            # Host case and an explicit :443 do not change that origin.
+            try:
+                source_origin, target_origin = urlsplit(url), urlsplit(target)
+                same_origin = (source_origin.scheme == target_origin.scheme == 'https'
+                               and source_origin.hostname == target_origin.hostname
+                               and source_origin.port in (None, 443)
+                               and target_origin.port in (None, 443))
+            except ValueError as exc:
+                raise CrawlError('invalid_url') from exc
+            if not same_origin:
                 notify(getattr(self, '_diagnostics', None), 'redirect', url=target,
                        reason='cross_origin', prior_hops=self._hops.get(key, 0))
                 raise CrawlError('redirect_requires_attention')
