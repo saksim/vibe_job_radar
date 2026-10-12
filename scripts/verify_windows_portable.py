@@ -1008,7 +1008,16 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
                         page=context.new_page();page.on('pageerror',lambda exc:result['page_errors'].append(type(exc).__name__))
                         page.goto(app.entry+'&report='+ident)
                         expect(page.locator('#report')).to_be_visible();expect(page.locator('#brief-capabilities')).to_contain_text('Cursor')
-                        expect(page.locator('#public-source option')).to_have_count(3)
+                        # The source catalogue loads independently of the report.
+                        # Wait for the same UI load; never navigate or submit again.
+                        try:
+                            expect(page.locator('#public-source option')).to_have_count(3,timeout=15000)
+                        except AssertionError:
+                            try:
+                                result['public_source_count_at_failure']=page.locator('#public-source option').count()
+                            except Exception:
+                                result['public_source_count_at_failure']=None
+                            raise
                         expect(page.locator('#public-source')).to_have_value('greenhouse_anthropic')
                         page.locator('#public-source').select_option('greenhouse_cloudflare')
                         page.locator('#public-source').select_option('ashby_cursor')
