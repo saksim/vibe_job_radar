@@ -76,7 +76,7 @@ class NativeGuardEvidenceTests(unittest.TestCase):
             time.sleep(.01)
 
     def test_unauthenticated_and_forbidden_paths_keep_distinct_replies(self):
-        for authorized, host, expected in [(False, HOST, 407), (True, 'other.fixture.test', 403)]:
+        for authorized, host, expected in [(False, HOST, 407), (False, 'other.fixture.test', 403), (True, 'other.fixture.test', 403)]:
             with self.subTest(status=expected):
                 opener = Mock(side_effect=AssertionError('upstream must not run'))
                 backend = self.backend(opener)

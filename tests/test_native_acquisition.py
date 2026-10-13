@@ -116,10 +116,10 @@ class TunnelTests(unittest.TestCase):
     def setUp(self):
         self.cancel=threading.Event();self.guard=NativeTunnel((HOST,),NetworkPolicy(),self.cancel,timeout=1)
     def tearDown(self):self.guard.close()
-    def send(self, target=None, auth=True, extra=''):
+    def send(self, target=None, auth=True, extra='', method='CONNECT'):
         sock=socket.create_connection(self.guard.server.server_address,2)
         with sock:
-            msg=f'CONNECT {target or HOST+":443"} HTTP/1.1\r\nHost: {HOST}:443\r\n'
+            msg=f'{method} {target or HOST+":443"} HTTP/1.1\r\nHost: {HOST}:443\r\n'
             if auth:msg+='Proxy-Authorization: '+self.guard._authorization+'\r\n'
             sock.sendall((msg+extra+'\r\n').encode());return sock.recv(4096)
     def test_unauthenticated_connection_does_not_resolve(self):
@@ -128,7 +128,25 @@ class TunnelTests(unittest.TestCase):
     def test_unapproved_authority_never_dials(self):
         with patch.object(self.guard,'_open') as dial:
             for target in ('127.0.0.1:443',HOST+'.evil:443',HOST+':80','user@'+HOST+':443'):
-                self.assertIn(b'403',self.send(target));dial.assert_not_called()
+                for authorized in (False, True):
+                    with self.subTest(target=target, authorized=authorized):
+                        response = self.send(target, auth=authorized)
+                        self.assertTrue(response.startswith(b'HTTP/1.1 403 '))
+                        self.assertNotIn(b'Proxy-Authenticate:', response)
+                        dial.assert_not_called()
+    def test_unsupported_request_never_challenges_for_proxy_credentials(self):
+        with patch.object(self.guard, '_open') as dial:
+            for method in ('GET', 'POST', 'HEAD'):
+                with self.subTest(method=method):
+                    response = self.send('http://' + HOST + '/check', auth=False, method=method)
+                    self.assertTrue(response.startswith(b'HTTP/1.1 403 '))
+                    self.assertNotIn(b'Proxy-Authenticate:', response)
+                    dial.assert_not_called()
+            for extra in ('Content-Length: 1\r\n', 'Transfer-Encoding: chunked\r\n'):
+                response = self.send(auth=False, extra=extra)
+                self.assertTrue(response.startswith(b'HTTP/1.1 403 '))
+                self.assertNotIn(b'Proxy-Authenticate:', response)
+                dial.assert_not_called()
     def test_duplicate_proxy_auth_is_rejected(self):
         with patch.object(self.guard,'_open') as dial:
             self.assertIn(b'400',self.send(extra='Proxy-Authorization: x\r\n'));dial.assert_not_called()
