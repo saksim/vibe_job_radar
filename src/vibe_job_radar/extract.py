@@ -224,9 +224,9 @@ def spans(text: str):
 # ("and is expected") refers back to the original subject; a named second
 # subject cannot safely inherit its polarity. Decimal dots are not boundaries.
 _ENGLISH_FINITE_CONTINUATION = re.compile(
-    r"(?P<connector>[,;!?]|\.(?=\s|$)|\b(?:but|however|yet|and|while|whereas)\b)\s*"
+    r"(?P<connector>[,;!?]|\.(?=\s|$)|\b(?:but|however|yet|and|while|whereas|although|though)\b)\s*"
     r"(?:(?:but|however|yet|and)\s+)?"
-    r"(?P<subject>(?:(?!\b(?:but|however|yet|and|or|while|whereas)\b)[^,;.!?]){0,100}?)\b(?:is|are|will\s+be)\s+", re.I)
+    r"(?P<subject>(?:(?!\b(?:but|however|yet|and|or|while|whereas|although|though)\b)[^,;.!?]){0,100}?)\b(?:is|are|will\s+be)\s+", re.I)
 
 
 _ENGLISH_PREDICATE_CUE = (
@@ -234,10 +234,10 @@ _ENGLISH_PREDICATE_CUE = (
     r"banned|disallowed|discouraged|restricted|optional|recommended\s+against|recommended|"
     r"encouraged|mandatory|essential|expected|required|preferred|a\s+plus)")
 _ENGLISH_ELIDED_PREDICATE = re.compile(
-    r"(?:[,;]\s*(?:(?:but|however|yet|and|or)\s+)?|\b(?:but|however|yet|and|or|while|whereas)\s+)"
+    r"(?:[,;]\s*(?:(?:but|however|yet|and|or|although|though)\s+)?|\b(?:but|however|yet|and|or|while|whereas|although|though)\s+)"
     r"(?:(?:also|still|highly|strongly|absolutely)\s+){0,2}"
     r"(?=" + _ENGLISH_PREDICATE_CUE + r"(?=\s*(?:[.,;!?]|$)|\s+(?:for|in|on|at|to|by|under|"
-    r"during|before|after|within|outside|when|where|while|with|as|every|depending|but|however|yet|and|or|whereas)\b))", re.I)
+    r"during|before|after|within|outside|when|where|while|with|as|every|depending|but|however|yet|and|or|whereas|although|though)\b))", re.I)
 
 
 def _english_predicate_priority(text: str) -> str:
@@ -285,14 +285,23 @@ def strength(text: str, section: str = "") -> str:
         if text.rstrip().endswith("?"):
             return "unspecified"
         reason = re.split(
-            r"\b(?:because|since|when|if|as|while|unless|although|though|whereas|once|whenever|until|"
+            r"\b(because|since|when|if|as|while|unless|although|though|whereas|once|whenever|until|"
             r"provided(?:\s+that)?|assuming|supposing|in\s+case)\b",
             text[ban.end():], maxsplit=1, flags=re.I)
-        if len(reason) == 2 and re.search(
-                r"\b(?:must(?:n['’]t)?|should|need(?:s)?\s+to|have\s+to|required|"
-                r"mandatory|expected|preferred|optional|recommended|prohibited|forbidden)\b",
-                reason[1], re.I):
-            return "unspecified"
+        if len(reason) == 3:
+            # A pronoun plus a matching negative policy explains the same ban.
+            # Named tools and any additional obligation still need review.
+            reinforcing = re.match(
+                r"\s*(?:it|this|that)\s+is\s+(?:strictly\s+)?"
+                r"(?:prohibited|forbidden|banned|disallowed)\b", reason[2], re.I)
+            subordinate = (reason[2][reinforcing.end():]
+                           if reinforcing and reason[1].lower() in {"because", "since"}
+                           else reason[2])
+            if re.search(
+                    r"\b(?:must(?:n['’]t)?|should|need(?:s)?\s+to|have\s+to|required|"
+                    r"mandatory|expected|preferred|optional|recommended|prohibited|forbidden)\b",
+                    subordinate, re.I):
+                return "unspecified"
         # All subjectless transitions use the same context check. Neither
         # company descriptions nor indicative second-person statements can
         # acquire an imperative meaning merely by being split.
@@ -300,7 +309,7 @@ def strength(text: str, section: str = "") -> str:
             return "unspecified"
         # Infinitive purposes stay inside the ban. Unsplit contrasts,
         # coordinated actions or a fresh finite requirement need review.
-        if (re.search(r"\S\s+(?:but|however|yet|nevertheless|nonetheless|instead|rather|while|whereas|although|though|unless|except)\b", text, re.I)
+        if (re.search(r"\S\s+(?:but|however|yet|nevertheless|nonetheless|instead|rather|while|whereas|although|though|unless|except|otherwise)\b", text, re.I)
                 or re.search(r"(?:,\s*|\b(?:and|or|still)\s+)(?:(?:also|please|still)\s+)*(?:use|apply|employ|adopt|integrate|upload|send)\b", text[ban.end():], re.I)
                 or _ENGLISH_FINITE_CONTINUATION.search(text[ban.end():])):
             return "unspecified"
