@@ -130,11 +130,9 @@ def _english_directive_prefix(prefix: str, modal: str) -> bool:
             prefix, re.I)
         if directive and negated:
             return False
-        # Job-role subjects express the same explicit modal prohibition.
-        return bool(re.search(
-            r"\b(?:you|candidates?|applicants?|employees?|engineers?|developers?|"
-            r"architects?|designers?|analysts?|managers?|interns?|contractors?|"
-            r"staff|personnel|team\s+members?|new\s+hires?)\s+(?:please\s+)?$", prefix, re.I))
+        # A modal imposes the ban regardless of the job title. Accept a
+        # bounded subject phrase instead of maintaining an occupation list.
+        return bool(re.fullmatch(r"(?:[a-z][a-z0-9+#/&'’-]*\s+){1,24}", clause_prefix.lstrip(), re.I))
     # Bare "you don't" is indicative. An explicit request supplies the
     # directive context without accepting a negated "we don't require".
     return bool(re.fullmatch(
@@ -277,11 +275,23 @@ def strength(text: str, section: str = "") -> str:
         return "prohibited"
     # Ordinary adverbs do not reverse a direct ban. Nested negations and
     # qualifiers such as "only" are deliberately outside this finite list.
+    adverbs = r"(?:(?:ever|directly|automatically|knowingly|intentionally|deliberately|personally|actually)\s+){0,2}"
     ban = re.search(
-        r"\b(?P<modal>must\s+not|mustn['’]t|do\s+not|don['’]t)\s+"
-        r"(?:(?:ever|directly|automatically|knowingly|intentionally|deliberately|personally|actually)\s+){0,2}"
-        r"(?:use|upload|send)\b", text, re.I)
+        r"\b(?P<modal>must\s+not|mustn['’]t|(?:do\s+not|don['’]t)(?=\s+"
+        + adverbs + r"(?:use|upload|send)\b))\s+" + adverbs
+        + r"(?P<action>[a-z]+)\b", text, re.I)
     if ban:
+        action = ban.group("action").lower()
+        # Modal bans can prohibit other actions (install/disclose). Linking
+        # and polarity-changing predicates still need review; a second
+        # infinitive/gerund can turn a ban into an obligation to use the tool.
+        if (action in {"be", "have", "need", "fail", "forget", "neglect", "avoid",
+                       "refuse", "prevent", "resist", "rely", "only", "just", "necessarily"}
+                or (action not in {"use", "upload", "send"}
+                    and re.match(
+                        r"\s+(?:to\b|[a-z]+ing\b|(?:use|upload|send|apply|adopt|integrate|install|disclose)\b)",
+                        text[ban.end():], re.I))):
+            return "unspecified"
         if text.rstrip().endswith("?"):
             return "unspecified"
         reason = re.split(
@@ -334,6 +344,11 @@ def strength(text: str, section: str = "") -> str:
     if noun_clause:
         predicate = re.search(r"\b(?:is|will\s+be)\s+(.+)", text, re.I)
         predicate_text = predicate.group(1) if predicate else text
+        # Normalize only the matching view, preserving the original quote.
+        # These modifiers negate optionality before "but" can split a clause.
+        predicate_text = re.sub(
+            r"\b(?:far\s+from|hardly|anything\s+but)\s+(?:being\s+)?optional\b",
+            "not optional", predicate_text, flags=re.I)
         continuations = [
             m for m in _ENGLISH_FINITE_CONTINUATION.finditer(predicate_text)
             # Temporal activity/state predicates retain the main obligation.
@@ -388,7 +403,7 @@ def strength(text: str, section: str = "") -> str:
 
 
 class RuleExtractor:
-    version = "rules-0.2.2"
+    version = "rules-0.2.3"
 
     def __init__(self, config: dict):
         self.config = config
