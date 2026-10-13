@@ -140,8 +140,12 @@ def spans(text: str):
 
 
 def strength(text: str, section: str = "") -> str:
-    if re.search(r"禁止|严禁|不得|不允许|不能(?:使用|上传|发送)|\b(?:must\s+not|mustn['’]t)\b|\b(?:do\s+not|don['’]t)\s+(?:use|upload|send)\b", text, re.I):
+    if re.search(r"禁止|严禁|不得|不允许|不能(?:使用|上传|发送)|\b(?:must\s+not|mustn['’]t|do\s+not|don['’]t)\s+(?:use|upload|send)\b", text, re.I):
         return "prohibited"
+    # A nested negation can require tool use ("mustn't fail to use").
+    # Keep uncertain predicates out of both accepted bans and positive anchors.
+    if re.search(r"\b(?:must\s+not|mustn['’]t)\b", text, re.I):
+        return "unspecified"
     if re.search(r"无需|不要求|不需要|不必|不强制|not (?:required|necessary|mandatory)|no .{0,40}experience.{0,20}required|\b(?:do not|don['’]t) (?:need|have to)\b|\bneed not\b", text, re.I):
         return "not_required"
     if _heading_kind(section) == 'preferred' or re.search(r"优先|加分|有更好|更佳|nice.to.have|preferred|\ba plus\b", text + section, re.I):

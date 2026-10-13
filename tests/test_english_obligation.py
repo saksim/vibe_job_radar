@@ -90,6 +90,23 @@ class EnglishObligationTests(unittest.TestCase):
                 self.assertTrue(all(r.strength == 'prohibited' and not r.positive for r in cursor))
                 self.assertTrue(all(r.positive and r.accepted for r in codex))
 
+    def test_nested_must_negations_require_review_without_anchoring_other_skills(self):
+        for command in ("You mustn't fail to use", "You mustn’t be afraid to use",
+                        "You must not fail to use", "You must not be afraid to use"):
+            with self.subTest(command=command):
+                text = 'Requirements:\n'+command+' Cursor.\n熟悉分布式架构。'
+                rows = self.rows(text)
+                self.assertTrue(rows)
+                self.assertTrue(all(r.strength == 'unspecified' and not r.accepted for r in rows))
+                self.assertTrue(all(r.relation == 'direct' for r in rows))
+                self.assertEqual(aggregate(rows, CONF), [])
+                mixed = self.rows('Requirements:\n'+command+' Cursor. You must use Codex.')
+                cursor = [r for r in mixed if 'Cursor' in r.tools]
+                codex = [r for r in mixed if 'Codex' in r.tools]
+                self.assertTrue(cursor and codex)
+                self.assertTrue(all(not r.accepted for r in cursor))
+                self.assertTrue(all(r.positive and r.accepted for r in codex))
+
     def test_original_report_excludes_contracted_ban_and_keeps_raw_quote(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp); db = root/'jobs.sqlite'
