@@ -76,8 +76,17 @@ class EnglishObligationTests(unittest.TestCase):
                      "Requirements:\nDon't use Cursor and use Codex.",
                      "Requirements:\nDo not use Cursor and apply Codex.",
                      "Requirements:\nDon't use Cursor but write code with Codex.",
-                     "Use Codex but please don't use Cursor."):
+                     "Use Codex but please don't use Cursor.",
+                     "Do not use Cursor, but use of Codex is prohibited.",
+                     "Requirements:\nUse of Codex is prohibited.",
+                     "Preferred qualifications:\nUse of Codex is prohibited.",
+                     "Don't use Cursor but apply to Codex."):
             self.assertTrue(all(not r.accepted for r in self.rows(text)))
+
+        rows = self.rows("Don't use Cursor. Use of Codex is prohibited.")
+        self.assertFalse(any(r.positive and r.accepted for r in rows))
+        self.assertTrue(all(not r.accepted for r in rows if 'Codex' in r.tools))
+        self.assertTrue(all(r.strength == 'prohibited' for r in rows if 'Cursor' in r.tools))
 
     def test_contracted_prohibitions_do_not_absorb_adjacent_positive_tool(self):
         for text in ("Requirements:\nUse Codex. Don't use Cursor.",
@@ -150,6 +159,7 @@ class EnglishObligationTests(unittest.TestCase):
             ('Requirements:\nHands-on knowledge of Cursor.', 'required'),
             ('About you:\nExperience with Cursor.', 'required'),
             ('Experience using Cursor to write tests.', 'required'),
+            ('Use of Cursor is required.', 'required'),
             ('Use Cursor for AI-assisted coding.', 'expected'),
             ("You will use Claude Code to implement changes.", 'expected')):
             with self.subTest(text=text):

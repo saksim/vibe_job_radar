@@ -103,11 +103,11 @@ def spans(text: str):
     vibe_section = False
     pattern = r"[^\n。！？；;]+(?:[。！？；;]|(?=\n|$))"
     # Split a comma only where a new obligation/negation begins, not arbitrary noun lists.
-    contrast = re.compile(r"[，,](?=\s*(?:(?:但(?:是)?|然而|不过|同时|且|并)?\s*(?:必须|需要|应当|禁止|不得|严禁|不能|不允许|不要求|不必|不强制|无需)|(?:(?:but|however|and|also)\s+){0,2}(?:you(?:\s+will|['’]ll)?\s+)?(?:must(?:n['’]t)?\b|need\s+to\b|should\b|do\s+not\b|don['’]t\b|(?:use|apply|employ|adopt|integrate)\b)))", re.I)
+    contrast = re.compile(r"[，,](?=\s*(?:(?:但(?:是)?|然而|不过|同时|且|并)?\s*(?:必须|需要|应当|禁止|不得|严禁|不能|不允许|不要求|不必|不强制|无需)|(?:(?:but|however|and|also)\s+){0,2}(?:you(?:\s+will|['’]ll)?\s+)?(?:must(?:n['’]t)?\b|need\s+to\b|should\b|do\s+not\b|don['’]t\b|(?:use(?!\s+of\b)|apply(?!\s+(?:to|for)\b)|employ|adopt|integrate)\b)))", re.I)
     # "but/however" introduce a contrasting obligation without a comma.
     # After "and", require a fresh explicit obligation/negation: a bare
     # coordinated verb can still belong to the preceding prohibition.
-    conjunction = re.compile(r"\s+(?=(?:(?:but|however)\s+(?:also\s+)?(?:you(?:\s+will|['’]ll)?\s+)?(?:must(?:n['’]t)?\b|need\s+to\b|should\b|do\s+not\b|don['’]t\b|(?:use|apply|employ|adopt|integrate)\b)|and\s+(?:you\s+)?(?:must(?:n['’]t)?\b|need\s+to\b|should\b|do\s+not\b|don['’]t\b)))", re.I)
+    conjunction = re.compile(r"\s+(?=(?:(?:but|however)\s+(?:also\s+)?(?:you(?:\s+will|['’]ll)?\s+)?(?:must(?:n['’]t)?\b|need\s+to\b|should\b|do\s+not\b|don['’]t\b|(?:use(?!\s+of\b)|apply(?!\s+(?:to|for)\b)|employ|adopt|integrate)\b)|and\s+(?:you\s+)?(?:must(?:n['’]t)?\b|need\s+to\b|should\b|do\s+not\b|don['’]t\b)))", re.I)
     # Only clear new English clauses. Decimal/version dots, initials and
     # abbreviations such as e.g. / U.S. are not arbitrary sentence boundaries.
     english = re.compile(r"[.!?](?=[ \t]+(?:You|We|The|Our|This|Must(?:n['’]t)?|Do(?:n['’]t)?|Use|Apply|Employ|Adopt|Integrate|Build|Write|Review|Maintain|Experience|Knowledge|Proficiency|No|Please|Candidates?|Applicants?)\b)", re.I)
@@ -157,6 +157,13 @@ def strength(text: str, section: str = "") -> str:
         return "unspecified"
     if re.search(r"无需|不要求|不需要|不必|不强制|not (?:required|necessary|mandatory)|no .{0,40}experience.{0,20}required|\b(?:do not|don['’]t) (?:need|have to)\b|\bneed not\b", text, re.I):
         return "not_required"
+    # Noun phrases and applications are not tool-use imperatives.
+    # Explicit positive/optional predicates remain distinct from heading defaults.
+    if re.match(r"(?:(?:but|however|and|also)\s+){0,2}apply\s+(?:to|for)\b", text, re.I):
+        return "unspecified"
+    if (re.match(r"(?:(?:but|however|and|also)\s+){0,2}use\s+of\b", text, re.I)
+            and not re.search(r"\bis\s+(?:required|preferred)\b", text, re.I)):
+        return "unspecified"
     if _heading_kind(section) == 'preferred' or re.search(r"优先|加分|有更好|更佳|nice.to.have|preferred|\ba plus\b", text + section, re.I):
         return "preferred"
     if re.search(r"必须|必备|要求|至少|精通|熟练|具备|能够|独立|熟悉|掌握|\bmust\b|\brequired\b", text, re.I):
@@ -166,7 +173,7 @@ def strength(text: str, section: str = "") -> str:
     if _heading_kind(section) == 'requirements' or re.match(
             r'(?:hands-on\s+)?(?:experience|proficiency|expertise|familiarity)\s+(?:with|in|using)\b|(?:proficient|comfortable)\s+(?:with|in)\b|ability\s+to\b', text, re.I):
         return "required"
-    if re.match(r"(?:(?:but|however|and|also)\s+){0,2}(?:(?:you(?:\s+will|['’]ll)?|candidates?\s+will)\s+)?(?:use|apply|employ|adopt|integrate)\b", text, re.I):
+    if re.match(r"(?:(?:but|however|and|also)\s+){0,2}(?:(?:you(?:\s+will|['’]ll)?|candidates?\s+will)\s+)?(?:use(?!\s+of\b)|apply(?!\s+(?:to|for)\b)|employ|adopt|integrate)\b", text, re.I):
         return "expected"
     return "unspecified"
 
