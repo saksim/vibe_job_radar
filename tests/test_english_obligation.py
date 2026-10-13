@@ -75,12 +75,16 @@ class EnglishObligationTests(unittest.TestCase):
                      "Requirements:\nYou mustn’t only use Cursor.",
                      "Requirements:\nDon't use Cursor and use Codex.",
                      "Requirements:\nDo not use Cursor and apply Codex.",
+                     "Don't use Cursor, yet use Codex.",
+                     "Don't use Cursor, yet write code with Codex.",
+                     "Don't use Cursor, still adopt Codex.",
                      "Requirements:\nDon't use Cursor but write code with Codex.",
                      "Use Codex but please don't use Cursor.",
                      "Do not use Cursor, but use of Codex is prohibited.",
                      "Requirements:\nUse of Codex is prohibited.",
                      "Preferred qualifications:\nUse of Codex is prohibited.",
                      "Requirements:\nUse of Codex will be prohibited.",
+                     "Requirements:\nUse of Codex 2.1 prohibited.",
                      "Requirements:\nUse of Codex is not expected.",
                      "Requirements:\nUse of Codex is prohibited even if a license is required.",
                      "Don't use Cursor but apply to Codex."):
@@ -171,6 +175,11 @@ class EnglishObligationTests(unittest.TestCase):
             ('Use of Cursor is required.', 'required'),
             ('Use of Cursor is a required skill.', 'required'),
             ('Use of Cursor is absolutely required.', 'required'),
+            ('Use of Cursor is a plus.', 'preferred'),
+            ('Preferred qualifications:\nUse of Cursor.', 'preferred'),
+            ('Requirements:\nUse of Cursor.', 'required'),
+            ('Use of Cursor is a critically important required skill.', 'required'),
+            ('Use of Cursor is optional.', 'not_required'),
             ('Requirements:\nUse of Cursor is expected.', 'required'),
             ('Requirements:\nUse of Cursor is mandatory.', 'required'),
             ('Requirements:\nUse of Cursor will be required.', 'required'),
@@ -205,6 +214,7 @@ class EnglishObligationTests(unittest.TestCase):
                 self.assertTrue(rows)
                 self.assertFalse(any(row.accepted and row.positive for row in rows))
                 self.assertEqual(aggregate(rows, CONF), [])
+        self.assertTrue(all(not row.accepted for row in self.rows('Use of Cursor.')))
         rows = self.rows('Cursor and Codex.')
         selected = rows[0]
         apply_reviews(rows, {selected.requirement_id:{'decision':'approve','reviewer':'fixture',

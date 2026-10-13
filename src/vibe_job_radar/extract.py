@@ -168,8 +168,9 @@ def spans(text: str):
 def strength(text: str, section: str = "") -> str:
     # Unsplit contrasts or bare coordinated verbs have uncertain scope.
     # Preserve the whole clause for review rather than accept a guessed ban.
-    if (re.search(r"\b(?:must\s+not|mustn['’]t|do\s+not|don['’]t)\s+(?:use|upload|send)\b", text, re.I)
-            and re.search(r"\S\s+(?:but|however)\b|\band\s+(?:use|apply|employ|adopt|integrate)\b", text, re.I)):
+    ban = re.search(r"\b(?:must\s+not|mustn['’]t|do\s+not|don['’]t)\s+(?:use|upload|send)\b", text, re.I)
+    if ban and (re.search(r"\S\s+(?:but|however|yet|nevertheless|nonetheless|instead|rather|while|whereas|although|though|unless|except)\b", text, re.I)
+                or re.search(r"\b(?:use|apply|employ|adopt|integrate|upload|send)\b", text[ban.end():], re.I)):
         return "unspecified"
     if re.search(r"禁止|严禁|不得|不允许|不能(?:使用|上传|发送)|\b(?:must\s+not|mustn['’]t|do\s+not|don['’]t)\s+(?:use|upload|send)\b", text, re.I):
         return "prohibited"
@@ -185,32 +186,35 @@ def strength(text: str, section: str = "") -> str:
         return "unspecified"
     if re.match(r"(?:(?:but|however|and|also)\s+){0,2}use\s+cases?\b", text, re.I):
         return "unspecified"
+    noun_priority = ""
     if re.match(r"(?:(?:but|however|and|also)\s+){0,2}use\s+of\b", text, re.I):
-        # Inspect the first predicate so a later positive clause cannot excuse
-        # an earlier passive ban. A noun phrase alone remains review-only.
+        # Reject an explicit negative predicate before applying the existing
+        # preference/requirement cues, including noun phrases under headings.
         predicate = re.search(r"\b(?:is|will\s+be)\s+(.+)", text, re.I)
-        positive = re.match(
-            r"(?:(?:a|an|the|[a-z]+ly|always|often)\s+){0,5}"
-            r"(required|mandatory|essential|expected|preferred|recommended|encouraged)\b",
-            predicate.group(1), re.I) if predicate else None
-        if not positive:
+        predicate_text = predicate.group(1) if predicate else text
+        if re.search(r"\b(?:not|never|no|prohibited|forbidden|banned|disallowed|discouraged|restricted)\b", predicate_text, re.I):
             return "unspecified"
-        word = positive.group(1).lower()
-        if word in {'preferred', 'recommended', 'encouraged'} or _heading_kind(section) == 'preferred':
-            return "preferred"
-        if word in {'required', 'mandatory', 'essential'} or _heading_kind(section) == 'requirements':
-            return "required"
-        return "expected"
-    if _heading_kind(section) == 'preferred' or re.search(r"优先|加分|有更好|更佳|nice.to.have|preferred|\ba plus\b", text + section, re.I):
+        predicate_text = re.split(
+            r"[,;.!?]|\b(?:but|however|yet|although|though|while|whereas|and|because|unless|even\s+if)\b",
+            predicate_text, maxsplit=1, flags=re.I)[0]
+        if re.search(r"\boptional\b", predicate_text, re.I):
+            return "not_required"
+        if re.search(r"\b(?:recommended|encouraged)\b", predicate_text, re.I):
+            noun_priority = "preferred"
+        elif re.search(r"\b(?:mandatory|essential)\b", predicate_text, re.I):
+            noun_priority = "required"
+        elif re.search(r"\bexpected\b", predicate_text, re.I):
+            noun_priority = "expected"
+    if noun_priority == 'preferred' or _heading_kind(section) == 'preferred' or re.search(r"优先|加分|有更好|更佳|nice.to.have|preferred|\ba plus\b", text + section, re.I):
         return "preferred"
-    if re.search(r"必须|必备|要求|至少|精通|熟练|具备|能够|独立|熟悉|掌握|\bmust\b|\brequired\b", text, re.I):
+    if noun_priority == "required" or re.search(r"必须|必备|要求|至少|精通|熟练|具备|能够|独立|熟悉|掌握|\bmust\b|\brequired\b", text, re.I):
         return "required"
     if re.search(r"负责|使用|应用|推动|参与|建立|构建|维护|设计|完成|开发", text):
         return "expected"
     if _heading_kind(section) == 'requirements' or re.match(
             r'(?:hands-on\s+)?(?:experience|proficiency|expertise|familiarity)\s+(?:with|in|using)\b|(?:proficient|comfortable)\s+(?:with|in)\b|ability\s+to\b', text, re.I):
         return "required"
-    if re.match(r"(?:(?:but|however|and|also)\s+){0,2}(?:(?:you(?:\s+will|['’]ll)?|candidates?\s+will)\s+)?(?:use(?!\s+(?:of|cases?)\b)|apply(?!\s+(?:to|for)\b)|employ|adopt|integrate)\b", text, re.I):
+    if noun_priority == "expected" or re.match(r"(?:(?:but|however|and|also)\s+){0,2}(?:(?:you(?:\s+will|['’]ll)?|candidates?\s+will)\s+)?(?:use(?!\s+(?:of|cases?)\b)|apply(?!\s+(?:to|for)\b)|employ|adopt|integrate)\b", text, re.I):
         return "expected"
     return "unspecified"
 
