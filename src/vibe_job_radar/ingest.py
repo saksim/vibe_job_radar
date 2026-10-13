@@ -81,6 +81,10 @@ def iter_items(path: str | Path):
                 text = file.read_text(encoding="utf-8-sig")
                 sidecar = Path(str(file) + ".meta.json")
                 meta = load_json(sidecar) if sidecar.exists() else {}
+                if not isinstance(meta, dict):
+                    raise ValueError("input metadata must be a JSON object")
+                if not isinstance(meta.get("url", ""), str):
+                    raise ValueError("input metadata url must be a string")
                 if ext in {".html", ".htm"}:
                     parsed = parse_job_html(text, source_url=meta.get("url", ""))
                     # The HTML is the source of text. Metadata cannot overwrite extracted text.
