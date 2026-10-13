@@ -122,7 +122,7 @@ def _english_directive_prefix(prefix: str, modal: str) -> bool:
         # A negated subject can reverse the modal's scope. Restrict this
         # guard to its leading quantifier: "candidates with no experience"
         # still names a group subject to an ordinary direct prohibition.
-        if re.match(connectors + r"(?:no|none|nobody|neither|not)\b", clause_prefix.lstrip(), re.I):
+        if re.match(connectors + r"(?:no|none|nobody|neither|not)(?=\s|$)", clause_prefix.lstrip(), re.I):
             return False
         # An embedded subject does not override a negated matrix directive.
         # Subject modifiers such as "without experience" do not themselves

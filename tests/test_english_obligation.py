@@ -115,6 +115,8 @@ class EnglishObligationTests(unittest.TestCase):
                      "Data scientists must not use Cursor.",
                      "Candidates with no industry experience must not use Cursor.",
                      "NoSQL developers must not use Cursor.",
+                     "No-code developers must not use Cursor.",
+                     "No/low-code developers must not use Cursor.",
                      "Researchers must not use Cursor.",
                      "You must not disclose secrets with Cursor.",
                      "Candidates must not install Cursor.",
