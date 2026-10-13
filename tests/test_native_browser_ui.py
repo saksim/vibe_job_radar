@@ -47,10 +47,14 @@ class BrowserUITests(TestCase):
                 self.assertFalse(NativeBackend._browser_chrome_ui({**self.info, 'url': url}))
 
     def test_unknown_internal_target_keeps_rejection(self):
+        self.b._cdp.send.return_value = {'sessionId': 'quarantine'}
         self.b._attached({'sessionId': 'other', 'targetInfo': {
             **self.info, 'url': 'chrome://unreviewed/'}})
         self.assertTrue(self.b.cancelled.is_set())
         self.assertEqual(self.b.error, 'native_surface_unsupported')
+        self.b._send.assert_called_once_with('quarantine', 'Fetch.enable', {
+            'patterns': [{'urlPattern': '*', 'requestStage': 'Request'}],
+            'handleAuthRequests': True})
 
     def test_browser_ui_detach_failure_does_not_continue(self):
         self.b._cdp.send.side_effect = RuntimeError('fixture detach error')
