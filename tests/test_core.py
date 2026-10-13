@@ -372,6 +372,43 @@ class StorePipelineTests(unittest.TestCase):
         self.assertIsInstance(items[0][1], JobRecord)
         self.assertIsInstance(items[1][1], Exception)
 
+    def test_invalid_html_metadata_does_not_abort_later_inputs(self):
+        from contextlib import redirect_stdout
+        from io import StringIO
+        from vibe_job_radar.cli import main
+        inputs = self.root / "inputs"; inputs.mkdir()
+        html = inputs / "a-invalid.html"
+        html.write_text("<h1>架构师</h1><div class='job-sec-text'>熟练使用 Cursor 进行 AI 辅助编程，并编写单元测试。</div>", encoding="utf-8")
+        sidecar = Path(str(html) + ".meta.json")
+        valid = inputs / "b-valid.txt"
+        body = "熟练使用 Cursor 进行 AI 辅助编程，并编写单元测试。"
+        valid.write_text(body, encoding="utf-8")
+        for metadata in ([], None, "not-an-object", {"url":123}, {"url":["https://example.org/job/1"]}):
+            with self.subTest(metadata=metadata):
+                sidecar.write_text(json.dumps(metadata), encoding="utf-8")
+                items = list(iter_items(inputs))
+                self.assertEqual([ref for ref, _ in items], [str(html), str(valid)])
+                self.assertIsInstance(items[0][1], ValueError)
+                self.assertIn("input metadata", str(items[0][1]))
+                self.assertIsInstance(items[1][1], JobRecord)
+                self.assertEqual(items[1][1].text, body)
+        output = StringIO()
+        with redirect_stdout(output):
+            code = main(["ingest", str(inputs), "--db", str(self.db)])
+        self.assertEqual(code, 2)
+        summary = json.loads(output.getvalue())
+        self.assertEqual((summary["new_snapshots"], summary["observations"], summary["errors"]), (1, 1, 1))
+        errors = json.loads(self.db.with_suffix(".ingest_errors.json").read_text(encoding="utf-8"))
+        self.assertEqual(errors[0]["source_ref"], str(html))
+        with Store(self.db) as store:
+            self.assertEqual([r.text for r in store.records()], [body])
+        sidecar.write_text(json.dumps({"url":"https://example.org/job/1", "company":"Fixture Co"}), encoding="utf-8")
+        restored = list(iter_items(inputs))
+        self.assertTrue(all(isinstance(record, JobRecord) for _, record in restored))
+        self.assertEqual(restored[0][1].url, "https://example.org/job/1")
+        self.assertEqual(restored[0][1].company, "Fixture Co")
+        self.assertEqual(restored[0][1].text, body)
+
     def test_html_xss_escaped_and_csv_formula_safe(self):
         self.add(job(title="架构师<script>alert(1)</script>", text='=HYPERLINK("x") 使用Cursor编程。'))
         out = self.root / "run"
