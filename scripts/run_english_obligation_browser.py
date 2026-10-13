@@ -52,7 +52,7 @@ def main():
                     expect(page.locator('#requirements')).to_contain_text('You must not upload customer secrets.')
                     expect(page.locator('#requirements')).not_to_contain_text('subscription')
                     expect(page.locator('#requirements')).not_to_contain_text('software teams')
-                    expect(page.locator('#manifest')).to_contain_text('rules-0.2.2')
+                    expect(page.locator('#manifest')).to_contain_text('rules-0.2.3')
                     first=next((workspace.root/'reports').iterdir())
                     original={p.name:p.read_bytes() for p in first.iterdir() if p.is_file()}
                     with page.expect_download() as pending:page.get_by_role('button',name='requirements_zh.csv',exact=True).click()

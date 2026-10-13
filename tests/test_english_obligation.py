@@ -112,6 +112,11 @@ class EnglishObligationTests(unittest.TestCase):
                      "Engineers mustn't use Cursor.",
                      "New hires must not use Cursor.",
                      "Senior developers must not use Cursor.",
+                     "Data scientists must not use Cursor.",
+                     "Researchers must not use Cursor.",
+                     "You must not disclose secrets with Cursor.",
+                     "Candidates must not install Cursor.",
+                     "Data scientists mustn't install Cursor.",
                      "If on call, candidates must not use Cursor.",
                      "Don't use Cursor because it is unapproved.",
                      "Don't use Cursor because it is prohibited by policy.",
@@ -198,7 +203,12 @@ class EnglishObligationTests(unittest.TestCase):
 
     def test_nested_must_negations_require_review_without_anchoring_other_skills(self):
         for command in ("You mustn't fail to use", "You mustn’t be afraid to use",
-                        "You must not fail to use", "You must not be afraid to use"):
+                        "You must not fail to use", "You must not be afraid to use",
+                        "You must not forget to use", "You must not avoid using",
+                        "You must not prevent use of", "You must not always use",
+                        "You must not simply use", "You must not not use",
+                        "Candidates must not feel compelled to use",
+                        "You must not consider it necessary to use"):
             with self.subTest(command=command):
                 text = 'Requirements:\n'+command+' Cursor.\n熟悉分布式架构。'
                 rows = self.rows(text)
@@ -226,8 +236,8 @@ class EnglishObligationTests(unittest.TestCase):
             self.assertTrue(all(r['strength'] == 'prohibited' and text[r['start']:r['end']] == r['quote'] for r in rows))
             self.assertIn('Don’t use Cursor for production code.', (first/'requirements_zh.csv').read_text(encoding='utf-8-sig'))
             manifest = json.loads((first/'run_manifest.json').read_text(encoding='utf-8'))
-            self.assertEqual(manifest['rule_engine'], 'rules-0.2.2')
-            self.assertTrue(all(r['extraction_method'] == 'rules-0.2.2' for r in rows))
+            self.assertEqual(manifest['rule_engine'], 'rules-0.2.3')
+            self.assertTrue(all(r['extraction_method'] == 'rules-0.2.3' for r in rows))
             self.assertEqual(manifest['stats']['accepted_positive_requirement_rows'], 0)
             self.assertEqual(manifest['stats']['vibe_evidence_job_groups'], 0)
             analyze(db, root/'second', config=CONF, as_of=NOW)
@@ -242,6 +252,9 @@ class EnglishObligationTests(unittest.TestCase):
             ('Experience using Cursor to write tests.', 'required'),
             ('Use of Cursor is required.', 'required'),
             ('Requirements:\nUse of Cursor is not optional.', 'required'),
+            ('Use of Cursor is far from optional.', 'required'),
+            ('Use of Cursor is hardly optional.', 'required'),
+            ('Use of Cursor is anything but optional.', 'required'),
             ('Use of Cursor is required and is expected for every task.', 'required'),
             ('Use of Cursor is required and will be mandatory for every task.', 'required'),
             ('Use of Cursor is preferred and is required for production.', 'required'),
@@ -297,12 +310,15 @@ class EnglishObligationTests(unittest.TestCase):
                      "We use Cursor and don't use Codex internally.",
                      "You don't use Cursor today but use Codex instead.",
                      "We don't require that you do not use Cursor.",
+                     "Requirements:\nWe don't require that you do not use Cursor.",
                      "We don't require that candidates mustn't use Cursor.",
                      "We never demand that applicants must not use Cursor.",
                      "It is not required that candidates mustn't use Cursor.",
                      "We can't require that candidates mustn't use Cursor.",
                      "We cannot require that candidates mustn't use Cursor.",
                      "Tell us whether candidates mustn't use Cursor.",
+                     "Explain why data scientists must not use Cursor.",
+                     "We are studying how data scientists must not use Cursor.",
                      "If candidates mustn't use Cursor, contact support.",
                      "If employees must not use Cursor, contact support.",
                      "We don't require that engineers must not use Cursor.",
