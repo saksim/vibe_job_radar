@@ -795,7 +795,11 @@ def main():
                         server.login_late_pacing = True
                         manual.action({'id':manual_task['id'],'action':'login','auto_continue':False})
                         pending = wait(manual)
-                        deadline = time.monotonic()+5
+                        # Login completion precedes these paced reads. Slow
+                        # durable rate reservations must not make this observer
+                        # cancel the still-running third request after 5 seconds.
+                        # Keep all three arrivals and the original state checks.
+                        deadline = time.monotonic()+30
                         while sum('/css/pacing-' in r['path'] for r in server.requests[before_login:])<3 and time.monotonic()<deadline:
                             time.sleep(.05)
                         assert sum('/css/pacing-' in r['path'] for r in server.requests[before_login:])==3
