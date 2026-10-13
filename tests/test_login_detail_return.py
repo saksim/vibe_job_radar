@@ -410,9 +410,16 @@ class DetailReturnFixtureTests(unittest.TestCase):
                 if first:
                     # Count from the owned writer's actual fsync, never from
                     # task setup; all other threads and writes keep their I/O.
-                    begin=time.monotonic()
-                    threading.Event().wait(6.5)
-                    held.append(time.monotonic()-begin)
+                    # Keep the real 6.5-second hold, measured without
+                    # subtracting rounded floating-point clock readings.
+                    begin=time.monotonic_ns()
+                    deadline=begin+6_500_000_000
+                    hold=threading.Event()
+                    now=begin
+                    while now < deadline:
+                        hold.wait((deadline-now)/1_000_000_000)
+                        now=time.monotonic_ns()
+                    held.append(now-begin)
                 return observed_fsync(descriptor)
             with patch.object(os,'fsync',side_effect=fsync):
                 # Preserve the original source identity, no-second-fetch,
@@ -420,7 +427,7 @@ class DetailReturnFixtureTests(unittest.TestCase):
                 case.test_login_returned_full_jd_enters_report_without_second_fetch()
             self.assertTrue(entered.is_set())
             self.assertEqual(len(held),1)
-            self.assertGreaterEqual(held[0],6.5)
+            self.assertGreaterEqual(held[0],6_500_000_000)
         finally:
             self.assertTrue(case.doCleanups())
             self.assertIs(os.fsync,original_fsync)
