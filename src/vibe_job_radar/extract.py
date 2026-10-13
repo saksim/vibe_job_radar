@@ -103,10 +103,10 @@ def spans(text: str):
     vibe_section = False
     pattern = r"[^\n。！？；;]+(?:[。！？；;]|(?=\n|$))"
     # Split a comma only where a new obligation/negation begins, not arbitrary noun lists.
-    contrast = re.compile(r"[，,](?=\s*(?:(?:但(?:是)?|然而|不过|同时|且|并)?\s*(?:必须|需要|应当|禁止|不得|严禁|不能|不允许|不要求|不必|不强制|无需)|(?:(?:but|however|and|also)\s+)?(?:you\s+)?(?:must\b|need\s+to\b|should\b|do\s+not\b|don['’]t\b)))", re.I)
+    contrast = re.compile(r"[，,](?=\s*(?:(?:但(?:是)?|然而|不过|同时|且|并)?\s*(?:必须|需要|应当|禁止|不得|严禁|不能|不允许|不要求|不必|不强制|无需)|(?:(?:but|however|and|also)\s+)?(?:you\s+)?(?:must(?:n['’]t)?\b|need\s+to\b|should\b|do\s+not\b|don['’]t\b)))", re.I)
     # Only clear new English clauses. Decimal/version dots, initials and
     # abbreviations such as e.g. / U.S. are not arbitrary sentence boundaries.
-    english = re.compile(r'[.!?](?=[ \t]+(?:You|We|The|Our|This|Must|Do|Use|Build|Write|Review|Maintain|Experience|Knowledge|Proficiency|No|Please|Candidates?|Applicants?)\b)')
+    english = re.compile(r"[.!?](?=[ \t]+(?:You|We|The|Our|This|Must(?:n['’]t)?|Do(?:n['’]t)?|Use|Build|Write|Review|Maintain|Experience|Knowledge|Proficiency|No|Please|Candidates?|Applicants?)\b)")
     for match in re.finditer(pattern, _soft_wrap_scan(text)):
         raw_match = match.group()
         endings = [m.end() for m in english.finditer(raw_match)
@@ -140,7 +140,7 @@ def spans(text: str):
 
 
 def strength(text: str, section: str = "") -> str:
-    if re.search(r"禁止|严禁|不得|不允许|不能(?:使用|上传|发送)|must not|do not (?:use|upload|send)", text, re.I):
+    if re.search(r"禁止|严禁|不得|不允许|不能(?:使用|上传|发送)|\b(?:must\s+not|mustn['’]t)\b|\b(?:do\s+not|don['’]t)\s+(?:use|upload|send)\b", text, re.I):
         return "prohibited"
     if re.search(r"无需|不要求|不需要|不必|不强制|not (?:required|necessary|mandatory)|no .{0,40}experience.{0,20}required|\b(?:do not|don['’]t) (?:need|have to)\b|\bneed not\b", text, re.I):
         return "not_required"
@@ -217,7 +217,7 @@ class RuleExtractor:
                 continue
             priority = strength(clause, s.section)
             mixed = bool(re.search(r"(?:无需|不要求|禁止|不得).{0,100}(?:但|同时|不过).{0,100}(?:必须|要求|熟练|需要)", clause))
-            ambiguous = bool(re.search(r"不接受只会|不能只|不依赖|不能依赖|\bnot (?:just|only)\b|\b(?:cannot|can't|must not) rely\b", clause, re.I))
+            ambiguous = bool(re.search(r"不接受只会|不能只|不依赖|不能依赖|\b(?:not|mustn['’]t) (?:just|only)\b|\b(?:cannot|can't|must not|mustn['’]t) rely\b", clause, re.I))
             # Building/selling the named product is not proof of using it as
             # a coding tool. Keep the original clause for explicit review.
             product_mention = any(re.search(

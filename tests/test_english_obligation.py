@@ -61,6 +61,53 @@ class EnglishObligationTests(unittest.TestCase):
                 self.assertTrue(any('Codex' in row.tools and row.positive and row.accepted for row in rows))
                 self.assertFalse(any('Cursor' in row.tools and row.positive and row.accepted for row in rows))
 
+    def test_contracted_prohibitions_are_not_positive_heading_defaults(self):
+        for command in ("Don't use", "Don’t use", "You mustn't use", "You mustn’t use"):
+            with self.subTest(command=command):
+                rows = self.rows('Requirements:\n'+command+' Cursor for production code.')
+                self.assertTrue(rows)
+                self.assertTrue(all(r.strength == 'prohibited' and not r.positive for r in rows))
+                self.assertEqual(aggregate(rows, CONF), [])
+        for text in ("Requirements:\nYou don't need to use Cursor.",
+                     "Requirements:\nYou don’t have to use Cursor."):
+            self.assertTrue(all(r.strength == 'not_required' for r in self.rows(text)))
+        for text in ("Requirements:\nYou mustn't rely on Cursor.",
+                     "Requirements:\nYou mustn’t only use Cursor."):
+            self.assertTrue(all(not r.accepted for r in self.rows(text)))
+
+    def test_contracted_prohibitions_do_not_absorb_adjacent_positive_tool(self):
+        for text in ("Requirements:\nUse Codex. Don't use Cursor.",
+                     "Requirements:\nUse Codex. Don’t use Cursor.",
+                     "Requirements:\nUse Codex. Mustn't use Cursor.",
+                     "Requirements:\nUse Codex, but you mustn’t use Cursor.",
+                     "Requirements:\nDon't use Cursor. Use Codex.",
+                     "Requirements:\nYou mustn't use Cursor, but you must use Codex."):
+            with self.subTest(text=text):
+                rows = self.rows(text)
+                cursor = [r for r in rows if 'Cursor' in r.tools]
+                codex = [r for r in rows if 'Codex' in r.tools]
+                self.assertTrue(cursor and codex)
+                self.assertTrue(all(r.strength == 'prohibited' and not r.positive for r in cursor))
+                self.assertTrue(all(r.positive and r.accepted for r in codex))
+
+    def test_original_report_excludes_contracted_ban_and_keeps_raw_quote(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); db = root/'jobs.sqlite'
+            text = "Requirements:\nDon’t use Cursor for production code."
+            with Store(db) as store: store.add(job(text))
+            first = root/'first'
+            analyze(db, first, config=CONF, as_of=NOW)
+            old = {p.name:p.read_bytes() for p in first.iterdir() if p.is_file()}
+            rows = [json.loads(line) for line in (first/'requirements.jsonl').read_text(encoding='utf-8').splitlines()]
+            self.assertTrue(rows)
+            self.assertTrue(all(r['strength'] == 'prohibited' and text[r['start']:r['end']] == r['quote'] for r in rows))
+            self.assertIn('Don’t use Cursor for production code.', (first/'requirements_zh.csv').read_text(encoding='utf-8-sig'))
+            manifest = json.loads((first/'run_manifest.json').read_text(encoding='utf-8'))
+            self.assertEqual(manifest['stats']['accepted_positive_requirement_rows'], 0)
+            self.assertEqual(manifest['stats']['vibe_evidence_job_groups'], 0)
+            analyze(db, root/'second', config=CONF, as_of=NOW)
+            self.assertEqual(old, {p.name:p.read_bytes() for p in first.iterdir() if p.is_file()})
+
     def test_preferred_required_and_explicit_use_are_understood(self):
         for text, expected in (
             ('Preferred qualifications:\nExperience with Cursor.', 'preferred'),
