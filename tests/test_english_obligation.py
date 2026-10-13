@@ -81,7 +81,13 @@ class EnglishObligationTests(unittest.TestCase):
                      "Requirements:\nUse Codex. Mustn't use Cursor.",
                      "Requirements:\nUse Codex, but you mustn’t use Cursor.",
                      "Requirements:\nDon't use Cursor. Use Codex.",
-                     "Requirements:\nYou mustn't use Cursor, but you must use Codex."):
+                     "Requirements:\nYou mustn't use Cursor, but you must use Codex.",
+                     "Don't use Cursor, but use Codex.",
+                     "Don’t use Cursor, but apply Codex.",
+                     "Don't use Cursor, and employ Codex.",
+                     "Mustn't use Cursor, but you'll adopt Codex.",
+                     "Don't use Cursor, but also integrate Codex.",
+                     "Don't use Cursor. Adopt Codex."):
             with self.subTest(text=text):
                 rows = self.rows(text)
                 cursor = [r for r in rows if 'Cursor' in r.tools]

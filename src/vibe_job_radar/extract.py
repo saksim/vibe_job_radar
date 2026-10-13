@@ -103,10 +103,10 @@ def spans(text: str):
     vibe_section = False
     pattern = r"[^\n。！？；;]+(?:[。！？；;]|(?=\n|$))"
     # Split a comma only where a new obligation/negation begins, not arbitrary noun lists.
-    contrast = re.compile(r"[，,](?=\s*(?:(?:但(?:是)?|然而|不过|同时|且|并)?\s*(?:必须|需要|应当|禁止|不得|严禁|不能|不允许|不要求|不必|不强制|无需)|(?:(?:but|however|and|also)\s+)?(?:you\s+)?(?:must(?:n['’]t)?\b|need\s+to\b|should\b|do\s+not\b|don['’]t\b)))", re.I)
+    contrast = re.compile(r"[，,](?=\s*(?:(?:但(?:是)?|然而|不过|同时|且|并)?\s*(?:必须|需要|应当|禁止|不得|严禁|不能|不允许|不要求|不必|不强制|无需)|(?:(?:but|however|and|also)\s+){0,2}(?:you(?:\s+will|['’]ll)?\s+)?(?:must(?:n['’]t)?\b|need\s+to\b|should\b|do\s+not\b|don['’]t\b|(?:use|apply|employ|adopt|integrate)\b)))", re.I)
     # Only clear new English clauses. Decimal/version dots, initials and
     # abbreviations such as e.g. / U.S. are not arbitrary sentence boundaries.
-    english = re.compile(r"[.!?](?=[ \t]+(?:You|We|The|Our|This|Must(?:n['’]t)?|Do(?:n['’]t)?|Use|Build|Write|Review|Maintain|Experience|Knowledge|Proficiency|No|Please|Candidates?|Applicants?)\b)")
+    english = re.compile(r"[.!?](?=[ \t]+(?:You|We|The|Our|This|Must(?:n['’]t)?|Do(?:n['’]t)?|Use|Apply|Employ|Adopt|Integrate|Build|Write|Review|Maintain|Experience|Knowledge|Proficiency|No|Please|Candidates?|Applicants?)\b)")
     for match in re.finditer(pattern, _soft_wrap_scan(text)):
         raw_match = match.group()
         endings = [m.end() for m in english.finditer(raw_match)
@@ -157,7 +157,7 @@ def strength(text: str, section: str = "") -> str:
     if _heading_kind(section) == 'requirements' or re.match(
             r'(?:hands-on\s+)?(?:experience|proficiency|expertise|familiarity)\s+(?:with|in|using)\b|(?:proficient|comfortable)\s+(?:with|in)\b|ability\s+to\b', text, re.I):
         return "required"
-    if re.match(r"(?:(?:you(?:\s+will|['’]ll)?|candidates?\s+will)\s+)?(?:use|apply|employ|adopt|integrate)\b", text, re.I):
+    if re.match(r"(?:(?:but|however|and|also)\s+){0,2}(?:(?:you(?:\s+will|['’]ll)?|candidates?\s+will)\s+)?(?:use|apply|employ|adopt|integrate)\b", text, re.I):
         return "expected"
     return "unspecified"
 
