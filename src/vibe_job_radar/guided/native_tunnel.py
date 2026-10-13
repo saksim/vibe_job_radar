@@ -160,11 +160,14 @@ class NativeTunnel:
                 if name in headers:
                     self._reply(client,400); return
                 headers[name] = value.strip()
-            if not hmac.compare_digest(headers.get('proxy-authorization',''),self._authorization):
-                self._reply(client,407); return
+            # Browser background traffic has no owned Fetch auth handler.
+            # Reject requests we can never tunnel before issuing a challenge:
+            # credentials cannot make an unsupported method/authority valid.
             if (not m or m[1].lower() not in self.hosts or headers.get('transfer-encoding')
                     or headers.get('content-length','0') != '0'):
                 self._reply(client,403); return
+            if not hmac.compare_digest(headers.get('proxy-authorization',''),self._authorization):
+                self._reply(client,407); return
             if self._stop.is_set() or self.cancelled.is_set():
                 self._reply(client,503); return
             upstream = self._open(m[1].lower())

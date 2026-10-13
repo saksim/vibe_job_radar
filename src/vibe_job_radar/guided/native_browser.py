@@ -1,10 +1,10 @@
 """Opt-in Chromium native HTTP/TLS with a public-target opaque CONNECT guard.
 
-CDP Fetch observes/authorizes each owned-page hop. A context route rejects
-unowned pages before their initial request (a page event can arrive too late).
-Owned requests use native networking without HTTP request replay. CORS contexts
-deliver native-fetched document bytes with one extra restrictive CSP; original
-publisher security policies remain enforced.
+One CDP Fetch handler observes/authorizes each owned-page hop and handles the
+local proxy challenge. Document sandboxing and abort-only target controls reject
+unowned surfaces before their requests. Owned requests use native networking
+without HTTP request replay. Native-fetched document bytes receive one extra
+restrictive CSP; original publisher security policies remain enforced.
 Cross-origin requests require an exact, code-owned CORS operation contract.
 Only application-owned browser targets are used. Worker/OOPIF targets are stopped
 before running until their complete request accounting is separately supported.
