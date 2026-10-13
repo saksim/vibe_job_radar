@@ -78,10 +78,12 @@ class LiveAcceptanceTests(unittest.TestCase):
         return self.ledger.capture(self.plan['id'])
 
     def test_plan_and_empty_verify_are_offline_and_do_not_create_business_data(self):
-        with patch('socket.create_connection',side_effect=AssertionError('offline')):
+        with patch('socket.create_connection',side_effect=AssertionError('offline')), \
+                patch('sqlite3.connect',side_effect=AssertionError('no observed jobs')) as connect:
             result=self.ledger.verify(self.plan['id'])
             self.assertEqual(result['selected_items'],0)
             self.assertIn('no_observations',result['gaps'])
+        connect.assert_not_called()
         self.assertFalse(self.workspace.db.exists())
         self.assertEqual(list((self.workspace.root/'reports').iterdir()),[])
 
@@ -152,6 +154,58 @@ class LiveAcceptanceTests(unittest.TestCase):
         with closing(sqlite3.connect(self.workspace.db)) as db:
             db.execute('DELETE FROM observations');db.commit()
         self.assertEqual(self.ledger.verify(self.plan['id'])['verified_full_target_items'],0)
+
+    def test_verification_reuses_connection_but_sees_new_committed_deletion(self):
+        state=self.batch(count=2);self.capture()
+        reads=[];connect=sqlite3.connect;check=self.ledger._verified_item
+        target=state['cards'][1]['record_id']
+        # Keep a real WAL writer open beside the operation's readonly reader.
+        with closing(connect(self.workspace.db)) as writer:
+            def opened(*args,**kwargs):
+                db=connect(*args,**kwargs)
+                if '?mode=ro' in str(args[0]):
+                    reads.append(db)
+                return db
+            def checked(*args,**kwargs):
+                result=check(*args,**kwargs)
+                if result['record_id']!=target:
+                    writer.execute('DELETE FROM observations WHERE record_id=?',(target,))
+                    writer.commit()
+                return result
+            with patch('sqlite3.connect',side_effect=opened), \
+                    patch.object(self.ledger,'_verified_item',side_effect=checked):
+                result=self.ledger.verify(self.plan['id'])
+        self.assertEqual(result['verified_full_target_items'],1)
+        self.assertIn('previously_observed_evidence_no_longer_valid',result['gaps'])
+        self.assertEqual(len(reads),1)
+        with self.assertRaises(sqlite3.ProgrammingError):
+            reads[0].execute('SELECT 1')
+
+    def test_capture_closes_readonly_connection_when_task_changes(self):
+        state=self.batch();reads=[];connect=sqlite3.connect;read=self.ledger._json
+        task_reads=0
+        def opened(*args,**kwargs):
+            db=connect(*args,**kwargs)
+            if '?mode=ro' in str(args[0]):
+                reads.append(db)
+            return db
+        def changed(path,*args,**kwargs):
+            nonlocal task_reads
+            result=read(path,*args,**kwargs)
+            if path.name==state['id']+'.json':
+                task_reads+=1
+                if task_reads==2:
+                    return {**result,'code':'changed_during_capture'}
+            return result
+        with patch('sqlite3.connect',side_effect=opened), \
+                patch.object(self.ledger,'_json',side_effect=changed):
+            with self.assertRaisesRegex(InputError,'观测期间改变'):
+                self.capture()
+        self.assertEqual(len(reads),1)
+        with self.assertRaises(sqlite3.ProgrammingError):
+            reads[0].execute('SELECT 1')
+        folder=self.workspace.root/ROOT_NAME/self.plan['id']
+        self.assertEqual(list(folder.glob('capture-*.json')),[])
 
     def test_wrong_identity_or_body_hash_is_not_counted(self):
         state=self.batch();state['cards'][0]['body_sha256']='0'*64;self.service._save(state)

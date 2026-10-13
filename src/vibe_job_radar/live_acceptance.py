@@ -6,7 +6,7 @@ No browser, transport, Store writer or personal session is opened here.
 """
 from __future__ import annotations
 from collections import Counter
-from contextlib import closing
+from contextlib import ExitStack, closing, contextmanager
 import csv
 import hashlib
 import io
@@ -179,7 +179,25 @@ class AcceptanceLedger:
                     if r['status'] == 'selected'}
         return manifest,audit,{j.record_id:j for j in jobs},selected
 
-    def _verified_item(self, state, row, report, plan):
+    @contextmanager
+    def _observation_reader(self):
+        # Share only a connection within this operation, never cached results
+        # or a read transaction. A later item must see a newly committed change.
+        with ExitStack() as resources:
+            db = None
+            def observed(record):
+                nonlocal db
+                if db is None:
+                    db = resources.enter_context(closing(sqlite3.connect(
+                        self._path('jobs.sqlite').as_uri()+'?mode=ro',
+                        uri=True, isolation_level=None)))
+                with closing(db.execute(
+                        'SELECT 1 FROM observations WHERE record_id=? AND collected_at=? AND source_ref=? AND source_mode=?',
+                        (record.record_id, record.collected_at, record.source_ref, 'browser_fetch'))) as cursor:
+                    return cursor.fetchone() is not None
+            yield observed
+
+    def _verified_item(self, state, row, report, plan, observed):
         manifest,audit,jobs,selected = report
         record = jobs.get(row.get('record_id'))
         if (record is None or audit.get('task_id') != state['id'] or record.is_synthetic
@@ -208,10 +226,7 @@ class AcceptanceLedger:
         collected = parse_time(record.collected_at)
         if not max(parse_time(plan['created_at']),parse_time(state['created_at'])) <= collected <= parse_time(self.clock()):
             raise InputError('样本日期在计划之前或当前时间之后。')
-        with closing(sqlite3.connect(self._path('jobs.sqlite').as_uri()+'?mode=ro',uri=True)) as db:
-            observation = db.execute('SELECT 1 FROM observations WHERE record_id=? AND collected_at=? AND source_ref=? AND source_mode=?',
-                (record.record_id,record.collected_at,record.source_ref,'browser_fetch')).fetchone()
-        if not observation: raise InputError('缺少该次实际入库观测，不能补造跨日期记录。')
+        if not observed(record): raise InputError('缺少该次实际入库观测，不能补造跨日期记录。')
         return {'entity':identity,'record_id':record.record_id,'body_sha256':row['body_sha256'],
                 'title_sha256':_hash(record.title.encode('utf-8')),
                 'raw_sha256':record.raw_sha256,'parser':record.parser,'collected_at':record.collected_at,
@@ -219,7 +234,7 @@ class AcceptanceLedger:
 
     def capture(self, ident):
         folder,plan = self._plan(ident)
-        with writer_lock(folder):
+        with writer_lock(folder), self._observation_reader() as has_observation:
             history,previous = self._history(folder,plan)
             prior_attempts, prior_environments, prior_costs = {}, {}, {}
             for observed in history:
@@ -277,7 +292,7 @@ class AcceptanceLedger:
                     elif row['status']=='ok':
                         try:
                             if report_error: raise InputError(report_error)
-                            item.update(self._verified_item(state,row,report,plan))
+                            item.update(self._verified_item(state,row,report,plan,has_observation))
                         except (InputError,OSError,ValueError,KeyError,TypeError,sqlite3.Error,CrawlError):
                             item['evidence_error']=report_error or 'item_evidence_invalid'
                     items.append(item)
@@ -350,25 +365,26 @@ class AcceptanceLedger:
                     origins[key] = task
         items = list(latest.values())
         complete, reports = [],{}
-        for key,item in latest.items():
-            if not item['full_target_verified']: continue
-            task = origins[key]
-            try:
-                report_id = task['report_id']
-                if _hash(self._read(self._path('reports',report_id,'run_manifest.json'))) != task['report_sha256']:
-                    raise InputError('原报告已改变。')
-                if report_id not in reports: reports[report_id] = self._report(report_id)
-                report = reports[report_id]
-                environment_history.require_report(task.get(environment_history.KEY), report[1])
-                quota_cost.require_report(task.get(quota_cost.KEY), report[1])
-                row = next(r for r in report[1]['items'] if r['id']==item['id'])
-                row = {**row,'title':report[2][item['record_id']].title}
-                checked = self._verified_item({'id':task['id'],'created_at':task['created_at'],
-                    'selection':[r['id'] for r in task['items'] if not r.get('historical_selection_only')]},row,report,plan)
-                if any(item.get(k) != v for k,v in checked.items()): raise InputError('原始条目已改变。')
-                complete.append(item)
-            except (InputError,OSError,ValueError,KeyError,TypeError,sqlite3.Error,CrawlError,StopIteration):
-                unknown.add('previously_observed_evidence_no_longer_valid')
+        with self._observation_reader() as has_observation:
+            for key,item in latest.items():
+                if not item['full_target_verified']: continue
+                task = origins[key]
+                try:
+                    report_id = task['report_id']
+                    if _hash(self._read(self._path('reports',report_id,'run_manifest.json'))) != task['report_sha256']:
+                        raise InputError('原报告已改变。')
+                    if report_id not in reports: reports[report_id] = self._report(report_id)
+                    report = reports[report_id]
+                    environment_history.require_report(task.get(environment_history.KEY), report[1])
+                    quota_cost.require_report(task.get(quota_cost.KEY), report[1])
+                    row = next(r for r in report[1]['items'] if r['id']==item['id'])
+                    row = {**row,'title':report[2][item['record_id']].title}
+                    checked = self._verified_item({'id':task['id'],'created_at':task['created_at'],
+                        'selection':[r['id'] for r in task['items'] if not r.get('historical_selection_only')]},row,report,plan,has_observation)
+                    if any(item.get(k) != v for k,v in checked.items()): raise InputError('原始条目已改变。')
+                    complete.append(item)
+                except (InputError,OSError,ValueError,KeyError,TypeError,sqlite3.Error,CrawlError,StopIteration):
+                    unknown.add('previously_observed_evidence_no_longer_valid')
         entities = {i['entity'] for i in complete}; dates = sorted({i['local_date'] for i in complete})
         denied = sum(i['permission']=='not_granted' for i in items)
         denominator = len(items)-denied
