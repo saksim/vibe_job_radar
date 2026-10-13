@@ -119,6 +119,16 @@ def _english_directive_prefix(prefix: str, modal: str) -> bool:
         clause_prefix = re.split(r"[,;.!?]", prefix)[-1]
         if re.search(r"\b(?:if|whether|unless|when|whenever|assuming|supposing|why|how)\b", clause_prefix, re.I):
             return False
+        # A reported claim/belief does not itself direct the candidate.
+        # Apply before stripping a numeric quantifier, so reported and plain
+        # subjects share the same boundary. Explicit "we require that" remains.
+        if re.search(
+                r"\b(?:said|says?|told|tells?|report(?:s|ed)?|claim(?:s|ed)?|"
+                r"stat(?:e|es|ed)|mention(?:s|ed)?|announc(?:e|es|ed)|"
+                r"argu(?:e|es|ed)|assert(?:s|ed)?|believ(?:e|es|ed)|"
+                r"thought|thinks?|suggest(?:s|ed)?|speculat(?:e|es|ed))\b",
+                clause_prefix, re.I):
+            return False
         # "No fewer than" / "not less than" impose a lower bound on the
         # group; they do not negate its obligation. Check the remaining
         # subject normally, including genuine nested negated subjects.
@@ -420,7 +430,7 @@ def strength(text: str, section: str = "") -> str:
 
 
 class RuleExtractor:
-    version = "rules-0.2.5"
+    version = "rules-0.2.6"
 
     def __init__(self, config: dict):
         self.config = config

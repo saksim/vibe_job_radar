@@ -491,7 +491,7 @@ def verify_english_report(app,previous_id,previous_csv):
     english=app.json('/api/analyze',{'dataset':'real','roles':['architect']})
     if english['id']==previous_id:raise AssertionError('new report overwrote the previous run')
     rows=english['requirements']
-    if (english['manifest']['rule_engine']!='rules-0.2.5'
+    if (english['manifest']['rule_engine']!='rules-0.2.6'
             or english['manifest']['stats']['accepted_positive_requirement_rows']!=2
             or any('subscription' in row['quote'] or 'software teams' in row['quote'] for row in rows)
             or not any(row['quote']=='You must use Cursor.' and row['strength']=='required' for row in rows)
@@ -515,7 +515,7 @@ def verify_numbered_wrap_report(app, previous):
         'evidence_level':'full_text', 'full_text_confirmed':True})
     report = app.json('/api/analyze', {'dataset':'real', 'roles':['architect']})
     rows = [r for r in report['requirements'] if r['company']=='ARTIFICIAL WRAP FIXTURE']
-    if (report['id']==previous['id'] or report['manifest']['rule_engine']!='rules-0.2.5'
+    if (report['id']==previous['id'] or report['manifest']['rule_engine']!='rules-0.2.6'
             or len(rows)!=4 or any(text[r['start']:r['end']]!=r['quote'] for r in rows)
             or not any(r['quote']==quote and r['strength']=='expected' and r['relation']=='direct' for r in rows)
             or any(r['strength']!='prohibited' for r in rows if 'Codex' in r['quote'])

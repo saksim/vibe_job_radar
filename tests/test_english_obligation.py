@@ -173,6 +173,32 @@ class EnglishObligationTests(unittest.TestCase):
         self.assertTrue(all(not r.accepted for r in rows if 'Codex' in r.tools))
         self.assertTrue(all(r.strength == 'prohibited' for r in rows if 'Cursor' in r.tools))
 
+    def test_reported_modal_bans_need_review_but_directives_remain(self):
+        for subject in ("No fewer than five respondents said developers",
+                        "Not less than 5 respondents reported that developers",
+                        "Respondents say developers", "Respondents claimed developers",
+                        "Respondents report that developers", "Respondents claim developers",
+                        "The report states that developers", "Respondents stated that developers",
+                        "Respondents mention developers", "Respondents announced developers",
+                        "Respondents argue developers", "Respondents asserted developers",
+                        "Respondents suggest developers", "Respondents speculated developers",
+                        "Researchers believe developers", "Researchers thought developers"):
+            with self.subTest(subject=subject):
+                rows = self.rows("Requirements:\n" + subject
+                                 + " must not use Cursor. You must use Codex.")
+                cursor = [r for r in rows if "Cursor" in r.tools]
+                codex = [r for r in rows if "Codex" in r.tools]
+                self.assertTrue(cursor and codex)
+                self.assertTrue(all(not r.accepted and r.strength == "unspecified" for r in cursor))
+                self.assertTrue(all(r.accepted and r.positive for r in codex))
+        for subject in ("We require that developers", "We expect that developers",
+                        "Five developers", "No fewer than five developers"):
+            with self.subTest(subject=subject):
+                rows = self.rows(subject + " must not use Cursor.")
+                self.assertTrue(rows)
+                self.assertTrue(all(r.accepted and r.strength == "prohibited"
+                                    and not r.positive for r in rows))
+
     def test_lower_bound_subject_preserves_direct_ban_and_adjacent_positive(self):
         for quantifier in ("No fewer than five", "Not less than five",
                            "No less than five", "Not fewer than five",
@@ -262,8 +288,8 @@ class EnglishObligationTests(unittest.TestCase):
             self.assertTrue(all(r['strength'] == 'prohibited' and text[r['start']:r['end']] == r['quote'] for r in rows))
             self.assertIn('Don’t use Cursor for production code.', (first/'requirements_zh.csv').read_text(encoding='utf-8-sig'))
             manifest = json.loads((first/'run_manifest.json').read_text(encoding='utf-8'))
-            self.assertEqual(manifest['rule_engine'], 'rules-0.2.5')
-            self.assertTrue(all(r['extraction_method'] == 'rules-0.2.5' for r in rows))
+            self.assertEqual(manifest['rule_engine'], 'rules-0.2.6')
+            self.assertTrue(all(r['extraction_method'] == 'rules-0.2.6' for r in rows))
             self.assertEqual(manifest['stats']['accepted_positive_requirement_rows'], 0)
             self.assertEqual(manifest['stats']['vibe_evidence_job_groups'], 0)
             analyze(db, root/'second', config=CONF, as_of=NOW)
