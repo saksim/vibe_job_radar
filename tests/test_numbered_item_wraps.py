@@ -152,7 +152,7 @@ class NumberedItemWrapTests(unittest.TestCase):
             analyze(db, root/'first', config=CONF, as_of=NOW)
             before = {p.name:p.read_bytes() for p in (root/'first').iterdir() if p.is_file()}
             result = analyze(db, root/'second', config=CONF, as_of=NOW)
-            self.assertEqual(result['rule_engine'], 'rules-0.2.5')
+            self.assertEqual(result['rule_engine'], 'rules-0.2.6')
             rows = [json.loads(line) for line in (root/'second'/'requirements.jsonl').read_text(encoding='utf-8').splitlines()]
             self.assertTrue(rows)
             self.assertTrue(all(r['quote'] == text[text.index('推动'):] for r in rows))
