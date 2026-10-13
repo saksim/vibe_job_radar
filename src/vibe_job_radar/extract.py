@@ -98,20 +98,101 @@ def _soft_wrap_scan(text: str) -> str:
     return ''.join(scan)
 
 
+def _english_directive_prefix(prefix: str, modal: str) -> bool:
+    connectors = r"(?:(?:but|however|and|also)\s+){0,2}"
+    # Introductory labels/adjuncts supply scope, not a grammatical subject.
+    # A following "we" remains visible, and examples/questions are not labels.
+    for _ in range(2):
+        intro = re.match(
+            connectors + r"(?:(?:important|note|warning|reminder|caution|policy|security\s+policy)\s*:\s*|"
+            r"(?:for|in|on|at|during|under|before|after|with|without|to|if|when|while)\b[^,;:!?]{1,100},\s*)",
+            prefix, re.I)
+        if not intro:
+            break
+        prefix = prefix[intro.end():]
+    if re.fullmatch(connectors + r"(?:please\s+)?", prefix, re.I):
+        return True
+    if modal.lower().startswith("must"):
+        # A condition/question can mention a ban without imposing it.
+        # A completed conditional setup before a comma does not negate the
+        # following directive ("If on call, candidates must not ...").
+        clause_prefix = re.split(r"[,;.!?]", prefix)[-1]
+        if re.search(r"\b(?:if|whether|unless|when|whenever|assuming|supposing)\b", clause_prefix, re.I):
+            return False
+        # An embedded subject does not override a negated matrix directive.
+        # Subject modifiers such as "without experience" do not themselves
+        # negate a must-not obligation.
+        directive = re.search(
+            r"\b(?:require(?:s|d|ment)?|expect(?:s|ed)?|ask(?:s|ed)?|instruct(?:s|ed)?|"
+            r"demand(?:s|ed)?|mandate(?:s|d)?|oblig(?:ed|atory|ation))\b", prefix, re.I)
+        negated = re.search(
+            r"\b(?:not|never|no|cannot|(?:do|does|did|is|are|was|were|have|has|had|ca|wo|should|would|could|must|need)n['’]t)\b",
+            prefix, re.I)
+        if directive and negated:
+            return False
+        # Job-role subjects express the same explicit modal prohibition.
+        return bool(re.search(
+            r"\b(?:you|candidates?|applicants?|employees?|engineers?|developers?|"
+            r"architects?|designers?|analysts?|managers?|interns?|contractors?|"
+            r"staff|personnel|team\s+members?|new\s+hires?)\s+(?:please\s+)?$", prefix, re.I))
+    # Bare "you don't" is indicative. An explicit request supplies the
+    # directive context without accepting a negated "we don't require".
+    return bool(re.fullmatch(
+        connectors + r"(?:you\s+please\s+|(?:we\s+)?(?:require|ask|instruct)\s+(?:that\s+)?you\s+(?:please\s+)?)",
+        prefix, re.I))
+
+
 def spans(text: str):
     section = ""
     vibe_section = False
     pattern = r"[^\n。！？；;]+(?:[。！？；;]|(?=\n|$))"
     # Split a comma only where a new obligation/negation begins, not arbitrary noun lists.
-    contrast = re.compile(r"[，,](?=\s*(?:(?:但(?:是)?|然而|不过|同时|且|并)?\s*(?:必须|需要|应当|禁止|不得|严禁|不能|不允许|不要求|不必|不强制|无需)|(?:(?:but|however|and|also)\s+)?(?:you\s+)?(?:must\b|need\s+to\b|should\b|do\s+not\b|don['’]t\b)))", re.I)
+    contrast = re.compile(r"[，,](?=\s*(?:(?:但(?:是)?|然而|不过|同时|且|并)?\s*(?:必须|需要|应当|禁止|不得|严禁|不能|不允许|不要求|不必|不强制|无需)|(?:(?:but|however|and|also)\s+){0,2}(?:you(?:\s+will|['’]ll)?\s+)?(?:must(?:n['’]t)?\b|need\s+to\b|should\b|do\s+not\b|don['’]t\b|(?:use(?!\s+(?:of|cases?)\b)|apply(?!\s+(?:to|for)\b)|employ|adopt|integrate)\b)))", re.I)
+    # "but/however" introduce a contrasting obligation without a comma.
+    # After "and", require a fresh explicit obligation/negation: a bare
+    # coordinated verb can still belong to the preceding prohibition.
+    conjunction = re.compile(r"\s+(?=(?:(?:but|however)\s+(?:also\s+)?(?:you(?:\s+will|['’]ll)?\s+)?(?:must(?:n['’]t)?\b|need\s+to\b|should\b|do\s+not\b|don['’]t\b|(?:use(?!\s+(?:of|cases?)\b)|apply(?!\s+(?:to|for)\b)|employ|adopt|integrate)\b)|and\s+(?:(?:you\s+)?(?:must(?:n['’]t)?\b|need\s+to\b|should\b|do\s+not\b|don['’]t\b)|you(?:\s+will|['’]ll)\s+(?:use(?!\s+(?:of|cases?)\b)|apply(?!\s+(?:to|for)\b)|employ|adopt|integrate)\b)))", re.I)
+    command = r"(?:use(?!\s+(?:of|cases?)\b)|apply(?!\s+(?:to|for)\b)|employ|adopt|integrate)\b"
+    bare_transition = re.compile(r"(?:(?:but|however|and|also)\s+){0,2}" + command, re.I)
+    implicit_transition = re.compile(
+        r"(?:(?:but|however|and|also)\s+){0,2}(?:must(?:n['’]t)?\b|need\s+to\b|"
+        r"should\b|do\s+not\b|don['’]t\b|" + command + r")", re.I)
+    candidate_command = re.compile(r"(?:(?:but|however|and|also)\s+){0,2}(?:please\s+)?(?:(?:you(?:\s+will|[\'’]ll)?|candidates?\s+will)\s+)?(?:must(?:n[\'’]t)?\b|need\s+to\b|should\b|do\s+not\b|don[\'’]t\b|" + command + r")", re.I)
     # Only clear new English clauses. Decimal/version dots, initials and
     # abbreviations such as e.g. / U.S. are not arbitrary sentence boundaries.
-    english = re.compile(r'[.!?](?=[ \t]+(?:You|We|The|Our|This|Must|Do|Use|Build|Write|Review|Maintain|Experience|Knowledge|Proficiency|No|Please|Candidates?|Applicants?)\b)')
+    english = re.compile(r"[.!?](?=[ \t]+(?:You|We|The|Our|This|Must(?:n['’]t)?|Do(?:n['’]t)?|Use|Apply|Employ|Adopt|Integrate|Build|Write|Review|Maintain|Experience|Knowledge|Proficiency|No|Please|Candidates?|Applicants?)\b)", re.I)
     for match in re.finditer(pattern, _soft_wrap_scan(text)):
         raw_match = match.group()
         endings = [m.end() for m in english.finditer(raw_match)
                    if not re.search(r'(?:\b(?:e\.g|i\.e|vs|Dr|Mr|Ms|Prof|Inc|Ltd|No)|(?:\b[A-Z]\.)+[A-Z])\.$', raw_match[:m.end()], re.I)]
-        bounds = sorted({0, *(m.end() for m in contrast.finditer(raw_match)), *endings, len(raw_match)})
+        bounds = {0, *endings, len(raw_match)}
+        transitions = sorted({*(m.end() for m in contrast.finditer(raw_match)),
+                              *(m.end() for m in conjunction.finditer(raw_match))})
+        for boundary in transitions:
+            following = raw_match[boundary:].lstrip()
+            if implicit_transition.match(following):
+                # A comma or "and" can continue a prohibited verb list.
+                # A bare positive command needs a genuine contrast.
+                if (bare_transition.match(following)
+                        and not re.match(r"(?:but|however)\b", following, re.I)):
+                    continue
+                # A bare coordinated verb inherits the preceding subject.
+                # Only a candidate command can supply implicit "you".
+                previous = max(point for point in bounds if point < boundary)
+                preceding = raw_match[previous:boundary].lstrip()
+                prefix = re.match(r"[-*•·][ \t]*", preceding) or _NUMBERED_PREFIX.match(preceding)
+                if prefix:
+                    preceding = preceding[prefix.end():]
+                inline_heading = re.match(r'([^：:\n]{1,80})[：:]\s*', preceding)
+                if inline_heading and _heading_kind(inline_heading.group(1)):
+                    preceding = preceding[inline_heading.end():]
+                negative = re.search(r"\b(?:must\s+not|mustn['’]t|do\s+not|don['’]t)\b", preceding, re.I)
+                candidate_context = (_english_directive_prefix(preceding[:negative.start()], negative.group())
+                                     if negative else bool(candidate_command.match(preceding)))
+                if not candidate_context:
+                    continue
+            bounds.add(boundary)
+        bounds = sorted(bounds)
         for lo, hi in zip(bounds, bounds[1:]):
             raw = match.group()[lo:hi]
             left = len(raw) - len(raw.lstrip())
@@ -139,27 +220,175 @@ def spans(text: str):
             yield Span(start, end, quote, text.count("\n", 0, start), section, vibe_section)
 
 
-def strength(text: str, section: str = "") -> str:
-    if re.search(r"禁止|严禁|不得|不允许|不能(?:使用|上传|发送)|must not|do not (?:use|upload|send)", text, re.I):
-        return "prohibited"
-    if re.search(r"无需|不要求|不需要|不必|不强制|not (?:required|necessary|mandatory)|no .{0,40}experience.{0,20}required|\b(?:do not|don['’]t) (?:need|have to)\b|\bneed not\b", text, re.I):
-        return "not_required"
-    if _heading_kind(section) == 'preferred' or re.search(r"优先|加分|有更好|更佳|nice.to.have|preferred|\ba plus\b", text + section, re.I):
+# Capture the subject before a coordinated finite predicate. An empty subject
+# ("and is expected") refers back to the original subject; a named second
+# subject cannot safely inherit its polarity. Decimal dots are not boundaries.
+_ENGLISH_FINITE_CONTINUATION = re.compile(
+    r"(?P<connector>[,;!?]|\.(?=\s|$)|\b(?:but|however|yet|and|while|whereas|although|though)\b)\s*"
+    r"(?:(?:but|however|yet|and)\s+)?"
+    r"(?P<subject>(?:(?!\b(?:but|however|yet|and|or|while|whereas|although|though)\b)[^,;.!?]){0,100}?)\b(?:is|are|will\s+be)\s+", re.I)
+
+
+_ENGLISH_PREDICATE_CUE = (
+    r"(?:not\s+(?:optional|required|necessary|mandatory)|not|never|no|prohibited|forbidden|"
+    r"banned|disallowed|discouraged|restricted|optional|recommended\s+against|recommended|"
+    r"encouraged|mandatory|essential|expected|required|preferred|a\s+plus)")
+_ENGLISH_ELIDED_PREDICATE = re.compile(
+    r"(?:[,;]\s*(?:(?:but|however|yet|and|or|although|though)\s+)?|\b(?:but|however|yet|and|or|while|whereas|although|though)\s+)"
+    r"(?:(?:also|still|highly|strongly|absolutely)\s+){0,2}"
+    r"(?=" + _ENGLISH_PREDICATE_CUE + r"(?=\s*(?:[.,;!?]|$)|\s+(?:for|in|on|at|to|by|under|"
+    r"during|before|after|within|outside|when|where|while|with|as|every|depending|but|however|yet|and|or|whereas|although|though)\b))", re.I)
+
+
+def _english_predicate_priority(text: str) -> str:
+    # An infinitive can change the polarity of "expected"/"recommended".
+    # Ordinary purposes ("required to avoid errors") retain their predicate.
+    if re.search(
+            r"\b(?:(?:not|never)\s+to|to\s+not)\b|"
+            r"\bto\s+(?:[a-z]+ly\s+){0,2}(?:be|remain|become|stay)\s+"
+            r"(?:(?:[a-z]+ly|also|still)\s+){0,2}"
+            r"(?:(?:considered|deemed|(?:treated|regarded|classified)\s+as)\s+"
+            r"(?:(?:[a-z]+ly|also|still)\s+){0,2}){0,2}"
+            r"(?:not|never|prohibited|forbidden|banned|disallowed|discouraged|restricted|avoided|optional)\b",
+            text, re.I):
+        return "unspecified"
+    optional_exception = bool(re.search(r"\b(?:except|unless)\b", text, re.I))
+    text = re.split(
+        r"[,;!?]|\.(?=\s|$)|\b(?:but|however|yet|although|though|while|whereas|and|"
+        r"for|to|in|on|with|by|under|because|when|where|as|unless|even\s+if)\b",
+        text, maxsplit=1, flags=re.I)[0]
+    cue = re.search(r"\b" + _ENGLISH_PREDICATE_CUE + r"\b", text, re.I)
+    word = re.sub(r"\s+", " ", cue.group().lower()) if cue else ""
+    if word in {"not", "never", "no", "prohibited", "forbidden", "banned",
+                "disallowed", "discouraged", "restricted", "recommended against"}:
+        return "unspecified"
+    if word in {"optional", "not required", "not necessary", "not mandatory"}:
+        return "unspecified" if optional_exception else "not_required"
+    if word in {"recommended", "encouraged", "preferred", "a plus"}:
         return "preferred"
-    if re.search(r"必须|必备|要求|至少|精通|熟练|具备|能够|独立|熟悉|掌握|\bmust\b|\brequired\b", text, re.I):
+    if word in {"not optional", "mandatory", "essential", "required"}:
+        return "required"
+    return "expected" if word == "expected" else ""
+
+
+def strength(text: str, section: str = "") -> str:
+    # Preserve explicit Chinese prohibitions in bilingual explanations.
+    if re.search(r"禁止|严禁|不得|不允许|不能(?:使用|上传|发送)", text):
+        return "prohibited"
+    # Ordinary adverbs do not reverse a direct ban. Nested negations and
+    # qualifiers such as "only" are deliberately outside this finite list.
+    ban = re.search(
+        r"\b(?P<modal>must\s+not|mustn['’]t|do\s+not|don['’]t)\s+"
+        r"(?:(?:ever|directly|automatically|knowingly|intentionally|deliberately|personally|actually)\s+){0,2}"
+        r"(?:use|upload|send)\b", text, re.I)
+    if ban:
+        if text.rstrip().endswith("?"):
+            return "unspecified"
+        reason = re.split(
+            r"\b(because|since|when|if|as|while|unless|although|though|whereas|once|whenever|until|"
+            r"provided(?:\s+that)?|assuming|supposing|in\s+case)\b",
+            text[ban.end():], maxsplit=1, flags=re.I)
+        if len(reason) == 3:
+            # A pronoun plus a matching negative policy explains the same ban.
+            # Named tools and any additional obligation still need review.
+            reinforcing = re.match(
+                r"\s*(?:it|this|that)\s+is\s+(?:strictly\s+)?"
+                r"(?:prohibited|forbidden|banned|disallowed)\b", reason[2], re.I)
+            subordinate = (reason[2][reinforcing.end():]
+                           if reinforcing and reason[1].lower() in {"because", "since"}
+                           else reason[2])
+            if re.search(
+                    r"\b(?:must(?:n['’]t)?|should|need(?:s)?\s+to|have\s+to|required|"
+                    r"mandatory|expected|preferred|optional|recommended|prohibited|forbidden)\b",
+                    subordinate, re.I):
+                return "unspecified"
+        # All subjectless transitions use the same context check. Neither
+        # company descriptions nor indicative second-person statements can
+        # acquire an imperative meaning merely by being split.
+        if not _english_directive_prefix(text[:ban.start()], ban.group("modal")):
+            return "unspecified"
+        # Infinitive purposes stay inside the ban. Unsplit contrasts,
+        # coordinated actions or a fresh finite requirement need review.
+        if (re.search(r"\S\s+(?:but|however|yet|nevertheless|nonetheless|instead|rather|while|whereas|although|though|unless|except|otherwise)\b", text, re.I)
+                or re.search(r"(?:,\s*|\b(?:and|or|still)\s+)(?:(?:also|please|still)\s+)*(?:use|apply|employ|adopt|integrate|upload|send)\b", text[ban.end():], re.I)
+                or _ENGLISH_FINITE_CONTINUATION.search(text[ban.end():])):
+            return "unspecified"
+        return "prohibited"
+    # A nested negation can require tool use ("mustn't fail to use").
+    # Keep uncertain predicates out of both accepted bans and positive anchors.
+    if re.search(r"\b(?:must\s+not|mustn['’]t)\b", text, re.I):
+        return "unspecified"
+    noun_clause = re.match(r"(?:(?:but|however|and|also)\s+){0,2}use\s+of\b", text, re.I)
+    if (re.search(r"无需|不要求|不需要|不必|不强制", text)
+            or (not noun_clause and re.search(
+                r"not (?:required|necessary|mandatory)|no .{0,40}experience.{0,20}required|"
+                r"\b(?:do not|don['’]t) (?:need|have to)\b|\bneed not\b", text, re.I))):
+        return "not_required"
+    # Noun phrases and applications are not tool-use imperatives.
+    # Explicit positive/optional predicates remain distinct from heading defaults.
+    if re.match(r"(?:(?:but|however|and|also)\s+){0,2}apply\s+(?:to|for)\b", text, re.I):
+        return "unspecified"
+    if re.match(r"(?:(?:but|however|and|also)\s+){0,2}use\s+cases?\b", text, re.I):
+        return "unspecified"
+    noun_priority = ""
+    if noun_clause:
+        predicate = re.search(r"\b(?:is|will\s+be)\s+(.+)", text, re.I)
+        predicate_text = predicate.group(1) if predicate else text
+        continuations = [
+            m for m in _ENGLISH_FINITE_CONTINUATION.finditer(predicate_text)
+            # Temporal activity/state predicates retain the main obligation.
+            # A second required/optional/prohibited predicate remains mixed.
+            if not (m.group("connector").lower() == "while"
+                    and re.match(
+                        r"(?:(?:not|[a-z]+ly|still|also)\s+){0,2}"
+                        r"(?:(?!being\b)[a-z]+ing\b|on\s+(?:call|duty)\b|"
+                        r"at\s+work\b|(?:remote|available|offline|online)\b)",
+                        predicate_text[m.end():], re.I))
+        ] if predicate else []
+        if any(re.sub(r"\b(?:also|still)\b", "", m.group("subject"), flags=re.I).strip()
+               for m in continuations):
+            return "unspecified"
+        # Elided copulas share the same polarity/ranking logic. Require a
+        # predicate boundary, so "for restricted repos and optional workflows"
+        # remains a coordinated complement rather than a second obligation.
+        if predicate:
+            elided = list(_ENGLISH_ELIDED_PREDICATE.finditer(predicate_text))
+            if any(re.search(r"\bor\b", m.group(), re.I) for m in elided):
+                return "unspecified"
+            continuations = sorted([*continuations, *elided], key=lambda m: m.start())
+        starts = [0, *(m.end() for m in continuations)]
+        ends = [*(m.start() for m in continuations), len(predicate_text)]
+        priorities = [_english_predicate_priority(predicate_text[lo:hi])
+                      for lo, hi in zip(starts, ends)]
+        # Shared-subject affirmative predicates remain positive. Conflicting
+        # optional/mandatory predicates cannot be summarized as one strength.
+        if "unspecified" in priorities or ("not_required" in priorities
+                and any(p in {"required", "expected", "preferred"} for p in priorities)):
+            return "unspecified"
+        if "not_required" in priorities:
+            return "not_required"
+        ranks = {"": 0, "preferred": 1, "expected": 2, "required": 3}
+        noun_priority = max(priorities, key=ranks.__getitem__)
+        if continuations and noun_priority:
+            if noun_priority == "expected" and _heading_kind(section) == "requirements":
+                return "required"
+            return noun_priority
+    if noun_priority == 'preferred' or _heading_kind(section) == 'preferred' or re.search(r"优先|加分|有更好|更佳|nice.to.have|preferred|\ba plus\b", text + section, re.I):
+        return "preferred"
+    if noun_priority == "required" or re.search(r"必须|必备|要求|至少|精通|熟练|具备|能够|独立|熟悉|掌握|\bmust\b|\brequired\b", text, re.I):
         return "required"
     if re.search(r"负责|使用|应用|推动|参与|建立|构建|维护|设计|完成|开发", text):
         return "expected"
     if _heading_kind(section) == 'requirements' or re.match(
             r'(?:hands-on\s+)?(?:experience|proficiency|expertise|familiarity)\s+(?:with|in|using)\b|(?:proficient|comfortable)\s+(?:with|in)\b|ability\s+to\b', text, re.I):
         return "required"
-    if re.match(r"(?:(?:you(?:\s+will|['’]ll)?|candidates?\s+will)\s+)?(?:use|apply|employ|adopt|integrate)\b", text, re.I):
+    if noun_priority == "expected" or re.match(r"(?:(?:but|however|and|also)\s+){0,2}(?:(?:you(?:\s+will|['’]ll)?|candidates?\s+will)\s+)?(?:use(?!\s+(?:of|cases?)\b)|apply(?!\s+(?:to|for)\b)|employ|adopt|integrate)\b", text, re.I):
         return "expected"
     return "unspecified"
 
 
 class RuleExtractor:
-    version = "rules-0.2.1"
+    version = "rules-0.2.2"
 
     def __init__(self, config: dict):
         self.config = config
@@ -217,7 +446,7 @@ class RuleExtractor:
                 continue
             priority = strength(clause, s.section)
             mixed = bool(re.search(r"(?:无需|不要求|禁止|不得).{0,100}(?:但|同时|不过).{0,100}(?:必须|要求|熟练|需要)", clause))
-            ambiguous = bool(re.search(r"不接受只会|不能只|不依赖|不能依赖|\bnot (?:just|only)\b|\b(?:cannot|can't|must not) rely\b", clause, re.I))
+            ambiguous = bool(re.search(r"不接受只会|不能只|不依赖|不能依赖|\b(?:not|mustn['’]t) (?:just|only)\b|\b(?:cannot|can't|must not|mustn['’]t) rely\b", clause, re.I))
             # Building/selling the named product is not proof of using it as
             # a coding tool. Keep the original clause for explicit review.
             product_mention = any(re.search(

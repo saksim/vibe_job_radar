@@ -61,6 +61,178 @@ class EnglishObligationTests(unittest.TestCase):
                 self.assertTrue(any('Codex' in row.tools and row.positive and row.accepted for row in rows))
                 self.assertFalse(any('Cursor' in row.tools and row.positive and row.accepted for row in rows))
 
+    def test_contracted_prohibitions_are_not_positive_heading_defaults(self):
+        for command in ("Don't use", "Don’t use", "You mustn't use", "You mustn’t use"):
+            with self.subTest(command=command):
+                rows = self.rows('Requirements:\n'+command+' Cursor for production code.')
+                self.assertTrue(rows)
+                self.assertTrue(all(r.strength == 'prohibited' and not r.positive for r in rows))
+                self.assertEqual(aggregate(rows, CONF), [])
+        for text in ("Requirements:\nYou don't need to use Cursor.",
+                     "Requirements:\nYou don’t have to use Cursor."):
+            self.assertTrue(all(r.strength == 'not_required' for r in self.rows(text)))
+        for text in ("Requirements:\nYou mustn't rely on Cursor.",
+                     "Requirements:\nYou mustn’t only use Cursor.",
+                     "Requirements:\nDon't use Cursor and use Codex.",
+                     "Requirements:\nDo not use Cursor and apply Codex.",
+                     "Do not use Cursor, apply Codex, or integrate Claude Code.",
+                     "Don't use Cursor, and employ Codex.",
+                     "Don't use Cursor and experience with Codex is required.",
+                     "Don't use Cursor because you must use Codex.",
+                     "Don't use Cursor since you must use Codex.",
+                     "Don't use Cursor because Codex is required.",
+                     "Don't use Cursor when you must use Codex.",
+                     "Don't use Cursor if you must use Codex.",
+                     "Don't use Cursor provided that you must use Codex.",
+                     "Don't use Cursor, otherwise you must use Codex.",
+                     "Don't use Cursor because it is prohibited and Codex is required.",
+                     "Don't use Cursor, yet use Codex.",
+                     "Don't use Cursor, yet write code with Codex.",
+                     "Don't use Cursor, still adopt Codex.",
+                     "Requirements:\nDon't use Cursor but write code with Codex.",
+                     "Use Codex but please don't use Cursor.",
+                     "Do not use Cursor, but use of Codex is prohibited.",
+                     "Requirements:\nUse of Codex is prohibited.",
+                     "Preferred qualifications:\nUse of Codex is prohibited.",
+                     "Requirements:\nUse of Codex will be prohibited.",
+                     "Requirements:\nUse of Codex 2.1 prohibited.",
+                     "Requirements:\nUse of Codex is not expected.",
+                     "Requirements:\nUse of Codex is prohibited even if a license is required.",
+                     "Don't use Cursor but apply to Codex."):
+            self.assertTrue(all(not r.accepted for r in self.rows(text)))
+
+        for text in ("Do not use Cursor to upload customer files.",
+                     "You must not use Cursor to send customer files.",
+                     "Don't use Cursor to upload customer files.",
+                     "Candidates mustn’t use Cursor to send customer files.",
+                     "Successful candidates must not use Cursor.",
+                     "We require that you do not upload code with Cursor.",
+                     "Our applicants must not use Cursor.",
+                     "Employees must not use Cursor.",
+                     "Engineers mustn't use Cursor.",
+                     "New hires must not use Cursor.",
+                     "Senior developers must not use Cursor.",
+                     "If on call, candidates must not use Cursor.",
+                     "Don't use Cursor because it is unapproved.",
+                     "Don't use Cursor because it is prohibited by policy.",
+                     "Don't use Cursor since this is strictly forbidden.",
+                     "Important: Do not use Cursor.",
+                     "For production, do not use Cursor.",
+                     "To protect customer data, don't use Cursor.",
+                     "You must not ever use Cursor.",
+                     "You mustn’t directly upload customer files with Cursor.",
+                     "Please don't ever use Cursor.",
+                     "You please don't use Cursor.",
+                     "禁止使用 Cursor（do not use Cursor）。"):
+            with self.subTest(text=text):
+                rows = self.rows(text)
+                self.assertTrue(rows)
+                self.assertTrue(all(r.strength == 'prohibited' and not r.positive for r in rows))
+        for text in ("Use of Cursor is optional, but Codex is required.",
+                     "Use of Cursor is optional and Codex is required.",
+                     "Use of Cursor is optional. Codex is required.",
+                     "Use of Cursor is optional and is required.",
+                     "Use of Cursor is required and is optional.",
+                     "Use of Cursor is optional while Codex is required.",
+                     "Use of Cursor is strongly recommended against.",
+                     "Requirements:\nUse of Cursor is recommended against.",
+                     "Use of Cursor is optional except in production.",
+                     "Use of Cursor is optional unless production code is involved.",
+                     "Use of Cursor is optional for development, but required in production.",
+                     "Use of Cursor is optional for prototypes, although required in production.",
+                     "Use of Cursor is optional for prototypes, though required in production.",
+                     "Use of Cursor is optional although Codex is required.",
+                     "Use of Cursor is required for development, but optional in production.",
+                     "Use of Cursor is required but not required for production.",
+                     "Use of Cursor is expected to be prohibited.",
+                     "Use of Cursor is expected to be considered prohibited.",
+                     "Use of Cursor is expected to be deemed forbidden.",
+                     "Use of Cursor is recommended to be treated as optional.",
+                     "Use of Cursor is expected to be regarded as strongly discouraged.",
+                     "Use of Cursor is recommended to be avoided.",
+                     "Use of Cursor is expected to eventually be prohibited.",
+                     "Use of Cursor is required not to be used.",
+                     "Use of Cursor is preferred or required depending on the project.",
+                     "Use of Cursor is required or preferred."):
+            with self.subTest(text=text):
+                rows = self.rows(text)
+                self.assertTrue(rows)
+                self.assertTrue(all(not r.accepted for r in rows))
+
+        rows = self.rows("Don't use Cursor. Use of Codex is prohibited.")
+        self.assertFalse(any(r.positive and r.accepted for r in rows))
+        self.assertTrue(all(not r.accepted for r in rows if 'Codex' in r.tools))
+        self.assertTrue(all(r.strength == 'prohibited' for r in rows if 'Cursor' in r.tools))
+
+    def test_contracted_prohibitions_do_not_absorb_adjacent_positive_tool(self):
+        for text in ("Requirements:\nUse Codex. Don't use Cursor.",
+                     "Requirements:\nUse Codex. Don’t use Cursor.",
+                     "Requirements:\nUse Codex. Mustn't use Cursor.",
+                     "Requirements:\nUse Codex, but you mustn’t use Cursor.",
+                     "Requirements:\nDon't use Cursor. Use Codex.",
+                     "Requirements:\nYou mustn't use Cursor, but you must use Codex.",
+                     "Don't use Cursor, but use Codex.",
+                     "Don’t use Cursor, but apply Codex.",
+                     "Mustn't use Cursor, but you'll adopt Codex.",
+                     "Don't use Cursor, but also integrate Codex.",
+                     "Don't use Cursor. Adopt Codex.",
+                     "Don't use Cursor but use Codex.",
+                     "Use Codex but don’t use Cursor.",
+                     "Use Codex and don't use Cursor.",
+                     "Don’t use Cursor however you will apply Codex.",
+                     "Don't use Cursor but also adopt Codex.",
+                     "Don't use Cursor and you will use Codex.",
+                     "Don't use Cursor and you'll use Codex.",
+                     "Don’t use Cursor and you’ll adopt Codex.",
+                     "Requirements: Don't use Cursor but use Codex.",
+                     "Please don't use Cursor but use Codex.",
+                     "We build tools. Don\'t use Cursor but use Codex.",
+                     "don't use Cursor. use Codex."):
+            with self.subTest(text=text):
+                rows = self.rows(text)
+                cursor = [r for r in rows if 'Cursor' in r.tools]
+                codex = [r for r in rows if 'Codex' in r.tools]
+                self.assertTrue(cursor and codex)
+                self.assertTrue(all(r.strength == 'prohibited' and not r.positive for r in cursor))
+                self.assertTrue(all(r.positive and r.accepted for r in codex))
+
+    def test_nested_must_negations_require_review_without_anchoring_other_skills(self):
+        for command in ("You mustn't fail to use", "You mustn’t be afraid to use",
+                        "You must not fail to use", "You must not be afraid to use"):
+            with self.subTest(command=command):
+                text = 'Requirements:\n'+command+' Cursor.\n熟悉分布式架构。'
+                rows = self.rows(text)
+                self.assertTrue(rows)
+                self.assertTrue(all(r.strength == 'unspecified' and not r.accepted for r in rows))
+                self.assertTrue(all(r.relation == 'direct' for r in rows))
+                self.assertEqual(aggregate(rows, CONF), [])
+                mixed = self.rows('Requirements:\n'+command+' Cursor. You must use Codex.')
+                cursor = [r for r in mixed if 'Cursor' in r.tools]
+                codex = [r for r in mixed if 'Codex' in r.tools]
+                self.assertTrue(cursor and codex)
+                self.assertTrue(all(not r.accepted for r in cursor))
+                self.assertTrue(all(r.positive and r.accepted for r in codex))
+
+    def test_original_report_excludes_contracted_ban_and_keeps_raw_quote(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); db = root/'jobs.sqlite'
+            text = "Requirements:\nDon’t use Cursor for production code."
+            with Store(db) as store: store.add(job(text))
+            first = root/'first'
+            analyze(db, first, config=CONF, as_of=NOW)
+            old = {p.name:p.read_bytes() for p in first.iterdir() if p.is_file()}
+            rows = [json.loads(line) for line in (first/'requirements.jsonl').read_text(encoding='utf-8').splitlines()]
+            self.assertTrue(rows)
+            self.assertTrue(all(r['strength'] == 'prohibited' and text[r['start']:r['end']] == r['quote'] for r in rows))
+            self.assertIn('Don’t use Cursor for production code.', (first/'requirements_zh.csv').read_text(encoding='utf-8-sig'))
+            manifest = json.loads((first/'run_manifest.json').read_text(encoding='utf-8'))
+            self.assertEqual(manifest['rule_engine'], 'rules-0.2.2')
+            self.assertTrue(all(r['extraction_method'] == 'rules-0.2.2' for r in rows))
+            self.assertEqual(manifest['stats']['accepted_positive_requirement_rows'], 0)
+            self.assertEqual(manifest['stats']['vibe_evidence_job_groups'], 0)
+            analyze(db, root/'second', config=CONF, as_of=NOW)
+            self.assertEqual(old, {p.name:p.read_bytes() for p in first.iterdir() if p.is_file()})
+
     def test_preferred_required_and_explicit_use_are_understood(self):
         for text, expected in (
             ('Preferred qualifications:\nExperience with Cursor.', 'preferred'),
@@ -68,6 +240,46 @@ class EnglishObligationTests(unittest.TestCase):
             ('Requirements:\nHands-on knowledge of Cursor.', 'required'),
             ('About you:\nExperience with Cursor.', 'required'),
             ('Experience using Cursor to write tests.', 'required'),
+            ('Use of Cursor is required.', 'required'),
+            ('Requirements:\nUse of Cursor is not optional.', 'required'),
+            ('Use of Cursor is required and is expected for every task.', 'required'),
+            ('Use of Cursor is required and will be mandatory for every task.', 'required'),
+            ('Use of Cursor is preferred and is required for production.', 'required'),
+            ('Use of Cursor is required and is preferred for production.', 'required'),
+            ('Use of Cursor is expected and will be mandatory.', 'required'),
+            ('Use of Cursor is preferred and is expected.', 'expected'),
+            ('Use of Cursor is a required skill.', 'required'),
+            ('Use of Cursor is absolutely required.', 'required'),
+            ('Use of Cursor is a plus.', 'preferred'),
+            ('Preferred qualifications:\nUse of Cursor.', 'preferred'),
+            ('Requirements:\nUse of Cursor.', 'required'),
+            ('Use of Cursor is a critically important required skill.', 'required'),
+            ('Use of Cursor is required for restricted repositories.', 'required'),
+            ('Use of Cursor is required because no alternative is approved.', 'required'),
+            ('Use of Cursor is required while you are working remotely.', 'required'),
+            ('Use of Cursor is required while you are currently working remotely.', 'required'),
+            ('Use of Cursor is required while you are on call.', 'required'),
+            ('Use of Cursor is required while employees are at work.', 'required'),
+            ('Use of Cursor is required while candidates are developing features.', 'required'),
+            ('Use of Cursor is required for optional workflows.', 'required'),
+            ('Use of Cursor is required for restricted repos and optional workflows.', 'required'),
+            ('Use of Cursor is required to avoid unsafe changes.', 'required'),
+            ('Use of Cursor is preferred but required in production.', 'required'),
+            ('Use of Cursor is required and expected for production.', 'required'),
+            ('Use of Cursor is preferred and required and is expected.', 'required'),
+            ('Use of Cursor is preferred but required and expected.', 'required'),
+            ('Use of Cursor is not required.', 'not_required'),
+            ('Use of Cursor is not necessary.', 'not_required'),
+            ('Requirements:\nUse of Cursor for restricted repositories.', 'required'),
+            ('Use of Cursor is optional.', 'not_required'),
+            ('Requirements:\nUse of Cursor is expected.', 'required'),
+            ('Requirements:\nUse of Cursor is mandatory.', 'required'),
+            ('Requirements:\nUse of Cursor will be required.', 'required'),
+            ('Use of Cursor is expected.', 'expected'),
+            ('Use of Cursor will be mandatory.', 'required'),
+            ('Use of Cursor is essential.', 'required'),
+            ('Use of Cursor is highly recommended.', 'preferred'),
+            ('Use of Cursor is encouraged.', 'preferred'),
             ('Use Cursor for AI-assisted coding.', 'expected'),
             ("You will use Claude Code to implement changes.", 'expected')):
             with self.subTest(text=text):
@@ -76,12 +288,49 @@ class EnglishObligationTests(unittest.TestCase):
 
     def test_unqualified_tool_mention_requires_review_and_does_not_anchor_other_skills(self):
         for text in ('We build Claude Code for software teams.', 'Our platform integrates Cursor.',
-                     'Cursor and Codex.', 'Cursor 与 Codex。'):
+                     'Cursor and Codex.', 'Cursor 与 Codex。',
+                     "Our applicants don't use Cursor today.",
+                     "Candidates don't use Cursor today.",
+                     "You don't use Cursor today.",
+                     "You do not use Cursor today.",
+                     "We use Cursor but don't use Codex internally.",
+                     "We use Cursor and don't use Codex internally.",
+                     "You don't use Cursor today but use Codex instead.",
+                     "We don't require that you do not use Cursor.",
+                     "We don't require that candidates mustn't use Cursor.",
+                     "We never demand that applicants must not use Cursor.",
+                     "It is not required that candidates mustn't use Cursor.",
+                     "We can't require that candidates mustn't use Cursor.",
+                     "We cannot require that candidates mustn't use Cursor.",
+                     "Tell us whether candidates mustn't use Cursor.",
+                     "If candidates mustn't use Cursor, contact support.",
+                     "If employees must not use Cursor, contact support.",
+                     "We don't require that engineers must not use Cursor.",
+                     "Do you think candidates mustn't use Cursor?",
+                     "For production, we don't use Cursor.",
+                     "Important: We don't use Cursor.",
+                     "Example: Do not use Cursor."):
             with self.subTest(text=text):
                 rows = self.rows(text+'\n熟悉分布式架构。')
                 self.assertTrue(rows); self.assertTrue(all(not row.accepted for row in rows))
                 self.assertEqual(aggregate(rows, CONF), [])
                 self.assertFalse(any(row.relation != 'direct' for row in rows))
+        for text in (
+                "Our research covers workflows, use cases involving Cursor, and benchmarks.",
+                "Requirements:\nUse cases involving Cursor.",
+                "We don't use Cursor.",
+                "Our team members don't use Cursor.",
+                "Acme engineers don't use Cursor.",
+                "We don't use Cursor but use Codex internally.",
+                "We don't use Cursor, but use Codex internally.",
+                "Our team doesn't use Cursor but use Codex internally.",
+                "Acme does not use Cursor but use Codex internally."):
+            with self.subTest(text=text):
+                rows = self.rows(text)
+                self.assertTrue(rows)
+                self.assertFalse(any(row.accepted and row.positive for row in rows))
+                self.assertEqual(aggregate(rows, CONF), [])
+        self.assertTrue(all(not row.accepted for row in self.rows('Use of Cursor.')))
         rows = self.rows('Cursor and Codex.')
         selected = rows[0]
         apply_reviews(rows, {selected.requirement_id:{'decision':'approve','reviewer':'fixture',
