@@ -130,7 +130,11 @@ def _english_directive_prefix(prefix: str, modal: str) -> bool:
             prefix, re.I)
         if directive and negated:
             return False
-        return bool(re.search(r"\b(?:you|candidates?|applicants?)\s+(?:please\s+)?$", prefix, re.I))
+        # Job-role subjects express the same explicit modal prohibition.
+        return bool(re.search(
+            r"\b(?:you|candidates?|applicants?|employees?|engineers?|developers?|"
+            r"architects?|designers?|analysts?|managers?|interns?|contractors?|"
+            r"staff|personnel|team\s+members?|new\s+hires?)\s+(?:please\s+)?$", prefix, re.I))
     # Bare "you don't" is indicative. An explicit request supplies the
     # directive context without accepting a negated "we don't require".
     return bool(re.fullmatch(
@@ -243,6 +247,8 @@ def _english_predicate_priority(text: str) -> str:
             r"\b(?:(?:not|never)\s+to|to\s+not)\b|"
             r"\bto\s+(?:[a-z]+ly\s+){0,2}(?:be|remain|become|stay)\s+"
             r"(?:(?:[a-z]+ly|also|still)\s+){0,2}"
+            r"(?:(?:considered|deemed|(?:treated|regarded|classified)\s+as)\s+"
+            r"(?:(?:[a-z]+ly|also|still)\s+){0,2}){0,2}"
             r"(?:not|never|prohibited|forbidden|banned|disallowed|discouraged|restricted|avoided|optional)\b",
             text, re.I):
         return "unspecified"
@@ -321,10 +327,14 @@ def strength(text: str, section: str = "") -> str:
         predicate_text = predicate.group(1) if predicate else text
         continuations = [
             m for m in _ENGLISH_FINITE_CONTINUATION.finditer(predicate_text)
-            # "while you are working" is a temporal condition, not another
-            # tool's obligation. "while Codex is required" remains mixed.
+            # Temporal activity/state predicates retain the main obligation.
+            # A second required/optional/prohibited predicate remains mixed.
             if not (m.group("connector").lower() == "while"
-                    and re.match(r"(?:not\s+)?(?!being\b)[a-z]+ing\b", predicate_text[m.end():], re.I))
+                    and re.match(
+                        r"(?:(?:not|[a-z]+ly|still|also)\s+){0,2}"
+                        r"(?:(?!being\b)[a-z]+ing\b|on\s+(?:call|duty)\b|"
+                        r"at\s+work\b|(?:remote|available|offline|online)\b)",
+                        predicate_text[m.end():], re.I))
         ] if predicate else []
         if any(re.sub(r"\b(?:also|still)\b", "", m.group("subject"), flags=re.I).strip()
                for m in continuations):
