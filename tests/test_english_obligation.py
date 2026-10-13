@@ -78,6 +78,9 @@ class EnglishObligationTests(unittest.TestCase):
                      "Do not use Cursor, apply Codex, or integrate Claude Code.",
                      "Don't use Cursor, and employ Codex.",
                      "Don't use Cursor and experience with Codex is required.",
+                     "Don't use Cursor because you must use Codex.",
+                     "Don't use Cursor since you must use Codex.",
+                     "Don't use Cursor because Codex is required.",
                      "Don't use Cursor, yet use Codex.",
                      "Don't use Cursor, yet write code with Codex.",
                      "Don't use Cursor, still adopt Codex.",
@@ -100,6 +103,8 @@ class EnglishObligationTests(unittest.TestCase):
                      "Successful candidates must not use Cursor.",
                      "We require that you do not upload code with Cursor.",
                      "Our applicants must not use Cursor.",
+                     "If on call, candidates must not use Cursor.",
+                     "Don't use Cursor because it is unapproved.",
                      "You must not ever use Cursor.",
                      "You mustn’t directly upload customer files with Cursor.",
                      "Please don't ever use Cursor.",
@@ -255,7 +260,10 @@ class EnglishObligationTests(unittest.TestCase):
                      "We never demand that applicants must not use Cursor.",
                      "It is not required that candidates mustn't use Cursor.",
                      "We can't require that candidates mustn't use Cursor.",
-                     "We cannot require that candidates mustn't use Cursor."):
+                     "We cannot require that candidates mustn't use Cursor.",
+                     "Tell us whether candidates mustn't use Cursor.",
+                     "If candidates mustn't use Cursor, contact support.",
+                     "Do you think candidates mustn't use Cursor?"):
             with self.subTest(text=text):
                 rows = self.rows(text+'\n熟悉分布式架构。')
                 self.assertTrue(rows); self.assertTrue(all(not row.accepted for row in rows))

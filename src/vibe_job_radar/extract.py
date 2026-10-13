@@ -103,6 +103,12 @@ def _english_directive_prefix(prefix: str, modal: str) -> bool:
     if re.fullmatch(connectors + r"(?:please\s+)?", prefix, re.I):
         return True
     if modal.lower().startswith("must"):
+        # A condition/question can mention a ban without imposing it.
+        # A completed conditional setup before a comma does not negate the
+        # following directive ("If on call, candidates must not ...").
+        clause_prefix = re.split(r"[,;.!?]", prefix)[-1]
+        if re.search(r"\b(?:if|whether|unless|when|whenever|assuming|supposing)\b", clause_prefix, re.I):
+            return False
         # An embedded subject does not override a negated matrix directive.
         # Subject modifiers such as "without experience" do not themselves
         # negate a must-not obligation.
@@ -243,6 +249,14 @@ def strength(text: str, section: str = "") -> str:
         r"(?:(?:ever|directly|automatically|knowingly|intentionally|deliberately|personally|actually)\s+){0,2}"
         r"(?:use|upload|send)\b", text, re.I)
     if ban:
+        if text.rstrip().endswith("?"):
+            return "unspecified"
+        reason = re.split(r"\b(?:because|since)\b", text[ban.end():], maxsplit=1, flags=re.I)
+        if len(reason) == 2 and re.search(
+                r"\b(?:must(?:n['’]t)?|should|need(?:s)?\s+to|have\s+to|required|"
+                r"mandatory|expected|preferred|optional|recommended|prohibited|forbidden)\b",
+                reason[1], re.I):
+            return "unspecified"
         # All subjectless transitions use the same context check. Neither
         # company descriptions nor indicative second-person statements can
         # acquire an imperative meaning merely by being split.
