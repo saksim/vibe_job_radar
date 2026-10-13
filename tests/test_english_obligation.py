@@ -93,7 +93,9 @@ class EnglishObligationTests(unittest.TestCase):
         for text in ("Do not use Cursor to upload customer files.",
                      "You must not use Cursor to send customer files.",
                      "Don't use Cursor to upload customer files.",
-                     "Candidates mustn’t use Cursor to send customer files."):
+                     "Candidates mustn’t use Cursor to send customer files.",
+                     "Successful candidates must not use Cursor.",
+                     "We require that you do not upload code with Cursor."):
             with self.subTest(text=text):
                 rows = self.rows(text)
                 self.assertTrue(rows)

@@ -173,7 +173,9 @@ def strength(text: str, section: str = "") -> str:
         # A company description does not address the candidate. Retain it
         # for review rather than accepting an embedded contracted ban.
         candidate = r"(?:(?:but|however|and|also)\s+){0,2}(?:please\s+)?(?:(?:you|candidates?|applicants?)\s+)?(?:please\s+)?"
-        if not re.fullmatch(candidate, text[:ban.start()], re.I):
+        prefix = text[:ban.start()]
+        explicit_subject = re.search(r"\b(?:you|candidates?|applicants?)\s+(?:please\s+)?$", prefix, re.I)
+        if not re.fullmatch(candidate, prefix, re.I) and not explicit_subject:
             return "unspecified"
         # Infinitive purposes ("use Cursor to upload files") stay within
         # the ban. A fresh coordinated action can have independent scope.
