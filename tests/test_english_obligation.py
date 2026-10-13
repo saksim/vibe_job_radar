@@ -90,6 +90,22 @@ class EnglishObligationTests(unittest.TestCase):
                      "Don't use Cursor but apply to Codex."):
             self.assertTrue(all(not r.accepted for r in self.rows(text)))
 
+        for text in ("Do not use Cursor to upload customer files.",
+                     "You must not use Cursor to send customer files.",
+                     "Don't use Cursor to upload customer files.",
+                     "Candidates mustn’t use Cursor to send customer files."):
+            with self.subTest(text=text):
+                rows = self.rows(text)
+                self.assertTrue(rows)
+                self.assertTrue(all(r.strength == 'prohibited' and not r.positive for r in rows))
+        for text in ("Use of Cursor is optional, but Codex is required.",
+                     "Use of Cursor is optional and Codex is required.",
+                     "Use of Cursor is optional. Codex is required."):
+            with self.subTest(text=text):
+                rows = self.rows(text)
+                self.assertTrue(rows)
+                self.assertTrue(all(not r.accepted for r in rows))
+
         rows = self.rows("Don't use Cursor. Use of Codex is prohibited.")
         self.assertFalse(any(r.positive and r.accepted for r in rows))
         self.assertTrue(all(not r.accepted for r in rows if 'Codex' in r.tools))
@@ -179,6 +195,10 @@ class EnglishObligationTests(unittest.TestCase):
             ('Preferred qualifications:\nUse of Cursor.', 'preferred'),
             ('Requirements:\nUse of Cursor.', 'required'),
             ('Use of Cursor is a critically important required skill.', 'required'),
+            ('Use of Cursor is required for restricted repositories.', 'required'),
+            ('Use of Cursor is required because no alternative is approved.', 'required'),
+            ('Use of Cursor is required for optional workflows.', 'required'),
+            ('Requirements:\nUse of Cursor for restricted repositories.', 'required'),
             ('Use of Cursor is optional.', 'not_required'),
             ('Requirements:\nUse of Cursor is expected.', 'required'),
             ('Requirements:\nUse of Cursor is mandatory.', 'required'),
@@ -205,6 +225,9 @@ class EnglishObligationTests(unittest.TestCase):
         for text in (
                 "Our research covers workflows, use cases involving Cursor, and benchmarks.",
                 "Requirements:\nUse cases involving Cursor.",
+                "We don't use Cursor.",
+                "Our team members don't use Cursor.",
+                "Acme engineers don't use Cursor.",
                 "We don't use Cursor but use Codex internally.",
                 "We don't use Cursor, but use Codex internally.",
                 "Our team doesn't use Cursor but use Codex internally.",
