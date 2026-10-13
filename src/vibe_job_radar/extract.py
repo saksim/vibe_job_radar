@@ -159,7 +159,7 @@ def strength(text: str, section: str = "") -> str:
 
 
 class RuleExtractor:
-    version = "rules-0.2.1"
+    version = "rules-0.2.2"
 
     def __init__(self, config: dict):
         self.config = config

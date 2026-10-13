@@ -103,6 +103,8 @@ class EnglishObligationTests(unittest.TestCase):
             self.assertTrue(all(r['strength'] == 'prohibited' and text[r['start']:r['end']] == r['quote'] for r in rows))
             self.assertIn('Don’t use Cursor for production code.', (first/'requirements_zh.csv').read_text(encoding='utf-8-sig'))
             manifest = json.loads((first/'run_manifest.json').read_text(encoding='utf-8'))
+            self.assertEqual(manifest['rule_engine'], 'rules-0.2.2')
+            self.assertTrue(all(r['extraction_method'] == 'rules-0.2.2' for r in rows))
             self.assertEqual(manifest['stats']['accepted_positive_requirement_rows'], 0)
             self.assertEqual(manifest['stats']['vibe_evidence_job_groups'], 0)
             analyze(db, root/'second', config=CONF, as_of=NOW)
