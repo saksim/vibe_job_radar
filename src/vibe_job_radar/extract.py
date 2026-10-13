@@ -100,6 +100,16 @@ def _soft_wrap_scan(text: str) -> str:
 
 def _english_directive_prefix(prefix: str, modal: str) -> bool:
     connectors = r"(?:(?:but|however|and|also)\s+){0,2}"
+    # Introductory labels/adjuncts supply scope, not a grammatical subject.
+    # A following "we" remains visible, and examples/questions are not labels.
+    for _ in range(2):
+        intro = re.match(
+            connectors + r"(?:(?:important|note|warning|reminder|caution|policy|security\s+policy)\s*:\s*|"
+            r"(?:for|in|on|at|during|under|before|after|with|without|to|if|when|while)\b[^,;:!?]{1,100},\s*)",
+            prefix, re.I)
+        if not intro:
+            break
+        prefix = prefix[intro.end():]
     if re.fullmatch(connectors + r"(?:please\s+)?", prefix, re.I):
         return True
     if modal.lower().startswith("must"):
@@ -212,24 +222,41 @@ def spans(text: str):
 _ENGLISH_FINITE_CONTINUATION = re.compile(
     r"(?P<connector>[,;!?]|\.(?=\s|$)|\b(?:but|however|yet|and|while|whereas)\b)\s*"
     r"(?:(?:but|however|yet|and)\s+)?"
-    r"(?P<subject>[^,;.!?]{0,100}?)\b(?:is|are|will\s+be)\s+", re.I)
+    r"(?P<subject>(?:(?!\b(?:but|however|yet|and|or|while|whereas)\b)[^,;.!?]){0,100}?)\b(?:is|are|will\s+be)\s+", re.I)
+
+
+_ENGLISH_PREDICATE_CUE = (
+    r"(?:not\s+(?:optional|required|necessary|mandatory)|not|never|no|prohibited|forbidden|"
+    r"banned|disallowed|discouraged|restricted|optional|recommended\s+against|recommended|"
+    r"encouraged|mandatory|essential|expected|required|preferred|a\s+plus)")
+_ENGLISH_ELIDED_PREDICATE = re.compile(
+    r"(?:[,;]\s*(?:(?:but|however|yet|and|or)\s+)?|\b(?:but|however|yet|and|or|while|whereas)\s+)"
+    r"(?:(?:also|still|highly|strongly|absolutely)\s+){0,2}"
+    r"(?=" + _ENGLISH_PREDICATE_CUE + r"(?=\s*(?:[.,;!?]|$)|\s+(?:for|in|on|at|to|by|under|"
+    r"during|before|after|within|outside|when|where|while|with|as|every|but|however|yet|and|or|whereas)\b))", re.I)
 
 
 def _english_predicate_priority(text: str) -> str:
+    # An infinitive can change the polarity of "expected"/"recommended".
+    # Ordinary purposes ("required to avoid errors") retain their predicate.
+    if re.search(
+            r"\b(?:(?:not|never)\s+to|to\s+not)\b|"
+            r"\bto\s+(?:[a-z]+ly\s+){0,2}(?:be|remain|become|stay)\s+"
+            r"(?:(?:[a-z]+ly|also|still)\s+){0,2}"
+            r"(?:not|never|prohibited|forbidden|banned|disallowed|discouraged|restricted|avoided|optional)\b",
+            text, re.I):
+        return "unspecified"
     optional_exception = bool(re.search(r"\b(?:except|unless)\b", text, re.I))
     text = re.split(
         r"[,;!?]|\.(?=\s|$)|\b(?:but|however|yet|although|though|while|whereas|and|"
         r"for|to|in|on|with|by|under|because|when|where|as|unless|even\s+if)\b",
         text, maxsplit=1, flags=re.I)[0]
-    cue = re.search(
-        r"\b(?:not\s+optional|not|never|no|prohibited|forbidden|banned|disallowed|"
-        r"discouraged|restricted|optional|recommended\s+against|recommended|encouraged|mandatory|essential|"
-        r"expected|required|preferred|a\s+plus)\b", text, re.I)
+    cue = re.search(r"\b" + _ENGLISH_PREDICATE_CUE + r"\b", text, re.I)
     word = re.sub(r"\s+", " ", cue.group().lower()) if cue else ""
     if word in {"not", "never", "no", "prohibited", "forbidden", "banned",
                 "disallowed", "discouraged", "restricted", "recommended against"}:
         return "unspecified"
-    if word == "optional":
+    if word in {"optional", "not required", "not necessary", "not mandatory"}:
         return "unspecified" if optional_exception else "not_required"
     if word in {"recommended", "encouraged", "preferred", "a plus"}:
         return "preferred"
@@ -251,7 +278,10 @@ def strength(text: str, section: str = "") -> str:
     if ban:
         if text.rstrip().endswith("?"):
             return "unspecified"
-        reason = re.split(r"\b(?:because|since)\b", text[ban.end():], maxsplit=1, flags=re.I)
+        reason = re.split(
+            r"\b(?:because|since|when|if|as|while|unless|although|though|whereas|once|whenever|until|"
+            r"provided(?:\s+that)?|assuming|supposing|in\s+case)\b",
+            text[ban.end():], maxsplit=1, flags=re.I)
         if len(reason) == 2 and re.search(
                 r"\b(?:must(?:n['’]t)?|should|need(?:s)?\s+to|have\s+to|required|"
                 r"mandatory|expected|preferred|optional|recommended|prohibited|forbidden)\b",
@@ -273,7 +303,11 @@ def strength(text: str, section: str = "") -> str:
     # Keep uncertain predicates out of both accepted bans and positive anchors.
     if re.search(r"\b(?:must\s+not|mustn['’]t)\b", text, re.I):
         return "unspecified"
-    if re.search(r"无需|不要求|不需要|不必|不强制|not (?:required|necessary|mandatory)|no .{0,40}experience.{0,20}required|\b(?:do not|don['’]t) (?:need|have to)\b|\bneed not\b", text, re.I):
+    noun_clause = re.match(r"(?:(?:but|however|and|also)\s+){0,2}use\s+of\b", text, re.I)
+    if (re.search(r"无需|不要求|不需要|不必|不强制", text)
+            or (not noun_clause and re.search(
+                r"not (?:required|necessary|mandatory)|no .{0,40}experience.{0,20}required|"
+                r"\b(?:do not|don['’]t) (?:need|have to)\b|\bneed not\b", text, re.I))):
         return "not_required"
     # Noun phrases and applications are not tool-use imperatives.
     # Explicit positive/optional predicates remain distinct from heading defaults.
@@ -282,7 +316,7 @@ def strength(text: str, section: str = "") -> str:
     if re.match(r"(?:(?:but|however|and|also)\s+){0,2}use\s+cases?\b", text, re.I):
         return "unspecified"
     noun_priority = ""
-    if re.match(r"(?:(?:but|however|and|also)\s+){0,2}use\s+of\b", text, re.I):
+    if noun_clause:
         predicate = re.search(r"\b(?:is|will\s+be)\s+(.+)", text, re.I)
         predicate_text = predicate.group(1) if predicate else text
         continuations = [
@@ -295,6 +329,12 @@ def strength(text: str, section: str = "") -> str:
         if any(re.sub(r"\b(?:also|still)\b", "", m.group("subject"), flags=re.I).strip()
                for m in continuations):
             return "unspecified"
+        # Elided copulas share the same polarity/ranking logic. Require a
+        # predicate boundary, so "for restricted repos and optional workflows"
+        # remains a coordinated complement rather than a second obligation.
+        if predicate:
+            continuations = sorted([*continuations, *_ENGLISH_ELIDED_PREDICATE.finditer(predicate_text)],
+                                   key=lambda m: m.start())
         starts = [0, *(m.end() for m in continuations)]
         ends = [*(m.start() for m in continuations), len(predicate_text)]
         priorities = [_english_predicate_priority(predicate_text[lo:hi])
