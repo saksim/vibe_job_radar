@@ -112,6 +112,9 @@ class EnglishObligationTests(unittest.TestCase):
                      "Don't use Cursor and you will use Codex.",
                      "Don't use Cursor and you'll use Codex.",
                      "Don’t use Cursor and you’ll adopt Codex.",
+                     "Requirements: Don't use Cursor but use Codex.",
+                     "Please don't use Cursor but use Codex.",
+                     "We build tools. Don\'t use Cursor but use Codex.",
                      "don't use Cursor. use Codex."):
             with self.subTest(text=text):
                 rows = self.rows(text)
@@ -166,6 +169,8 @@ class EnglishObligationTests(unittest.TestCase):
             ('About you:\nExperience with Cursor.', 'required'),
             ('Experience using Cursor to write tests.', 'required'),
             ('Use of Cursor is required.', 'required'),
+            ('Use of Cursor is a required skill.', 'required'),
+            ('Use of Cursor is absolutely required.', 'required'),
             ('Requirements:\nUse of Cursor is expected.', 'required'),
             ('Requirements:\nUse of Cursor is mandatory.', 'required'),
             ('Requirements:\nUse of Cursor will be required.', 'required'),
@@ -188,6 +193,18 @@ class EnglishObligationTests(unittest.TestCase):
                 self.assertTrue(rows); self.assertTrue(all(not row.accepted for row in rows))
                 self.assertEqual(aggregate(rows, CONF), [])
                 self.assertFalse(any(row.relation != 'direct' for row in rows))
+        for text in (
+                "Our research covers workflows, use cases involving Cursor, and benchmarks.",
+                "Requirements:\nUse cases involving Cursor.",
+                "We don't use Cursor but use Codex internally.",
+                "We don't use Cursor, but use Codex internally.",
+                "Our team doesn't use Cursor but use Codex internally.",
+                "Acme does not use Cursor but use Codex internally."):
+            with self.subTest(text=text):
+                rows = self.rows(text)
+                self.assertTrue(rows)
+                self.assertFalse(any(row.accepted and row.positive for row in rows))
+                self.assertEqual(aggregate(rows, CONF), [])
         rows = self.rows('Cursor and Codex.')
         selected = rows[0]
         apply_reviews(rows, {selected.requirement_id:{'decision':'approve','reviewer':'fixture',

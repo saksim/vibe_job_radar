@@ -103,11 +103,14 @@ def spans(text: str):
     vibe_section = False
     pattern = r"[^\n。！？；;]+(?:[。！？；;]|(?=\n|$))"
     # Split a comma only where a new obligation/negation begins, not arbitrary noun lists.
-    contrast = re.compile(r"[，,](?=\s*(?:(?:但(?:是)?|然而|不过|同时|且|并)?\s*(?:必须|需要|应当|禁止|不得|严禁|不能|不允许|不要求|不必|不强制|无需)|(?:(?:but|however|and|also)\s+){0,2}(?:you(?:\s+will|['’]ll)?\s+)?(?:must(?:n['’]t)?\b|need\s+to\b|should\b|do\s+not\b|don['’]t\b|(?:use(?!\s+of\b)|apply(?!\s+(?:to|for)\b)|employ|adopt|integrate)\b)))", re.I)
+    contrast = re.compile(r"[，,](?=\s*(?:(?:但(?:是)?|然而|不过|同时|且|并)?\s*(?:必须|需要|应当|禁止|不得|严禁|不能|不允许|不要求|不必|不强制|无需)|(?:(?:but|however|and|also)\s+){0,2}(?:you(?:\s+will|['’]ll)?\s+)?(?:must(?:n['’]t)?\b|need\s+to\b|should\b|do\s+not\b|don['’]t\b|(?:use(?!\s+(?:of|cases?)\b)|apply(?!\s+(?:to|for)\b)|employ|adopt|integrate)\b)))", re.I)
     # "but/however" introduce a contrasting obligation without a comma.
     # After "and", require a fresh explicit obligation/negation: a bare
     # coordinated verb can still belong to the preceding prohibition.
-    conjunction = re.compile(r"\s+(?=(?:(?:but|however)\s+(?:also\s+)?(?:you(?:\s+will|['’]ll)?\s+)?(?:must(?:n['’]t)?\b|need\s+to\b|should\b|do\s+not\b|don['’]t\b|(?:use(?!\s+of\b)|apply(?!\s+(?:to|for)\b)|employ|adopt|integrate)\b)|and\s+(?:(?:you\s+)?(?:must(?:n['’]t)?\b|need\s+to\b|should\b|do\s+not\b|don['’]t\b)|you(?:\s+will|['’]ll)\s+(?:use(?!\s+of\b)|apply(?!\s+(?:to|for)\b)|employ|adopt|integrate)\b)))", re.I)
+    conjunction = re.compile(r"\s+(?=(?:(?:but|however)\s+(?:also\s+)?(?:you(?:\s+will|['’]ll)?\s+)?(?:must(?:n['’]t)?\b|need\s+to\b|should\b|do\s+not\b|don['’]t\b|(?:use(?!\s+(?:of|cases?)\b)|apply(?!\s+(?:to|for)\b)|employ|adopt|integrate)\b)|and\s+(?:(?:you\s+)?(?:must(?:n['’]t)?\b|need\s+to\b|should\b|do\s+not\b|don['’]t\b)|you(?:\s+will|['’]ll)\s+(?:use(?!\s+(?:of|cases?)\b)|apply(?!\s+(?:to|for)\b)|employ|adopt|integrate)\b)))", re.I)
+    command = r"(?:use(?!\s+(?:of|cases?)\b)|apply(?!\s+(?:to|for)\b)|employ|adopt|integrate)\b"
+    bare_transition = re.compile(r"(?:(?:but|however|and|also)\s+){0,2}" + command, re.I)
+    candidate_command = re.compile(r"(?:(?:but|however|and|also)\s+){0,2}(?:please\s+)?(?:(?:you(?:\s+will|[\'’]ll)?|candidates?\s+will)\s+)?(?:must(?:n[\'’]t)?\b|need\s+to\b|should\b|do\s+not\b|don[\'’]t\b|" + command + r")", re.I)
     # Only clear new English clauses. Decimal/version dots, initials and
     # abbreviations such as e.g. / U.S. are not arbitrary sentence boundaries.
     english = re.compile(r"[.!?](?=[ \t]+(?:You|We|The|Our|This|Must(?:n['’]t)?|Do(?:n['’]t)?|Use|Apply|Employ|Adopt|Integrate|Build|Write|Review|Maintain|Experience|Knowledge|Proficiency|No|Please|Candidates?|Applicants?)\b)", re.I)
@@ -115,7 +118,26 @@ def spans(text: str):
         raw_match = match.group()
         endings = [m.end() for m in english.finditer(raw_match)
                    if not re.search(r'(?:\b(?:e\.g|i\.e|vs|Dr|Mr|Ms|Prof|Inc|Ltd|No)|(?:\b[A-Z]\.)+[A-Z])\.$', raw_match[:m.end()], re.I)]
-        bounds = sorted({0, *(m.end() for m in contrast.finditer(raw_match)), *(m.end() for m in conjunction.finditer(raw_match)), *endings, len(raw_match)})
+        bounds = {0, *endings, len(raw_match)}
+        transitions = sorted({*(m.end() for m in contrast.finditer(raw_match)),
+                              *(m.end() for m in conjunction.finditer(raw_match))})
+        for boundary in transitions:
+            following = raw_match[boundary:].lstrip()
+            if bare_transition.match(following):
+                # A bare coordinated verb inherits the preceding subject.
+                # Only a candidate command can supply implicit "you".
+                previous = max(point for point in bounds if point < boundary)
+                preceding = raw_match[previous:boundary].lstrip()
+                prefix = re.match(r"[-*•·][ \t]*", preceding) or _NUMBERED_PREFIX.match(preceding)
+                if prefix:
+                    preceding = preceding[prefix.end():]
+                inline_heading = re.match(r'([^：:\n]{1,80})[：:]\s*', preceding)
+                if inline_heading and _heading_kind(inline_heading.group(1)):
+                    preceding = preceding[inline_heading.end():]
+                if not candidate_command.match(preceding):
+                    continue
+            bounds.add(boundary)
+        bounds = sorted(bounds)
         for lo, hi in zip(bounds, bounds[1:]):
             raw = match.group()[lo:hi]
             left = len(raw) - len(raw.lstrip())
@@ -161,12 +183,14 @@ def strength(text: str, section: str = "") -> str:
     # Explicit positive/optional predicates remain distinct from heading defaults.
     if re.match(r"(?:(?:but|however|and|also)\s+){0,2}apply\s+(?:to|for)\b", text, re.I):
         return "unspecified"
+    if re.match(r"(?:(?:but|however|and|also)\s+){0,2}use\s+cases?\b", text, re.I):
+        return "unspecified"
     if re.match(r"(?:(?:but|however|and|also)\s+){0,2}use\s+of\b", text, re.I):
         # Inspect the first predicate so a later positive clause cannot excuse
         # an earlier passive ban. A noun phrase alone remains review-only.
         predicate = re.search(r"\b(?:is|will\s+be)\s+(.+)", text, re.I)
         positive = re.match(
-            r"(?:(?:strongly|highly|generally|normally|typically|always)\s+){0,2}"
+            r"(?:(?:a|an|the|[a-z]+ly|always|often)\s+){0,5}"
             r"(required|mandatory|essential|expected|preferred|recommended|encouraged)\b",
             predicate.group(1), re.I) if predicate else None
         if not positive:
@@ -186,7 +210,7 @@ def strength(text: str, section: str = "") -> str:
     if _heading_kind(section) == 'requirements' or re.match(
             r'(?:hands-on\s+)?(?:experience|proficiency|expertise|familiarity)\s+(?:with|in|using)\b|(?:proficient|comfortable)\s+(?:with|in)\b|ability\s+to\b', text, re.I):
         return "required"
-    if re.match(r"(?:(?:but|however|and|also)\s+){0,2}(?:(?:you(?:\s+will|['’]ll)?|candidates?\s+will)\s+)?(?:use(?!\s+of\b)|apply(?!\s+(?:to|for)\b)|employ|adopt|integrate)\b", text, re.I):
+    if re.match(r"(?:(?:but|however|and|also)\s+){0,2}(?:(?:you(?:\s+will|['’]ll)?|candidates?\s+will)\s+)?(?:use(?!\s+(?:of|cases?)\b)|apply(?!\s+(?:to|for)\b)|employ|adopt|integrate)\b", text, re.I):
         return "expected"
     return "unspecified"
 
