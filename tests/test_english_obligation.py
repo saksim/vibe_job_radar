@@ -182,7 +182,14 @@ class EnglishObligationTests(unittest.TestCase):
                         "Respondents mention developers", "Respondents announced developers",
                         "Respondents argue developers", "Respondents asserted developers",
                         "Respondents suggest developers", "Respondents speculated developers",
-                        "Researchers believe developers", "Researchers thought developers"):
+                        "Researchers believe developers", "Researchers thought developers",
+                        "Respondents are saying that developers",
+                        "Respondents were reporting that developers",
+                        "Respondents have been claiming that developers",
+                        "Respondents are repeatedly suggesting that developers",
+                        "Researchers who reported that developers",
+                        "Researchers who said developers", "Report that developers",
+                        "Respondents are saying developers", "They're reporting that developers"):
             with self.subTest(subject=subject):
                 rows = self.rows("Requirements:\n" + subject
                                  + " must not use Cursor. You must use Codex.")
@@ -192,7 +199,12 @@ class EnglishObligationTests(unittest.TestCase):
                 self.assertTrue(all(not r.accepted and r.strength == "unspecified" for r in cursor))
                 self.assertTrue(all(r.accepted and r.positive for r in codex))
         for subject in ("We require that developers", "We expect that developers",
-                        "Five developers", "No fewer than five developers"):
+                        "Five developers", "No fewer than five developers",
+                        "Report developers", "Senior report developers",
+                        "Reporting analysts", "Developers who said nothing",
+                        "Developers who reported security issues",
+                        "Developers that reported security issues",
+                        "Developers who are reporting security issues"):
             with self.subTest(subject=subject):
                 rows = self.rows(subject + " must not use Cursor.")
                 self.assertTrue(rows)

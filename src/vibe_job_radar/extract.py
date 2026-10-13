@@ -119,15 +119,57 @@ def _english_directive_prefix(prefix: str, modal: str) -> bool:
         clause_prefix = re.split(r"[,;.!?]", prefix)[-1]
         if re.search(r"\b(?:if|whether|unless|when|whenever|assuming|supposing|why|how)\b", clause_prefix, re.I):
             return False
-        # A reported claim/belief does not itself direct the candidate.
-        # Apply before stripping a numeric quantifier, so reported and plain
-        # subjects share the same boundary. Explicit "we require that" remains.
-        if re.search(
-                r"\b(?:said|says?|told|tells?|report(?:s|ed)?|claim(?:s|ed)?|"
-                r"stat(?:e|es|ed)|mention(?:s|ed)?|announc(?:e|es|ed)|"
-                r"argu(?:e|es|ed)|assert(?:s|ed)?|believ(?:e|es|ed)|"
-                r"thought|thinks?|suggest(?:s|ed)?|speculat(?:e|es|ed))\b",
-                clause_prefix, re.I):
+        # Locate a reporting predicate between a subject and its complement.
+        # An initial "Report" is a noun modifier, not a matrix predicate.
+        reporting = re.compile(
+            r"\b(?:said|says?|saying|told|tells?|telling|report(?:s|ed|ing)?|"
+            r"claim(?:s|ed|ing)?|stat(?:e|es|ed|ing)|mention(?:s|ed|ing)?|"
+            r"announc(?:e|es|ed|ing)|argu(?:e|es|ed|ing)|assert(?:s|ed|ing)?|"
+            r"believ(?:e|es|ed|ing)|thought|thinks?|thinking|suggest(?:s|ed|ing)?|"
+            r"speculat(?:e|es|ed|ing))\b", re.I)
+        subject_prefix = re.sub(r"^" + connectors, "", clause_prefix.lstrip(), flags=re.I)
+        for report in reporting.finditer(subject_prefix):
+            before, after = subject_prefix[:report.start()], subject_prefix[report.end():]
+            if not after.strip():
+                continue
+            if not before.strip():
+                if re.match(r"\s+that\b", after, re.I):
+                    return False
+                continue
+            word = report.group().lower()
+            # Bare plural reporting verbs need a plausible finite subject.
+            # "Senior report developers" uses report as a noun modifier.
+            if word in {"say", "tell", "report", "claim", "state", "mention",
+                        "announce", "argue", "assert", "believe", "think",
+                        "suggest", "speculate"} and not re.search(
+                    r"\b(?:i|we|you|they|[a-z][a-z'-]*s|do|does|did|can|could|"
+                    r"will|would|may|might|should|must)\s+(?:[a-z]+ly\s+){0,2}$",
+                    before, re.I):
+                continue
+            # An -ing noun modifier needs a finite auxiliary to report speech.
+            if word.endswith("ing") and not re.search(
+                    r"(?:\b(?:am|is|are|was|were|be|been|being)|['’](?:m|re|s))"
+                    r"\s+(?:[a-z]+ly\s+){0,2}$", before, re.I):
+                continue
+            relatives = list(re.finditer(r"\b(?:who|which|that)\b", before, re.I))
+            if relatives:
+                relative = relatives[-1]
+                matrix = before[:relative.start()]
+                directive = relative.group().lower() == "that" and re.search(
+                    r"\b(?:require(?:s|d)?|expect(?:s|ed)?|ask(?:s|ed)?|"
+                    r"instruct(?:s|ed)?|demand(?:s|ed)?|mandate(?:s|d)?)\b",
+                    matrix, re.I)
+                # Only clear reporting objects make a relative modifier safe.
+                # "who said developers ..." may omit that and still report the
+                # modal; it must not become a direct ban just because of who.
+                object_phrase = re.fullmatch(
+                    r"\s+(?:[a-z][a-z'-]*\s+){0,6}"
+                    r"(?:issues?|bugs?|defects?|errors?|incidents?|vulnerabilities|"
+                    r"risks?|problems?|concerns?|findings?|results?|outcomes?|"
+                    r"nothing|something|anything|everything)\s+", after, re.I)
+                if not directive and object_phrase and not re.search(
+                        r"\b(?:that|who|which)\b", after, re.I):
+                    continue
             return False
         # "No fewer than" / "not less than" impose a lower bound on the
         # group; they do not negate its obligation. Check the remaining
