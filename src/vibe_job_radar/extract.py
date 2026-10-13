@@ -233,7 +233,7 @@ _ENGLISH_ELIDED_PREDICATE = re.compile(
     r"(?:[,;]\s*(?:(?:but|however|yet|and|or)\s+)?|\b(?:but|however|yet|and|or|while|whereas)\s+)"
     r"(?:(?:also|still|highly|strongly|absolutely)\s+){0,2}"
     r"(?=" + _ENGLISH_PREDICATE_CUE + r"(?=\s*(?:[.,;!?]|$)|\s+(?:for|in|on|at|to|by|under|"
-    r"during|before|after|within|outside|when|where|while|with|as|every|but|however|yet|and|or|whereas)\b))", re.I)
+    r"during|before|after|within|outside|when|where|while|with|as|every|depending|but|however|yet|and|or|whereas)\b))", re.I)
 
 
 def _english_predicate_priority(text: str) -> str:
@@ -333,8 +333,10 @@ def strength(text: str, section: str = "") -> str:
         # predicate boundary, so "for restricted repos and optional workflows"
         # remains a coordinated complement rather than a second obligation.
         if predicate:
-            continuations = sorted([*continuations, *_ENGLISH_ELIDED_PREDICATE.finditer(predicate_text)],
-                                   key=lambda m: m.start())
+            elided = list(_ENGLISH_ELIDED_PREDICATE.finditer(predicate_text))
+            if any(re.search(r"\bor\b", m.group(), re.I) for m in elided):
+                return "unspecified"
+            continuations = sorted([*continuations, *elided], key=lambda m: m.start())
         starts = [0, *(m.end() for m in continuations)]
         ends = [*(m.start() for m in continuations), len(predicate_text)]
         priorities = [_english_predicate_priority(predicate_text[lo:hi])

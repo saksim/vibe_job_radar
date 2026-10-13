@@ -136,7 +136,9 @@ class EnglishObligationTests(unittest.TestCase):
                      "Use of Cursor is expected to be prohibited.",
                      "Use of Cursor is recommended to be avoided.",
                      "Use of Cursor is expected to eventually be prohibited.",
-                     "Use of Cursor is required not to be used."):
+                     "Use of Cursor is required not to be used.",
+                     "Use of Cursor is preferred or required depending on the project.",
+                     "Use of Cursor is required or preferred."):
             with self.subTest(text=text):
                 rows = self.rows(text)
                 self.assertTrue(rows)
