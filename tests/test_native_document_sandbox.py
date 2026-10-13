@@ -50,7 +50,7 @@ class DocumentPolicyTests(unittest.TestCase):
                 self.assertEqual(document_response_params(event(resourceType=resource), enabled=True),
                                  {'requestId': 'r'})
 
-    def test_non_cors_backend_unchanged(self):
+    def test_explicitly_disabled_header_helper_is_unchanged(self):
         self.assertEqual(document_response_params(event(), enabled=False), {'requestId': 'r'})
 
     def test_redirects_not_reconstructed(self):
@@ -205,9 +205,9 @@ class NativeDocumentDeliveryTests(unittest.TestCase):
             self.assertEqual(self.b._send.call_args.args[1:],
                              ('Fetch.continueResponse', {'requestId':'r'}))
 
-    def test_direct_cdp_without_cors_blocks_workers_and_websockets_preserving_source_policy(self):
+    def test_default_native_context_blocks_new_surfaces_preserving_source_policy(self):
         self.b._native_cors = False
-        self.b._direct_cdp = True
+        self.b._direct_cdp = False
         headers = [{'name':'Content-Security-Policy','value':"script-src 'self'"}]
         continue_document_response(self.b, 'session', event(responseHeaders=headers))
         request = self.b._send.call_args.args

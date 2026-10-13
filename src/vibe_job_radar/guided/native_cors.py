@@ -1,6 +1,6 @@
-"""Abort-only CDP attachment for unsupported surfaces in CORS contexts.
+"""Abort-only CDP attachment for unsupported surfaces in native contexts.
 
-Do not use Playwright request routing in those contexts: its driver can answer
+Playwright HTTP routing has a competing proxy-auth handler and can answer
 OPTIONS itself. Quarantined targets never receive credentials or a debugger
 resume; every paused HTTP request is failed by the already-halted controller.
 """

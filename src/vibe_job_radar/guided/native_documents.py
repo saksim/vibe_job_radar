@@ -1,4 +1,4 @@
-"""Additive document sandbox for native CORS collection contexts.
+"""Additive document sandbox for all native collection contexts.
 
 Target-created callbacks cannot reliably prevent the first popup request. A
 header-delivered sandbox is enforced before a document runs, without allowing
@@ -46,7 +46,7 @@ def continue_document_response(backend, session: str, event: dict, *, robots: bo
     Supplying the unchanged decoded body makes the browser parse all headers
     together. Other responses keep the normal native continuation.
     """
-    params = document_response_params(event, enabled=(getattr(backend, '_native_cors', False) or getattr(backend, '_direct_cdp', False)), robots=robots)
+    params = document_response_params(event, enabled=True, robots=robots)
     if 'responseHeaders' not in params or event['responseStatusCode'] in {204, 205}:
         backend._send(session, 'Fetch.continueResponse', {'requestId': event['requestId']})
         return
