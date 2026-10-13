@@ -113,7 +113,12 @@ class EnglishObligationTests(unittest.TestCase):
                      "Use of Cursor is optional and Codex is required.",
                      "Use of Cursor is optional. Codex is required.",
                      "Use of Cursor is optional and is required.",
-                     "Use of Cursor is required and is optional."):
+                     "Use of Cursor is required and is optional.",
+                     "Use of Cursor is optional while Codex is required.",
+                     "Use of Cursor is strongly recommended against.",
+                     "Requirements:\nUse of Cursor is recommended against.",
+                     "Use of Cursor is optional except in production.",
+                     "Use of Cursor is optional unless production code is involved."):
             with self.subTest(text=text):
                 rows = self.rows(text)
                 self.assertTrue(rows)
@@ -216,6 +221,8 @@ class EnglishObligationTests(unittest.TestCase):
             ('Use of Cursor is a critically important required skill.', 'required'),
             ('Use of Cursor is required for restricted repositories.', 'required'),
             ('Use of Cursor is required because no alternative is approved.', 'required'),
+            ('Use of Cursor is required while you are working remotely.', 'required'),
+            ('Use of Cursor is required while candidates are developing features.', 'required'),
             ('Use of Cursor is required for optional workflows.', 'required'),
             ('Requirements:\nUse of Cursor for restricted repositories.', 'required'),
             ('Use of Cursor is optional.', 'not_required'),
@@ -243,7 +250,12 @@ class EnglishObligationTests(unittest.TestCase):
                      "We use Cursor but don't use Codex internally.",
                      "We use Cursor and don't use Codex internally.",
                      "You don't use Cursor today but use Codex instead.",
-                     "We don't require that you do not use Cursor."):
+                     "We don't require that you do not use Cursor.",
+                     "We don't require that candidates mustn't use Cursor.",
+                     "We never demand that applicants must not use Cursor.",
+                     "It is not required that candidates mustn't use Cursor.",
+                     "We can't require that candidates mustn't use Cursor.",
+                     "We cannot require that candidates mustn't use Cursor."):
             with self.subTest(text=text):
                 rows = self.rows(text+'\n熟悉分布式架构。')
                 self.assertTrue(rows); self.assertTrue(all(not row.accepted for row in rows))

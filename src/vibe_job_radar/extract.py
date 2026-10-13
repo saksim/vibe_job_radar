@@ -103,6 +103,17 @@ def _english_directive_prefix(prefix: str, modal: str) -> bool:
     if re.fullmatch(connectors + r"(?:please\s+)?", prefix, re.I):
         return True
     if modal.lower().startswith("must"):
+        # An embedded subject does not override a negated matrix directive.
+        # Subject modifiers such as "without experience" do not themselves
+        # negate a must-not obligation.
+        directive = re.search(
+            r"\b(?:require(?:s|d|ment)?|expect(?:s|ed)?|ask(?:s|ed)?|instruct(?:s|ed)?|"
+            r"demand(?:s|ed)?|mandate(?:s|d)?|oblig(?:ed|atory|ation))\b", prefix, re.I)
+        negated = re.search(
+            r"\b(?:not|never|no|cannot|(?:do|does|did|is|are|was|were|have|has|had|ca|wo|should|would|could|must|need)n['’]t)\b",
+            prefix, re.I)
+        if directive and negated:
+            return False
         return bool(re.search(r"\b(?:you|candidates?|applicants?)\s+(?:please\s+)?$", prefix, re.I))
     # Bare "you don't" is indicative. An explicit request supplies the
     # directive context without accepting a negated "we don't require".
@@ -193,26 +204,27 @@ def spans(text: str):
 # ("and is expected") refers back to the original subject; a named second
 # subject cannot safely inherit its polarity. Decimal dots are not boundaries.
 _ENGLISH_FINITE_CONTINUATION = re.compile(
-    r"(?:[,;!?]|\.(?=\s|$)|\b(?:but|however|yet|and|while|whereas)\b)\s*"
+    r"(?P<connector>[,;!?]|\.(?=\s|$)|\b(?:but|however|yet|and|while|whereas)\b)\s*"
     r"(?:(?:but|however|yet|and)\s+)?"
     r"(?P<subject>[^,;.!?]{0,100}?)\b(?:is|are|will\s+be)\s+", re.I)
 
 
 def _english_predicate_priority(text: str) -> str:
+    optional_exception = bool(re.search(r"\b(?:except|unless)\b", text, re.I))
     text = re.split(
         r"[,;!?]|\.(?=\s|$)|\b(?:but|however|yet|although|though|while|whereas|and|"
         r"for|to|in|on|with|by|under|because|when|where|as|unless|even\s+if)\b",
         text, maxsplit=1, flags=re.I)[0]
     cue = re.search(
         r"\b(?:not\s+optional|not|never|no|prohibited|forbidden|banned|disallowed|"
-        r"discouraged|restricted|optional|recommended|encouraged|mandatory|essential|"
+        r"discouraged|restricted|optional|recommended\s+against|recommended|encouraged|mandatory|essential|"
         r"expected|required|preferred|a\s+plus)\b", text, re.I)
     word = re.sub(r"\s+", " ", cue.group().lower()) if cue else ""
     if word in {"not", "never", "no", "prohibited", "forbidden", "banned",
-                "disallowed", "discouraged", "restricted"}:
+                "disallowed", "discouraged", "restricted", "recommended against"}:
         return "unspecified"
     if word == "optional":
-        return "not_required"
+        return "unspecified" if optional_exception else "not_required"
     if word in {"recommended", "encouraged", "preferred", "a plus"}:
         return "preferred"
     if word in {"not optional", "mandatory", "essential", "required"}:
@@ -259,7 +271,13 @@ def strength(text: str, section: str = "") -> str:
     if re.match(r"(?:(?:but|however|and|also)\s+){0,2}use\s+of\b", text, re.I):
         predicate = re.search(r"\b(?:is|will\s+be)\s+(.+)", text, re.I)
         predicate_text = predicate.group(1) if predicate else text
-        continuations = list(_ENGLISH_FINITE_CONTINUATION.finditer(predicate_text)) if predicate else []
+        continuations = [
+            m for m in _ENGLISH_FINITE_CONTINUATION.finditer(predicate_text)
+            # "while you are working" is a temporal condition, not another
+            # tool's obligation. "while Codex is required" remains mixed.
+            if not (m.group("connector").lower() == "while"
+                    and re.match(r"(?:not\s+)?(?!being\b)[a-z]+ing\b", predicate_text[m.end():], re.I))
+        ] if predicate else []
         if any(re.sub(r"\b(?:also|still)\b", "", m.group("subject"), flags=re.I).strip()
                for m in continuations):
             return "unspecified"
