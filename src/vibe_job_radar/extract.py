@@ -124,6 +124,10 @@ def spans(text: str):
         for boundary in transitions:
             following = raw_match[boundary:].lstrip()
             if bare_transition.match(following):
+                # A comma or "and" can continue a prohibited verb list.
+                # A bare positive command needs a genuine contrast.
+                if not re.match(r"(?:but|however)\b", following, re.I):
+                    continue
                 # A bare coordinated verb inherits the preceding subject.
                 # Only a candidate command can supply implicit "you".
                 previous = max(point for point in bounds if point < boundary)
@@ -165,24 +169,64 @@ def spans(text: str):
             yield Span(start, end, quote, text.count("\n", 0, start), section, vibe_section)
 
 
+# Capture the subject before a coordinated finite predicate. An empty subject
+# ("and is expected") refers back to the original subject; a named second
+# subject cannot safely inherit its polarity. Decimal dots are not boundaries.
+_ENGLISH_FINITE_CONTINUATION = re.compile(
+    r"(?:[,;!?]|\.(?=\s|$)|\b(?:but|however|yet|and|while|whereas)\b)\s*"
+    r"(?:(?:but|however|yet|and)\s+)?"
+    r"(?P<subject>[^,;.!?]{0,100}?)\b(?:is|are|will\s+be)\s+", re.I)
+
+
+def _english_predicate_priority(text: str) -> str:
+    text = re.split(
+        r"[,;!?]|\.(?=\s|$)|\b(?:but|however|yet|although|though|while|whereas|and|"
+        r"for|to|in|on|with|by|under|because|when|where|as|unless|even\s+if)\b",
+        text, maxsplit=1, flags=re.I)[0]
+    cue = re.search(
+        r"\b(?:not\s+optional|not|never|no|prohibited|forbidden|banned|disallowed|"
+        r"discouraged|restricted|optional|recommended|encouraged|mandatory|essential|"
+        r"expected|required|preferred|a\s+plus)\b", text, re.I)
+    word = re.sub(r"\s+", " ", cue.group().lower()) if cue else ""
+    if word in {"not", "never", "no", "prohibited", "forbidden", "banned",
+                "disallowed", "discouraged", "restricted"}:
+        return "unspecified"
+    if word == "optional":
+        return "not_required"
+    if word in {"recommended", "encouraged", "preferred", "a plus"}:
+        return "preferred"
+    if word in {"not optional", "mandatory", "essential", "required"}:
+        return "required"
+    return "expected" if word == "expected" else ""
+
+
 def strength(text: str, section: str = "") -> str:
-    # Unsplit contrasts or bare coordinated verbs have uncertain scope.
-    # Preserve the whole clause for review rather than accept a guessed ban.
-    ban = re.search(r"\b(?:must\s+not|mustn['’]t|do\s+not|don['’]t)\s+(?:use|upload|send)\b", text, re.I)
+    # Preserve explicit Chinese prohibitions in bilingual explanations.
+    if re.search(r"禁止|严禁|不得|不允许|不能(?:使用|上传|发送)", text):
+        return "prohibited"
+    # Ordinary adverbs do not reverse a direct ban. Nested negations and
+    # qualifiers such as "only" are deliberately outside this finite list.
+    ban = re.search(
+        r"\b(?P<modal>must\s+not|mustn['’]t|do\s+not|don['’]t)\s+"
+        r"(?:(?:ever|directly|automatically|knowingly|intentionally|deliberately|personally|actually)\s+){0,2}"
+        r"(?:use|upload|send)\b", text, re.I)
     if ban:
-        # A company description does not address the candidate. Retain it
-        # for review rather than accepting an embedded contracted ban.
-        candidate = r"(?:(?:but|however|and|also)\s+){0,2}(?:please\s+)?(?:(?:you|candidates?|applicants?)\s+)?(?:please\s+)?"
         prefix = text[:ban.start()]
-        explicit_subject = re.search(r"\b(?:you|candidates?|applicants?)\s+(?:please\s+)?$", prefix, re.I)
-        if not re.fullmatch(candidate, prefix, re.I) and not explicit_subject:
+        imperative = re.fullmatch(
+            r"(?:(?:but|however|and|also)\s+){0,2}(?:please\s+)?", prefix, re.I)
+        addressed = re.search(r"\byou\s+(?:please\s+)?$", prefix, re.I)
+        candidate = (ban.group("modal").lower().startswith("must")
+                     and re.search(r"\b(?:candidates?|applicants?)\s+(?:please\s+)?$", prefix, re.I))
+        # Indicative "our applicants don't" describes behavior, not an
+        # obligation. Candidate noun subjects need an explicit modal ban.
+        if not (imperative or addressed or candidate):
             return "unspecified"
-        # Infinitive purposes ("use Cursor to upload files") stay within
-        # the ban. A fresh coordinated action can have independent scope.
+        # Infinitive purposes stay inside the ban. Unsplit contrasts,
+        # coordinated actions or a fresh finite requirement need review.
         if (re.search(r"\S\s+(?:but|however|yet|nevertheless|nonetheless|instead|rather|while|whereas|although|though|unless|except)\b", text, re.I)
-                or re.search(r"(?:,\s*|\b(?:and|still)\s+)(?:(?:also|please|still)\s+)*(?:use|apply|employ|adopt|integrate|upload|send)\b", text[ban.end():], re.I)):
+                or re.search(r"(?:,\s*|\b(?:and|or|still)\s+)(?:(?:also|please|still)\s+)*(?:use|apply|employ|adopt|integrate|upload|send)\b", text[ban.end():], re.I)
+                or _ENGLISH_FINITE_CONTINUATION.search(text[ban.end():])):
             return "unspecified"
-    if re.search(r"禁止|严禁|不得|不允许|不能(?:使用|上传|发送)|\b(?:must\s+not|mustn['’]t|do\s+not|don['’]t)\s+(?:use|upload|send)\b", text, re.I):
         return "prohibited"
     # A nested negation can require tool use ("mustn't fail to use").
     # Keep uncertain predicates out of both accepted bans and positive anchors.
@@ -198,41 +242,24 @@ def strength(text: str, section: str = "") -> str:
         return "unspecified"
     noun_priority = ""
     if re.match(r"(?:(?:but|however|and|also)\s+){0,2}use\s+of\b", text, re.I):
-        # Reject an explicit negative predicate before applying the existing
-        # preference/requirement cues, including noun phrases under headings.
         predicate = re.search(r"\b(?:is|will\s+be)\s+(.+)", text, re.I)
         predicate_text = predicate.group(1) if predicate else text
-        if predicate:
-            # A second finite noun predicate cannot inherit the first one's
-            # polarity. These clauses are not yet split into separate spans.
-            if re.search(
-                    r"(?:[,;.!?]\s*(?:(?:but|however|yet|and)\s+)?|\b(?:but|however|yet|and|while|whereas)\s+)"
-                    r"[^,;.!?]{0,100}\b(?:is|are|will\s+be)\b", predicate_text, re.I):
-                return "unspecified"
-            predicate_text = re.split(
-                r"[,;.!?]|\b(?:but|however|yet|although|though|while|whereas|and|because|unless|even\s+if)\b",
-                predicate_text, maxsplit=1, flags=re.I)[0]
-        # Restrict polarity to the predicate, not a following purpose,
-        # repository or other complement.
-        predicate_text = re.split(
-            r"\b(?:for|to|in|on|with|by|under|because|when|where|as)\b",
-            predicate_text, maxsplit=1, flags=re.I)[0]
-        # The first strength cue wins over later descriptive words.
-        cue = re.search(
-            r"\b(?:not|never|no|prohibited|forbidden|banned|disallowed|discouraged|restricted|"
-            r"optional|recommended|encouraged|mandatory|essential|expected|required|preferred|a\s+plus)\b",
-            predicate_text, re.I)
-        word = cue.group().lower() if cue else ""
-        if word in {"not", "never", "no", "prohibited", "forbidden", "banned", "disallowed", "discouraged", "restricted"}:
+        continuations = list(_ENGLISH_FINITE_CONTINUATION.finditer(predicate_text)) if predicate else []
+        if any(re.sub(r"\b(?:also|still)\b", "", m.group("subject"), flags=re.I).strip()
+               for m in continuations):
             return "unspecified"
-        if word == "optional":
+        starts = [0, *(m.end() for m in continuations)]
+        ends = [*(m.start() for m in continuations), len(predicate_text)]
+        priorities = [_english_predicate_priority(predicate_text[lo:hi])
+                      for lo, hi in zip(starts, ends)]
+        # Shared-subject affirmative predicates remain positive. Conflicting
+        # optional/mandatory predicates cannot be summarized as one strength.
+        if "unspecified" in priorities or ("not_required" in priorities
+                and any(p in {"required", "expected", "preferred"} for p in priorities)):
+            return "unspecified"
+        if "not_required" in priorities:
             return "not_required"
-        if word in {"recommended", "encouraged"}:
-            noun_priority = "preferred"
-        elif word in {"mandatory", "essential"}:
-            noun_priority = "required"
-        elif word == "expected":
-            noun_priority = "expected"
+        noun_priority = next((p for p in priorities if p), "")
     if noun_priority == 'preferred' or _heading_kind(section) == 'preferred' or re.search(r"优先|加分|有更好|更佳|nice.to.have|preferred|\ba plus\b", text + section, re.I):
         return "preferred"
     if noun_priority == "required" or re.search(r"必须|必备|要求|至少|精通|熟练|具备|能够|独立|熟悉|掌握|\bmust\b|\brequired\b", text, re.I):

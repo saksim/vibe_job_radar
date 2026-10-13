@@ -75,6 +75,9 @@ class EnglishObligationTests(unittest.TestCase):
                      "Requirements:\nYou mustn’t only use Cursor.",
                      "Requirements:\nDon't use Cursor and use Codex.",
                      "Requirements:\nDo not use Cursor and apply Codex.",
+                     "Do not use Cursor, apply Codex, or integrate Claude Code.",
+                     "Don't use Cursor, and employ Codex.",
+                     "Don't use Cursor and experience with Codex is required.",
                      "Don't use Cursor, yet use Codex.",
                      "Don't use Cursor, yet write code with Codex.",
                      "Don't use Cursor, still adopt Codex.",
@@ -95,14 +98,21 @@ class EnglishObligationTests(unittest.TestCase):
                      "Don't use Cursor to upload customer files.",
                      "Candidates mustn’t use Cursor to send customer files.",
                      "Successful candidates must not use Cursor.",
-                     "We require that you do not upload code with Cursor."):
+                     "We require that you do not upload code with Cursor.",
+                     "Our applicants must not use Cursor.",
+                     "You must not ever use Cursor.",
+                     "You mustn’t directly upload customer files with Cursor.",
+                     "Please don't ever use Cursor.",
+                     "禁止使用 Cursor（do not use Cursor）。"):
             with self.subTest(text=text):
                 rows = self.rows(text)
                 self.assertTrue(rows)
                 self.assertTrue(all(r.strength == 'prohibited' and not r.positive for r in rows))
         for text in ("Use of Cursor is optional, but Codex is required.",
                      "Use of Cursor is optional and Codex is required.",
-                     "Use of Cursor is optional. Codex is required."):
+                     "Use of Cursor is optional. Codex is required.",
+                     "Use of Cursor is optional and is required.",
+                     "Use of Cursor is required and is optional."):
             with self.subTest(text=text):
                 rows = self.rows(text)
                 self.assertTrue(rows)
@@ -122,7 +132,6 @@ class EnglishObligationTests(unittest.TestCase):
                      "Requirements:\nYou mustn't use Cursor, but you must use Codex.",
                      "Don't use Cursor, but use Codex.",
                      "Don’t use Cursor, but apply Codex.",
-                     "Don't use Cursor, and employ Codex.",
                      "Mustn't use Cursor, but you'll adopt Codex.",
                      "Don't use Cursor, but also integrate Codex.",
                      "Don't use Cursor. Adopt Codex.",
@@ -191,6 +200,9 @@ class EnglishObligationTests(unittest.TestCase):
             ('About you:\nExperience with Cursor.', 'required'),
             ('Experience using Cursor to write tests.', 'required'),
             ('Use of Cursor is required.', 'required'),
+            ('Requirements:\nUse of Cursor is not optional.', 'required'),
+            ('Use of Cursor is required and is expected for every task.', 'required'),
+            ('Use of Cursor is required and will be mandatory for every task.', 'required'),
             ('Use of Cursor is a required skill.', 'required'),
             ('Use of Cursor is absolutely required.', 'required'),
             ('Use of Cursor is a plus.', 'preferred'),
@@ -218,7 +230,9 @@ class EnglishObligationTests(unittest.TestCase):
 
     def test_unqualified_tool_mention_requires_review_and_does_not_anchor_other_skills(self):
         for text in ('We build Claude Code for software teams.', 'Our platform integrates Cursor.',
-                     'Cursor and Codex.', 'Cursor 与 Codex。'):
+                     'Cursor and Codex.', 'Cursor 与 Codex。',
+                     "Our applicants don't use Cursor today.",
+                     "Candidates don't use Cursor today."):
             with self.subTest(text=text):
                 rows = self.rows(text+'\n熟悉分布式架构。')
                 self.assertTrue(rows); self.assertTrue(all(not row.accepted for row in rows))
