@@ -113,6 +113,10 @@ class EnglishObligationTests(unittest.TestCase):
                      "New hires must not use Cursor.",
                      "Senior developers must not use Cursor.",
                      "Data scientists must not use Cursor.",
+                     "Candidates with no industry experience must not use Cursor.",
+                     "NoSQL developers must not use Cursor.",
+                     "No-code developers must not use Cursor.",
+                     "No/low-code developers must not use Cursor.",
                      "Researchers must not use Cursor.",
                      "You must not disclose secrets with Cursor.",
                      "Candidates must not install Cursor.",
@@ -208,7 +212,9 @@ class EnglishObligationTests(unittest.TestCase):
                         "You must not prevent use of", "You must not always use",
                         "You must not simply use", "You must not not use",
                         "Candidates must not feel compelled to use",
-                        "You must not consider it necessary to use"):
+                        "You must not consider it necessary to use",
+                        "Candidates must not lack experience with",
+                        "Applicants mustn't lack expertise in"):
             with self.subTest(command=command):
                 text = 'Requirements:\n'+command+' Cursor.\n熟悉分布式架构。'
                 rows = self.rows(text)
@@ -236,8 +242,8 @@ class EnglishObligationTests(unittest.TestCase):
             self.assertTrue(all(r['strength'] == 'prohibited' and text[r['start']:r['end']] == r['quote'] for r in rows))
             self.assertIn('Don’t use Cursor for production code.', (first/'requirements_zh.csv').read_text(encoding='utf-8-sig'))
             manifest = json.loads((first/'run_manifest.json').read_text(encoding='utf-8'))
-            self.assertEqual(manifest['rule_engine'], 'rules-0.2.3')
-            self.assertTrue(all(r['extraction_method'] == 'rules-0.2.3' for r in rows))
+            self.assertEqual(manifest['rule_engine'], 'rules-0.2.4')
+            self.assertTrue(all(r['extraction_method'] == 'rules-0.2.4' for r in rows))
             self.assertEqual(manifest['stats']['accepted_positive_requirement_rows'], 0)
             self.assertEqual(manifest['stats']['vibe_evidence_job_groups'], 0)
             analyze(db, root/'second', config=CONF, as_of=NOW)
@@ -317,6 +323,12 @@ class EnglishObligationTests(unittest.TestCase):
                      "We can't require that candidates mustn't use Cursor.",
                      "We cannot require that candidates mustn't use Cursor.",
                      "Tell us whether candidates mustn't use Cursor.",
+                     "No data scientists must not use Cursor.",
+                     "Not all data scientists must not use Cursor.",
+                     "None of the researchers must not use Cursor.",
+                     "Neither researchers nor engineers must not use Cursor.",
+                     "Nobody must not use Cursor.",
+                     "However no data scientists must not use Cursor.",
                      "Explain why data scientists must not use Cursor.",
                      "We are studying how data scientists must not use Cursor.",
                      "If candidates mustn't use Cursor, contact support.",
