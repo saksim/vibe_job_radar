@@ -119,6 +119,11 @@ def _english_directive_prefix(prefix: str, modal: str) -> bool:
         clause_prefix = re.split(r"[,;.!?]", prefix)[-1]
         if re.search(r"\b(?:if|whether|unless|when|whenever|assuming|supposing|why|how)\b", clause_prefix, re.I):
             return False
+        # A negated subject can reverse the modal's scope. Restrict this
+        # guard to its leading quantifier: "candidates with no experience"
+        # still names a group subject to an ordinary direct prohibition.
+        if re.match(connectors + r"(?:no|none|nobody|neither|not)\b", clause_prefix.lstrip(), re.I):
+            return False
         # An embedded subject does not override a negated matrix directive.
         # Subject modifiers such as "without experience" do not themselves
         # negate a must-not obligation.
@@ -285,7 +290,7 @@ def strength(text: str, section: str = "") -> str:
         # Modal bans can prohibit other actions (install/disclose). Linking
         # and polarity-changing predicates still need review; a second
         # infinitive/gerund can turn a ban into an obligation to use the tool.
-        if (action in {"be", "have", "need", "fail", "forget", "neglect", "avoid",
+        if (action in {"be", "have", "need", "lack", "fail", "forget", "neglect", "avoid",
                        "refuse", "prevent", "resist", "rely", "only", "just", "necessarily"}
                 or (action not in {"use", "upload", "send"}
                     and re.match(
@@ -407,7 +412,7 @@ def strength(text: str, section: str = "") -> str:
 
 
 class RuleExtractor:
-    version = "rules-0.2.3"
+    version = "rules-0.2.4"
 
     def __init__(self, config: dict):
         self.config = config
