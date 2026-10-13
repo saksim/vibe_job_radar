@@ -206,7 +206,9 @@ class EnglishObligationTests(unittest.TestCase):
                         "You must not fail to use", "You must not be afraid to use",
                         "You must not forget to use", "You must not avoid using",
                         "You must not prevent use of", "You must not always use",
-                        "You must not simply use", "You must not not use"):
+                        "You must not simply use", "You must not not use",
+                        "Candidates must not feel compelled to use",
+                        "You must not consider it necessary to use"):
             with self.subTest(command=command):
                 text = 'Requirements:\n'+command+' Cursor.\n熟悉分布式架构。'
                 rows = self.rows(text)
@@ -315,6 +317,8 @@ class EnglishObligationTests(unittest.TestCase):
                      "We can't require that candidates mustn't use Cursor.",
                      "We cannot require that candidates mustn't use Cursor.",
                      "Tell us whether candidates mustn't use Cursor.",
+                     "Explain why data scientists must not use Cursor.",
+                     "We are studying how data scientists must not use Cursor.",
                      "If candidates mustn't use Cursor, contact support.",
                      "If employees must not use Cursor, contact support.",
                      "We don't require that engineers must not use Cursor.",

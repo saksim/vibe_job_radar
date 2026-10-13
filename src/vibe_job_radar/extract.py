@@ -117,7 +117,7 @@ def _english_directive_prefix(prefix: str, modal: str) -> bool:
         # A completed conditional setup before a comma does not negate the
         # following directive ("If on call, candidates must not ...").
         clause_prefix = re.split(r"[,;.!?]", prefix)[-1]
-        if re.search(r"\b(?:if|whether|unless|when|whenever|assuming|supposing)\b", clause_prefix, re.I):
+        if re.search(r"\b(?:if|whether|unless|when|whenever|assuming|supposing|why|how)\b", clause_prefix, re.I):
             return False
         # An embedded subject does not override a negated matrix directive.
         # Subject modifiers such as "without experience" do not themselves
@@ -290,7 +290,11 @@ def strength(text: str, section: str = "") -> str:
                 or (action not in {"use", "upload", "send"}
                     and re.match(
                         r"\s+(?:to\b|[a-z]+ing\b|(?:use|upload|send|apply|adopt|integrate|install|disclose)\b)",
-                        text[ban.end():], re.I))):
+                        text[ban.end():], re.I))
+                or (action not in {"use", "upload", "send"} and re.search(
+                    r"\bto\s+(?:use|upload|send|apply|employ|adopt|integrate|install|disclose|rely)\b|"
+                    r"\b(?:using|applying|employing|adopting|integrating)\b",
+                    text[ban.end():], re.I))):
             return "unspecified"
         if text.rstrip().endswith("?"):
             return "unspecified"
