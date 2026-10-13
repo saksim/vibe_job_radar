@@ -24,7 +24,7 @@ from .native_navigation import observe_document
 from .diagnostic_trace import notify, observe, observe_robots, traced
 from .native_policy import NativeRobots, contract_for
 from .native_tunnel import NativeTunnel
-from .native_errors import native_transport_failure, target_closed_by_driver
+from .native_errors import native_transport_failure
 from .native_documents import continue_document_response
 from .rate import RateLimit
 from .read_retry import TransientReadFailure, document_failure, read_attempt
@@ -128,12 +128,11 @@ class NativeBackend(PlaywrightBackend):
         # alone prevent the browser's initial popup network request.
         self._native_cors = any(rule.cors_origin for rule in self.contract.rules)
         self._direct_cdp = getattr(self.browser, 'minimal_events', False) is True
-        # Playwright's route layer auto-fulfills CORS OPTIONS. For reviewed
-        # CORS contracts use direct CDP controls, so the publisher really
-        # receives and decides preflight. Unsupported targets get an abort-only
-        # Fetch guard before their deferred close, never collection controls.
-        if not self._native_cors and not self._direct_cdp:
-            self.context.route('**/*', self._ownership_route)
+        # A Playwright HTTP route installs its own Fetch auth handler, which
+        # can consume the guard proxy's challenge before our native handler.
+        # Use one HTTP interception owner for every native context. Document
+        # sandboxing blocks new surfaces before script execution; unsupported
+        # targets also receive abort-only CDP controls before deferred close.
         if not self._direct_cdp:
             self.context.route_web_socket('**/*', lambda ws: ws.close())
         self.context.on('page', self._page_created)
@@ -154,50 +153,6 @@ class NativeBackend(PlaywrightBackend):
         self._cdp.send('Target.setAutoAttach', {'autoAttach':True,
             'waitForDebuggerOnStart':True, 'flatten':True})
 
-    def _ownership_route(self, route):
-        """Only admit requests whose main page already has our CDP controls.
-
-        This is an early ownership gate, not a transport: the browser retains
-        original headers, TLS, cookies, method and body. Site operations and
-        redirects still require the independent native controller's approval.
-        """
-        page = None
-        try:
-            frame = route.request.frame
-            page = frame.page
-            session = self._bound_pages.get(page)
-            owned = (session in self._page_sessions and frame == page.main_frame)
-            allowed = (owned and not self._closing and not self._halted
-                       and not self.cancelled.is_set())
-        except Exception:
-            allowed = owned = False
-        if not allowed:
-            if not owned:
-                self.cancelled.set()
-                self._fatal('native_surface_unsupported')
-            try:
-                route.abort('blockedbyclient')
-            except Exception as exc:
-                # Deferred rejection can close the target while abort yields
-                # to Playwright. A confirmed closed page cannot send this
-                # request; retain the original refusal/cancellation.
-                # The driver's exact closed-target exception is also evidence
-                # of termination, even before the page close event arrives.
-                # Unknown errors still escape; no route is continued here.
-                try:
-                    closed = page is not None and page.is_closed() is True
-                except Exception:
-                    closed = False
-                reason = ('closed_page' if closed else 'closed_target'
-                          if target_closed_by_driver(exc) else 'unconfirmed')
-                counts = self.__dict__.setdefault('_ownership_abort_counts', {})
-                counts[reason] = counts.get(reason, 0) + 1
-                if reason == 'unconfirmed':
-                    raise
-            return
-        # No parameter overrides, fetch, response reconstruction or retries.
-        route.continue_()
-
     def _page_created(self, page):
         # Never synchronously close a popup from its creation event. Chromium
         # may be waiting for that very event to finish window.open(), while the
@@ -215,8 +170,8 @@ class NativeBackend(PlaywrightBackend):
     def _reject_target(self, target):
         # Do not call closeTarget inside attachedToTarget: closing during
         # window creation can deadlock the opener's synchronous browser call.
-        # Our code never resumes an unsupported target. The context ownership
-        # route blocks its initial HTTP independently of debugger pause state.
+        # Our code never resumes an unsupported target. Document sandboxing,
+        # tunnel cancellation and abort-only CDP controls block its requests.
         rejected = self.__dict__.setdefault('_rejected_targets', set())
         self.cancelled.set()
         self._fatal('native_surface_unsupported')
@@ -226,9 +181,8 @@ class NativeBackend(PlaywrightBackend):
             return
         rejected.add(target)
         self.__dict__.setdefault('_pending_rejected_targets', []).append(target)
-        if self.__dict__.get('_native_cors', False) or self.__dict__.get('_direct_cdp', False):
-            from .native_cors import quarantine_target
-            quarantine_target(self, target)
+        from .native_cors import quarantine_target
+        quarantine_target(self, target)
 
     def _drain_rejected_pages(self):
         # Called outside target/page events. Our controller sends no resume

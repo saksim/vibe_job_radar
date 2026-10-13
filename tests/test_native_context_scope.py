@@ -30,9 +30,14 @@ class NativeContextScopeTests(TestCase):
 
     def test_popup_in_collection_context_still_stops_and_is_not_resumed(self):
         self.b._context_id='collection-context'
+        self.b._cdp.send.return_value={'sessionId':'quarantine'}
         self.b._attached({'sessionId':'popup','targetInfo':{
             'type':'page','targetId':'popup','browserContextId':'collection-context','openerId':'owned'}})
-        self.b._cdp.send.assert_not_called()
-        self.b._send.assert_not_called()
+        self.b._cdp.send.assert_called_once_with('Target.attachToTarget', {
+            'targetId':'popup', 'flatten':False})
+        self.b._send.assert_called_once_with('quarantine', 'Fetch.enable', {
+            'patterns':[{'urlPattern':'*', 'requestStage':'Request'}],
+            'handleAuthRequests':True})
         self.assertTrue(self.b.cancelled.is_set())
+        self.assertTrue(self.b._halted)
         self.assertEqual(self.b._pending_rejected_targets,['popup'])

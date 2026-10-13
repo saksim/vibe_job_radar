@@ -3,6 +3,7 @@ from unittest import TestCase
 from unittest.mock import Mock
 
 from vibe_job_radar.guided.native_browser import NativeBackend
+import test_native_acquisition as fixture
 
 
 class NativeAttachmentOrderTests(TestCase):
@@ -75,10 +76,22 @@ class NativeAttachmentOrderTests(TestCase):
         self.assertIn('Target.closeTarget', events)
 
     def test_unsupported_target_is_closed_without_any_credentials(self):
-        b, events, _ = self.make_backend()
+        helper = fixture.NativeControllerTests()
+        helper.setUp()
+        self.addCleanup(helper.doCleanups)
+        b = helper.b
+        b._cdp.send.return_value = {'sessionId': 'quarantine'}
+        b._install_target = Mock()
         b._attached({'targetInfo': {'type': 'worker', 'targetId': 'worker'}, 'sessionId': 'worker-session'})
-        self.assertEqual(events, [])
+        b._cdp.send.assert_called_once_with('Target.attachToTarget', {
+            'targetId': 'worker', 'flatten': False})
+        b._send.assert_called_once_with('quarantine', 'Fetch.enable', {
+            'patterns': [{'urlPattern': '*', 'requestStage': 'Request'}],
+            'handleAuthRequests': True})
         b._install_target.assert_not_called()
-        b.cancelled.set.assert_called_once()
+        self.assertTrue(b.cancelled.is_set())
+        self.assertTrue(b._halted)
         b._drain_rejected_pages()
-        self.assertEqual(events, ['Target.closeTarget'])
+        self.assertEqual([call.args[0] for call in b._cdp.send.call_args_list],
+                         ['Target.attachToTarget', 'Target.closeTarget'])
+        self.assertNotIn('quarantine', b._sessions)

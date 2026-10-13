@@ -51,7 +51,7 @@ class CorsQuarantineTests(unittest.TestCase):
     def test_reentrant_rejection_is_registered_before_quarantine_attach(self):
         backend=NativeBackend.__new__(NativeBackend)
         backend.cancelled=threading.Event(); backend.error=None
-        backend._halted=False; backend._native_cors=True; backend._sessions={}
+        backend._halted=False; backend._native_cors=False; backend._direct_cdp=False; backend._sessions={}
         backend._send=Mock(); backend._cdp=Mock()
         def attach(*args):
             backend._reject_target('popup')
