@@ -104,14 +104,18 @@ def spans(text: str):
     pattern = r"[^\n。！？；;]+(?:[。！？；;]|(?=\n|$))"
     # Split a comma only where a new obligation/negation begins, not arbitrary noun lists.
     contrast = re.compile(r"[，,](?=\s*(?:(?:但(?:是)?|然而|不过|同时|且|并)?\s*(?:必须|需要|应当|禁止|不得|严禁|不能|不允许|不要求|不必|不强制|无需)|(?:(?:but|however|and|also)\s+){0,2}(?:you(?:\s+will|['’]ll)?\s+)?(?:must(?:n['’]t)?\b|need\s+to\b|should\b|do\s+not\b|don['’]t\b|(?:use|apply|employ|adopt|integrate)\b)))", re.I)
+    # "but/however" introduce a contrasting obligation without a comma.
+    # After "and", require a fresh explicit obligation/negation: a bare
+    # coordinated verb can still belong to the preceding prohibition.
+    conjunction = re.compile(r"\s+(?=(?:(?:but|however)\s+(?:also\s+)?(?:you(?:\s+will|['’]ll)?\s+)?(?:must(?:n['’]t)?\b|need\s+to\b|should\b|do\s+not\b|don['’]t\b|(?:use|apply|employ|adopt|integrate)\b)|and\s+(?:you\s+)?(?:must(?:n['’]t)?\b|need\s+to\b|should\b|do\s+not\b|don['’]t\b)))", re.I)
     # Only clear new English clauses. Decimal/version dots, initials and
     # abbreviations such as e.g. / U.S. are not arbitrary sentence boundaries.
-    english = re.compile(r"[.!?](?=[ \t]+(?:You|We|The|Our|This|Must(?:n['’]t)?|Do(?:n['’]t)?|Use|Apply|Employ|Adopt|Integrate|Build|Write|Review|Maintain|Experience|Knowledge|Proficiency|No|Please|Candidates?|Applicants?)\b)")
+    english = re.compile(r"[.!?](?=[ \t]+(?:You|We|The|Our|This|Must(?:n['’]t)?|Do(?:n['’]t)?|Use|Apply|Employ|Adopt|Integrate|Build|Write|Review|Maintain|Experience|Knowledge|Proficiency|No|Please|Candidates?|Applicants?)\b)", re.I)
     for match in re.finditer(pattern, _soft_wrap_scan(text)):
         raw_match = match.group()
         endings = [m.end() for m in english.finditer(raw_match)
                    if not re.search(r'(?:\b(?:e\.g|i\.e|vs|Dr|Mr|Ms|Prof|Inc|Ltd|No)|(?:\b[A-Z]\.)+[A-Z])\.$', raw_match[:m.end()], re.I)]
-        bounds = sorted({0, *(m.end() for m in contrast.finditer(raw_match)), *endings, len(raw_match)})
+        bounds = sorted({0, *(m.end() for m in contrast.finditer(raw_match)), *(m.end() for m in conjunction.finditer(raw_match)), *endings, len(raw_match)})
         for lo, hi in zip(bounds, bounds[1:]):
             raw = match.group()[lo:hi]
             left = len(raw) - len(raw.lstrip())
@@ -140,6 +144,11 @@ def spans(text: str):
 
 
 def strength(text: str, section: str = "") -> str:
+    # Unsplit contrasts or bare coordinated verbs have uncertain scope.
+    # Preserve the whole clause for review rather than accept a guessed ban.
+    if (re.search(r"\b(?:must\s+not|mustn['’]t|do\s+not|don['’]t)\s+(?:use|upload|send)\b", text, re.I)
+            and re.search(r"\S\s+(?:but|however)\b|\band\s+(?:use|apply|employ|adopt|integrate)\b", text, re.I)):
+        return "unspecified"
     if re.search(r"禁止|严禁|不得|不允许|不能(?:使用|上传|发送)|\b(?:must\s+not|mustn['’]t|do\s+not|don['’]t)\s+(?:use|upload|send)\b", text, re.I):
         return "prohibited"
     # A nested negation can require tool use ("mustn't fail to use").

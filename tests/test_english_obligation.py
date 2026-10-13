@@ -72,7 +72,11 @@ class EnglishObligationTests(unittest.TestCase):
                      "Requirements:\nYou don’t have to use Cursor."):
             self.assertTrue(all(r.strength == 'not_required' for r in self.rows(text)))
         for text in ("Requirements:\nYou mustn't rely on Cursor.",
-                     "Requirements:\nYou mustn’t only use Cursor."):
+                     "Requirements:\nYou mustn’t only use Cursor.",
+                     "Requirements:\nDon't use Cursor and use Codex.",
+                     "Requirements:\nDo not use Cursor and apply Codex.",
+                     "Requirements:\nDon't use Cursor but write code with Codex.",
+                     "Use Codex but please don't use Cursor."):
             self.assertTrue(all(not r.accepted for r in self.rows(text)))
 
     def test_contracted_prohibitions_do_not_absorb_adjacent_positive_tool(self):
@@ -87,7 +91,13 @@ class EnglishObligationTests(unittest.TestCase):
                      "Don't use Cursor, and employ Codex.",
                      "Mustn't use Cursor, but you'll adopt Codex.",
                      "Don't use Cursor, but also integrate Codex.",
-                     "Don't use Cursor. Adopt Codex."):
+                     "Don't use Cursor. Adopt Codex.",
+                     "Don't use Cursor but use Codex.",
+                     "Use Codex but don’t use Cursor.",
+                     "Use Codex and don't use Cursor.",
+                     "Don’t use Cursor however you will apply Codex.",
+                     "Don't use Cursor but also adopt Codex.",
+                     "don't use Cursor. use Codex."):
             with self.subTest(text=text):
                 rows = self.rows(text)
                 cursor = [r for r in rows if 'Cursor' in r.tools]
