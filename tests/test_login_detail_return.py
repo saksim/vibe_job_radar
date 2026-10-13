@@ -299,7 +299,9 @@ class DetailReturnServiceTests(unittest.TestCase):
         self.fail(f'expected {key}={value}; got {self.service._load(self.ident)}')
     def login(self):
         self.service.action({'id':self.ident,'action':'login','auto_continue':True})
-        self.wait_idle()
+        # Functional preparation includes the real ledger and durable saves;
+        # use the setup allowance, retaining explicit 5s diagnostic controls.
+        self.wait_idle(timeout=30)
         self.assertEqual(self.backend.calls[-1],(URL,True))
         self.backend.unlocked=True;self.backend.page=PageSnapshot(URL,markup())
     def test_login_returned_full_jd_enters_report_without_second_fetch(self):
@@ -325,7 +327,7 @@ class DetailReturnServiceTests(unittest.TestCase):
         with self.assertRaises(InputError):
             self.service.action({'id':self.ident,'action':'resume_returned_detail'})
     def test_default_manual_login_keeps_platform_entry(self):
-        self.service.action({'id':self.ident,'action':'login'});self.wait_idle()
+        self.service.action({'id':self.ident,'action':'login'});self.wait_idle(timeout=30)
         self.assertEqual(self.backend.calls[-1],(ADAPTER.login_url,True))
         self.assertFalse(self.service._login_return._watches)
     def third_read(self,fn):
