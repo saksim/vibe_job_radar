@@ -173,6 +173,26 @@ class EnglishObligationTests(unittest.TestCase):
         self.assertTrue(all(not r.accepted for r in rows if 'Codex' in r.tools))
         self.assertTrue(all(r.strength == 'prohibited' for r in rows if 'Cursor' in r.tools))
 
+    def test_lower_bound_subject_preserves_direct_ban_and_adjacent_positive(self):
+        for quantifier in ("No fewer than five", "Not less than five",
+                           "No less than five", "Not fewer than five",
+                           "No fewer than 5", "However not less than 5"):
+            with self.subTest(quantifier=quantifier):
+                text = quantifier + " developers must not use Cursor. You must use Codex."
+                rows = self.rows(text)
+                cursor = [r for r in rows if "Cursor" in r.tools]
+                codex = [r for r in rows if "Codex" in r.tools]
+                self.assertTrue(cursor and codex)
+                self.assertTrue(all(r.accepted and r.strength == "prohibited"
+                                    and not r.positive for r in cursor))
+                self.assertTrue(all(r.accepted and r.positive for r in codex))
+        for subject in ("No developers", "Not all developers", "None of the developers",
+                        "No fewer than no developers"):
+            with self.subTest(subject=subject):
+                rows = self.rows(subject + " must not use Cursor.")
+                self.assertTrue(rows)
+                self.assertTrue(all(not r.accepted and r.strength == "unspecified" for r in rows))
+
     def test_contracted_prohibitions_do_not_absorb_adjacent_positive_tool(self):
         for text in ("Requirements:\nUse Codex. Don't use Cursor.",
                      "Requirements:\nUse Codex. Don’t use Cursor.",
@@ -242,8 +262,8 @@ class EnglishObligationTests(unittest.TestCase):
             self.assertTrue(all(r['strength'] == 'prohibited' and text[r['start']:r['end']] == r['quote'] for r in rows))
             self.assertIn('Don’t use Cursor for production code.', (first/'requirements_zh.csv').read_text(encoding='utf-8-sig'))
             manifest = json.loads((first/'run_manifest.json').read_text(encoding='utf-8'))
-            self.assertEqual(manifest['rule_engine'], 'rules-0.2.4')
-            self.assertTrue(all(r['extraction_method'] == 'rules-0.2.4' for r in rows))
+            self.assertEqual(manifest['rule_engine'], 'rules-0.2.5')
+            self.assertTrue(all(r['extraction_method'] == 'rules-0.2.5' for r in rows))
             self.assertEqual(manifest['stats']['accepted_positive_requirement_rows'], 0)
             self.assertEqual(manifest['stats']['vibe_evidence_job_groups'], 0)
             analyze(db, root/'second', config=CONF, as_of=NOW)

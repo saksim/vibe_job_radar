@@ -119,6 +119,14 @@ def _english_directive_prefix(prefix: str, modal: str) -> bool:
         clause_prefix = re.split(r"[,;.!?]", prefix)[-1]
         if re.search(r"\b(?:if|whether|unless|when|whenever|assuming|supposing|why|how)\b", clause_prefix, re.I):
             return False
+        # "No fewer than" / "not less than" impose a lower bound on the
+        # group; they do not negate its obligation. Check the remaining
+        # subject normally, including genuine nested negated subjects.
+        lower_bound = re.match(
+            connectors + r"(?:no|not)\s+(?:fewer|less)\s+than\s+",
+            clause_prefix.lstrip(), re.I)
+        if lower_bound:
+            clause_prefix = clause_prefix.lstrip()[lower_bound.end():]
         # A negated subject can reverse the modal's scope. Restrict this
         # guard to its leading quantifier: "candidates with no experience"
         # still names a group subject to an ordinary direct prohibition.
@@ -137,7 +145,7 @@ def _english_directive_prefix(prefix: str, modal: str) -> bool:
             return False
         # A modal imposes the ban regardless of the job title. Accept a
         # bounded subject phrase instead of maintaining an occupation list.
-        return bool(re.fullmatch(r"(?:[a-z][a-z0-9+#/&'’-]*\s+){1,24}", clause_prefix.lstrip(), re.I))
+        return bool(re.fullmatch(r"(?:[1-9][0-9]*\s+)?(?:[a-z][a-z0-9+#/&'’-]*\s+){1,24}", clause_prefix.lstrip(), re.I))
     # Bare "you don't" is indicative. An explicit request supplies the
     # directive context without accepting a negated "we don't require".
     return bool(re.fullmatch(
@@ -412,7 +420,7 @@ def strength(text: str, section: str = "") -> str:
 
 
 class RuleExtractor:
-    version = "rules-0.2.4"
+    version = "rules-0.2.5"
 
     def __init__(self, config: dict):
         self.config = config
