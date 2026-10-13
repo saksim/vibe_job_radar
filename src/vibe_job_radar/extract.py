@@ -98,6 +98,19 @@ def _soft_wrap_scan(text: str) -> str:
     return ''.join(scan)
 
 
+def _english_directive_prefix(prefix: str, modal: str) -> bool:
+    connectors = r"(?:(?:but|however|and|also)\s+){0,2}"
+    if re.fullmatch(connectors + r"(?:please\s+)?", prefix, re.I):
+        return True
+    if modal.lower().startswith("must"):
+        return bool(re.search(r"\b(?:you|candidates?|applicants?)\s+(?:please\s+)?$", prefix, re.I))
+    # Bare "you don't" is indicative. An explicit request supplies the
+    # directive context without accepting a negated "we don't require".
+    return bool(re.fullmatch(
+        connectors + r"(?:you\s+please\s+|(?:we\s+)?(?:require|ask|instruct)\s+(?:that\s+)?you\s+(?:please\s+)?)",
+        prefix, re.I))
+
+
 def spans(text: str):
     section = ""
     vibe_section = False
@@ -110,6 +123,9 @@ def spans(text: str):
     conjunction = re.compile(r"\s+(?=(?:(?:but|however)\s+(?:also\s+)?(?:you(?:\s+will|['’]ll)?\s+)?(?:must(?:n['’]t)?\b|need\s+to\b|should\b|do\s+not\b|don['’]t\b|(?:use(?!\s+(?:of|cases?)\b)|apply(?!\s+(?:to|for)\b)|employ|adopt|integrate)\b)|and\s+(?:(?:you\s+)?(?:must(?:n['’]t)?\b|need\s+to\b|should\b|do\s+not\b|don['’]t\b)|you(?:\s+will|['’]ll)\s+(?:use(?!\s+(?:of|cases?)\b)|apply(?!\s+(?:to|for)\b)|employ|adopt|integrate)\b)))", re.I)
     command = r"(?:use(?!\s+(?:of|cases?)\b)|apply(?!\s+(?:to|for)\b)|employ|adopt|integrate)\b"
     bare_transition = re.compile(r"(?:(?:but|however|and|also)\s+){0,2}" + command, re.I)
+    implicit_transition = re.compile(
+        r"(?:(?:but|however|and|also)\s+){0,2}(?:must(?:n['’]t)?\b|need\s+to\b|"
+        r"should\b|do\s+not\b|don['’]t\b|" + command + r")", re.I)
     candidate_command = re.compile(r"(?:(?:but|however|and|also)\s+){0,2}(?:please\s+)?(?:(?:you(?:\s+will|[\'’]ll)?|candidates?\s+will)\s+)?(?:must(?:n[\'’]t)?\b|need\s+to\b|should\b|do\s+not\b|don[\'’]t\b|" + command + r")", re.I)
     # Only clear new English clauses. Decimal/version dots, initials and
     # abbreviations such as e.g. / U.S. are not arbitrary sentence boundaries.
@@ -123,10 +139,11 @@ def spans(text: str):
                               *(m.end() for m in conjunction.finditer(raw_match))})
         for boundary in transitions:
             following = raw_match[boundary:].lstrip()
-            if bare_transition.match(following):
+            if implicit_transition.match(following):
                 # A comma or "and" can continue a prohibited verb list.
                 # A bare positive command needs a genuine contrast.
-                if not re.match(r"(?:but|however)\b", following, re.I):
+                if (bare_transition.match(following)
+                        and not re.match(r"(?:but|however)\b", following, re.I)):
                     continue
                 # A bare coordinated verb inherits the preceding subject.
                 # Only a candidate command can supply implicit "you".
@@ -138,7 +155,10 @@ def spans(text: str):
                 inline_heading = re.match(r'([^：:\n]{1,80})[：:]\s*', preceding)
                 if inline_heading and _heading_kind(inline_heading.group(1)):
                     preceding = preceding[inline_heading.end():]
-                if not candidate_command.match(preceding):
+                negative = re.search(r"\b(?:must\s+not|mustn['’]t|do\s+not|don['’]t)\b", preceding, re.I)
+                candidate_context = (_english_directive_prefix(preceding[:negative.start()], negative.group())
+                                     if negative else bool(candidate_command.match(preceding)))
+                if not candidate_context:
                     continue
             bounds.add(boundary)
         bounds = sorted(bounds)
@@ -211,15 +231,10 @@ def strength(text: str, section: str = "") -> str:
         r"(?:(?:ever|directly|automatically|knowingly|intentionally|deliberately|personally|actually)\s+){0,2}"
         r"(?:use|upload|send)\b", text, re.I)
     if ban:
-        prefix = text[:ban.start()]
-        imperative = re.fullmatch(
-            r"(?:(?:but|however|and|also)\s+){0,2}(?:please\s+)?", prefix, re.I)
-        addressed = re.search(r"\byou\s+(?:please\s+)?$", prefix, re.I)
-        candidate = (ban.group("modal").lower().startswith("must")
-                     and re.search(r"\b(?:candidates?|applicants?)\s+(?:please\s+)?$", prefix, re.I))
-        # Indicative "our applicants don't" describes behavior, not an
-        # obligation. Candidate noun subjects need an explicit modal ban.
-        if not (imperative or addressed or candidate):
+        # All subjectless transitions use the same context check. Neither
+        # company descriptions nor indicative second-person statements can
+        # acquire an imperative meaning merely by being split.
+        if not _english_directive_prefix(text[:ban.start()], ban.group("modal")):
             return "unspecified"
         # Infinitive purposes stay inside the ban. Unsplit contrasts,
         # coordinated actions or a fresh finite requirement need review.
@@ -259,7 +274,12 @@ def strength(text: str, section: str = "") -> str:
             return "unspecified"
         if "not_required" in priorities:
             return "not_required"
-        noun_priority = next((p for p in priorities if p), "")
+        ranks = {"": 0, "preferred": 1, "expected": 2, "required": 3}
+        noun_priority = max(priorities, key=ranks.__getitem__)
+        if continuations and noun_priority:
+            if noun_priority == "expected" and _heading_kind(section) == "requirements":
+                return "required"
+            return noun_priority
     if noun_priority == 'preferred' or _heading_kind(section) == 'preferred' or re.search(r"优先|加分|有更好|更佳|nice.to.have|preferred|\ba plus\b", text + section, re.I):
         return "preferred"
     if noun_priority == "required" or re.search(r"必须|必备|要求|至少|精通|熟练|具备|能够|独立|熟悉|掌握|\bmust\b|\brequired\b", text, re.I):
