@@ -80,6 +80,9 @@ class EnglishObligationTests(unittest.TestCase):
                      "Do not use Cursor, but use of Codex is prohibited.",
                      "Requirements:\nUse of Codex is prohibited.",
                      "Preferred qualifications:\nUse of Codex is prohibited.",
+                     "Requirements:\nUse of Codex will be prohibited.",
+                     "Requirements:\nUse of Codex is not expected.",
+                     "Requirements:\nUse of Codex is prohibited even if a license is required.",
                      "Don't use Cursor but apply to Codex."):
             self.assertTrue(all(not r.accepted for r in self.rows(text)))
 
@@ -106,6 +109,9 @@ class EnglishObligationTests(unittest.TestCase):
                      "Use Codex and don't use Cursor.",
                      "Don’t use Cursor however you will apply Codex.",
                      "Don't use Cursor but also adopt Codex.",
+                     "Don't use Cursor and you will use Codex.",
+                     "Don't use Cursor and you'll use Codex.",
+                     "Don’t use Cursor and you’ll adopt Codex.",
                      "don't use Cursor. use Codex."):
             with self.subTest(text=text):
                 rows = self.rows(text)
@@ -160,6 +166,14 @@ class EnglishObligationTests(unittest.TestCase):
             ('About you:\nExperience with Cursor.', 'required'),
             ('Experience using Cursor to write tests.', 'required'),
             ('Use of Cursor is required.', 'required'),
+            ('Requirements:\nUse of Cursor is expected.', 'required'),
+            ('Requirements:\nUse of Cursor is mandatory.', 'required'),
+            ('Requirements:\nUse of Cursor will be required.', 'required'),
+            ('Use of Cursor is expected.', 'expected'),
+            ('Use of Cursor will be mandatory.', 'required'),
+            ('Use of Cursor is essential.', 'required'),
+            ('Use of Cursor is highly recommended.', 'preferred'),
+            ('Use of Cursor is encouraged.', 'preferred'),
             ('Use Cursor for AI-assisted coding.', 'expected'),
             ("You will use Claude Code to implement changes.", 'expected')):
             with self.subTest(text=text):

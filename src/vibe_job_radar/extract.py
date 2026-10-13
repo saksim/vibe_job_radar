@@ -107,7 +107,7 @@ def spans(text: str):
     # "but/however" introduce a contrasting obligation without a comma.
     # After "and", require a fresh explicit obligation/negation: a bare
     # coordinated verb can still belong to the preceding prohibition.
-    conjunction = re.compile(r"\s+(?=(?:(?:but|however)\s+(?:also\s+)?(?:you(?:\s+will|['’]ll)?\s+)?(?:must(?:n['’]t)?\b|need\s+to\b|should\b|do\s+not\b|don['’]t\b|(?:use(?!\s+of\b)|apply(?!\s+(?:to|for)\b)|employ|adopt|integrate)\b)|and\s+(?:you\s+)?(?:must(?:n['’]t)?\b|need\s+to\b|should\b|do\s+not\b|don['’]t\b)))", re.I)
+    conjunction = re.compile(r"\s+(?=(?:(?:but|however)\s+(?:also\s+)?(?:you(?:\s+will|['’]ll)?\s+)?(?:must(?:n['’]t)?\b|need\s+to\b|should\b|do\s+not\b|don['’]t\b|(?:use(?!\s+of\b)|apply(?!\s+(?:to|for)\b)|employ|adopt|integrate)\b)|and\s+(?:(?:you\s+)?(?:must(?:n['’]t)?\b|need\s+to\b|should\b|do\s+not\b|don['’]t\b)|you(?:\s+will|['’]ll)\s+(?:use(?!\s+of\b)|apply(?!\s+(?:to|for)\b)|employ|adopt|integrate)\b)))", re.I)
     # Only clear new English clauses. Decimal/version dots, initials and
     # abbreviations such as e.g. / U.S. are not arbitrary sentence boundaries.
     english = re.compile(r"[.!?](?=[ \t]+(?:You|We|The|Our|This|Must(?:n['’]t)?|Do(?:n['’]t)?|Use|Apply|Employ|Adopt|Integrate|Build|Write|Review|Maintain|Experience|Knowledge|Proficiency|No|Please|Candidates?|Applicants?)\b)", re.I)
@@ -161,9 +161,22 @@ def strength(text: str, section: str = "") -> str:
     # Explicit positive/optional predicates remain distinct from heading defaults.
     if re.match(r"(?:(?:but|however|and|also)\s+){0,2}apply\s+(?:to|for)\b", text, re.I):
         return "unspecified"
-    if (re.match(r"(?:(?:but|however|and|also)\s+){0,2}use\s+of\b", text, re.I)
-            and not re.search(r"\bis\s+(?:required|preferred)\b", text, re.I)):
-        return "unspecified"
+    if re.match(r"(?:(?:but|however|and|also)\s+){0,2}use\s+of\b", text, re.I):
+        # Inspect the first predicate so a later positive clause cannot excuse
+        # an earlier passive ban. A noun phrase alone remains review-only.
+        predicate = re.search(r"\b(?:is|will\s+be)\s+(.+)", text, re.I)
+        positive = re.match(
+            r"(?:(?:strongly|highly|generally|normally|typically|always)\s+){0,2}"
+            r"(required|mandatory|essential|expected|preferred|recommended|encouraged)\b",
+            predicate.group(1), re.I) if predicate else None
+        if not positive:
+            return "unspecified"
+        word = positive.group(1).lower()
+        if word in {'preferred', 'recommended', 'encouraged'} or _heading_kind(section) == 'preferred':
+            return "preferred"
+        if word in {'required', 'mandatory', 'essential'} or _heading_kind(section) == 'requirements':
+            return "required"
+        return "expected"
     if _heading_kind(section) == 'preferred' or re.search(r"优先|加分|有更好|更佳|nice.to.have|preferred|\ba plus\b", text + section, re.I):
         return "preferred"
     if re.search(r"必须|必备|要求|至少|精通|熟练|具备|能够|独立|熟悉|掌握|\bmust\b|\brequired\b", text, re.I):
