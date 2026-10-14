@@ -204,10 +204,12 @@ def main(argv=None):
                 device_ids=[r[0] for r in conn.execute('SELECT id FROM devices WHERE tenant=? AND member=?',(args.tenant,args.member))]
                 for device in device_ids:
                     for table in ('watermarks','sync_views'):conn.execute(f'DELETE FROM {table} WHERE device=?',(device,))
-                    conn.execute('DELETE FROM audit WHERE tenant=? AND target=?',(args.tenant,device))
+                    conn.execute("DELETE FROM audit WHERE tenant=? AND target=? AND action IN ('device_issued','device_revoked')",(args.tenant,device))
                 for table in ('devices','grants','source_grants','members'):
                     conn.execute(f'DELETE FROM {table} WHERE tenant=? AND member=?',(args.tenant,args.member))
-                conn.execute('DELETE FROM audit WHERE tenant=? AND (actor=? OR target=?)',(args.tenant,args.member,args.member))
+                # Audit actors are operator actions, not member identities. A
+                # resource/source may legitimately use the same opaque ID.
+                conn.execute("DELETE FROM audit WHERE tenant=? AND target=? AND action='member_changed'",(args.tenant,args.member))
                 # Resource quotas remain: deleting membership cannot refund visits.
         print(json.dumps(result,ensure_ascii=False));return 0
     except (TeamError,ContractError,CrawlError,OSError,ValueError,TypeError,ImportError) as error:

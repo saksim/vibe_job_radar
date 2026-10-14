@@ -353,6 +353,49 @@ class TeamTests(unittest.TestCase):
         with self.assertRaises(ValueError):unavailable._scope(fixture.query())
         with self.assertRaises(TeamError):connection.request('/v1/team/state')
 
+    def test_member_erasure_keeps_same_named_resource_source_and_operator_audits(self):
+        self.store.member('group','operator','reader')
+        self.store.issue('group','operator','operator-pc')
+        for member in ['alice','operator']:
+            for key in [member,member+'-pc']:
+                self.store.resource('group',key,'liepin',['https://www.liepin.com'])
+                self.store.grant('group','bob',key)
+                self.store.grant('group','bob',key,source=True)
+            with self.store.connection() as conn:
+                before=[tuple(r) for r in conn.execute("SELECT * FROM audit WHERE action NOT IN ('member_changed','device_issued','device_revoked') ORDER BY seq")]
+            with patch('sys.stdout',new=io.StringIO()),patch('vibe_job_radar.team_service.TeamStore',return_value=self.store):
+                self.assertEqual(service_main(['--data',str(self.store.root),'erase-member','--tenant','group','--member',member]),0)
+            with self.store.connection() as conn:
+                after=[tuple(r) for r in conn.execute("SELECT * FROM audit WHERE action NOT IN ('member_changed','device_issued','device_revoked') ORDER BY seq")]
+                self.assertEqual(after,before)
+                self.assertIsNone(conn.execute("SELECT 1 FROM audit WHERE action='member_changed' AND target=?",(member,)).fetchone())
+                self.assertIsNone(conn.execute("SELECT 1 FROM audit WHERE action IN ('device_issued','device_revoked') AND target=?",(member+'-pc',)).fetchone())
+                self.assertIsNotNone(conn.execute("SELECT 1 FROM audit WHERE action='member_changed' AND target='bob'").fetchone())
+
+    def test_device_sync_scope_history_is_bounded_and_evicted_scope_can_resume(self):
+        token=self.tokens['alice'];scopes=[]
+        self.store.sync_seen(self.tokens['bob'],['fixture'],1)
+        self.store.sync_seen(self.tokens['bob'],['fixture'],1,acknowledge=True)
+        for index in range(65):
+            scope=['scope-'+str(index)];scopes.append(scope)
+            self.store.grant('group','alice',scope[0],source=True)
+            self.store.sync_seen(token,scope,1)
+            self.store.sync_seen(token,scope,1,acknowledge=True)
+        with self.store.connection() as conn:
+            for table in ['sync_views','watermarks']:
+                self.assertEqual(conn.execute('SELECT COUNT(*) FROM '+table+' WHERE device=?',('alice-pc',)).fetchone()[0],64)
+                self.assertEqual(conn.execute('SELECT COUNT(*) FROM '+table+' WHERE device=?',('bob-pc',)).fetchone()[0],1)
+        with self.assertRaisesRegex(TeamError,'team_watermark_not_read'):
+            self.store.sync_seen(token,scopes[0],1,acknowledge=True)
+        self.store.sync_seen(token,scopes[1],2)  # Refresh its position before adding a scope.
+        self.store.sync_seen(token,scopes[0],1)
+        self.assertTrue(self.store.sync_seen(token,scopes[0],1,acknowledge=True)['acknowledged'])
+        self.assertTrue(self.store.sync_seen(token,scopes[1],2,acknowledge=True)['acknowledged'])
+        with self.assertRaisesRegex(TeamError,'team_watermark_not_read'):
+            self.store.sync_seen(token,scopes[2],1,acknowledge=True)
+        self.store.sync_seen(token,scopes[1],1)  # A replay cannot lower the stored revision.
+        self.assertTrue(self.store.sync_seen(token,scopes[1],2,acknowledge=True)['acknowledged'])
+
     def test_member_erasure_revokes_tokens_without_refunding_resource_quota(self):
         client=self.connection('alice');client.reserve('liepin','page')
         with patch('sys.stdout',new=io.StringIO()),patch('vibe_job_radar.team_service.TeamStore',return_value=self.store):

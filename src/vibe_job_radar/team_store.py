@@ -396,8 +396,17 @@ class TeamStore:
                              'DO UPDATE SET revision=MAX(revision,excluded.revision),updated=excluded.updated',
                              (who['device'],scope,revision,self.now(conn,record=True)))
             else:
-                conn.execute('INSERT INTO sync_views VALUES(?,?,?) ON CONFLICT(device,scope) '
-                             'DO UPDATE SET revision=MAX(revision,excluded.revision)',(who['device'],scope,revision))
+                previous=conn.execute('SELECT revision FROM sync_views WHERE device=? AND scope=?',(who['device'],scope)).fetchone()
+                # Replacing refreshes rowid order. Keep the 64 most recently
+                # completed scopes per device, including their acknowledgments.
+                # An evicted scope must be read again before a new acknowledgment.
+                conn.execute('INSERT OR REPLACE INTO sync_views VALUES(?,?,?)',
+                             (who['device'],scope,max(revision,previous[0] if previous else 0)))
+                conn.execute('DELETE FROM sync_views WHERE device=? AND rowid NOT IN '
+                             '(SELECT rowid FROM sync_views WHERE device=? ORDER BY rowid DESC LIMIT 64)',
+                             (who['device'],who['device']))
+                conn.execute('DELETE FROM watermarks WHERE device=? AND scope NOT IN '
+                             '(SELECT scope FROM sync_views WHERE device=?)',(who['device'],who['device']))
         return {'schema_version':1,'revision':revision,'acknowledged':acknowledge}
 
     def metrics(self, token):
