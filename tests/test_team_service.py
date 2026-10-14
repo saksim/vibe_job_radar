@@ -107,6 +107,39 @@ class TeamTests(unittest.TestCase):
         result=b''.join(self.app(env,lambda s,h:status.append((s,dict(h)))))
         return int(status[0][0].split()[0]),json.loads(result),status[0][1]
 
+    def test_failed_service_initialization_is_retryable_and_preserves_existing_files(self):
+        from vibe_job_radar.team_service import initialize_service
+        for component in [TeamStore,TeamCatalog]:
+            root=self.root/('init-'+component.__name__)
+            root.mkdir();note=root/'operator-note.txt';note.write_text('keep',encoding='utf-8')
+            original=component.initialize
+            def initialize_then_fail(instance):
+                original(instance);raise OSError('fixture disk full')
+            with patch.object(component,'initialize',initialize_then_fail):
+                with self.assertRaises(OSError):initialize_service(root)
+            self.assertEqual(sorted(p.name for p in root.iterdir() if p.name!='.writer.lock'),['operator-note.txt'])
+            initialize_service(root)
+            TeamApplication(root,host='team.fixture.test')
+            before={p.name:p.read_bytes() for p in root.iterdir() if p.is_file() and p.name!='.writer.lock'}
+            with self.assertRaisesRegex(TeamError,'team_already_initialized'):initialize_service(root)
+            self.assertEqual({p.name:p.read_bytes() for p in root.iterdir() if p.is_file() and p.name!='.writer.lock'},before)
+            self.assertEqual(note.read_text(encoding='utf-8'),'keep')
+
+    def test_failed_initial_database_publication_removes_only_its_own_links(self):
+        from vibe_job_radar.team_service import initialize_service
+        import os
+        root=self.root/'init-links';original=os.link;calls=[]
+        def fail_second(source,destination):
+            calls.append(str(destination))
+            if len(calls)==2:raise OSError('fixture link failure')
+            return original(source,destination)
+        with patch('vibe_job_radar.team_service.os.link',side_effect=fail_second):
+            with self.assertRaises(OSError):initialize_service(root)
+        self.assertEqual([p for p in root.iterdir() if p.name!='.writer.lock'],[])
+        with patch('sys.stdout',new=io.StringIO()):
+            self.assertEqual(service_main(['--data',str(root),'init']),0)
+        TeamApplication(root,host='team.fixture.test')
+
     def test_two_http_devices_share_account_budget_and_local_denial_is_not_charged(self):
         a=self.connection('alice');b=self.connection('bob')
         la=TeamLedger(self.root/'alice/rates.sqlite',a,clock=lambda:self.now[0])

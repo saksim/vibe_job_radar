@@ -9,6 +9,7 @@ import re
 import sqlite3
 import sys
 import threading
+import tempfile
 import time
 from collections import deque
 from contextlib import closing
@@ -19,6 +20,35 @@ from .guided.contracts import CrawlError
 from .public_contract import ContractError, PublicQuery
 from .team_store import TeamError, TeamStore, strict_json, safe_path, private_json, service_host
 from .team_catalog import TeamCatalog, read_snapshot
+
+
+def initialize_service(root):
+    from .collection import writer_lock
+    from .team_store import remove_private_file
+    root=Path(root);root.mkdir(parents=True,exist_ok=True,mode=0o700)
+    names=('control.sqlite','rates.sqlite','catalog.sqlite')
+    with writer_lock(root):
+        for name in names:
+            path=safe_path(root/name)
+            if path.exists():raise TeamError('team_already_initialized',409)
+        # Build complete databases privately. Ordinary failures clean the
+        # staging directory; publication never replaces an existing database.
+        with tempfile.TemporaryDirectory(prefix='.team-init-',dir=root) as directory:
+            staged=Path(directory)
+            TeamStore(staged).initialize();TeamCatalog(staged).initialize()
+            created=[]
+            try:
+                for name in names:
+                    source=staged/name;info=source.stat()
+                    os.link(source,root/name)
+                    created.append((root/name,(info.st_dev,info.st_ino)))
+                if os.name!='nt':
+                    descriptor=os.open(root,os.O_RDONLY|os.O_DIRECTORY)
+                    try:os.fsync(descriptor)
+                    finally:os.close(descriptor)
+            except BaseException:
+                for path,identity in reversed(created):remove_private_file(path,identity)
+                raise
 
 
 class TeamApplication:
@@ -167,7 +197,7 @@ def main(argv=None):
     args=parser.parse_args(argv);store=TeamStore(args.data);catalog=TeamCatalog(args.data)
     try:
         result={'ok':True,'operation':args.command}
-        if args.command=='init':store.initialize();catalog.initialize()
+        if args.command=='init':initialize_service(args.data)
         elif args.command=='serve':serve(args.data,args.config)
         elif args.command=='member':store.member(args.tenant,args.member,args.role,active=not args.disable)
         elif args.command=='device':

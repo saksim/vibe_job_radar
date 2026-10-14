@@ -15,7 +15,7 @@
 适用模型是单台服务主机、一个 Waitress 进程、持久本地 SQLite 文件、多个 HTTP 客户端。不是网络共享盘、无状态多副本或多机数据库高可用方案。Python >=3.10，服务额外依赖固定为 Waitress 3.0.2。实际目标主机上的 CPU/内存/磁盘、TLS 域名、网络策略和容量需部署时验证。
 
 1. 在准备好的 Linux 主机上建立专用 radar 用户、/opt/vibe-radar/venv 环境和 /var/lib/vibe-radar（属主 radar，0700）。使用本次经过验证的发行源码安装 `pip install '.[service]'`；不要从浮动开发分支直接更新正在运行的服务。
-2. 以 radar 用户执行 `vibe-radar-service --data /var/lib/vibe-radar init`。该命令只用于不存在的新库；已有、缺失或损坏的运行库必须恢复完整备份，不能重新 init 清零配额。
+2. 以 radar 用户执行 `vibe-radar-service --data /var/lib/vibe-radar init`。该命令只用于不存在的新库：先在私有暂存目录完成三个库，普通初始化失败只清理本次创建的文件，可再次执行；已有、缺失或损坏的运行库仍须恢复完整备份，不能重新 init 清零配额。
 3. 复制 [service.example.json](../deploy/team/service.example.json) 为 /etc/vibe-radar/service.json，填写实际域名；连接配置只接受域名，不接受IPv4/IPv6字面地址。应用始终监听127.0.0.1，仅信任该地址反向代理提供的协议头。必须配置 HTTPS 反向代理，否则 API 拒绝请求。
 4. 使用 [Caddyfile](../deploy/team/Caddyfile) 配置实际 RADAR_HOST；Caddy 终止 TLS 并转发到本机8766。只开放实际需要的80/443，不暴露后端端口。不要开启包含请求内容、Authorization 或查询文本的调试/访问日志。
 5. 审阅并安装 [systemd 服务](../deploy/team/vibe-radar-team.service)，再启动。使用 HTTPS /healthz 检查数据库就绪；认证 /v1/team/metrics 给管理员返回本组成员/有效设备/审计数量及进程运行时间。监控工具发现非200、进程退出、磁盘不足或连续刷新失败时通知运营者；本仓库不替用户购买监控或指定第三方消息收件人。
