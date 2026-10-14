@@ -155,6 +155,10 @@ def main() -> int:
                         page.locator('#roles-reviewed').check()
                         page.locator('#roles input[value=time_series]').check()
                         page.locator('#complete').check()
+                        def locked_editor(route):
+                            assert page.evaluate("[...document.querySelectorAll('button,input,select,textarea')].every(e => e.disabled)")
+                            route.continue_()
+                        page.route('**/api/quality/save', locked_editor)
                         page.locator('#save').click()
                         expect(page.locator('#source-info')).to_contain_text('标注版本 1')
                         expect(page.locator('#coverage')).to_contain_text('本人已确认 0')
@@ -172,9 +176,24 @@ def main() -> int:
                             saved = labels['documents'][0]['requirements'][0]
                             assert saved['start'] == 1 and saved['quote'] == quote
                             assert json.loads(archive.read('quality-evaluation.json'))['coverage']['extraction_evaluated_documents'] == 1
+                        # A second writer cannot silently change the exported version.
+                        latest = server.quality.open({'report_id':source_id})
+                        server.quality.save({'report_id':source_id,'expected_revision':latest['revision'],
+                                             'document':latest['annotations']['documents'][0], 'confirm_human':True})
+                        page.locator('#export').click()
+                        expect(page.locator('#notice')).to_contain_text('标注版本已更新')
+                        page.locator('#reload').click()
+                        expect(page.locator('#source-info')).to_contain_text('标注版本 3')
+                        page.locator('details').filter(has=page.locator('#import')).locator('summary').click()
+                        oversized = json.dumps({'notes':'\\' * 520000}).encode()
+                        assert len(oversized) < 1900000
+                        page.locator('#import-file').set_input_files({'name':'large.json','mimeType':'application/json','buffer':oversized})
+                        page.locator('#import').click()
+                        expect(page.locator('#notice')).to_contain_text('编码后超过 2 MB')
+                        expect(page.locator('#author')).to_be_enabled()
                         page.screenshot(path=str(out / 'quality-review-mobile.png'), full_page=True)
                         assert hashlib.sha256(workspace.report_file(source_id, 'requirements.jsonl').read_bytes()).hexdigest() == before_hash
-                        result['checks'].append('report-pinned independent quality UI: Unicode selection, non-gold draft, explicit synthetic confirmation, reload, export and unchanged original')
+                        result['checks'].append('report-pinned independent quality UI: Unicode selection, non-gold draft, explicit synthetic confirmation, locked pending edits, stale export conflict, encoded import limit and unchanged original')
                         page.locator('#back').click()
                         expect(page.locator('#report-title')).to_contain_text(source_id[:8])
                         with page.expect_download() as download:

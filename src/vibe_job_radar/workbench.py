@@ -26,6 +26,7 @@ from .guided.contracts import CrawlError
 from .collection_guidance import CollectionGuidance
 from .evidence_ui import Conflict, EvidenceService
 from .quality_ui import QualityService
+from .quality_packet import decode_json
 from .public_tasks import PublicTasks, PublicTaskBusy
 from .guided.ownership import GuidedTaskBusy
 from .public_schedule import PublicSchedule
@@ -199,9 +200,12 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/guided/state":
                 self._json(200, self.server.guided.state())
             elif path.startswith("/api/quality/export/"):
-                run_id = path.removeprefix("/api/quality/export/")
-                self._respond(200, self.server.quality.export({"report_id": run_id}),
-                              "application/zip", filename="jd-quality.zip")
+                parts = path.removeprefix("/api/quality/export/").split("/")
+                if len(parts) != 2 or not parts[1].isascii() or not parts[1].isdecimal() or len(parts[1]) > 10:
+                    raise InputError("缺少有效的导出版本。")
+                run_id, revision = parts[0], int(parts[1])
+                self._respond(200, self.server.quality.export({"report_id": run_id, "expected_revision": revision}),
+                              "application/zip", filename=f"jd-quality-{run_id}-v{revision}.zip")
             elif path == "/api/evidence/export":
                 self._respond(200, self.server.evidence.export(), "application/zip", filename="personal-evidence.zip")
             elif path.startswith("/api/evidence/attachment/"):
@@ -223,6 +227,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._respond(200, artifact.read_bytes(), "application/octet-stream", filename=artifact.name)
             else:
                 self._json(404, {"error": "入口不存在。"})
+        except Conflict as exc:
+            self._json(409, {"error": str(exc)})
         except InputError as exc:
             self._json(400, {"error": str(exc)})
         except Exception as exc:
@@ -252,7 +258,8 @@ class Handler(BaseHTTPRequestHandler):
             self._body_consumed = True
             if len(raw) != length:
                 raise ValueError
-            data = json.loads(raw.decode("utf-8"))
+            data = (decode_json(raw) if urlsplit(self.path).path.startswith("/api/quality/")
+                    else json.loads(raw.decode("utf-8")))
             if not isinstance(data, dict):
                 raise ValueError
         except (ValueError, UnicodeError, TimeoutError):

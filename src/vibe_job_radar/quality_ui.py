@@ -159,9 +159,15 @@ class QualityService:
 
     def export(self, data):
         run_id, report = self._report(data)
+        expected = data.get("expected_revision")
+        if type(expected) is not int or expected < 0:
+            raise InputError("缺少有效的导出版本，请重新打开报告。")
         with closing(self._connect()) as connection, connection:
+            connection.execute("BEGIN")
             packet, manifest, contents = self._packet(connection, run_id, report)
             revision, raw = self._current(connection, run_id)
+            if revision != expected:
+                raise Conflict("标注版本已更新；请重新打开报告核对后再导出。")
             evaluation = evaluate_annotations(manifest, contents, raw)
             buffer = io.BytesIO()
             with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:

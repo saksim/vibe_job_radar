@@ -14,6 +14,7 @@ from vibe_job_radar.quality_evaluation import evaluate_packet
 from vibe_job_radar.quality_ui import QualityService
 from vibe_job_radar.workspace import Workspace, InputError
 from test_quality_review import fixture_report, span, TEXT
+import test_workbench as http_fixtures
 
 
 class QualityUITests(unittest.TestCase):
@@ -74,6 +75,10 @@ class QualityUITests(unittest.TestCase):
         with self.assertRaises(Conflict):
             other.save(self.form(stale))
         self.assertEqual(other.open({"report_id": self.run})["revision"], fresh["revision"])
+        with self.assertRaises(Conflict):
+            other.export({"report_id": self.run, "expected_revision": stale["revision"]})
+        with self.assertRaises(InputError):
+            other.export({"report_id": self.run})
         self.assert_original_unchanged()
 
     def test_wrong_span_or_packet_cannot_create_a_revision(self):
@@ -94,7 +99,7 @@ class QualityUITests(unittest.TestCase):
 
     def test_export_round_trips_through_original_cli_evaluator(self):
         saved = self.service.save(self.form(self.open(), True))
-        archive = self.service.export({"report_id": self.run})
+        archive = self.service.export({"report_id": self.run, "expected_revision": saved["revision"]})
         output = Path(self.temp.name) / "exported"
         with zipfile.ZipFile(io.BytesIO(archive)) as bundle:
             bundle.extractall(output)
@@ -121,6 +126,37 @@ class QualityUITests(unittest.TestCase):
                 self.service.open({"report_id": bad})
         self.assert_original_unchanged()
 
+
+class QualityHTTPTests(unittest.TestCase):
+    setUp = http_fixtures.HTTPTests.setUp
+    tearDown = http_fixtures.HTTPTests.tearDown
+    call = http_fixtures.HTTPTests.call
+
+    def test_object_import_cannot_hide_duplicate_keys_in_http_parser(self):
+        run = "a" * 32
+        fixture_report(self.server.workspace.root / "reports" / run)
+        state = self.server.quality.open({"report_id": run})
+        labels = json.dumps(state["annotations"])
+        ambiguous = labels.replace('"schema_version": 1', '"schema_version": 1, "schema_version": 1', 1)
+        self.assertNotEqual(ambiguous, labels)
+        raw = ('{"report_id":"' + run + '","expected_revision":0,"annotations":' + ambiguous + '}').encode()
+        self.assertEqual(self.call("/api/quality/import_annotations", raw=raw)[0], 400)
+        self.assertEqual(self.server.quality.open({"report_id": run})["revision"], 0)
+
+    def test_export_conflict_is_http_409_and_download_names_actual_version(self):
+        run = "a" * 32
+        fixture_report(self.server.workspace.root / "reports" / run)
+        state = self.server.quality.open({"report_id": run})
+        self.server.quality.save({"report_id": run, "expected_revision": 0,
+                                  "document": state["annotations"]["documents"][0]})
+        url = "/api/quality/export/" + run + "/"
+        self.assertEqual(self.call(url + "1", authorized=False)[0], 403)
+        self.assertEqual(self.call(url + "0")[0], 409)
+        status, headers, data = self.call(url + "1")
+        self.assertEqual(status, 200)
+        self.assertIn("-v1.zip", headers["Content-Disposition"])
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            self.assertEqual(json.loads(archive.read("review-version.json"))["revision"], 1)
 
 if __name__ == "__main__":
     unittest.main()

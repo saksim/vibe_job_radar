@@ -12,8 +12,11 @@ const strengthLabels = {required:"必须",expected:"职责 / 期望",preferred:"
 const reviewLabels = {pending:"草稿 / 未确认", assistant_draft:"助手草稿", human_confirmed:"本人已确认"};
 const text = (id, value) => { $(id).textContent = value; };
 async function request(path, data) {
+  const body = JSON.stringify(data);
+  if (new TextEncoder().encode(body).byteLength > 2000000)
+    throw new Error("标注请求编码后超过 2 MB；请减少单次导入内容，原文件保持不变。");
   const response = await fetch(path, {method:"POST", cache:"no-store",
-    headers:{"X-Radar-Token":token,"Content-Type":"application/json"}, body:JSON.stringify(data)});
+    headers:{"X-Radar-Token":token,"Content-Type":"application/json"}, body});
   const result = await response.json();
   if (!response.ok) throw new Error(result.error || "操作失败");
   return result;
@@ -21,10 +24,12 @@ async function request(path, data) {
 async function operation(action) {
   if (busy) return;
   busy = true;
-  document.querySelectorAll("button").forEach(button => { button.disabled = true; });
+  const controls = [...document.querySelectorAll("button,input,select,textarea")];
+  const disabled = controls.map(control => control.disabled);
+  controls.forEach(control => { control.disabled = true; });
   try { await action(); }
   catch (error) { text("notice", error.message || "操作失败，当前输入仍保留。"); }
-  finally { busy = false; document.querySelectorAll("button").forEach(button => { button.disabled = false; }); }
+  finally { busy = false; controls.forEach((control,index) => { control.disabled = disabled[index]; }); }
 }
 function mayDiscard() { return !dirty || window.confirm("当前 JD 有未保存的修改。放弃这些修改并继续？"); }
 function source() { return state.corpus.find(row => row.record_id === currentId); }
@@ -160,7 +165,7 @@ $("confirm").addEventListener("click",()=>operation(()=>save(true)));
 $("reload").addEventListener("click",()=>{if(mayDiscard()) operation(openReport);});
 $("export").addEventListener("click",()=>operation(async()=>{
   if (dirty) throw new Error("请先保存当前修改，再导出。");
-  const response = await fetch("/api/quality/export/"+reportId,{cache:"no-store",headers:{"X-Radar-Token":token}});
+  const response = await fetch("/api/quality/export/"+reportId+"/"+state.revision,{cache:"no-store",headers:{"X-Radar-Token":token}});
   if (!response.ok) { const result=await response.json(); throw new Error(result.error || "导出失败"); }
   const url=URL.createObjectURL(await response.blob()), link=document.createElement("a");
   link.href=url;link.download="jd-quality-"+reportId+"-v"+state.revision+".zip";link.click();
@@ -169,7 +174,7 @@ $("export").addEventListener("click",()=>operation(async()=>{
 $("import").addEventListener("click",()=>operation(async()=>{
   if (!mayDiscard()) return;
   const file=$("import-file").files[0];
-  if (!file || file.size>1900000) throw new Error("请选择小于 1.9 MB 的标注 JSON。");
+  if (!file || file.size>2000000) throw new Error("请选择不超过 2 MB 的标注 JSON；发送前还会核对编码后的请求大小。");
   const annotations_json=await file.text();
   const result=await request("/api/quality/import_annotations",{report_id:reportId,
     expected_revision:state.revision,annotations_json,confirm_human:$("import-confirm").checked});
