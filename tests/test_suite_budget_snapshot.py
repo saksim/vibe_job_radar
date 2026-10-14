@@ -291,7 +291,7 @@ class SuiteBudgetTests(unittest.TestCase):
 
     def test_full_suite_budgets_preserve_steps_and_outer_cleanup_allowance(self):
         workflows=ROOT / ".github/workflows"
-        for filename,job in [('tests.yml','test'),('windows-native-tls.yml','native-chain-and-repair')]:
+        for filename,job in [('tests.yml','test')]:
             with self.subTest(workflow=filename):
                 source=(workflows / filename).read_text(encoding='utf8')
                 section=source.split(f'  {job}:\n',1)[1]
@@ -299,6 +299,19 @@ class SuiteBudgetTests(unittest.TestCase):
                 unit_step=re.search(r'(?m)^      - (?:name:.*\n|.*\n)*?        timeout-minutes: 20\n        run: python scripts/run_tests.py [^\n]+',section)
                 self.assertIsNotNone(unit_step)
                 self.assertIn('if: always()',section)
+        offline=(workflows / 'tests.yml').read_text(encoding='utf8')
+        self.assertIn("if: runner.os == 'Windows' && matrix.python == '3.12'\n"
+                      '        run: python -m pip install "truststore>=0.10.4,<0.11"',offline)
+        tls=(workflows / 'windows-native-tls.yml').read_text(encoding='utf8')
+        self.assertNotIn('scripts/run_tests.py',tls)
+        self.assertIn('    timeout-minutes: 10\n',tls)
+        self.assertIn('scripts/check_windows_native_tls.py',tls)
+        self.assertIn('scripts/run_tls_repair_browser.py',tls)
+        self.assertIn('scripts/check_live_encrypted_dns.py --live',tls)
+        self.assertIn('python -m unittest discover -s tests -p "test_tls*.py"',tls)
+        self.assertIn('$testExit = $LASTEXITCODE',tls)
+        self.assertIn('exit $testExit',tls)
+        self.assertIn('if: always()',tls)
         native=(workflows / 'native-browser.yml').read_text(encoding='utf8')
         for job in ['native-http','native-chrome']:
             section=native.split(f'  {job}:\n',1)[1]

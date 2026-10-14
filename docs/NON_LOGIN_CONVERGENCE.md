@@ -25,25 +25,23 @@
 | [#45](https://github.com/saksim/vibe_job_radar/issues/45) | PR44 请求头去重、PR293 正常搜索入口、PR326 robots 默认 HTTPS 端口判断；已保存匿名关键词→完整正文→原报告的三份结果 | 结束重复汇总；三站现场条件已分别由 #47–#56、旧 Edge 空白由 #23/#48 跟踪，不把三站标成已认证 |
 | [#117](https://github.com/saksim/vibe_job_radar/issues/117) | PR271 固定 data 页、PR313 协议观察、PR321 已提交同页的有界 DOM 等待；当前 Windows 实际程序验收通过 | 启动健康检查修复已交付；旧 6 秒超时的物理原因未知，浏览器复发风险由 #263 承接，本机 Chrome 环境由 #48 承接 |
 | [#126](https://github.com/saksim/vibe_job_radar/issues/126) | 准备阶段 LIFO 清理；PR276 任务锁范围、PR283/331 有真实持久化对照的功能等待、PR334 整数时间边界；当前全矩阵通过 | 已知清理和夹具误报缺陷结束；旧机器为何慢不作已知结论，剩余运行耗时由 #269 跟踪 |
-| [#174](https://github.com/saksim/vibe_job_radar/issues/174) | 失败前线程/SQLite 诊断、PR281/328 合法持久化等待、PR301/302 关闭与所有权交接；当前 TLS、矩阵和实际程序验收通过 | 已知等待与交接缺陷结束；旧队列原因由 #269 保留，测试去重配置另待权限 |
+| [#174](https://github.com/saksim/vibe_job_radar/issues/174) | 失败前线程/SQLite 诊断、PR281/328 合法持久化等待、PR301/302 关闭与所有权交接；当前 TLS、矩阵和实际程序验收通过 | 已知等待与交接缺陷结束；旧队列原因由 #269 保留，去重编排独立提交，旧失败仍保留 |
 | [#202](https://github.com/saksim/vibe_job_radar/issues/202) | PR247 清理分项与严格明细资格、PR273 启动阶段事实；实际程序继续要求关闭、profile、桥进程与代理线程全部满足 | 诊断与验收缺口结束；原聚合清理失败没有可回溯的分项，未知原因由 #263 保留，不写成已定位 |
 
 上表是工程收口决定；远端状态以各 Issue 的执行回执为准。原 PR、日志、负对照、
 未通过的旧提交与历史正文全部保留，关闭不等于把旧结果改成成功。
 
-## 已准备的测试去重变更（等待 GitHub workflow 权限）
+## 测试去重配置
 
-下列配置尚未合入：本机相关验证通过，但 GitHub 拒绝推送，明确提示当前 OAuth
-凭据没有修改工作流的 workflow scope。本地提交 c1f16c5592ba060caacd40b5e010587b904a826a
-已保留；需用户通过 gh auth refresh -h github.com -s workflow 完成授权后再提交独立 PR。
-普通代码、文档和 Issue 操作不以此为前置，不换凭据绕过该拒绝。
+初次推送曾因 GitHub 凭据缺少 workflow scope 被拒；用户随后完成授权，权限已核对。
+本次恢复同一组已验证的编排修改，未更改产品源码。提交与合并结果以对应 PR 为准。
 
-拟议 Windows TLS 工作流保留实际证书链恢复、Edge 修复同意/服务重启、TLS 专项回归、
+Windows TLS 工作流保留实际证书链恢复、Edge 修复同意/服务重启、TLS 专项回归、
 原有公网信任冒烟及失败产物。TLS 专项用 `test_tls*.py`，结果保存在
 `native-tls-evidence/tls-unit.log`，Python 失败退出码继续传给 CI。
 它不再额外运行与完整矩阵重复的三千多项全套。
 
-拟在已有 Windows/Python 3.12 完整矩阵安装同范围的 truststore，保留安装原生 TLS
+在已有 Windows/Python 3.12 完整矩阵安装同范围的 truststore，保留安装原生 TLS
 依赖后的全量覆盖。其他六组完整矩阵、打包前的源码全套资格、实际 exe、
 原生搜索/代理/会话和原报告断言均保留。产品代码、访问规则、配额与持久化不变。
 TLS 专项步骤上限 3 分钟、作业 10 分钟；完整矩阵仍为原 20/25 分钟。
