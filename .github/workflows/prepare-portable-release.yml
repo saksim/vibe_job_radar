@@ -6,6 +6,10 @@ on:
         description: Successful windows-portable-candidate push run on main
         required: true
         type: string
+      change_notes:
+        description: 'Markdown sections: 解决了什么, 提高了什么, 验证结果, 剩余问题; include Issue/PR links'
+        required: true
+        type: string
 concurrency:
   group: prepare-portable-release-${{ inputs.candidate_run_id }}
   cancel-in-progress: false
@@ -35,7 +39,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
-        run: python scripts/prepare_portable_release.py --repository "$GITHUB_REPOSITORY" --run-id "$CANDIDATE_RUN_ID" --out release-draft --create-draft
+          CHANGE_NOTES: ${{ inputs.change_notes }}
+        run: |
+          python -c "import os,pathlib; pathlib.Path('.release-temp/changes.md').write_text(os.environ['CHANGE_NOTES'], encoding='utf-8')"
+          python scripts/prepare_portable_release.py --repository "$GITHUB_REPOSITORY" --run-id "$CANDIDATE_RUN_ID" --out release-draft --create-draft --change-notes .release-temp/changes.md
       - name: Retain preparation result including partial upload failures
         if: always()
         uses: actions/upload-artifact@v4

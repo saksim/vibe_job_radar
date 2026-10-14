@@ -179,18 +179,23 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = unquote(urlsplit(self.path).path)
-        public = path in {"/quality", "/quality.js", "/", "/app.js", "/report-sources.js", "/advanced", "/advanced.js", "/collection-help.js", "/guided", "/guided.js", "/network-settings.js", "/public-schedule.js", "/public-queue.js", "/windows-startup.js"}
+        public = path in {"/quality", "/quality.js", "/", "/app.js", "/report-sources.js", "/advanced", "/advanced.js", "/collection-help.js", "/guided", "/guided.js", "/network-settings.js", "/public-schedule.js", "/public-history.js", "/public-queue.js", "/windows-startup.js"}
         if not self._authorized(token_required=not public):
             return
         try:
             if public:
-                name = {"/quality": "quality.html", "/quality.js": "quality.js", "/": "workbench.html", "/app.js": "workbench.js", "/report-sources.js": "report_sources.js", "/advanced": "advanced.html", "/advanced.js": "advanced.js", "/collection-help.js": "collection_help.js", "/guided": "guided.html", "/guided.js": "guided.js", "/network-settings.js": "network_settings.js", "/public-schedule.js": "public_schedule.js", "/public-queue.js": "public_queue.js", "/windows-startup.js": "windows_startup.js"}[path]
+                name = {"/quality": "quality.html", "/quality.js": "quality.js", "/": "workbench.html", "/app.js": "workbench.js", "/report-sources.js": "report_sources.js", "/advanced": "advanced.html", "/advanced.js": "advanced.js", "/collection-help.js": "collection_help.js", "/guided": "guided.html", "/guided.js": "guided.js", "/network-settings.js": "network_settings.js", "/public-schedule.js": "public_schedule.js", "/public-history.js": "public_history.js", "/public-queue.js": "public_queue.js", "/windows-startup.js": "windows_startup.js"}[path]
                 mime = "text/html" if name.endswith(".html") else "text/javascript"
                 self._respond(200, files("vibe_job_radar").joinpath(name).read_bytes(), mime + "; charset=utf-8")
             elif path == "/api/network/state":
                 self._json(200, self.server.workspace.network_state())
             elif path == "/api/public/state":
                 self._json(200, self.server.public_tasks.state())
+            elif path == "/api/public/history":
+                self._json(200, self.server.public_tasks.history())
+            elif path == "/api/public/history/export":
+                self._respond(200, json.dumps(self.server.public_tasks.history(), ensure_ascii=False, indent=2).encode("utf-8"),
+                              "application/json; charset=utf-8", filename="source-history.json")
             elif path == "/api/public/schedule/state":
                 self._json(200, self.server.public_schedule.state())
             elif path == "/api/public/queue/state":

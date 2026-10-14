@@ -13,6 +13,7 @@ body{overflow-wrap:anywhere}
 <script src="/app.js" defer></script>
 <script src="/network-settings.js" defer></script>
 <script src="/public-schedule.js" defer></script>
+<script src="/public-history.js" defer></script>
 <script src="/public-queue.js" defer></script>
 <script src="/windows-startup.js" defer></script>
 </head>
@@ -53,6 +54,11 @@ body{overflow-wrap:anywhere}
 <p id="queue-status" role="status" aria-live="polite">正在读取待办，不请求外部来源。</p>
 <p id="queue-message" role="status" aria-live="polite"></p>
 <ul id="queue-history" aria-label="待办的最近结果"></ul></details>
+<details id="public-history"><summary>查看来源更新历史与异常</summary>
+<p>记录三项固定公开目录的实际更新、未变化确认和失败。查看、刷新和导出仅读取本机记录，不请求招聘来源。每个来源保留最近128次记录；旧报告继续保留。缓存、分页和改关键词不算新观测。</p>
+<button id="history-refresh" type="button" class="secondary">刷新本机历史</button> <button id="history-export" type="button" class="secondary">导出历史摘要</button>
+<p id="history-status" role="status" aria-live="polite">展开后读取本机记录。</p><div id="history-sources"></div>
+<p class="muted">本次未出现不等于岗位关闭。结构摘要变化仅为提示；适配器仍校验完整响应。此页不代表指定平台验收、全天服务或跨设备同步。</p></details>
 <details id="public-schedule"><summary>每24小时自动更新这组公开查询</summary>
 <p>默认关闭。沿用上方查询词、地区与来源，每次最多20条首屏结果，不自动翻页。保存后首次在24小时后运行；关闭网页不影响，工作台或独立后台进程需保持运行。重启后只补一次到期查询。</p>
 <p>来源或网络路线变化、失败或过期缓存会暂停计划，需要重新确认。停止会取消后续步骤；已经开始的只读请求或本地保存结束后停止，已有报告保留。</p>
