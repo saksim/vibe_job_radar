@@ -111,7 +111,24 @@ def main():
                         expect(page.locator('#report')).to_be_visible()
                         page.set_viewport_size({'width':390,'height':844})
                         assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
+                        page.locator('#public-history > summary').click()
+                        expect(page.locator('#history-status')).to_contain_text('已读取本机历史')
+                        expect(page.locator('#history-sources > section')).to_have_count(3)
+                        history = server.public_tasks.history()
+                        assert sum(source['total_observations'] for source in history['sources']) == 3
+                        cloud = next(source for source in history['sources'] if source['source'] == CLOUDFLARE.source.key)
+                        assert cloud['retained'] == 2 and cloud['history'][0]['change_status'] == 'compared'
+                        page.locator('#history-refresh').click()
+                        expect(page.locator('#history-export')).to_be_enabled()
+                        with page.expect_download() as download:
+                            page.locator('#history-export').click()
+                        download.value.save_as(str(out/'source-history.json'))
+                        exported = json.loads((out/'source-history.json').read_text(encoding='utf-8'))
+                        assert exported['sources'] == server.public_tasks.history()['sources']
+                        assert len(calls) == 3
+                        assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
                         page.locator('#public-entry').screenshot(path=str(out/'public-sources-mobile.png'))
+                        result['checks'].append('daily and manual catalog observations survive report navigation; cache paging adds no event; history refresh/export make no source requests and stay readable at 390px')
                         result['checks'].append('separate daily consent saves Cloudflare offline; injected 24-hour boundary refreshes only that source and opens original history report; 390px has no overflow')
                         assert not result['page_errors'] and not result['external_requests']
                         result.update(success=True,browser_version=browser.version,fixture_requests=len(calls),recruiting_requests=0)
