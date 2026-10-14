@@ -1,5 +1,7 @@
 # Vibe Job Radar｜招聘要求与个人证据工作台
 
+0.3.0 增加[报告内独立质量复核](docs/QUALITY_REVIEW.md)、[来源更新历史](docs/SOURCE_HISTORY.md)和可选[团队协作服务](docs/TEAM_SERVICE.md)：在原报告上标注 JD、核对重复岗位；查看目录更新与失败；为已登记设备提供共享配额、成员权限和版本同步。原采集、个人材料、报告和CLI继续保留。具体变化、验证与剩余条件见 [0.3.0 发行说明](docs/RELEASE_0_3_0.md)。
+
 非登录工程的关闭依据、剩余现场条件及测试收敛方式见[当前收口清单](docs/NON_LOGIN_CONVERGENCE.md)；历史失败保留，工程完成与真人/实站认证分别记录。
 
 软件提供的流程见[交付清单](docs/DELIVERY_STATUS.md)，已保存的实站观察、逐次成败和仍需人工验收的条件统一见[取数证据](docs/CURRENT_ACQUISITION_EVIDENCE.md)。[GAP 审计](docs/PROJECT_GAP_AUDIT_2026_09_26.md)和[历史目标追溯](docs/PROJECT_GOAL_TRACE_2026_09_26.md)保留2026年9月26日的核查原文，后续处理记录见[Issue #210](https://github.com/saksim/vibe_job_radar/issues/210)。历史关键词列表不等于登录后完整正文；较早文档中的主干提交和采样数量只属于当时记录。按某个PR或基线编写的实施说明保留该阶段的“本分支/待验收”措辞；当前合并状态与验收以总线Issue、能力矩阵和准确提交的证据为准。
@@ -62,7 +64,7 @@ BOSS、猎聘、51job 的浏览器采集仍需逐站现场验收，不能因入�
 
 Windows便携包可在首页明确选择[登录后打开工作台](docs/WINDOWS_LOGIN_STARTUP.md)，默认关闭，只登记当前用户和当前工作区。原每日计划仍独立确认；移动或升级程序前关闭旧登记，再从新包启用。实际登录时机由Windows管理，不是全天服务保证。
 
-详细的主线范围与验收见 [首份岗位研究流程](docs/MAINLINE_WORKFLOW.md)。所有后续源码迭代从实际已合并的 main 开始，不把未合并分支写成主干功能。
+详细的主线范围与验收见 [首份岗位研究流程](docs/MAINLINE_WORKFLOW.md)。后续研发从已同步main的dev开始；功能PR进入dev，再按 [dev → release → main](docs/BRANCH_PROMOTION.md) 晋升。待审PR不作为已发行功能。
 
 ## 已经打开过工作台
 
