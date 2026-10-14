@@ -143,6 +143,11 @@ class PublicTasks:
                                if self.mode() == 'local_direct' else
                                '只发送已确认的查询字段；登录态、简历、个人证据和私人报告不发送。')}
 
+    def history(self):
+        if self.mode() != "local_direct" or not callable(getattr(type(self.hybrid), "history", None)):
+            return {"available": False, "sources": [], "message": "此入口只展示本机固定公开目录的历史。"}
+        return self.hybrid.history()
+
     def start(self, data):
         if set(data)!={'consent'} or data['consent'] is not True:
             raise InputError('请确认获取公开案例；不接受网址、凭据或额外参数。')
@@ -313,7 +318,7 @@ class PublicTasks:
             # Do not persist the report's full private rendering in task status.
             allowed={'success','message','code','report_id','source_url','collected_at','checked_at',
                      'cache_reused','stale','refresh_error','network_requests_this_click','scope','source_scope',
-                     'next_cursor','matching_jobs','returned_jobs','available_jobs','execution_mode','catalog_change',
+                     'next_cursor','matching_jobs','returned_jobs','available_jobs','execution_mode','catalog_change','history_warning',
                      'source_checked_at','not_modified'}
             view={k:v for k,v in result.items() if k in allowed}
             if self._cancel.is_set() and result.get('success'):
@@ -341,7 +346,7 @@ class PublicTasks:
                  'stale':result['stale'],'refresh_error':result['refresh_error'],
                  'network_requests_this_click':result['network_requests'],'report_id':'',
                  'next_cursor':result['response']['next_cursor'],'execution_mode':self.mode()}
-        for key in ('matching_jobs','returned_jobs','available_jobs'):
+        for key in ('matching_jobs','returned_jobs','available_jobs','history_warning'):
             if key in result:
                 summary[key]=result[key]
         if self.mode()=='local_direct' and 'checked_at' in result:
@@ -355,6 +360,7 @@ class PublicTasks:
             if summary.get('not_modified'):
                 message+=' 来源最近于'+summary['source_checked_at']+'确认目录未变化；原正文采集时间保持。'
             if result['stale']:message+=' 刷新暂不可用，当前是过期缓存。'
+            if result.get('history_warning'):message += ' ' + result['history_warning']
             return {**summary,'code':'public_empty','message':message}
         from .pipeline import analyze
         with writer_lock(self.workspace.root):
@@ -393,6 +399,7 @@ class PublicTasks:
         message+=' 最早的来源采集时间：'+summary['collected_at']+'。'
         if result['stale']:
             message+=' 刷新暂不可用，当前是过期缓存，不是实时结果。'
+        if result.get('history_warning'):message += ' ' + result['history_warning']
         return {**summary,'report_id':report_id,'code':'public_results_received','message':message}
 
     def is_running(self):
