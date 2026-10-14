@@ -235,7 +235,7 @@ def _read_source(report):
         full = job.evidence_level == "full_text" and job.is_synthetic == demo
         corpus.append({
             "record_id": rid, "title": job.title, "text": job.text, "company": job.company,
-            "location": job.location, "platform": job.platform, "url": job.url,
+            "location": job.location, "platform": job.platform, "url": job.url, "source_ref": job.source_ref,
             "collected_at": job.collected_at, "evidence_level": job.evidence_level,
             "is_synthetic": job.is_synthetic, "selection_status": audit[rid]["status"],
             "group_key": key, "representative_record_id": representatives.get(key),
@@ -314,7 +314,8 @@ def create_packet(report: str | Path, output: str | Path):
     contents = {name: (json_text(value) + "\n").encode("utf-8") for name, value in values.items()}
     # Plain text, not HTML/Markdown: source content cannot inject active markup.
     contents["documents.txt"] = "\n\n".join(
-        "记录 " + d["record_id"] + "\n标题 " + d["title"] + "\n正文（偏移从正文第一个码点0开始）\n" + d["text"]
+        "记录 " + d["record_id"] + "\n标题 " + d["title"] + "\n公司 " + d["company"] + "\n地区 " + d["location"]
+        + "\n来源 " + (d["url"] or d["source_ref"]) + "\n正文（偏移从正文第一个码点0开始）\n" + d["text"]
         for d in corpus).encode("utf-8")
     contents["REVIEW_PROTOCOL.txt"] = PROTOCOL.encode("utf-8")
     manifest = {"schema_version": 1, "status": "complete", "created_at": utc_now(),

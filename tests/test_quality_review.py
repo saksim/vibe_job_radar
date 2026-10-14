@@ -38,11 +38,12 @@ def refresh_hashes(report):
     atomic_json(report / "run_manifest.json", manifest)
 
 
-def fixture_report(root):
+def fixture_report(root, *, manual_sources=False):
     root.mkdir()
     def job(key, **kwargs):
         values = dict(title="人工架构师", text=TEXT, company="人工夹具公司", platform="manual",
-                      url="https://example.com/" + key, is_synthetic=True,
+                      url="" if manual_sources else "https://example.com/" + key,
+                      source_ref="authored-fixture:" + key if manual_sources else "", is_synthetic=True,
                       source_mode="synthetic", collected_at=FIXED)
         values.update(kwargs)
         return JobRecord(**values)
