@@ -1,5 +1,7 @@
 # Vibe Job Radar｜招聘要求与个人证据工作台
 
+非登录工程的关闭依据、剩余现场条件及测试收敛方式见[当前收口清单](docs/NON_LOGIN_CONVERGENCE.md)；历史失败保留，工程完成与真人/实站认证分别记录。
+
 软件提供的流程见[交付清单](docs/DELIVERY_STATUS.md)，已保存的实站观察、逐次成败和仍需人工验收的条件统一见[取数证据](docs/CURRENT_ACQUISITION_EVIDENCE.md)。[GAP 审计](docs/PROJECT_GAP_AUDIT_2026_09_26.md)和[历史目标追溯](docs/PROJECT_GOAL_TRACE_2026_09_26.md)保留2026年9月26日的核查原文，后续处理记录见[Issue #210](https://github.com/saksim/vibe_job_radar/issues/210)。历史关键词列表不等于登录后完整正文；较早文档中的主干提交和采样数量只属于当时记录。按某个PR或基线编写的实施说明保留该阶段的“本分支/待验收”措辞；当前合并状态与验收以总线Issue、能力矩阵和准确提交的证据为准。
 
 候选交接、包来源和升级回退的历史材料见[固定候选交接清单](docs/MAIN_HANDOFF_REVIEW.md)。其中PR220、81项PR索引及旧包均有固定核查日期；当前源码与程序包按各自提交核验，旧到期工件不作为当前下载入口。
