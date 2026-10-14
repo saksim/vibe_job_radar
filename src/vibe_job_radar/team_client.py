@@ -23,6 +23,15 @@ from .utils import atomic_json
 from .workspace import InputError
 
 
+SYNC_CONFLICT_MESSAGES={
+    'team_sync_reset_required':'同步历史已过期，请选择完整重置后重新同步。',
+    'team_snapshot_changed':'同步期间目录已更新，请重新同步。',
+    'team_cursor_invalid':'同步游标已失效，请重新同步。',
+    'team_watermark_not_read':'服务尚未确认本次读取，请重新同步。',
+    'team_watermark_invalid':'同步水位无效，请选择完整重置后重新同步。',
+}
+
+
 def origin(value):
     try:
         p=urlsplit(value)
@@ -140,9 +149,10 @@ class TeamConnection:
         client=self.transport or SafeHTTP({urlsplit(self.origin).hostname},timeout=10,max_bytes=32_000_000,interval=0,network_policy=self._policy)
         try:
             value=client.json(self.origin+path,method='POST' if payload is not None else 'GET',
-                              headers={'Authorization':'Bearer '+token},payload=payload)
+                              headers={'Authorization':'Bearer '+token},payload=payload,error_codes={409:SYNC_CONFLICT_MESSAGES})
         except FetchError as error:
             if error.code=='http_429':raise RateLimit(error.retry_after or 60,'team_rate_wait') from None
+            if error.code in SYNC_CONFLICT_MESSAGES:raise CrawlError(error.code) from None
             # No offline quota allowance, automatic retry, redirect, token echo,
             # credential forwarding to publishers or fallback to another origin.
             code='team_unauthorized' if error.code=='http_401' else 'team_forbidden' if error.code=='http_403' else 'team_unavailable'
@@ -266,7 +276,8 @@ class TeamUI:
             connection=TeamConnection(self.workspace.root,policy_factory=self.workspace.network_policy)
             result={'status':'completed',**TeamSync(self.workspace.root,connection=connection).run(reset=reset,cancelled=self._stop)}
         except (TeamError,RuntimeError,ContractError,OSError,ValueError) as error:
-            result={'status':'failed','code':getattr(error,'code','team_sync_failed'),'message':'同步未完成，已保存岗位和报告保留。'}
+            code=getattr(error,'code','team_sync_failed')
+            result={'status':'failed','code':code,'message':SYNC_CONFLICT_MESSAGES.get(code,'同步未完成，已保存岗位和报告保留。')}
         with self._lock:self._state=result
     def close(self):
         self._stop.set()

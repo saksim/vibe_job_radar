@@ -52,7 +52,7 @@ class HTTPFixture:
         self.thread.start()
     def close(self):
         self.server.shutdown();self.server.server_close();self.thread.join(3)
-    def json(self,url,*,method='GET',headers=None,payload=None):
+    def json(self,url,*,method='GET',headers=None,payload=None,error_codes=None):
         from urllib.parse import urlsplit
         assert urlsplit(url).netloc=='team.fixture.test'
         with self.lock:self.clock[0]+=0.1
@@ -64,6 +64,9 @@ class HTTPFixture:
             conn.request(method,path,body=body,headers={**(headers or {}),**({'Content-Type':'application/json'} if body else {})})
             response=conn.getresponse();data=json.loads(response.read())
             if response.status!=200:
+                if (error_codes and set(data)=={'error'}
+                        and data['error'] in error_codes.get(response.status,())):
+                    raise FetchError(data['error'])
                 raise FetchError('http_'+str(response.status),retry_after=float(response.getheader('Retry-After') or 0))
             return data
         finally:conn.close()
@@ -504,6 +507,57 @@ class TeamTests(unittest.TestCase):
             for path,data in [('/v1/jobs/search',fixture.query().payload()),('/v1/jobs/fixture.one',None)]:
                 status,body,_=self.call(path,self.tokens['alice'],data=data)
                 self.assertEqual(status,503);self.assertEqual(body['error'],'team_catalog_stale')
+
+    def test_expired_delta_reaches_client_and_ui_then_explicit_reset_recovers(self):
+        from vibe_job_radar.team_client import TeamUI
+        self.tokens['alice']=self.store.issue('group','alice','sync-long',days=90)
+        client=self.connection('alice');sync=TeamSync(self.root/'alice',connection=client)
+        self.assertEqual(sync.run()['revision'],1)
+        for key in ['new','newest']:
+            self.now[0]+=31*86400
+            self.catalog.publish(fixture.REGISTRY,[fixture.job(key)],observed_at={'fixture':self.now[0]})
+        with self.assertRaisesRegex(CrawlError,'team_sync_reset_required'):sync.run()
+        workspace=Workspace(self.root/'alice');self.addCleanup(workspace.close_network)
+        panel=TeamUI(workspace)
+        with patch('vibe_job_radar.team_client.TeamConnection',return_value=client):panel._run(False)
+        result=panel.state()['sync']
+        self.assertEqual(result['code'],'team_sync_reset_required')
+        self.assertIn('完整重置',result['message'])
+        recovered=sync.run(reset=True)
+        self.assertEqual(recovered['revision'],3);self.assertEqual(recovered['jobs'],1)
+        self.assertTrue(recovered['acknowledged'])
+
+    def test_health_and_backup_expire_idle_history_without_refunding_policy(self):
+        client=self.connection('alice')
+        client.quota('liepin','publisher',origin='https://www.liepin.com',delay=20)
+        client.reserve('liepin','request',origin='https://www.liepin.com')
+        client.quota('liepin','defer',seconds=600)
+        with closing(sqlite3.connect(self.store.rate_path)) as rates:
+            policies={table:rates.execute('SELECT * FROM '+table).fetchall()
+                      for table in ['publisher_policy','cooldown','clock_seen']}
+            self.assertGreater(rates.execute('SELECT COUNT(*) FROM publisher_visits').fetchone()[0],0)
+        self.now[0]+=3*86400
+        self.assertEqual(self.call('/healthz')[0],200)
+        with closing(sqlite3.connect(self.store.rate_path)) as rates:
+            self.assertEqual(rates.execute('SELECT COUNT(*) FROM visits').fetchone()[0],0)
+            self.assertGreater(rates.execute('SELECT COUNT(*) FROM publisher_visits').fetchone()[0],0)
+        self.now[0]+=364*86400
+        # A still-current publisher visit must survive while an idle old one expires.
+        with closing(sqlite3.connect(self.store.rate_path)) as rates:
+            rates.execute('INSERT INTO publisher_visits VALUES(?,?,?)',('recent','https://fixture.test',self.now[0]-1));rates.commit()
+        output=self.root/'backup'
+        with patch('vibe_job_radar.team_service.TeamStore',return_value=self.store),patch('vibe_job_radar.team_service.TeamCatalog',return_value=self.catalog),patch('sys.stdout',new=io.StringIO()):
+            self.assertEqual(service_main(['--data',str(self.store.root),'backup','--output',str(output)]),0)
+        for root in [self.store.root,output]:
+            with closing(sqlite3.connect(root/'rates.sqlite')) as rates:
+                self.assertEqual(rates.execute('SELECT site FROM publisher_visits').fetchall(),[('recent',)])
+                for table,rows in policies.items():self.assertEqual(rates.execute('SELECT * FROM '+table).fetchall(),rows)
+            with closing(sqlite3.connect(root/'catalog.sqlite')) as catalog:
+                self.assertEqual(catalog.execute('SELECT COUNT(*) FROM changes').fetchone()[0],0)
+                self.assertEqual(catalog.execute('SELECT COUNT(*) FROM jobs').fetchone()[0],2)
+                self.assertEqual(catalog.execute("SELECT value FROM meta WHERE key='floor'").fetchone()[0],'1')
+        self.now[0]-=86400
+        self.assertEqual(self.call('/healthz')[0],503)
 
     def test_health_read_expires_audit_without_another_management_event(self):
         with closing(sqlite3.connect(self.store.path)) as conn:

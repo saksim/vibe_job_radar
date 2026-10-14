@@ -151,13 +151,24 @@ class TeamCatalog:
                 raise TeamError('team_snapshot_too_large')
             conn.execute("UPDATE meta SET value=? WHERE key='revision'",(str(revision),))
             conn.execute("UPDATE meta SET value=? WHERE key='clock'",(str(now),))
-            cut=conn.execute('SELECT COALESCE(MAX(revision),0) FROM changes WHERE ts<?',(now-30*86400,)).fetchone()[0]
-            count_cut=conn.execute('SELECT revision FROM changes ORDER BY seq DESC LIMIT 1 OFFSET 100000').fetchone()
-            if count_cut:cut=max(cut,count_cut[0])
-            if cut:
-                conn.execute('DELETE FROM changes WHERE revision<=?',(cut,))
-                conn.execute("UPDATE meta SET value=? WHERE key='floor'",(str(max(cut,int(meta['floor']))),))
+            self._expire_changes(conn,meta,now)
             return {'schema_version':1,'revision':revision,**counts}
+
+    @staticmethod
+    def _expire_changes(conn,meta,now):
+        conn.execute('PRAGMA secure_delete=ON')
+        cut=conn.execute('SELECT COALESCE(MAX(revision),0) FROM changes WHERE ts<?',(now-30*86400,)).fetchone()[0]
+        count_cut=conn.execute('SELECT revision FROM changes ORDER BY seq DESC LIMIT 1 OFFSET 100000').fetchone()
+        if count_cut:cut=max(cut,count_cut[0])
+        if cut:
+            conn.execute('DELETE FROM changes WHERE revision<=?',(cut,))
+            conn.execute("UPDATE meta SET value=? WHERE key='floor'",(str(max(cut,int(meta['floor']))),))
+
+    def expire_changes(self):
+        with self.connection(write=True) as (conn,meta):
+            now=self.clock()
+            self._expire_changes(conn,meta,now)
+            conn.execute("UPDATE meta SET value=? WHERE key='clock'",(str(max(now,float(meta['clock']))),))
 
     def withdraw(self,source):
         from .team_store import ident

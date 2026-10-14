@@ -182,6 +182,22 @@ class TeamStore:
             conn.execute('INSERT INTO clock VALUES(1,?) ON CONFLICT(id) DO UPDATE SET ts=MAX(ts,excluded.ts)', (now,))
         return now
 
+    def expire_rate_history(self):
+        # Persist the control clock before deleting rate rows: a rollback or a
+        # failure between these databases must never make expired quota reusable.
+        with self.connection(write=True) as conn:
+            now=self.now(conn,record=True)
+        try:
+            with closing(sqlite3.connect(self.rate_path.resolve().as_uri()+'?mode=rw',uri=True,timeout=10)) as rates:
+                rates.execute('BEGIN IMMEDIATE')
+                if not RateLedger._schema_ready(rates):raise TeamError('team_rate_storage_invalid',503)
+                rates.execute('PRAGMA secure_delete=ON')
+                rates.execute('DELETE FROM visits WHERE ts<?',(now-172800,))
+                rates.execute('DELETE FROM publisher_visits WHERE ts<?',(now-MAX_PUBLISHER_WINDOW,))
+                rates.commit()
+        except sqlite3.Error as error:
+            raise TeamError('team_storage_unavailable',503) from error
+
     def audit(self, conn, tenant, actor, action, target):
         now = self.now(conn, record=True)
         conn.execute('INSERT INTO audit(ts,tenant,actor,action,target) VALUES(?,?,?,?,?)',

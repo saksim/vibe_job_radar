@@ -59,8 +59,8 @@ class TeamApplication:
                 raise TeamError('team_request_boundary',400)
             path=environ.get('PATH_INFO','');method=environ.get('REQUEST_METHOD','GET')
             if path=='/healthz' and method=='GET':
-                with self.store.connection():pass
-                with self.catalog.connection():pass
+                self.store.expire_rate_history()
+                self.catalog.expire_changes()
                 data={'status':'ready','schema_version':1}
             else:
                 auth=environ.get('HTTP_AUTHORIZATION','')
@@ -189,8 +189,8 @@ def main(argv=None):
         elif args.command=='backup':
             from .collection import writer_lock
             with writer_lock(args.data):
-                with store.connection():pass
-                with catalog.connection():pass
+                store.expire_rate_history()
+                catalog.expire_changes()
                 args.output.mkdir(mode=0o700,parents=True,exist_ok=False)
                 for name in ('control.sqlite','rates.sqlite','catalog.sqlite'):
                     with closing(sqlite3.connect((args.data/name).resolve().as_uri()+'?mode=ro',uri=True)) as source:

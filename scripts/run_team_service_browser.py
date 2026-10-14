@@ -34,7 +34,7 @@ from vibe_job_radar.workbench import LocalServer
 
 class ProxyFixtureTransport:
     def __init__(self,port):self.port=port
-    def json(self,url,*,method='GET',headers=None,payload=None):
+    def json(self,url,*,method='GET',headers=None,payload=None,error_codes=None):
         from urllib.parse import urlsplit
         assert urlsplit(url).netloc=='team.fixture.test'
         conn=http.client.HTTPConnection('127.0.0.1',self.port,timeout=10)
@@ -43,7 +43,11 @@ class ProxyFixtureTransport:
             conn.request(method,urlsplit(url).path,body=raw,headers={'Host':'team.fixture.test','X-Forwarded-Proto':'https',
                          **(headers or {}),**({'Content-Type':'application/json'} if raw is not None else {})})
             response=conn.getresponse();value=json.loads(response.read())
-            if response.status!=200:raise FetchError('http_'+str(response.status),retry_after=float(response.getheader('Retry-After') or 0))
+            if response.status!=200:
+                if (error_codes and set(value)=={'error'}
+                        and value['error'] in error_codes.get(response.status,())):
+                    raise FetchError(value['error'])
+                raise FetchError('http_'+str(response.status),retry_after=float(response.getheader('Retry-After') or 0))
             return value
         finally:conn.close()
 
