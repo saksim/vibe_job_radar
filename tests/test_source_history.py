@@ -125,6 +125,17 @@ class SourceHistoryTests(unittest.TestCase):
         self.assertEqual(self.history.path.read_bytes(), b"broken optional history")
         self.assertTrue(self.client.path.exists())
 
+    def test_truncated_history_cannot_restart_with_a_healthy_zero_total(self):
+        self.fetch()
+        self.history.path.write_bytes(b"")
+        self.now[0] += 601
+        result = self.fetch()
+        self.assertIn("来源历史无法保存", result["history_warning"])
+        self.assertEqual(result["returned_jobs"], 3)
+        with self.assertRaises(InputError):
+            self.client.history()
+        self.assertEqual(self.history.path.read_bytes(), b"")
+
     def test_clock_rollback_and_metadata_corruption_cannot_claim_freshness(self):
         self.fetch()
         self.now[0] -= 1

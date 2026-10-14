@@ -72,7 +72,7 @@ def _validate(value):
             if (counts["added"] + counts["updated"] + counts["unchanged"] != value["total"]
                     or counts["missing"] + counts["updated"] + counts["unchanged"] != counts["previous_total"]):
                 raise ValueError("observation count mismatch")
-        elif any(counts[key] for key in ("added", "updated", "missing", "unchanged")):
+        elif counts["previous_total"] is not None or any(counts[key] for key in ("added", "updated", "missing", "unchanged")):
             raise ValueError("baseline is not additions")
     elif counts is not None or value["change_status"] or value["shape_changed"]:
         raise ValueError("non-snapshot changes")
@@ -121,6 +121,7 @@ class SourceHistory:
     def remember(self, board, kind, at, *, snapshot=None, code="", payload=None):
         self._safe()
         self.root.mkdir(exist_ok=True, mode=0o700)
+        existed = self.path.exists()
         success = kind in {"snapshot", "not_modified"}
         change = snapshot.get("catalog_change") if kind == "snapshot" and snapshot else None
         value = dict(source=board.source.key, adapter=board.adapter_version, at=at, kind=kind,
@@ -132,9 +133,9 @@ class SourceHistory:
             counts=copy.deepcopy(change["counts"]) if change else None,
             shape=shape_fingerprint(payload) if kind == "snapshot" else "", shape_changed=False)
         try:
-            with closing(sqlite3.connect(self.path.resolve().as_uri() + "?mode=rwc", uri=True, timeout=5)) as connection:
+            with closing(sqlite3.connect(self.path.resolve().as_uri() + ("?mode=rw" if existed else "?mode=rwc"), uri=True, timeout=5)) as connection:
                 connection.execute("BEGIN IMMEDIATE")
-                self._schema(connection, create=True)
+                self._schema(connection, create=not existed)
                 if kind == "snapshot":
                     rows = connection.execute("SELECT payload FROM observations WHERE source=? ORDER BY seq DESC", (value["source"],))
                     for row in rows:
