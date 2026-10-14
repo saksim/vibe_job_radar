@@ -31,16 +31,19 @@ class QualityService:
         db = self.root / "history.sqlite"
         if db.is_symlink():
             raise InputError("质量复核历史不能使用符号链接。")
-        connection = sqlite3.connect(db, timeout=15)
+        existed = db.exists()
+        connection = sqlite3.connect(db.resolve().as_uri() + ("?mode=rw" if existed else "?mode=rwc"), uri=True, timeout=15)
         try:
-            connection.executescript("""
-                CREATE TABLE IF NOT EXISTS packets(
-                    report_id TEXT PRIMARY KEY, packet_name TEXT NOT NULL);
-                CREATE TABLE IF NOT EXISTS revisions(
-                    report_id TEXT NOT NULL, revision INTEGER NOT NULL,
-                    body TEXT NOT NULL, created_at TEXT NOT NULL,
-                    PRIMARY KEY(report_id, revision));
-            """)
+            connection.execute("BEGIN IMMEDIATE")
+            version = connection.execute("PRAGMA user_version").fetchone()[0]
+            tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            if not existed and version == 0 and not tables:
+                connection.execute("CREATE TABLE packets(report_id TEXT PRIMARY KEY, packet_name TEXT NOT NULL)")
+                connection.execute("CREATE TABLE revisions(report_id TEXT NOT NULL, revision INTEGER NOT NULL, body TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(report_id, revision))")
+                connection.execute("PRAGMA user_version=1")
+            elif version != 1 or tables != {"packets", "revisions"}:
+                raise InputError("质量复核历史损坏或版本不兼容；未重建或清空标注，请保留文件并检查工作区。")
+            connection.commit()
         except Exception:
             connection.close()
             raise
@@ -141,6 +144,25 @@ class QualityService:
                     annotations["documents"][index] = saved
                     return annotations
             raise InputError("标注记录不属于这份报告。")
+        return self._write(data, mutate)
+
+    def save_pair(self, data):
+        row = data.get("pair")
+        if not isinstance(row, dict) or not all(isinstance(row.get(key), str) for key in ("left", "right")):
+            raise InputError("请选择两份有效的 JD。")
+        if row.get("review_state") == "human_confirmed" and data.get("confirm_human") is not True:
+            raise InputError("文档对需要复核者本人明确确认；草稿不计入指标。")
+
+        def mutate(annotations):
+            saved = copy.deepcopy(row)
+            saved["reviewed_at"] = utc_now()
+            identity = tuple(sorted((saved["left"], saved["right"])))
+            for index, existing in enumerate(annotations["dedup_pairs"]):
+                if tuple(sorted((existing["left"], existing["right"]))) == identity:
+                    annotations["dedup_pairs"][index] = saved
+                    return annotations
+            annotations["dedup_pairs"].append(saved)
+            return annotations
         return self._write(data, mutate)
 
     def import_annotations(self, data):

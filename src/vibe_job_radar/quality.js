@@ -6,7 +6,8 @@ const reportId = fragment.get("report") || "";
 if (fragment.has("token")) sessionStorage.setItem("radar-session", token);
 history.replaceState(null, "", location.pathname + "#report=" + encodeURIComponent(reportId));
 $("back").href = "/#report=" + encodeURIComponent(reportId);
-let state = null, currentId = "", requirements = [], dirty = false, busy = false, offsets = [];
+let state = null, currentId = "", requirements = [], dirty = false, pairDirty = false, busy = false, offsets = [];
+let pairLeft = "", pairRight = "";
 const relationLabels = {direct:"明确 AI 辅助编程",contextual:"AI 辅助工程上下文",role_related:"普通岗位能力"};
 const strengthLabels = {required:"必须",expected:"职责 / 期望",preferred:"优先",not_required:"明确不要求",prohibited:"明确禁止",unspecified:"未明确强度"};
 const reviewLabels = {pending:"草稿 / 未确认", assistant_draft:"助手草稿", human_confirmed:"本人已确认"};
@@ -31,7 +32,7 @@ async function operation(action) {
   catch (error) { text("notice", error.message || "操作失败，当前输入仍保留。"); }
   finally { busy = false; controls.forEach((control,index) => { control.disabled = disabled[index]; }); }
 }
-function mayDiscard() { return !dirty || window.confirm("当前 JD 有未保存的修改。放弃这些修改并继续？"); }
+function mayDiscard() { return !(dirty || pairDirty) || window.confirm("当前 JD 或文档对有未保存的修改。放弃这些修改并继续？"); }
 function source() { return state.corpus.find(row => row.record_id === currentId); }
 function annotation() { return state.annotations.documents.find(row => row.record_id === currentId); }
 function sourceValue(original) {
@@ -91,7 +92,7 @@ function renderDocument(id) {
   $("relation").value = ""; $("strength").value = ""; text("selection","");
   renderRequirements(); dirty = false;
 }
-function show(next, id = currentId) {
+function show(next, id = currentId, preserve = {}) {
   state = next;
   $("summary").hidden = false; $("editor").hidden = !state.corpus.length;
   text("source-info", (state.source_mode === "synthetic_demo" ? "合成演示" : "真实样本") +
@@ -116,15 +117,18 @@ function show(next, id = currentId) {
     const row = state.annotations.documents.find(item => item.record_id === doc.record_id);
     $("document").append(new Option((row.review_state === "human_confirmed" ? "✓ " : "○ ") + doc.title,doc.record_id));
   }
-  if (state.corpus.length) renderDocument(state.corpus.some(row=>row.record_id===id) ? id : state.corpus[0].record_id);
-  else text("notice","这份报告没有可复核记录；原报告保持不变。");
+  if (state.corpus.length) {
+    if (!(preserve.document && dirty)) renderDocument(state.corpus.some(row=>row.record_id===id) ? id : state.corpus[0].record_id);
+    else $("document").value = currentId;
+  } else text("notice","这份报告没有可复核记录；原报告保持不变。");
+  if (!(preserve.pair && pairDirty)) renderPairs();
 }
 async function openReport() {
   const result = await request("/api/quality/open",{report_id:reportId});
   show(result); text("notice","已打开保存的质量复核；请选择 JD 独立标注。");
 }
 $("document").addEventListener("change", () => {
-  if (!mayDiscard()) { $("document").value = currentId; return; }
+  if (dirty && !window.confirm("当前 JD 有未保存的修改，放弃并切换？")) { $("document").value = currentId; return; }
   renderDocument($("document").value);
 });
 $("editor").addEventListener("input", event => {
@@ -157,14 +161,14 @@ async function save(confirmed) {
     notes:$("notes").value, requirements_complete:$("complete").checked, requirements};
   const result = await request("/api/quality/save",{report_id:reportId,expected_revision:state.revision,
     document:row,confirm_human:confirmed});
-  show(result);
+  show(result, currentId, {pair:true});
   text("notice",confirmed ? "已保存本人确认的新版本；指标只统计适用样本。" : "草稿已保存；尚未计入质量指标。");
 }
 $("save").addEventListener("click",()=>operation(()=>save(false)));
 $("confirm").addEventListener("click",()=>operation(()=>save(true)));
 $("reload").addEventListener("click",()=>{if(mayDiscard()) operation(openReport);});
 $("export").addEventListener("click",()=>operation(async()=>{
-  if (dirty) throw new Error("请先保存当前修改，再导出。");
+  if (dirty || pairDirty) throw new Error("请先保存当前 JD 和文档对的修改，再导出。");
   const response = await fetch("/api/quality/export/"+reportId+"/"+state.revision,{cache:"no-store",headers:{"X-Radar-Token":token}});
   if (!response.ok) { const result=await response.json(); throw new Error(result.error || "导出失败"); }
   const url=URL.createObjectURL(await response.blob()), link=document.createElement("a");
@@ -180,6 +184,73 @@ $("import").addEventListener("click",()=>operation(async()=>{
     expected_revision:state.revision,annotations_json,confirm_human:$("import-confirm").checked});
   show(result);$("import-confirm").checked=false;text("notice","离线标注已保存为新版本。");
 }));
-window.addEventListener("beforeunload",event=>{if(dirty){event.preventDefault();event.returnValue="";}});
+
+function documentLabel(doc) {
+  return [doc.title, doc.company, doc.location, doc.record_id.slice(0,8)].filter(Boolean).join(" · ");
+}
+function renderPairForm(left, right) {
+  pairLeft = left; pairRight = right;
+  $("pair-left").value = left; $("pair-right").value = right;
+  for (const side of ["left","right"]) {
+    const doc = state.corpus.find(row => row.record_id === (side === "left" ? left : right));
+    text("pair-"+side+"-text", doc?.text || "");
+    text("pair-"+side+"-meta", doc ? [doc.company,doc.location,doc.platform,doc.url,doc.source_ref].filter(Boolean).join(" · ") : "");
+  }
+  const row = state.annotations.dedup_pairs.find(item =>
+    (item.left === left && item.right === right) || (item.left === right && item.right === left));
+  $("pair-author").value = row?.author || "";
+  $("pair-notes").value = row?.notes || "";
+  $("pair-decision").value = row?.same_job === true ? "same" : row?.same_job === false ? "different" : "";
+  pairDirty = false;
+}
+function choosePair(left,right) {
+  if (pairDirty && !window.confirm("当前文档对有未保存的修改，放弃并切换？")) {
+    $("pair-left").value = pairLeft; $("pair-right").value = pairRight; return;
+  }
+  renderPairForm(left,right);
+}
+function renderPairs() {
+  $("pairs").hidden = false;
+  $("pair-content").hidden = state.corpus.length < 2;
+  text("pair-availability", state.corpus.length < 2 ? "此报告少于两份记录，无法构成文档对。" : "先独立裁决，再查看指标。原预测不预选为答案。");
+  for (const side of ["left","right"]) {
+    $("pair-"+side).replaceChildren();
+    for (const doc of state.corpus) $("pair-"+side).append(new Option(documentLabel(doc),doc.record_id));
+  }
+  const left = state.corpus.some(row=>row.record_id===pairLeft) ? pairLeft : state.corpus[0]?.record_id || "";
+  const right = state.corpus.some(row=>row.record_id===pairRight) ? pairRight : state.corpus[1]?.record_id || "";
+  renderPairForm(left,right);
+  $("pair-list").replaceChildren();
+  for (const row of state.annotations.dedup_pairs) {
+    const label = id => documentLabel(state.corpus.find(doc=>doc.record_id===id));
+    const block = document.createElement("div"); block.className = "requirement";
+    const description = document.createElement("p"); description.className = "quote";
+    description.textContent = label(row.left) + " ↔ " + label(row.right) + " · " + reviewLabels[row.review_state] +
+      " · " + (row.same_job === true ? "同一岗位" : row.same_job === false ? "不同岗位" : "尚未裁决");
+    const button = document.createElement("button"); button.type = "button"; button.className = "secondary";
+    button.textContent = "查看或修改此文档对";
+    button.addEventListener("click", () => choosePair(row.left,row.right));
+    block.append(description,button); $("pair-list").append(block);
+  }
+  if (!state.annotations.dedup_pairs.length) text("pair-list","尚未保存文档对；不会自动创建人工标签。");
+}
+for (const side of ["left","right"])
+  $("pair-"+side).addEventListener("change",()=>choosePair($("pair-left").value,$("pair-right").value));
+for (const id of ["pair-author","pair-notes","pair-decision"])
+  $(id).addEventListener("input",()=>{pairDirty=true;});
+async function savePair(confirmed) {
+  if (!pairLeft || !pairRight || pairLeft === pairRight) throw new Error("请选择两份不同的 JD。");
+  const author = $("pair-author").value.trim(), decision = $("pair-decision").value;
+  if (confirmed && (!author || !decision)) throw new Error("本人确认前请填写复核者并明确裁决。");
+  const pair = {left:pairLeft,right:pairRight,same_job:decision ? decision === "same" : null,
+    author,review_state:confirmed ? "human_confirmed" : "pending",reviewed_at:"",notes:$("pair-notes").value};
+  const result = await request("/api/quality/save_pair",{report_id:reportId,expected_revision:state.revision,pair,confirm_human:confirmed});
+  show(result,currentId,{document:true});
+  text("notice",confirmed ? "文档对已确认；指标只统计适用的完整正文对。" : "文档对草稿已保存，尚未计入指标。");
+}
+$("pair-save").addEventListener("click",()=>operation(()=>savePair(false)));
+$("pair-confirm").addEventListener("click",()=>operation(()=>savePair(true)));
+
+window.addEventListener("beforeunload",event=>{if(dirty || pairDirty){event.preventDefault();event.returnValue="";}});
 if (!/^[a-f0-9]{32}$/.test(reportId)) text("notice","请从工作台的具体报告进入质量复核。");
 else operation(openReport);

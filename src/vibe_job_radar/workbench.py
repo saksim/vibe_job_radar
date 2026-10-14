@@ -294,7 +294,7 @@ class Handler(BaseHTTPRequestHandler):
             methods = {"/api/guided/" + name: name for name in ("create", "action", "install", "check_browser", "diagnose", "export", "diagnostics")}
         elif route.startswith("/api/quality/"):
             target = self.server.quality
-            methods = {"/api/quality/" + name: name for name in ("open", "save", "import_annotations")}
+            methods = {"/api/quality/" + name: name for name in ("open", "save", "save_pair", "import_annotations")}
         elif route.startswith("/api/evidence/"):
             target = self.server.evidence
             methods = {"/api/evidence/" + name: name for name in ("state", "catalogue", "sources", "source", "review", "upload", "metric", "save", "remove", "generate")}

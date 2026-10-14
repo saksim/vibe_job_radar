@@ -115,6 +115,45 @@ class QualityUITests(unittest.TestCase):
         self.assertEqual(self.service.import_annotations(request)["revision"], 2)
         self.assert_original_unchanged()
 
+    def test_pairs_require_explicit_confirmation_replace_reverse_and_support_revoke(self):
+        initial = self.open()
+        records = [row["record_id"] for row in initial["corpus"] if row["dedup_eligible"] and row["text"] == TEXT]
+        pair = dict(left=records[0], right=records[1], same_job=True, review_state="pending",
+                    author="Synthetic pair reviewer", reviewed_at="", notes="Synthetic authored pair only")
+        request = dict(report_id=self.run, expected_revision=0, pair=pair)
+        draft = self.service.save_pair(request)
+        self.assertEqual(draft["evaluation"]["deduplication"]["comparable_human_pairs"], 0)
+        pair["review_state"] = "human_confirmed"
+        request["expected_revision"] = 1
+        with self.assertRaises(InputError):
+            self.service.save_pair(request)
+        request["confirm_human"] = True
+        confirmed = self.service.save_pair(request)
+        self.assertEqual(confirmed["evaluation"]["deduplication"]["comparable_human_pairs"], 1)
+        pair["left"], pair["right"] = pair["right"], pair["left"]
+        pair["review_state"] = "pending"
+        request["expected_revision"] = 2
+        revoked = self.service.save_pair(request)
+        self.assertEqual(len(revoked["annotations"]["dedup_pairs"]), 1)
+        self.assertEqual(revoked["evaluation"]["deduplication"]["comparable_human_pairs"], 0)
+        with self.assertRaises(Conflict):
+            self.service.save_pair(request)
+        request["expected_revision"] = 3
+        pair["right"] = pair["left"]
+        with self.assertRaises(ValueError):
+            self.service.save_pair(request)
+        self.assertEqual(self.open()["revision"], 3)
+        self.assert_original_unchanged()
+
+    def test_truncated_quality_database_is_not_recreated_as_blank_labels(self):
+        self.open()
+        database = self.service.root / "history.sqlite"
+        database.write_bytes(b"")
+        with self.assertRaises(InputError):
+            self.open()
+        self.assertEqual(database.read_bytes(), b"")
+        self.assert_original_unchanged()
+
     def test_corrupted_packet_is_rejected_and_input_paths_cannot_escape(self):
         initial = self.open()
         packet = next((self.service.root / self.run).iterdir())

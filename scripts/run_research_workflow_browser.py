@@ -223,6 +223,43 @@ def main() -> int:
                         expect(page.locator('#notice')).to_contain_text('未自动加载其他报告')
                         expect(page.locator('#source-run')).to_have_value('')
                         result['checks'].append('readable guide downloads, narrow-screen layout holds, invalid report never falls back to another batch')
+                        # A separate synthetic report supplies source pairs without
+                        # changing the original one-job research/evidence flow.
+                        sys.path.insert(0, str(ROOT / 'tests'))
+                        from test_quality_review import fixture_report, TEXT
+                        pair_run = 'b' * 32
+                        fixture_report(workspace.root / 'reports' / pair_run)
+                        pair_state = server.quality.open({'report_id':pair_run})
+                        records = [row['record_id'] for row in pair_state['corpus']
+                                   if row['dedup_eligible'] and row['text'] == TEXT]
+                        page.goto(server.origin + '/quality#report=' + pair_run)
+                        expect(page.locator('#pair-content')).to_be_visible()
+                        page.locator('#pair-left').select_option(records[0])
+                        page.locator('#pair-right').select_option(records[1])
+                        expect(page.locator('#pair-left-text')).to_have_text(TEXT)
+                        page.locator('#notes').fill('unsaved JD notes must survive pair save')
+                        page.locator('#pair-author').fill('人工去重夹具（非真人验收）')
+                        page.locator('#pair-decision').select_option('same')
+                        page.locator('#pair-save').click()
+                        expect(page.locator('#source-info')).to_contain_text('标注版本 1')
+                        expect(page.locator('#notes')).to_have_value('unsaved JD notes must survive pair save')
+                        page.locator('#pair-notes').fill('unsaved pair notes must survive JD save')
+                        page.locator('#save').click()
+                        expect(page.locator('#source-info')).to_contain_text('标注版本 2')
+                        expect(page.locator('#pair-notes')).to_have_value('unsaved pair notes must survive JD save')
+                        page.locator('#pair-confirm').click()
+                        expect(page.locator('#source-info')).to_contain_text('标注版本 3')
+                        expect(page.locator('#pair-list')).to_contain_text('本人已确认')
+                        actual = server.quality.open({'report_id':pair_run})
+                        assert actual['evaluation']['deduplication']['comparable_human_pairs'] == 1
+                        page.locator('#pair-save').click()
+                        expect(page.locator('#source-info')).to_contain_text('标注版本 4')
+                        actual = server.quality.open({'report_id':pair_run})
+                        assert actual['evaluation']['deduplication']['comparable_human_pairs'] == 0
+                        assert len(actual['annotations']['dedup_pairs']) == 1
+                        assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+                        page.locator('#pairs').screenshot(path=str(out / 'quality-pairs-mobile.png'))
+                        result['checks'].append('independent side-by-side pair review: draft, confirmation, revoke, preserve other unsaved editor and 390px layout; synthetic pair only')
                         assert not result['page_errors'], result['page_errors']
                         assert not result['external_browser_requests'], result['external_browser_requests']
                         result['success'] = True
