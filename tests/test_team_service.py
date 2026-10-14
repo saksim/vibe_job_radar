@@ -335,3 +335,20 @@ class TeamTests(unittest.TestCase):
         self.catalog.publish(fixture.REGISTRY,[fixture.job('old')],observed_at={'fixture':self.now[0]-8*86400})
         self.assertEqual(self.call('/v1/jobs/search',self.tokens['alice'],data=fixture.query().payload())[0],503)
         with self.assertRaises(TeamError):self.catalog.publish(fixture.REGISTRY,[fixture.job('old')],observed_at={'fixture':self.now[0]+3600})
+
+    def test_public_resources_keep_original_stricter_limits_across_devices(self):
+        site='greenhouse_public_example';origin='https://boards-api.greenhouse.io'
+        with self.assertRaisesRegex(TeamError,'team_limits_invalid'):
+            self.store.resource('group','catalog',site,[origin],limits=Limits())
+        self.store.resource('group','catalog',site,[origin])
+        for member in ['alice','bob']:self.store.grant('group',member,'catalog')
+        request={'resource':'catalog','site':site,'operation':'reserve','kind':'request','origin':origin}
+        self.store.quota(self.tokens['alice'],request)
+        self.now[0]+=20
+        with self.assertRaises(RateLimit):self.store.quota(self.tokens['bob'],request)
+        self.now[0]+=10
+        self.store.quota(self.tokens['bob'],request)
+        resource=next(r for r in self.store.state(self.tokens['bob'])['resources'] if r['id']=='catalog')
+        self.assertEqual(resource['limits']['requests_hour'],12)
+        self.assertEqual(resource['limits']['requests_day'],24)
+        self.assertEqual(resource['usage']['request']['day'],2)

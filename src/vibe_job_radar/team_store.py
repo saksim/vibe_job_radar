@@ -180,8 +180,10 @@ class TeamStore:
             origins = sorted({RateLedger._origin(origin) for origin in origins})
         except CrawlError as error:
             raise TeamError() from error
-        bounds = asdict(Limits())
-        values = asdict(limits or Limits())
+        baseline = (Limits(request_interval=30, requests_hour=12, requests_day=24)
+                    if site == 'greenhouse_public_example' else Limits())
+        bounds = asdict(baseline)
+        values = asdict(limits or baseline)
         # Operators can make the original product limits stricter, never larger.
         for key, value in values.items():
             if type(value) not in (int,float) or not math.isfinite(value) or value <= 0:

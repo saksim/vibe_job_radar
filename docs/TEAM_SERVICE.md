@@ -37,7 +37,7 @@ vibe-radar-service --data /var/lib/vibe-radar device --tenant research-team --me
 
 资源文件见 [示例](../deploy/team/resource.example.json)。origins 必须是适配器实际访问且管理员核对过的精确来源，示例不是所有动态请求的完整认证。未登记来源会停止；不会因此扩大原采集契约。资源创建后不允许更换站点、来源集合或放宽限额，避免把已有资源改成另一账号或退款。需要扩展配置时先停止任务，由管理员保留原配额并评审迁移。
 
-公开本机目录和单条案例共享 site=greenhouse_public_example，给这个资源登记两个固定接口 origin（https://boards-api.greenhouse.io、https://api.ashbyhq.com），limits.request_interval=30、requests_hour=12、requests_day=24；其余限额沿用示例。这不授予任何分发权。配置了团队模式但未绑定的平台会明确停止，管理员应列全需要的站点。
+公开本机目录和单条案例共享 site=greenhouse_public_example，给这个资源登记两个固定接口 origin（https://boards-api.greenhouse.io、https://api.ashbyhq.com），limits.request_interval=30、requests_hour=12、requests_day=24；其余限额沿用示例。中央服务也强制保留这组公开目录上限，管理员不能通过填写通用平台的较宽限额放松它。这不授予任何分发权。配置了团队模式但未绑定的平台会明确停止，管理员应列全需要的站点。
 
 凭据只写入指定的独占文件，不打印令牌。经安全渠道交给对应设备后撤下中转副本；不要把凭据提交 Git、贴进聊天、Issue 或浏览器 URL。新设备需单独发证。换证使用新 device 标识，撤销旧设备并重启客户端。
 
