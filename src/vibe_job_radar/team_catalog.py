@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import json
 import math
+import re
 import secrets
 import sqlite3
 import time
@@ -86,7 +87,9 @@ class TeamCatalog:
                 if names!={'meta','jobs','changes','sources'} or conn.execute('PRAGMA user_version').fetchone()[0]!=1:
                     raise TeamError('team_catalog_invalid',503)
                 meta=dict(conn.execute('SELECT key,value FROM meta'))
-                if set(meta)!={'revision','floor','clock','secret'} or len(meta['secret'])!=64:
+                if (set(meta)!={'revision','floor','clock','secret'}
+                        or not isinstance(meta['secret'],str)
+                        or re.fullmatch(r'[0-9a-fA-F]{64}',meta['secret']) is None):
                     raise TeamError('team_catalog_invalid',503)
                 now=self.clock()
                 if type(now) not in (int,float) or not math.isfinite(now) or now<float(meta['clock'])-1:
