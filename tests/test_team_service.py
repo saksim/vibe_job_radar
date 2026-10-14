@@ -363,7 +363,7 @@ class TeamTests(unittest.TestCase):
                 self.assertIsNone(conn.execute('SELECT id FROM devices WHERE id=?',('retry-pc',)).fetchone())
             self.assertFalse(destination.exists())
         token=self.store.issue('group','alice','retry-pc',output=output)
-        self.assertEqual(json.loads(output.read_text())['device_token'],token)
+        self.assertEqual(json.loads(output.read_text(encoding='utf-8'))['device_token'],token)
         self.assertEqual(self.store.state(token)['device'],'retry-pc')
 
     def test_failed_install_never_activates_partial_connection_and_can_retry(self):
@@ -417,3 +417,13 @@ class TeamTests(unittest.TestCase):
             policy=factory.call_args.kwargs['network_policy']
             self.assertEqual(policy.source,'explicit_workspace')
             self.assertEqual(policy.for_host('team.fixture.test').port,18765)
+
+    def test_snapshot_storage_limit_counts_utf8_bytes_and_rolls_back(self):
+        from vibe_job_radar.team_catalog import encoded
+        before=self.catalog.gateway().jobs
+        row=fixture.job('unicode',text='岗位要求'*100)
+        body=encoded(row);limit=(len(body)+len(body.encode('utf-8')))//2
+        with patch('vibe_job_radar.team_catalog.MAX_SNAPSHOT_BYTES',limit):
+            with self.assertRaisesRegex(TeamError,'team_snapshot_too_large'):
+                self.catalog.publish(fixture.REGISTRY,[row],observed_at={'fixture':self.now[0]})
+        self.assertEqual(self.catalog.gateway().jobs,before)

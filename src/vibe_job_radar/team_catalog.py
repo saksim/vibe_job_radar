@@ -18,6 +18,8 @@ from .public_gateway import PublicGateway
 from .team_store import TeamError, strict_json, safe_path
 from .utils import parse_time
 
+MAX_SNAPSHOT_BYTES=50_000_000
+
 
 def encoded(value):
     return json.dumps(value,sort_keys=True,ensure_ascii=False,allow_nan=False,separators=(',',':'))
@@ -25,7 +27,7 @@ def encoded(value):
 
 def read_snapshot(path):
     path=safe_path(Path(path))
-    if not path.is_file() or path.stat().st_size>50_000_000:
+    if not path.is_file() or path.stat().st_size>MAX_SNAPSHOT_BYTES:
         raise TeamError('team_snapshot_invalid')
     value=strict_json(path.read_bytes())
     if (not isinstance(value,dict) or set(value)-{'schema_version','sources','jobs','observed_at'}
@@ -137,7 +139,7 @@ class TeamCatalog:
                 # including unchanged/empty catalogs. It never fabricates jobs.
                 conn.execute('INSERT INTO changes(revision,source,id,kind,body,ts) VALUES(?,?,?,?,NULL,?)',
                              (revision,source.key,'','observed',now))
-            if conn.execute('SELECT COUNT(*) FROM jobs').fetchone()[0]>10000 or conn.execute('SELECT COALESCE(SUM(length(body)),0) FROM jobs').fetchone()[0]>50_000_000:
+            if conn.execute('SELECT COUNT(*) FROM jobs').fetchone()[0]>10000 or conn.execute('SELECT COALESCE(SUM(length(CAST(body AS BLOB))),0) FROM jobs').fetchone()[0]>MAX_SNAPSHOT_BYTES:
                 raise TeamError('team_snapshot_too_large')
             conn.execute("UPDATE meta SET value=? WHERE key='revision'",(str(revision),))
             conn.execute("UPDATE meta SET value=? WHERE key='clock'",(str(now),))
