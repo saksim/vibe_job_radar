@@ -16,7 +16,7 @@
 
 1. 在准备好的 Linux 主机上建立专用 radar 用户、/opt/vibe-radar/venv 环境和 /var/lib/vibe-radar（属主 radar，0700）。使用本次经过验证的发行源码安装 `pip install '.[service]'`；不要从浮动开发分支直接更新正在运行的服务。
 2. 以 radar 用户执行 `vibe-radar-service --data /var/lib/vibe-radar init`。该命令只用于不存在的新库；已有、缺失或损坏的运行库必须恢复完整备份，不能重新 init 清零配额。
-3. 复制 [service.example.json](../deploy/team/service.example.json) 为 /etc/vibe-radar/service.json，填写实际域名。应用始终监听127.0.0.1，仅信任该地址反向代理提供的协议头。必须配置 HTTPS 反向代理，否则 API 拒绝请求。
+3. 复制 [service.example.json](../deploy/team/service.example.json) 为 /etc/vibe-radar/service.json，填写实际域名；连接配置只接受域名，不接受IPv4/IPv6字面地址。应用始终监听127.0.0.1，仅信任该地址反向代理提供的协议头。必须配置 HTTPS 反向代理，否则 API 拒绝请求。
 4. 使用 [Caddyfile](../deploy/team/Caddyfile) 配置实际 RADAR_HOST；Caddy 终止 TLS 并转发到本机8766。只开放实际需要的80/443，不暴露后端端口。不要开启包含请求内容、Authorization 或查询文本的调试/访问日志。
 5. 审阅并安装 [systemd 服务](../deploy/team/vibe-radar-team.service)，再启动。使用 HTTPS /healthz 检查数据库就绪；认证 /v1/team/metrics 给管理员返回本组成员/有效设备/审计数量及进程运行时间。监控工具发现非200、进程退出、磁盘不足或连续刷新失败时通知运营者；本仓库不替用户购买监控或指定第三方消息收件人。
 
@@ -57,10 +57,12 @@ vibe-radar-team --workspace /path/to/workspace install --config client.json --cr
 Windows便携程序支持同一安装动作：
 
 ```powershell
-.\vibe-radar.exe --workspace D:\radar-data --team-install client.json --team-credential alice-device.json
+.\VibeJobRadar.exe --workspace D:\radar-data --team-install client.json --team-credential alice-device.json
 ```
 
 随后正常启动工作台。首页“团队服务与跨设备同步”可核对当前权限、同步目录和查看水位；展开面板只读本机设置，按按钮才联网。同步在后台执行，不占用原采集操作锁。普通查询仍使用原来源选择和报告入口，不在网页手工填 API Key 或令牌。
+
+安装先写入私有临时目录，全部文件完成后再一次性启用连接；中断不会激活半份连接。异常断电可能留下同工作区的 .team-install-* 私有暂存目录，可在停止程序后核对并移除，不要将其打包。团队请求沿用该工作区的代理/加密解析许可与网络会话规则。
 
 Windows将凭据保存为当前用户DPAPI密文；其他系统使用0700目录/0600文件，未声称磁盘加密。运行实例冻结配置与凭据摘要，更换文件后会停止而非悄悄换身份；重启后采用新配置。已知损坏连接不能被当作未配置服务自动回到直连。
 
@@ -93,7 +95,7 @@ vibe-radar-service --data /var/lib/vibe-radar withdraw --source greenhouse_anthr
 
 ## 留存、备份与回退
 
-配额不因设备撤销、成员删除或应用升级退款。原账本保留最近两天访问及最长366天发布方窗口；分发变更保留30天且最多10万事件，超过窗口的客户端明确要求完整同步。审计只含动作和不透明标识，保留90天且最多10万条，不存查询文本。到期令牌停止访问；管理员可执行 erase-member 删除其成员/设备/授权/水位及有关审计，资源配额保留。
+配额不因设备撤销、成员删除或应用升级退款。原账本保留最近两天访问及最长366天发布方窗口；分发变更保留30天且最多10万事件，超过窗口的客户端明确要求完整同步。审计只含动作和不透明标识，保留90天且最多10万条，不存查询文本；过期清理同时在后续读取、健康检查和备份前执行，不要求再发生管理事件。到期令牌停止访问；管理员可执行 erase-member 删除其成员/设备/授权/水位及有关审计，资源配额保留。
 
 停止服务和刷新任务，确认没有管理员并发写入，再运行 `backup --output /private/backup-directory`，会用SQLite备份接口保存control/rates/catalog三个库。备份包含凭据哈希和公开全文，应按相同权限保护；运营者为备份另定保留期并删除过期副本。恢复时整组恢复到停止的服务，不能只恢复较旧rates库制造额度。首次升级前保留工作区和服务完整备份。回退新服务须停止团队联网任务；保留中央账本与本机数据，不以移除.team连接规避共享限制。
 

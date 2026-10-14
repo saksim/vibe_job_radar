@@ -135,7 +135,7 @@ class LocalPublicDataClient:
             # entrypoints or query terms cannot reset its request budget.
             from .team_client import workspace_ledger
             self.ledger = workspace_ledger(self.workspace.root, rate_root / 'rates.sqlite',
-                Limits(request_interval=30, requests_hour=12, requests_day=24), clock=self.clock, local_factory=RateLedger)
+                Limits(request_interval=30, requests_hour=12, requests_day=24), clock=self.clock, local_factory=RateLedger, policy_factory=lambda:self.workspace.network_policy())
 
     def _scope(self, query):
         if (not isinstance(query, PublicQuery) or len(query.source_scope) != 1

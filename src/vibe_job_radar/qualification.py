@@ -35,7 +35,8 @@ def source_files(root: Path) -> dict[str, Path]:
             continue
         for path in base.rglob('*'):
             rel = path.relative_to(root)
-            if '.team' in rel.parts or path.name == 'credential.json' or path.name.endswith('-credential.json'):
+            if (any(part.lower()=='.team' or part.lower().startswith('.team-install-') for part in rel.parts)
+                    or path.name.lower() == 'credential.json' or path.name.lower().endswith(('-credential.json','-device.json'))):
                 raise ValueError('private team connection inside source payload')
             if '.radar-sessions' in rel.parts:
                 raise ValueError('private browser state inside source payload')
@@ -46,6 +47,12 @@ def source_files(root: Path) -> dict[str, Path]:
             if path.is_symlink():
                 raise ValueError('source file is a symlink')
             if path.is_file():
+                if path.suffix.lower()=='.json':
+                    try:value=json.loads(path.read_text(encoding='utf-8-sig'))
+                    except (ValueError,UnicodeError):value=None
+                    if isinstance(value,dict) and ('device_token' in value or
+                            value.get('scheme') in ('owner-file','windows-dpapi') and 'value' in value):
+                        raise ValueError('private team credential inside source payload')
                 if (path.name == '.env' or path.name.startswith('.env.') and path.name != '.env.example'
                         or path.suffix.lower() in {'.sqlite','.sqlite3','.db','.key','.p12','.pfx'}
                         or path.suffix.lower() == '.pem' and rel.as_posix() not in TEST_CERTIFICATES):

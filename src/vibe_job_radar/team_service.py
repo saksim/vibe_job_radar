@@ -17,7 +17,7 @@ from pathlib import Path
 from .guided.rate import Limits, RateLedger, RateLimit
 from .guided.contracts import CrawlError
 from .public_contract import ContractError, PublicQuery
-from .team_store import TeamError, TeamStore, strict_json, safe_path
+from .team_store import TeamError, TeamStore, strict_json, safe_path, private_json
 from .team_catalog import TeamCatalog, read_snapshot
 
 
@@ -88,20 +88,20 @@ class TeamApplication:
                     data=self.catalog.sync(who,value)
                     if data['complete']:self.store.sync_seen(token,value['source_scope'],data['revision'])
                 elif path in {'/v1/catalog/sources','/v1/jobs/search'} or re.fullmatch(r'/v1/jobs/[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+',path):
-                    gateway=self.catalog.gateway()
                     if path=='/v1/catalog/sources' and method=='GET':
                         state=self.store.state(token)
+                        gateway=self.catalog.gateway()
                         data={'schema_version':1,'sources':[{'id':s.key,'label':s.label,'domains':list(s.domains),'contract':s.contract}
                               for s in gateway.registry.values() if s.distribution_approved and s.key in state['sources']]}
                     elif path=='/v1/jobs/search' and method=='POST':
                         value=self._body(environ);query=PublicQuery.from_dict(value)
                         with self.store.connection() as conn:self.store.authorize(conn,who,list(query.source_scope))
-                        self.catalog.require_fresh(list(query.source_scope))
+                        gateway=self.catalog.gateway(fresh_sources=list(query.source_scope))
                         data=gateway.search(value)
                     elif path.startswith('/v1/jobs/') and method=='GET':
                         source,ident=path.removeprefix('/v1/jobs/').split('.')
                         with self.store.connection() as conn:self.store.authorize(conn,who,[source])
-                        self.catalog.require_fresh([source])
+                        gateway=self.catalog.gateway(fresh_sources=[source])
                         row=next((j for j in gateway.jobs if j['source']==source and j['id']==ident),None)
                         if row is None:raise TeamError('public_job_not_found',404)
                         from .utils import utc_now
@@ -123,13 +123,6 @@ class TeamApplication:
         start_response(f'{status} {reason}',[('Content-Type','application/json; charset=utf-8'),('Content-Length',str(len(body))),
                        ('Cache-Control','no-store'),('X-Content-Type-Options','nosniff'),*headers])
         return [body]
-
-
-def private_json(path,value):
-    path=Path(path);safe_path(path)
-    descriptor=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
-    with os.fdopen(descriptor,'w',encoding='utf-8') as stream:
-        json.dump(value,stream,ensure_ascii=False,indent=2);stream.write('\n')
 
 
 def serve(root,config):
@@ -181,8 +174,7 @@ def main(argv=None):
         elif args.command=='device':
             # Refuse an existing output before minting an otherwise orphaned token.
             if args.output.exists():raise TeamError('team_output_exists',409)
-            token=store.issue(args.tenant,args.member,args.device,days=args.days)
-            private_json(args.output,{'schema_version':1,'device_token':token})
+            store.issue(args.tenant,args.member,args.device,days=args.days,output=args.output)
         elif args.command=='revoke':store.revoke(args.tenant,args.device)
         elif args.command=='resource':
             value=strict_json(args.file.read_bytes())

@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import re
 import secrets
 import sqlite3
@@ -60,6 +61,33 @@ def safe_path(path):
         if Path(str(path) + suffix).is_symlink():
             raise TeamError('team_storage_unsafe', 503)
     return path
+
+
+def remove_private_file(path, identity):
+    path=Path(path)
+    try:
+        current=path.lstat()
+        if not path.is_symlink() and (current.st_dev,current.st_ino)==identity:
+            path.unlink()
+    except FileNotFoundError:pass
+
+
+def private_json(path,value):
+    path=Path(path);safe_path(path)
+    descriptor=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+    info=os.fstat(descriptor);identity=(info.st_dev,info.st_ino)
+    try:
+        with os.fdopen(descriptor,'w',encoding='utf-8') as stream:
+            json.dump(value,stream,ensure_ascii=False,indent=2);stream.write('\n')
+            stream.flush();os.fsync(stream.fileno())
+        if os.name!='nt':
+            parent=os.open(path.parent,os.O_RDONLY|os.O_DIRECTORY)
+            try:os.fsync(parent)
+            finally:os.close(parent)
+        return identity
+    except BaseException:
+        remove_private_file(path,identity)
+        raise
 
 
 class TeamStore:
@@ -116,6 +144,17 @@ class TeamStore:
                 with closing(sqlite3.connect(self.rate_path.resolve().as_uri()+'?mode=ro',uri=True,timeout=10)) as rates:
                     if not RateLedger._schema_ready(rates):
                         raise TeamError('team_rate_storage_invalid',503)
+                # Expiry also runs on reads/health checks/backups, even when no
+                # later administrative event is recorded. Only overdue rows
+                # require a write transaction.
+                cutoff=self.now(conn)-90*86400
+                if conn.execute('SELECT 1 FROM audit WHERE ts<? LIMIT 1',(cutoff,)).fetchone():
+                    if not write:
+                        conn.rollback();conn.execute('BEGIN IMMEDIATE')
+                    conn.execute('PRAGMA secure_delete=ON')
+                    conn.execute('DELETE FROM audit WHERE ts<?',(cutoff,))
+                    if not write:
+                        conn.commit();conn.execute('BEGIN')
                 yield conn
                 if write:
                     conn.commit()
@@ -148,22 +187,29 @@ class TeamStore:
                          'DO UPDATE SET role=excluded.role,active=excluded.active', (tenant, member, role, int(active)))
             self.audit(conn, tenant, 'operator', 'member_changed', member)
 
-    def issue(self, tenant, member, device, *, days=30):
+    def issue(self, tenant, member, device, *, days=30, output=None):
         ident(tenant); ident(member); ident(device)
         if type(days) is not int or not 1 <= days <= 90:
             raise TeamError()
         token = 'vjr_' + secrets.token_urlsafe(32)
-        with self.connection(write=True) as conn:
-            if not conn.execute('SELECT 1 FROM members WHERE tenant=? AND member=? AND active=1',
-                                (tenant, member)).fetchone():
-                raise TeamError('team_member_missing', 404)
-            if conn.execute('SELECT 1 FROM devices WHERE id=?', (device,)).fetchone():
-                raise TeamError('team_device_exists', 409)
-            expires = self.now(conn, record=True) + days*86400
-            conn.execute('INSERT INTO devices VALUES(?,?,?,?,?,0)',
-                         (device, tenant, member, hashlib.sha256(token.encode()).hexdigest(), expires))
-            self.audit(conn, tenant, 'operator', 'device_issued', device)
-        return token
+        identity=None
+        try:
+            with self.connection(write=True) as conn:
+                if not conn.execute('SELECT 1 FROM members WHERE tenant=? AND member=? AND active=1',
+                                    (tenant, member)).fetchone():
+                    raise TeamError('team_member_missing', 404)
+                if conn.execute('SELECT 1 FROM devices WHERE id=?', (device,)).fetchone():
+                    raise TeamError('team_device_exists', 409)
+                expires = self.now(conn, record=True) + days*86400
+                conn.execute('INSERT INTO devices VALUES(?,?,?,?,?,0)',
+                             (device, tenant, member, hashlib.sha256(token.encode()).hexdigest(), expires))
+                self.audit(conn, tenant, 'operator', 'device_issued', device)
+                if output is not None:
+                    identity=private_json(output,{'schema_version':1,'device_token':token})
+            return token
+        except BaseException:
+            if identity is not None:remove_private_file(output,identity)
+            raise
 
     def revoke(self, tenant, device):
         ident(tenant); ident(device)

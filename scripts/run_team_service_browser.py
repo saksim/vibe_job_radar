@@ -61,12 +61,14 @@ def child(args):
 def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--browser-executable')
+    parser.add_argument('--out',type=Path,help='Fresh output directory for an independent evidence run')
     parser.add_argument('--child',action='store_true');parser.add_argument('--port',type=int)
     parser.add_argument('--workspace',type=Path);parser.add_argument('--action')
     args=parser.parse_args()
     if args.child:return child(args)
     from playwright.sync_api import sync_playwright,expect
-    out=ROOT/'browser-acceptance/team';out.mkdir(parents=True,exist_ok=True)
+    from vibe_job_radar.qualification import output_directory
+    out=output_directory(ROOT,args.out or ROOT/'browser-acceptance/team');out.mkdir(parents=True,exist_ok=True)
     result={'success':False,'checks':[],'page_errors':[],'external_requests':[],
             'scope':'Actual Waitress, two client processes, Edge/Chromium UI and original reports; artificial JDs, loopback proxy envelope; not real TLS/domain/site acceptance.'}
     process=None;server=None;worker=None
@@ -155,7 +157,9 @@ def main():
         if server is not None:server.shutdown();server.server_close()
         if worker is not None:worker.join(10)
         if process is not None and process.poll() is None:process.terminate();process.communicate(timeout=10)
-        (out/'result.json').write_text(json.dumps(result,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+        try:(out/'result.json').write_text(json.dumps(result,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+        except OSError:
+            result['success']=False;result['evidence_error']='result_file_unwritable'
         print(json.dumps(result,ensure_ascii=False,indent=2))
     return 0 if result['success'] else 1
 

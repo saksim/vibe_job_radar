@@ -73,7 +73,7 @@ class PublicExample:
         # Persistent per-workspace quota; the endpoint never accepts URL/Key/board input.
         from .team_client import workspace_ledger
         self.ledger = workspace_ledger(workspace.root, self.root/'rates.sqlite', Limits(request_interval=30,
-                                                                 requests_hour=12, requests_day=24), local_factory=RateLedger)
+                                                                 requests_hour=12, requests_day=24), local_factory=RateLedger, policy_factory=lambda:workspace.network_policy())
 
     def run(self, data):
         if set(data) != {'consent'} or data.get('consent') is not True:

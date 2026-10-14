@@ -166,23 +166,29 @@ class TeamCatalog:
             conn.execute("UPDATE meta SET value=? WHERE key='clock'",(str(self.clock()),))
         return {'schema_version':1,'withdrawn':source,'revision':revision}
 
-    def source_state(self,sources):
-        with self.connection() as (conn,meta):
-            result=[]
-            for source in sources:
-                row=conn.execute('SELECT observed,revision FROM sources WHERE id=?',(source,)).fetchone()
-                result.append({'source':source,'observed_at':row['observed'] if row else None,
-                               'revision':row['revision'] if row else None,
-                               'stale':not row or self.clock()-row['observed']>7*86400})
-            return result
+    def _source_state(self,conn,sources):
+        result=[]
+        for source in sources:
+            row=conn.execute('SELECT observed,revision FROM sources WHERE id=?',(source,)).fetchone()
+            result.append({'source':source,'observed_at':row['observed'] if row else None,
+                           'revision':row['revision'] if row else None,
+                           'stale':not row or row['observed']<=0 or self.clock()-row['observed']>7*86400})
+        return result
 
-    def require_fresh(self,sources):
-        state=self.source_state(sources)
+    def source_state(self,sources):
+        with self.connection() as (conn,meta):return self._source_state(conn,sources)
+
+    def _require_fresh(self,conn,sources):
+        state=self._source_state(conn,sources)
         if any(s['observed_at'] is None for s in state):raise TeamError('team_distribution_unapproved',403)
         if any(s['stale'] for s in state):raise TeamError('team_catalog_stale',503)
 
-    def gateway(self):
+    def require_fresh(self,sources):
+        with self.connection() as (conn,meta):self._require_fresh(conn,sources)
+
+    def gateway(self,*,fresh_sources=None):
         with self.connection() as (conn,meta):
+            if fresh_sources is not None:self._require_fresh(conn,fresh_sources)
             registry=self.registry(conn)
             return PublicGateway(registry,[json.loads(r[0]) for r in conn.execute('SELECT body FROM jobs')],
                                  cursor_secret=bytes.fromhex(meta['secret']),clock=self.clock)
@@ -200,8 +206,8 @@ class TeamCatalog:
         if (type(after) is not int or after<0 or type(limit) is not int or not 1<=limit<=50
                 or not isinstance(cursor,str) or len(cursor)>4096):raise TeamError()
         scope=sorted(sources)
-        self.require_fresh(scope)
         with self.connection() as (conn,meta):
+            self._require_fresh(conn,scope)
             registry=self.registry(conn)
             if any(s not in registry or not registry[s].distribution_approved for s in scope):
                 raise TeamError('team_distribution_unapproved',403)

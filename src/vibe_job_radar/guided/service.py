@@ -207,7 +207,7 @@ class GuidedService:
         self.registry, self.factory = registry or builtins(), backend_factory
         self.native_factory = native_backend_factory
         from ..team_client import workspace_ledger
-        self.ledger = ledger or workspace_ledger(workspace.root, self.root / 'rates.sqlite', local_factory=RateLedger)
+        self.ledger = ledger or workspace_ledger(workspace.root, self.root / 'rates.sqlite', local_factory=RateLedger, policy_factory=lambda:workspace.network_policy())
         self._lock = threading.RLock()
         self._ownership=Ownership(self.root)
         self._owner_depth=0

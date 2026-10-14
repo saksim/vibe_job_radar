@@ -244,7 +244,7 @@ class TeamTests(unittest.TestCase):
 
     def test_member_erasure_revokes_tokens_without_refunding_resource_quota(self):
         client=self.connection('alice');client.reserve('liepin','page')
-        with patch('sys.stdout',new=io.StringIO()):
+        with patch('sys.stdout',new=io.StringIO()),patch('vibe_job_radar.team_service.TeamStore',return_value=self.store):
             result=service_main(['--data',str(self.root/'service'),'erase-member','--tenant','group','--member','alice'])
         self.assertEqual(result,0);self.assertEqual(self.call('/v1/team/state',self.tokens['alice'])[0],401)
         self.assertEqual(self.store.quota(self.tokens['bob'],{'resource':'account','site':'liepin','operation':'summary'})['result']['page']['day'],1)
@@ -352,3 +352,68 @@ class TeamTests(unittest.TestCase):
         self.assertEqual(resource['limits']['requests_hour'],12)
         self.assertEqual(resource['limits']['requests_day'],24)
         self.assertEqual(resource['usage']['request']['day'],2)
+
+    def test_failed_device_export_rolls_back_and_allows_same_device_id(self):
+        output=self.root/'retry-device.json'
+        for destination in [self.root/'missing/retry-device.json',output]:
+            with patch('vibe_job_radar.team_store.os.fsync',side_effect=OSError('fixture disk failure')):
+                with self.assertRaises(OSError):
+                    self.store.issue('group','alice','retry-pc',output=destination)
+            with self.store.connection() as conn:
+                self.assertIsNone(conn.execute('SELECT id FROM devices WHERE id=?',('retry-pc',)).fetchone())
+            self.assertFalse(destination.exists())
+        token=self.store.issue('group','alice','retry-pc',output=output)
+        self.assertEqual(json.loads(output.read_text())['device_token'],token)
+        self.assertEqual(self.store.state(token)['device'],'retry-pc')
+
+    def test_failed_install_never_activates_partial_connection_and_can_retry(self):
+        self.connection('alice');destination=self.root/'new-workspace'
+        config=self.root/'alice-config.json';credential=self.root/'alice-credential.json'
+        with patch('vibe_job_radar.team_store.os.fsync',side_effect=OSError('fixture disk failure')):
+            with self.assertRaises(OSError):install_connection(destination,config,credential)
+        self.assertFalse(local_state(destination)['configured'])
+        self.assertFalse((destination/'.team').exists())
+        install_connection(destination,config,credential)
+        client=TeamConnection(destination,transport=self.http)
+        self.assertEqual(client.request('/v1/team/state')['member'],'alice')
+
+    def test_concurrent_refresh_cannot_lend_freshness_to_older_gateway_rows(self):
+        self.now[0]+=8*86400
+        original=self.app.catalog.gateway
+        def refresh_after_loading(**kwargs):
+            gateway=original(**kwargs)
+            self.catalog.publish(fixture.REGISTRY,[fixture.job('new')],observed_at={'fixture':self.now[0]})
+            return gateway
+        # Reproduce a publish at the former gap between loading rows and a
+        # separate metadata check. An already stale snapshot must not escape.
+        with patch.object(self.app.catalog,'gateway',side_effect=refresh_after_loading):
+            for path,data in [('/v1/jobs/search',fixture.query().payload()),('/v1/jobs/fixture.one',None)]:
+                status,body,_=self.call(path,self.tokens['alice'],data=data)
+                self.assertEqual(status,503);self.assertEqual(body['error'],'team_catalog_stale')
+
+    def test_health_read_expires_audit_without_another_management_event(self):
+        with closing(sqlite3.connect(self.store.path)) as conn:
+            self.assertGreater(conn.execute('SELECT COUNT(*) FROM audit').fetchone()[0],0)
+        self.now[0]+=91*86400
+        self.assertEqual(self.call('/healthz')[0],200)
+        with closing(sqlite3.connect(self.store.path)) as conn:
+            self.assertEqual(conn.execute('SELECT COUNT(*) FROM audit').fetchone()[0],0)
+
+    def test_connection_requires_a_domain_instead_of_persisting_an_invalid_ip_origin(self):
+        from vibe_job_radar.team_client import origin
+        for value in ['https://[2606:4700:4700::1111]','https://8.8.8.8']:
+            with self.assertRaisesRegex(TeamError,'team_connection_invalid'):origin(value)
+        self.assertEqual(origin('https://team.fixture.test:443/'),'https://team.fixture.test')
+
+    def test_team_panel_uses_its_workspace_proxy_policy(self):
+        import os
+        from vibe_job_radar.team_client import TeamUI
+        self.connection('alice')
+        workspace=Workspace(self.root/'alice');self.addCleanup(workspace.close_network)
+        with patch.dict(os.environ,{},clear=True):
+            workspace.network_proxy_preferences({'mode':'http','endpoint':'http://127.0.0.1:18765','revision':0,'consent':True})
+            with patch('vibe_job_radar.team_client.SafeHTTP',return_value=self.http) as factory:
+                self.assertEqual(TeamUI(workspace).check({'consent':True})['member'],'alice')
+            policy=factory.call_args.kwargs['network_policy']
+            self.assertEqual(policy.source,'explicit_workspace')
+            self.assertEqual(policy.for_host('team.fixture.test').port,18765)
