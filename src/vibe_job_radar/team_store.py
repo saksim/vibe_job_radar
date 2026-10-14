@@ -422,5 +422,7 @@ class TeamStore:
             who=self.principal(conn,token)
             if who['role'] != 'admin':raise TeamError('team_forbidden',403)
             return {'schema_version':1,'members':conn.execute('SELECT COUNT(*) FROM members WHERE tenant=? AND active=1',(who['tenant'],)).fetchone()[0],
-                    'devices':conn.execute('SELECT COUNT(*) FROM devices WHERE tenant=? AND revoked=0 AND expires>?',(who['tenant'],self.now(conn))).fetchone()[0],
+                    'devices':conn.execute('SELECT COUNT(*) FROM devices d JOIN members m ON d.tenant=m.tenant AND d.member=m.member '
+                                           'WHERE d.tenant=? AND m.active=1 AND d.revoked=0 AND d.expires>?',
+                                           (who['tenant'],self.now(conn))).fetchone()[0],
                     'recent_audit_events':conn.execute('SELECT COUNT(*) FROM audit WHERE tenant=?',(who['tenant'],)).fetchone()[0]}

@@ -168,6 +168,24 @@ class TeamTests(unittest.TestCase):
         self.assertEqual(self.call('/v1/team/metrics',self.tokens['bob'])[0],403)
         self.assertEqual(self.call('/v1/team/metrics',self.tokens['alice'])[0],200)
 
+    def test_metrics_count_only_devices_of_active_members_in_the_same_tenant(self):
+        admin=self.store.issue('group','alice','admin-long',days=90)
+        self.store.issue('group','reader','short-device',days=1)
+        self.store.member('other','bob','collector')
+        self.store.issue('other','bob','other-bob')
+        client=self.connection('alice')
+        self.assertEqual(client.request('/v1/team/metrics')['devices'],5)
+        self.store.member('group','bob','collector',active=False)
+        self.assertEqual(client.request('/v1/team/metrics')['devices'],4)
+        self.assertEqual(self.call('/v1/team/state',self.tokens['bob'])[0],401)
+        self.store.revoke('group','reader-pc')
+        self.assertEqual(client.request('/v1/team/metrics')['devices'],3)
+        self.now[0]+=2*86400
+        self.assertEqual(self.call('/v1/team/metrics',admin)[1]['devices'],2)
+        self.store.member('group','bob','collector',active=True)
+        self.assertEqual(self.call('/v1/team/metrics',admin)[1]['devices'],3)
+        self.assertEqual(self.call('/v1/team/state',self.tokens['bob'])[0],200)
+
     def test_revocation_expiry_and_member_disable_apply_to_existing_clients(self):
         client=self.connection('alice');self.assertEqual(client.request('/v1/team/state')['member'],'alice')
         self.store.revoke('group','alice-pc')
