@@ -258,6 +258,41 @@ class TeamTests(unittest.TestCase):
         upgraded=json.loads(path.read_text(encoding='utf-8'))
         self.assertEqual(upgraded['schema_version'],2);self.assertEqual(upgraded['jobs'],saved['jobs'])
 
+    def test_unchanged_observation_keeps_full_and_delta_clients_convergent(self):
+        from datetime import timedelta
+        from vibe_job_radar.utils import parse_time
+        a=self.connection('alice');b=self.connection('bob')
+        TeamSync(self.root/'alice',connection=a).run()
+        original=self.catalog.gateway().jobs;updated=copy.deepcopy(original)
+        for job in updated:job['collected_at']=(parse_time(job['collected_at'])+timedelta(seconds=1)).isoformat()
+        self.now[0]+=16;observed=self.now[0]
+        result=self.catalog.publish(fixture.REGISTRY,updated,observed_at={'fixture':observed})
+        self.assertEqual(result['changed'],0)
+        delta=TeamSync(self.root/'alice',connection=a).run()
+        full=TeamSync(self.root/'bob',connection=b).run()
+        self.assertEqual(delta['revision'],full['revision']);self.assertTrue(delta['acknowledged'])
+        for member in ('alice','bob'):
+            saved=json.loads((self.root/member/'team_sync/snapshot.json').read_text(encoding='utf-8'))
+            self.assertEqual(saved['jobs'],original)
+        self.assertEqual(self.catalog.source_state(['fixture'])[0]['observed_at'],observed)
+
+    def test_aggregate_capacity_includes_gateway_framing_across_sources(self):
+        from dataclasses import replace
+        from vibe_job_radar.team_catalog import encoded
+        from vibe_job_radar.public_gateway import encode_snapshot
+        before=self.catalog.gateway().jobs
+        source=replace(fixture.SOURCE,key='another');row={**fixture.job('three'),'source':'another'}
+        aggregate=before+[row]
+        compact=sum(len(encoded(job).encode('utf-8')) for job in aggregate)
+        limit=(compact+len(encode_snapshot(aggregate)))//2
+        self.assertLess(compact,limit)
+        with patch('vibe_job_radar.team_catalog.MAX_SNAPSHOT_BYTES',limit):
+            with self.assertRaisesRegex(TeamError,'team_snapshot_too_large'):
+                self.catalog.publish({'another':source},[row],observed_at={'another':self.now[0]})
+        self.assertEqual(self.catalog.gateway().jobs,before)
+        with self.catalog.connection() as (conn,meta):
+            self.assertEqual(meta['revision'],'1');self.assertNotIn('another',self.catalog.registry(conn))
+
     def test_public_query_enters_the_original_task_and_report_pipeline(self):
         import time
         connection=self.connection('alice',public=True);workspace=Workspace(self.root/'alice')

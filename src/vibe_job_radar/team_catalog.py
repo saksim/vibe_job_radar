@@ -14,7 +14,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from .public_contract import PublicSource, checked_registry
-from .public_gateway import PublicGateway
+from .public_gateway import PublicGateway, encode_snapshot
 from .team_store import TeamError, strict_json, safe_path
 from .utils import parse_time, utc_now
 
@@ -123,9 +123,12 @@ class TeamCatalog:
                     body=encoded(job)
                     digest=hashlib.sha256(encoded({k:v for k,v in job.items() if k!='collected_at'}).encode()).hexdigest()
                     kind='added' if ident not in old else 'changed' if old[ident]['digest']!=digest else None
-                    conn.execute('INSERT INTO jobs VALUES(?,?,?,?) ON CONFLICT(source,id) DO UPDATE SET body=excluded.body,digest=excluded.digest',
-                                 (source.key,ident,body,digest))
                     if kind:
+                        # An unchanged body keeps its original collection time;
+                        # source observation time advances separately. Full and
+                        # delta clients must converge at the same revision.
+                        conn.execute('INSERT INTO jobs VALUES(?,?,?,?) ON CONFLICT(source,id) DO UPDATE SET body=excluded.body,digest=excluded.digest',
+                                     (source.key,ident,body,digest))
                         conn.execute('INSERT INTO changes(revision,source,id,kind,body,ts) VALUES(?,?,?,?,?,?)',
                                      (revision,source.key,ident,kind,body,now));counts[kind]+=1
                 for ident in old.keys()-current.keys():
@@ -139,7 +142,12 @@ class TeamCatalog:
                 # including unchanged/empty catalogs. It never fabricates jobs.
                 conn.execute('INSERT INTO changes(revision,source,id,kind,body,ts) VALUES(?,?,?,?,NULL,?)',
                              (revision,source.key,'','observed',now))
-            if conn.execute('SELECT COUNT(*) FROM jobs').fetchone()[0]>10000 or conn.execute('SELECT COALESCE(SUM(length(CAST(body AS BLOB))),0) FROM jobs').fetchone()[0]>MAX_SNAPSHOT_BYTES:
+            if conn.execute('SELECT COUNT(*) FROM jobs').fetchone()[0]>10000:
+                raise TeamError('team_snapshot_too_large')
+            # Include all sources and the gateway's exact UTF-8 JSON framing,
+            # separators and whitespace before committing a usable catalog.
+            aggregate=[json.loads(row[0]) for row in conn.execute('SELECT body FROM jobs')]
+            if len(encode_snapshot(aggregate))>MAX_SNAPSHOT_BYTES:
                 raise TeamError('team_snapshot_too_large')
             conn.execute("UPDATE meta SET value=? WHERE key='revision'",(str(revision),))
             conn.execute("UPDATE meta SET value=? WHERE key='clock'",(str(now),))
