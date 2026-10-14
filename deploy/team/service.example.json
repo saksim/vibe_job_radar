@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "host": "radar.example.com",
+  "port": 8766,
+  "threads": 4,
+  "connection_limit": 32
+}

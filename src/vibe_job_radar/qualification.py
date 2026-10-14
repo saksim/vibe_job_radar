@@ -15,7 +15,7 @@ from pathlib import Path
 ROOT_FILES = {'README.md','README_CLI.md','START_HERE.html','LICENSE','pyproject.toml',
               'start_windows.bat','start_macos.command','get_real_example_windows.bat',
               '.env.example','.gitattributes','.gitignore'}
-SOURCE_DIRS = {'src','scripts','tests','docs','examples','demo_output','.github'}
+SOURCE_DIRS = {'src','scripts','tests','docs','examples','demo_output','.github','deploy'}
 TEST_CERTIFICATES = {'tests/fixtures/connection_test_only.pem',
                      'tests/fixtures/encrypted_dns_test_only.pem'}
 CHECKS = ('unit-tests', 'user-guide', 'offline-demo', 'source-doctor')
@@ -35,6 +35,9 @@ def source_files(root: Path) -> dict[str, Path]:
             continue
         for path in base.rglob('*'):
             rel = path.relative_to(root)
+            if (any(part.lower()=='.team' or part.lower().startswith('.team-install-') for part in rel.parts)
+                    or path.name.lower() == 'credential.json' or path.name.lower().endswith(('-credential.json','-device.json'))):
+                raise ValueError('private team connection inside source payload')
             if '.radar-sessions' in rel.parts:
                 raise ValueError('private browser state inside source payload')
             if '.radar-acceptance' in rel.parts:
@@ -44,6 +47,12 @@ def source_files(root: Path) -> dict[str, Path]:
             if path.is_symlink():
                 raise ValueError('source file is a symlink')
             if path.is_file():
+                if path.suffix.lower()=='.json':
+                    try:value=json.loads(path.read_text(encoding='utf-8-sig'))
+                    except (ValueError,UnicodeError):value=None
+                    if isinstance(value,dict) and ('device_token' in value or
+                            value.get('scheme') in ('owner-file','windows-dpapi') and 'value' in value):
+                        raise ValueError('private team credential inside source payload')
                 if (path.name == '.env' or path.name.startswith('.env.') and path.name != '.env.example'
                         or path.suffix.lower() in {'.sqlite','.sqlite3','.db','.key','.p12','.pfx'}
                         or path.suffix.lower() == '.pem' and rel.as_posix() not in TEST_CERTIFICATES):

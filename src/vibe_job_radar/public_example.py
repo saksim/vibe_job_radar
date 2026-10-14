@@ -71,8 +71,9 @@ class PublicExample:
         self.client = transport or SafeHTTP({'boards-api.greenhouse.io'}, timeout=15,
                                             max_bytes=500000, interval=2, network_policy=workspace.network_policy())
         # Persistent per-workspace quota; the endpoint never accepts URL/Key/board input.
-        self.ledger = RateLedger(self.root/'rates.sqlite', Limits(request_interval=30,
-                                                                 requests_hour=12, requests_day=24))
+        from .team_client import workspace_ledger
+        self.ledger = workspace_ledger(workspace.root, self.root/'rates.sqlite', Limits(request_interval=30,
+                                                                 requests_hour=12, requests_day=24), local_factory=RateLedger, policy_factory=lambda:workspace.network_policy())
 
     def run(self, data):
         if set(data) != {'consent'} or data.get('consent') is not True:
@@ -96,7 +97,7 @@ class PublicExample:
                         'report': report, 'message': '复用10分钟内的真实获取结果，不重复请求；获取时间保持原值。'}
         try:
             check_cancelled(self.cancelled)
-            self.ledger.reserve('greenhouse_public_example', 'request')
+            self.ledger.reserve('greenhouse_public_example', 'request', origin='https://boards-api.greenhouse.io')
         except RateLimit as exc:
             raise InputError(f'真实案例请求过密，请至少等待 {int(exc.wait)+1} 秒；不会自动重试。') from exc
         audit = {'id': uuid.uuid4().hex, 'source_url': SOURCE_URL, 'api_url': API_URL,

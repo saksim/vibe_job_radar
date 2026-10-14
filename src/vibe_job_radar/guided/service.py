@@ -185,6 +185,16 @@ MESSAGES.update({
 })
 
 
+MESSAGES.update({
+    'team_unavailable': '团队配额服务不可达，本次联网已停止。恢复连接后再继续；额度不会清空。',
+    'team_rate_wait': '团队共享额度暂不可用，请等待后再明确继续。',
+    'team_unauthorized': '此设备的团队凭据已到期或撤销，请联系管理员重新登记。',
+    'team_forbidden': '当前成员或设备没有该账号资源的采集权限。',
+    'team_resource_unconfigured': '该平台尚未绑定团队账号资源，请由管理员配置后重启。',
+    'team_connection_invalid': '本机团队连接损坏，已停止联网；原岗位和报告保留。',
+    'team_connection_changed': '团队连接已更改，请停止当前任务并重启工作台。',
+})
+
 class GuidedService:
     def __init__(self, workspace, *, registry: Registry | None = None, backend_factory=PlaywrightBackend,
                  ledger: RateLedger | None = None, health_probe=probe_browser, installer=run_command,
@@ -196,7 +206,8 @@ class GuidedService:
             raise InputError('向导目录不能使用符号链接。')
         self.registry, self.factory = registry or builtins(), backend_factory
         self.native_factory = native_backend_factory
-        self.ledger = ledger or RateLedger(self.root / 'rates.sqlite')
+        from ..team_client import workspace_ledger
+        self.ledger = ledger or workspace_ledger(workspace.root, self.root / 'rates.sqlite', local_factory=RateLedger, policy_factory=lambda:workspace.network_policy())
         self._lock = threading.RLock()
         self._ownership=Ownership(self.root)
         self._owner_depth=0

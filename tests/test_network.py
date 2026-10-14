@@ -164,3 +164,25 @@ class FetchTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ServiceErrorTests(unittest.TestCase):
+    def test_only_bounded_opted_in_error_codes_leave_the_transport(self):
+        url='https://team.fixture.test/v1/sync/read'
+        client=SafeHTTP({'team.fixture.test'},interval=0)
+        allowed={409:{'team_sync_reset_required'}}
+        examples=[
+            (b'{"error":"team_sync_reset_required"}',409,'team_sync_reset_required'),
+            (b'{"error":"secret-response"}',409,'http_409'),
+            (b'{"error":"team_sync_reset_required","token":"secret"}',409,'http_409'),
+            (b'{"error":["team_sync_reset_required"]}',409,'http_409'),
+            (b'not JSON',409,'http_409'),
+            (b' '*1024+b'{"error":"team_sync_reset_required"}',409,'http_409'),
+            (b'{"error":"team_sync_reset_required"}',500,'http_500'),
+        ]
+        for body,status,code in examples:
+            with self.subTest(status=status,body=body[:60]),patch.object(client,'request',return_value=Response(status,{},body,url)):
+                with self.assertRaises(FetchError) as caught:client.json(url,error_codes=allowed)
+                self.assertEqual(str(caught.exception),code)
+        with patch.object(client,'request',return_value=Response(409,{},examples[0][0],url)):
+            with self.assertRaisesRegex(FetchError,'http_409'):client.json(url)

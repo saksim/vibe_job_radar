@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily refresh for one explicitly approved public source (%i)
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=3600
+Persistent=true
+Unit=vibe-radar-refresh@%i.service
+
+[Install]
+WantedBy=timers.target

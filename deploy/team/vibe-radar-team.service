@@ -1,0 +1,26 @@
+[Unit]
+Description=Vibe Job Radar reviewed public data and team quotas
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=radar
+Group=radar
+WorkingDirectory=/var/lib/vibe-radar
+ExecStart=/opt/vibe-radar/venv/bin/vibe-radar-service --data /var/lib/vibe-radar serve --config /etc/vibe-radar/service.json
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/vibe-radar
+MemoryMax=768M
+TasksMax=64
+LimitNOFILE=256
+
+[Install]
+WantedBy=multi-user.target
