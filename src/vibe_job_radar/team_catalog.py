@@ -171,8 +171,8 @@ class TeamCatalog:
             conn.execute("UPDATE meta SET value=? WHERE key='clock'",(str(max(now,float(meta['clock']))),))
 
     def withdraw(self,source):
-        from .team_store import ident
-        ident(source)
+        from .team_store import source_ident
+        source_ident(source)
         with self.connection(write=True) as (conn,meta):
             if not conn.execute('SELECT 1 FROM sources WHERE id=?',(source,)).fetchone():raise TeamError('team_source_missing',404)
             conn.execute('PRAGMA secure_delete=ON')

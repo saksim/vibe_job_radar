@@ -89,6 +89,10 @@ def install_connection(workspace_root,config_path,credential_path):
             private_json(staged/'connection.json',config)
             private_json(staged/'enrolled.json',{'schema_version':1})
             staged.rename(root)
+            if os.name!='nt':
+                parent=os.open(root.parent,os.O_RDONLY|os.O_DIRECTORY)
+                try:os.fsync(parent)
+                finally:os.close(parent)
 
     return {'configured':True,'restart_required':True,'credential_storage':scheme}
 

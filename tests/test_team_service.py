@@ -300,7 +300,7 @@ class TeamTests(unittest.TestCase):
         from dataclasses import replace
         self.connection('alice');registry={};jobs=[]
         for index in range(100):
-            key='s'+str(index).zfill(3)+'x'*70
+            key='s'+str(index).zfill(3)+'x'*96
             registry[key]=replace(fixture.SOURCE,key=key)
             jobs.append({**fixture.job('job'),'source':key})
             self.store.grant('group','alice',key,source=True)
@@ -319,6 +319,11 @@ class TeamTests(unittest.TestCase):
         self.assertEqual(result['jobs'],100);self.assertTrue(result['acknowledged'])
         self.assertEqual(len(cursors),2);self.assertTrue(cursors[0]);self.assertEqual(cursors[-1],'')
         self.assertLess(len(cursors[0]),4096)
+        self.assertEqual(len(key),100)
+        self.assertEqual(self.catalog.withdraw(key)['withdrawn'],key)
+        with self.assertRaises(TeamError):self.store.grant('group','alice',key+'x',source=True)
+        with self.assertRaises(TeamError):self.catalog.withdraw(key+'x')
+        with self.assertRaises(TeamError):self.store.grant('group','alice',key)
 
     def test_public_query_enters_the_original_task_and_report_pipeline(self):
         import time
@@ -525,6 +530,30 @@ class TeamTests(unittest.TestCase):
         token=self.store.issue('group','alice','retry-pc',output=output)
         self.assertEqual(json.loads(output.read_text(encoding='utf-8'))['device_token'],token)
         self.assertEqual(self.store.state(token)['device'],'retry-pc')
+
+    def test_posix_install_syncs_parent_after_activation_and_surfaces_failure(self):
+        import os
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        self.connection('alice')
+        for fail in [False,True]:
+            workspace=self.root/('install-failure' if fail else 'install-durable')
+            def barrier(descriptor):
+                self.assertTrue((workspace/'.team/enrolled.json').is_file())
+                self.assertTrue((workspace/'.team/credential.json').is_file())
+                if fail:raise OSError('fixture parent fsync failure')
+            posix=SimpleNamespace(name='posix',O_RDONLY=os.O_RDONLY,O_DIRECTORY=getattr(os,'O_DIRECTORY',0),
+                                  open=Mock(return_value=123),fsync=Mock(side_effect=barrier),close=Mock())
+            with patch('vibe_job_radar.team_client.os',posix):
+                if fail:
+                    with self.assertRaises(OSError):
+                        install_connection(workspace,self.root/'alice-config.json',self.root/'alice-credential.json')
+                else:self.assertTrue(install_connection(workspace,self.root/'alice-config.json',self.root/'alice-credential.json')['configured'])
+            posix.open.assert_called_once_with(workspace,posix.O_RDONLY|posix.O_DIRECTORY)
+            posix.fsync.assert_called_once_with(123);posix.close.assert_called_once_with(123)
+            # Failure is reported; an activated connection is never removed as a
+            # fallback to local quotas, even when durability cannot be confirmed.
+            self.assertTrue((workspace/'.team').is_dir())
 
     def test_failed_install_never_activates_partial_connection_and_can_retry(self):
         self.connection('alice');destination=self.root/'new-workspace'

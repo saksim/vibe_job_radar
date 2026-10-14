@@ -20,6 +20,7 @@ from pathlib import Path
 
 from .guided.rate import Limits, RateLedger, RateLimit, MAX_PUBLISHER_WINDOW
 from .guided.contracts import CrawlError
+from .public_contract import ID as PUBLIC_SOURCE_ID
 
 ID = re.compile(r'[a-zA-Z0-9_-]{1,80}')
 TOKEN = re.compile(r'vjr_[a-zA-Z0-9_-]{43}')
@@ -46,6 +47,12 @@ def service_host(value):
 
 def ident(value):
     if not isinstance(value, str) or not ID.fullmatch(value):
+        raise TeamError()
+    return value
+
+
+def source_ident(value):
+    if not isinstance(value,str) or not PUBLIC_SOURCE_ID.fullmatch(value):
         raise TeamError()
     return value
 
@@ -280,7 +287,8 @@ class TeamStore:
             self.audit(conn,tenant,'operator','resource_changed',resource)
 
     def grant(self, tenant, member, value, *, source=False, remove=False):
-        ident(tenant);ident(member);ident(value)
+        ident(tenant);ident(member)
+        (source_ident if source else ident)(value)
         table, column = ('source_grants','source') if source else ('grants','resource')
         with self.connection(write=True) as conn:
             if not conn.execute('SELECT 1 FROM members WHERE tenant=? AND member=?', (tenant,member)).fetchone():
@@ -308,7 +316,7 @@ class TeamStore:
         if not isinstance(sources,list) or not 1 <= len(sources) <= 100 or len(set(sources)) != len(sources):
             raise TeamError()
         for source in sources:
-            ident(source)
+            source_ident(source)
             if not conn.execute('SELECT 1 FROM source_grants WHERE tenant=? AND member=? AND source=?',
                                 (principal['tenant'],principal['member'],source)).fetchone():
                 raise TeamError('team_forbidden',403)
