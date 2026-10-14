@@ -221,11 +221,29 @@ def main(argv=None):
             with writer_lock(args.data):
                 store.expire_rate_history()
                 catalog.expire_changes()
-                args.output.mkdir(mode=0o700,parents=True,exist_ok=False)
-                for name in ('control.sqlite','rates.sqlite','catalog.sqlite'):
-                    with closing(sqlite3.connect((args.data/name).resolve().as_uri()+'?mode=ro',uri=True)) as source:
-                        with closing(sqlite3.connect(args.output/name)) as target:source.backup(target)
-                    (args.output/name).chmod(0o600)
+                safe_path(args.output)
+                if args.output.exists():raise TeamError('team_output_exists',409)
+                args.output.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
+                # No published output exists until all three databases are
+                # copied and protected. Failure leaves the same path retryable.
+                with tempfile.TemporaryDirectory(prefix='.team-backup-',dir=args.output.parent) as directory:
+                    staged=Path(directory)
+                    for name in ('control.sqlite','rates.sqlite','catalog.sqlite'):
+                        with closing(sqlite3.connect((args.data/name).resolve().as_uri()+'?mode=ro',uri=True)) as source:
+                            with closing(sqlite3.connect(staged/name)) as target:source.backup(target)
+                        (staged/name).chmod(0o600)
+                    if os.name!='nt':
+                        for path in staged.iterdir():
+                            with path.open('rb') as stream:os.fsync(stream.fileno())
+                        descriptor=os.open(staged,os.O_RDONLY|os.O_DIRECTORY)
+                        try:os.fsync(descriptor)
+                        finally:os.close(descriptor)
+                    if args.output.exists():raise TeamError('team_output_exists',409)
+                    staged.rename(args.output)
+                    if os.name!='nt':
+                        descriptor=os.open(args.output.parent,os.O_RDONLY|os.O_DIRECTORY)
+                        try:os.fsync(descriptor)
+                        finally:os.close(descriptor)
         else:
             from .team_store import ident
             ident(args.tenant);ident(args.member)
@@ -242,7 +260,7 @@ def main(argv=None):
                 conn.execute("DELETE FROM audit WHERE tenant=? AND target=? AND action='member_changed'",(args.tenant,args.member))
                 # Resource quotas remain: deleting membership cannot refund visits.
         print(json.dumps(result,ensure_ascii=False));return 0
-    except (TeamError,ContractError,CrawlError,OSError,ValueError,TypeError,ImportError) as error:
+    except (TeamError,ContractError,CrawlError,OSError,ValueError,TypeError,ImportError,sqlite3.Error) as error:
         print(json.dumps({'ok':False,'error':getattr(error,'code','team_operation_failed')}),file=sys.stderr);return 2
 
 

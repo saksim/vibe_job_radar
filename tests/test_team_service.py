@@ -125,6 +125,31 @@ class TeamTests(unittest.TestCase):
             self.assertEqual({p.name:p.read_bytes() for p in root.iterdir() if p.is_file() and p.name!='.writer.lock'},before)
             self.assertEqual(note.read_text(encoding='utf-8'),'keep')
 
+    def test_backup_failure_never_publishes_partial_output_and_same_path_can_retry(self):
+        original_connect=sqlite3.connect;original_chmod=Path.chmod
+        for failure in ['database','chmod']:
+            output=self.root/('backup-'+failure);observed=[]
+            def connect(path,*args,**kwargs):
+                if isinstance(path,Path) and path.parent.name.startswith('.team-backup-') and path.name=='rates.sqlite':
+                    observed.append((path.parent/'control.sqlite').is_file())
+                    if failure=='database':raise sqlite3.OperationalError('fixture disk full')
+                return original_connect(path,*args,**kwargs)
+            def chmod(path,*args,**kwargs):
+                if path.parent.name.startswith('.team-backup-') and path.name=='rates.sqlite' and failure=='chmod':
+                    raise OSError('fixture chmod failed')
+                return original_chmod(path,*args,**kwargs)
+            with patch('vibe_job_radar.team_service.TeamStore',return_value=self.store),patch('vibe_job_radar.team_service.TeamCatalog',return_value=self.catalog),patch('sys.stdout',new=io.StringIO()),patch('sys.stderr',new=io.StringIO()):
+                args=['--data',str(self.store.root),'backup','--output',str(output)]
+                with patch('vibe_job_radar.team_service.sqlite3.connect',side_effect=connect),patch.object(Path,'chmod',chmod):
+                    self.assertEqual(service_main(args),2)
+                self.assertEqual(observed,[True]);self.assertFalse(output.exists())
+                self.assertEqual(list(output.parent.glob('.team-backup-*')),[])
+                self.assertEqual(service_main(args),0)
+                self.assertEqual(sorted(p.name for p in output.iterdir()),['catalog.sqlite','control.sqlite','rates.sqlite'])
+                before={p.name:p.read_bytes() for p in output.iterdir()}
+                self.assertEqual(service_main(args),2)
+                self.assertEqual({p.name:p.read_bytes() for p in output.iterdir()},before)
+
     def test_failed_initial_database_publication_removes_only_its_own_links(self):
         from vibe_job_radar.team_service import initialize_service
         import os
