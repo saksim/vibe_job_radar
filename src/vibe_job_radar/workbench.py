@@ -25,6 +25,7 @@ from .guided.service import GuidedService, MESSAGES
 from .guided.contracts import CrawlError
 from .collection_guidance import CollectionGuidance
 from .evidence_ui import Conflict, EvidenceService
+from .quality_ui import QualityService
 from .public_tasks import PublicTasks, PublicTaskBusy
 from .guided.ownership import GuidedTaskBusy
 from .public_schedule import PublicSchedule
@@ -45,6 +46,7 @@ class LocalServer(ThreadingHTTPServer):
         self.collection_runner = CollectionRunner(self.collector)
         self.guidance = CollectionGuidance(workspace)
         self.evidence = EvidenceService(workspace)
+        self.quality = QualityService(workspace)
         self.guided = GuidedService(workspace)
         self.handoff = CollectionHandoff(self.collector, self.guided)
         if public_client is _DEFAULT_PUBLIC_CLIENT:
@@ -176,12 +178,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = unquote(urlsplit(self.path).path)
-        public = path in {"/", "/app.js", "/report-sources.js", "/advanced", "/advanced.js", "/collection-help.js", "/guided", "/guided.js", "/network-settings.js", "/public-schedule.js", "/public-queue.js", "/windows-startup.js"}
+        public = path in {"/quality", "/quality.js", "/", "/app.js", "/report-sources.js", "/advanced", "/advanced.js", "/collection-help.js", "/guided", "/guided.js", "/network-settings.js", "/public-schedule.js", "/public-queue.js", "/windows-startup.js"}
         if not self._authorized(token_required=not public):
             return
         try:
             if public:
-                name = {"/": "workbench.html", "/app.js": "workbench.js", "/report-sources.js": "report_sources.js", "/advanced": "advanced.html", "/advanced.js": "advanced.js", "/collection-help.js": "collection_help.js", "/guided": "guided.html", "/guided.js": "guided.js", "/network-settings.js": "network_settings.js", "/public-schedule.js": "public_schedule.js", "/public-queue.js": "public_queue.js", "/windows-startup.js": "windows_startup.js"}[path]
+                name = {"/quality": "quality.html", "/quality.js": "quality.js", "/": "workbench.html", "/app.js": "workbench.js", "/report-sources.js": "report_sources.js", "/advanced": "advanced.html", "/advanced.js": "advanced.js", "/collection-help.js": "collection_help.js", "/guided": "guided.html", "/guided.js": "guided.js", "/network-settings.js": "network_settings.js", "/public-schedule.js": "public_schedule.js", "/public-queue.js": "public_queue.js", "/windows-startup.js": "windows_startup.js"}[path]
                 mime = "text/html" if name.endswith(".html") else "text/javascript"
                 self._respond(200, files("vibe_job_radar").joinpath(name).read_bytes(), mime + "; charset=utf-8")
             elif path == "/api/network/state":
@@ -196,6 +198,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, self.server.windows_startup.state())
             elif path == "/api/guided/state":
                 self._json(200, self.server.guided.state())
+            elif path.startswith("/api/quality/export/"):
+                run_id = path.removeprefix("/api/quality/export/")
+                self._respond(200, self.server.quality.export({"report_id": run_id}),
+                              "application/zip", filename="jd-quality.zip")
             elif path == "/api/evidence/export":
                 self._respond(200, self.server.evidence.export(), "application/zip", filename="personal-evidence.zip")
             elif path.startswith("/api/evidence/attachment/"):
@@ -279,6 +285,9 @@ class Handler(BaseHTTPRequestHandler):
         elif route.startswith("/api/guided/"):
             target = self.server.guided
             methods = {"/api/guided/" + name: name for name in ("create", "action", "install", "check_browser", "diagnose", "export", "diagnostics")}
+        elif route.startswith("/api/quality/"):
+            target = self.server.quality
+            methods = {"/api/quality/" + name: name for name in ("open", "save", "import_annotations")}
         elif route.startswith("/api/evidence/"):
             target = self.server.evidence
             methods = {"/api/evidence/" + name: name for name in ("state", "catalogue", "sources", "source", "review", "upload", "metric", "save", "remove", "generate")}
