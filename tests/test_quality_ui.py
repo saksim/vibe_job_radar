@@ -145,6 +145,19 @@ class QualityUITests(unittest.TestCase):
         self.assertEqual(self.open()["revision"], 3)
         self.assert_original_unchanged()
 
+    def test_manual_source_identity_survives_packet_ui_and_plain_text_export(self):
+        run = "c" * 32
+        fixture_report(self.workspace.root / "reports" / run, manual_sources=True)
+        result = self.service.open({"report_id": run})
+        self.assertTrue(all(not row["url"] and row["source_ref"].startswith("authored-fixture:") for row in result["corpus"]))
+        archive = self.service.export({"report_id": run, "expected_revision": 0})
+        with zipfile.ZipFile(io.BytesIO(archive)) as bundle:
+            exported = json.loads(bundle.read("corpus.json"))
+            self.assertEqual(exported[0]["source_ref"], result["corpus"][0]["source_ref"])
+            text = bundle.read("documents.txt").decode("utf-8")
+            self.assertIn("来源 authored-fixture:", text)
+            self.assertIn("公司 人工夹具公司", text)
+
     def test_truncated_quality_database_is_not_recreated_as_blank_labels(self):
         self.open()
         database = self.service.root / "history.sqlite"

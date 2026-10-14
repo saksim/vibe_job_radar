@@ -228,7 +228,7 @@ def main() -> int:
                         sys.path.insert(0, str(ROOT / 'tests'))
                         from test_quality_review import fixture_report, TEXT
                         pair_run = 'b' * 32
-                        fixture_report(workspace.root / 'reports' / pair_run)
+                        fixture_report(workspace.root / 'reports' / pair_run, manual_sources=True)
                         pair_state = server.quality.open({'report_id':pair_run})
                         records = [row['record_id'] for row in pair_state['corpus']
                                    if row['dedup_eligible'] and row['text'] == TEXT]
@@ -237,6 +237,7 @@ def main() -> int:
                         page.locator('#pair-left').select_option(records[0])
                         page.locator('#pair-right').select_option(records[1])
                         expect(page.locator('#pair-left-text')).to_have_text(TEXT)
+                        expect(page.locator('#pair-left-meta')).to_contain_text('authored-fixture:')
                         page.locator('#notes').fill('unsaved JD notes must survive pair save')
                         page.locator('#pair-author').fill('人工去重夹具（非真人验收）')
                         page.locator('#pair-decision').select_option('same')
