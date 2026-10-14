@@ -277,11 +277,15 @@ class TeamTests(unittest.TestCase):
         with self.assertRaises(RateLimit):restored.ledger.reserve(SCOPE,'request')
 
     def test_refresh_backup_copy_failure_is_retryable_without_partial_publication(self):
+        from vibe_job_radar.collection import writer_lock
         cache=self.store.root/'refresh-workspace/local_public';cache.mkdir(parents=True)
         (cache/'cursor.key').write_bytes(b'fixture cursor state')
         output=self.root/'refresh-backup-failure'
         args=['--data',str(self.store.root),'backup','--output',str(output)]
         with patch('vibe_job_radar.team_service.TeamStore',return_value=self.store),patch('vibe_job_radar.team_service.TeamCatalog',return_value=self.catalog),patch('sys.stdout',new=io.StringIO()),patch('sys.stderr',new=io.StringIO()):
+            with writer_lock(cache.parent):
+                self.assertEqual(service_main(args),2)
+            self.assertFalse(output.exists());self.assertEqual(list(self.root.glob('.team-backup-*')),[])
             with patch('vibe_job_radar.team_service.shutil.copyfile',side_effect=OSError('fixture copy failure')):
                 self.assertEqual(service_main(args),2)
             self.assertFalse(output.exists());self.assertEqual(list(self.root.glob('.team-backup-*')),[])

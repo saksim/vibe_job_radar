@@ -70,7 +70,6 @@ def backup_database(source, target):
 
 def backup_refresh_state(root, staged):
     from .collection import writer_lock
-    from contextlib import ExitStack
     workspace=safe_path(root/'refresh-workspace')
     if not workspace.exists():return
     # Only the service refresher's durable public state is included. Refuse
@@ -82,11 +81,10 @@ def backup_refresh_state(root, staged):
             raise TeamError('team_storage_unsafe',503)
     check(workspace,True)
     target=staged/'refresh-workspace';target.mkdir(mode=0o700)
-    with ExitStack() as locks:
+    with writer_lock(workspace):
         cache=safe_path(workspace/'local_public')
         if cache.exists():
             check(cache,True)
-            locks.enter_context(writer_lock(cache))
             copied=target/'local_public';copied.mkdir(mode=0o700)
             for path in cache.iterdir():
                 if path.name=='.writer.lock':continue
