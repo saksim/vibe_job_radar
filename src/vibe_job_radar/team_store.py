@@ -289,7 +289,7 @@ class TeamStore:
         return dict(row)
 
     def authorize(self, conn, principal, sources):
-        if not isinstance(sources,list) or not 1 <= len(sources) <= 10 or len(set(sources)) != len(sources):
+        if not isinstance(sources,list) or not 1 <= len(sources) <= 100 or len(set(sources)) != len(sources):
             raise TeamError()
         for source in sources:
             ident(source)

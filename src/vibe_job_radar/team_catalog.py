@@ -216,6 +216,7 @@ class TeamCatalog:
         if (type(after) is not int or after<0 or type(limit) is not int or not 1<=limit<=50
                 or not isinstance(cursor,str) or len(cursor)>4096):raise TeamError()
         scope=sorted(sources)
+        scope_id=hashlib.sha256(encoded(scope).encode()).hexdigest()
         with self.connection() as (conn,meta):
             self._require_fresh(conn,scope)
             registry=self.registry(conn)
@@ -229,7 +230,7 @@ class TeamCatalog:
                     saved=strict_json(base64.urlsafe_b64decode(raw+'='*((-len(raw))%4)))
                     if (set(saved)!={'device','scope','after','limit','target','offset','mode','expires'}
                             or not hmac.compare_digest(cursor,self._sign(saved,meta['secret']))
-                            or saved['device']!=principal['device'] or saved['scope']!=scope or saved['after']!=after
+                            or saved['device']!=principal['device'] or saved['scope']!=scope_id or saved['after']!=after
                             or saved['limit']!=limit or saved['mode']!=mode or saved['expires']<self.clock()
                             or type(saved['offset']) is not int or saved['offset']<0):raise ValueError()
                     target,offset,expires=saved['target'],saved['offset'],saved['expires']
@@ -248,7 +249,7 @@ class TeamCatalog:
                 events=[{'source':r['source'],'id':r['id'],'kind':r['kind'],'revision':r['revision'],
                          'job':json.loads(r['body']) if r['body'] else None} for r in rows[:limit]]
             more=len(rows)>limit
-            next_cursor=self._sign({'device':principal['device'],'scope':scope,'after':after,'limit':limit,
+            next_cursor=self._sign({'device':principal['device'],'scope':scope_id,'after':after,'limit':limit,
                                    'target':target,'offset':offset+limit,'mode':mode,'expires':expires},meta['secret']) if more else ''
             observations=[dict(r) for r in conn.execute('SELECT id,observed,revision FROM sources WHERE id IN ('+placeholders+')',scope)]
             return {'schema_version':1,'mode':mode,'events':events,'next_cursor':next_cursor,

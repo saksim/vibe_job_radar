@@ -293,6 +293,30 @@ class TeamTests(unittest.TestCase):
         with self.catalog.connection() as (conn,meta):
             self.assertEqual(meta['revision'],'1');self.assertNotIn('another',self.catalog.registry(conn))
 
+    def test_maximum_configured_source_scope_syncs_through_bounded_cursors(self):
+        from dataclasses import replace
+        self.connection('alice');registry={};jobs=[]
+        for index in range(100):
+            key='s'+str(index).zfill(3)+'x'*70
+            registry[key]=replace(fixture.SOURCE,key=key)
+            jobs.append({**fixture.job('job'),'source':key})
+            self.store.grant('group','alice',key,source=True)
+        self.catalog.publish(registry,jobs,observed_at={key:self.now[0] for key in registry})
+        config=self.root/'many-config.json';credential=self.root/'alice-credential.json'
+        private_json(config,{'schema_version':1,'origin':'https://team.fixture.test','quota_resources':{},
+                             'public_sources':[asdict(source) for source in registry.values()],'use_public_service':True})
+        workspace=self.root/'many-sources';install_connection(workspace,config,credential)
+        client=TeamConnection(workspace,transport=self.http);cursors=[];original=client.request
+        def read(path,*,payload=None):
+            response=original(path,payload=payload)
+            if path=='/v1/sync/read':cursors.append(response['next_cursor'])
+            return response
+        with patch.object(client,'request',side_effect=read):
+            result=TeamSync(workspace,connection=client).run()
+        self.assertEqual(result['jobs'],100);self.assertTrue(result['acknowledged'])
+        self.assertEqual(len(cursors),2);self.assertTrue(cursors[0]);self.assertEqual(cursors[-1],'')
+        self.assertLess(len(cursors[0]),4096)
+
     def test_public_query_enters_the_original_task_and_report_pipeline(self):
         import time
         connection=self.connection('alice',public=True);workspace=Workspace(self.root/'alice')
