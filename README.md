@@ -50,7 +50,7 @@ BOSS、猎聘、51job 的浏览器采集仍需逐站现场验收，不能因入�
 
 ### 本地优先与网络支持
 
-登录态、简历、本人证据和私人报告默认留本地，生产 Linux 部署后置。已合并的匿名本机 HTTP/SOCKS5 静态策略和明确同意的 198.18/15 加密解析保留；PR76已合入[显式本机代理认证](docs/LOCAL_PROXY_AUTH.md)，高级采集与CLI也已由PR66接入工作区策略。#109增加默认关闭的[Windows本地PAC导入](docs/WINDOWS_DOMAIN_PAC.md)，#135另接入[确认后使用系统已配置PAC地址](docs/WINDOWS_SYSTEM_PAC.md)，每个新会话读取一次并冻结，默认与状态读取不下载；按域名保留明确的原始选路，失败不推进至直连。另有默认关闭的[Windows WPAD发现与来源确认](docs/WINDOWS_WPAD.md)，发现许可与脚本信任分别确认；当前提交的真实DNS和便携程序验收须核对CI证据。其他剩余网络范围见 [网络状态](docs/NETWORK_COMPATIBILITY_STATUS.md)。不要关闭 TLS 校验或删除配额库来制造成功。
+登录态、简历、本人证据和私人报告默认留本地，可选[团队服务](docs/TEAM_SERVICE.md)提供设备权限、集中配额、公开来源增量及部署配置；实际主机与域名尚未准备，未公开上线。已合并的匿名本机 HTTP/SOCKS5 静态策略和明确同意的 198.18/15 加密解析保留；PR76已合入[显式本机代理认证](docs/LOCAL_PROXY_AUTH.md)，高级采集与CLI也已由PR66接入工作区策略。#109增加默认关闭的[Windows本地PAC导入](docs/WINDOWS_DOMAIN_PAC.md)，#135另接入[确认后使用系统已配置PAC地址](docs/WINDOWS_SYSTEM_PAC.md)，每个新会话读取一次并冻结，默认与状态读取不下载；按域名保留明确的原始选路，失败不推进至直连。另有默认关闭的[Windows WPAD发现与来源确认](docs/WINDOWS_WPAD.md)，发现许可与脚本信任分别确认；当前提交的真实DNS和便携程序验收须核对CI证据。其他剩余网络范围见 [网络状态](docs/NETWORK_COMPATIBILITY_STATUS.md)。不要关闭 TLS 校验或删除配额库来制造成功。
 
 需要按 HTTPS 路径或查询参数选路时，可另行确认[完整网址 PAC](docs/FULL_URL_PAC.md)。它使用单独的可选组件和许可，适用于 HTTP 与浏览器请求桥；原生浏览器入口会在打开窗口和预留登录次数前拒绝。原 Windows 域名 PAC、系统 PAC 和 WPAD 范围保持。
 

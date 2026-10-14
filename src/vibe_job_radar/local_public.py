@@ -133,8 +133,9 @@ class LocalPublicDataClient:
         if self.ledger is None:
             # Match the existing example's database, scope AND limits. Switching
             # entrypoints or query terms cannot reset its request budget.
-            self.ledger = RateLedger(rate_root / 'rates.sqlite',
-                Limits(request_interval=30, requests_hour=12, requests_day=24), clock=self.clock)
+            from .team_client import workspace_ledger
+            self.ledger = workspace_ledger(self.workspace.root, rate_root / 'rates.sqlite',
+                Limits(request_interval=30, requests_hour=12, requests_day=24), clock=self.clock, local_factory=RateLedger)
 
     def _scope(self, query):
         if (not isinstance(query, PublicQuery) or len(query.source_scope) != 1
@@ -287,7 +288,7 @@ class LocalPublicDataClient:
                 return self._select(query, cached, now, cached=True)
             check_stopped()
             try:
-                self.ledger.reserve(SCOPE, 'request')
+                self.ledger.reserve(SCOPE, 'request', origin='https://'+urlsplit(board.api_url).hostname)
             except RateLimit as exc:
                 if hard_failure:
                     raise FetchError(hard_failure) from None

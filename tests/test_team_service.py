@@ -1,0 +1,337 @@
+"""Authored fixtures: real local HTTP and independent device/workspace ledgers."""
+import copy
+import http.client
+import io
+import json
+import sqlite3
+import tempfile
+import threading
+import unittest
+from contextlib import closing
+from dataclasses import asdict
+from pathlib import Path
+from socketserver import ThreadingMixIn
+from unittest.mock import patch
+from wsgiref.simple_server import WSGIServer,WSGIRequestHandler,make_server
+
+import test_public_hybrid as fixture
+from vibe_job_radar.team_store import TeamStore,TeamError
+from vibe_job_radar.team_catalog import TeamCatalog
+from vibe_job_radar.team_service import TeamApplication,private_json,main as service_main
+from vibe_job_radar.team_client import TeamConnection,TeamLedger,AuthenticatedPublicTransport,install_connection,local_state,public_client
+from vibe_job_radar.team_sync import TeamSync
+from vibe_job_radar.guided.rate import RateLedger,RateLimit,Limits
+from vibe_job_radar.guided.contracts import CrawlError
+from vibe_job_radar.public_data import PublicDataClient
+from vibe_job_radar.public_tasks import PublicTasks
+from vibe_job_radar.network import FetchError
+from vibe_job_radar.workspace import Workspace
+
+
+class Quiet(WSGIRequestHandler):
+    def log_message(self,*args):pass
+
+
+class ThreadedWSGI(ThreadingMixIn,WSGIServer):
+    daemon_threads=True
+
+
+class HTTPFixture:
+    """Only this test adapter maps the fixed HTTPS origin to artificial loopback.
+
+    The deployed client keeps public-IP TLS validation; no runtime HTTP option.
+    """
+    def __init__(self,app,clock):
+        self.app=app;self.clock=clock;self.lock=threading.Lock();self.calls=[]
+        def trusted_proxy_fixture(environ,start):
+            # Model the already terminated TLS/proxy envelope, not TLS itself.
+            environ['wsgi.url_scheme']='https';environ['HTTP_HOST']='team.fixture.test'
+            return app(environ,start)
+        self.server=make_server('127.0.0.1',0,trusted_proxy_fixture,server_class=ThreadedWSGI,handler_class=Quiet)
+        self.thread=threading.Thread(target=self.server.serve_forever,kwargs={'poll_interval':0.01},daemon=True)
+        self.thread.start()
+    def close(self):
+        self.server.shutdown();self.server.server_close();self.thread.join(3)
+    def json(self,url,*,method='GET',headers=None,payload=None):
+        from urllib.parse import urlsplit
+        assert urlsplit(url).netloc=='team.fixture.test'
+        with self.lock:self.clock[0]+=0.1
+        path=urlsplit(url).path
+        self.calls.append((method,path,sorted(payload or {})))
+        conn=http.client.HTTPConnection('127.0.0.1',self.server.server_port,timeout=5)
+        body=json.dumps(payload).encode() if payload is not None else None
+        try:
+            conn.request(method,path,body=body,headers={**(headers or {}),**({'Content-Type':'application/json'} if body else {})})
+            response=conn.getresponse();data=json.loads(response.read())
+            if response.status!=200:
+                raise FetchError('http_'+str(response.status),retry_after=float(response.getheader('Retry-After') or 0))
+            return data
+        finally:conn.close()
+
+
+class TeamTests(unittest.TestCase):
+    def setUp(self):
+        tmp=tempfile.TemporaryDirectory(prefix='team-fixture-');self.addCleanup(tmp.cleanup)
+        self.root=Path(tmp.name);self.now=[2_000_000_000.0]
+        self.store=TeamStore(self.root/'service',clock=lambda:self.now[0]);self.store.initialize()
+        self.catalog=TeamCatalog(self.root/'service',clock=lambda:self.now[0]);self.catalog.initialize()
+        for member,role in [('alice','admin'),('bob','collector'),('reader','reader')]:
+            self.store.member('group',member,role)
+        self.store.resource('group','account','liepin',['https://www.liepin.com'])
+        for member in ['alice','bob','reader']:
+            self.store.grant('group',member,'account');self.store.grant('group',member,'fixture',source=True)
+        self.tokens={name:self.store.issue('group',name,name+'-pc') for name in ['alice','bob','reader']}
+        self.catalog.publish(fixture.REGISTRY,[fixture.job('one'),fixture.job('two')],observed_at={'fixture':self.now[0]})
+        self.app=TeamApplication(self.root/'service',host='team.fixture.test',clock=lambda:self.now[0])
+        self.http=HTTPFixture(self.app,self.now);self.addCleanup(self.http.close)
+
+    def connection(self,member,*,public=False):
+        workspace=self.root/member;workspace.mkdir(exist_ok=True)
+        config=self.root/(member+'-config.json');credential=self.root/(member+'-credential.json')
+        if not config.exists():
+            private_json(config,{'schema_version':1,'origin':'https://team.fixture.test','quota_resources':{'liepin':'account'},
+                          'public_sources':[asdict(fixture.SOURCE)],'use_public_service':public})
+            private_json(credential,{'schema_version':1,'device_token':self.tokens[member]})
+            install_connection(workspace,config,credential)
+        return TeamConnection(workspace,transport=self.http)
+
+    def call(self,path,token=None,*,data=None,raw=None,**extra):
+        body=raw if raw is not None else json.dumps(data).encode() if data is not None else b''
+        env={'wsgi.url_scheme':'https','HTTP_HOST':'team.fixture.test','PATH_INFO':path,'REQUEST_METHOD':'POST' if body else 'GET',
+             'CONTENT_TYPE':'application/json','CONTENT_LENGTH':str(len(body)),'wsgi.input':io.BytesIO(body)}
+        if token is not None:env['HTTP_AUTHORIZATION']='Bearer '+token
+        env.update(extra);status=[];self.now[0]+=0.1
+        result=b''.join(self.app(env,lambda s,h:status.append((s,dict(h)))))
+        return int(status[0][0].split()[0]),json.loads(result),status[0][1]
+
+    def test_two_http_devices_share_account_budget_and_local_denial_is_not_charged(self):
+        a=self.connection('alice');b=self.connection('bob')
+        la=TeamLedger(self.root/'alice/rates.sqlite',a,clock=lambda:self.now[0])
+        lb=TeamLedger(self.root/'bob/rates.sqlite',b,clock=lambda:self.now[0])
+        la.reserve('liepin','page',origin='https://www.liepin.com')
+        with self.assertRaises(RateLimit):lb.reserve('liepin','page',origin='https://www.liepin.com')
+        self.assertEqual(lb.summary('liepin')['page']['day'],0)
+        calls=len(self.http.calls)
+        with self.assertRaises(RateLimit):la.reserve('liepin','page')
+        self.assertEqual(len(self.http.calls),calls)  # local denial before service
+        self.now[0]+=16;lb.reserve('liepin','page')
+        self.assertEqual(b.quota('liepin','summary')['page']['day'],2)
+        restarted=TeamApplication(self.root/'service',host='team.fixture.test',clock=lambda:self.now[0])
+        self.assertEqual(restarted.store.quota(self.tokens['bob'],{'resource':'account','site':'liepin','operation':'summary'})['result']['page']['day'],2)
+
+    def test_role_tenant_resource_origin_and_unknown_fields_cannot_widen_scope(self):
+        base={'resource':'account','site':'liepin','operation':'reserve','kind':'request','origin':'https://www.liepin.com'}
+        self.assertEqual(self.call('/v1/team/quota',self.tokens['reader'],data=base)[0],403)
+        for change in ({'site':'boss'},{'resource':'ungranted'},{'origin':'https://evil.test'},{'tenant':'elsewhere'}):
+            status,body,_=self.call('/v1/team/quota',self.tokens['bob'],data={**base,**change})
+            self.assertIn(status,{400,403});self.assertNotIn('evil.test',json.dumps(body))
+        self.store.member('other','bob','collector')
+        other=self.store.issue('other','bob','other-pc')
+        self.assertEqual(self.call('/v1/team/quota',other,data=base)[0],403)
+        self.assertEqual(self.call('/v1/jobs/search',self.tokens['bob'],data=fixture.query(source_scope=['other']).payload())[0],403)
+        self.assertEqual(self.call('/v1/team/metrics',self.tokens['bob'])[0],403)
+        self.assertEqual(self.call('/v1/team/metrics',self.tokens['alice'])[0],200)
+
+    def test_revocation_expiry_and_member_disable_apply_to_existing_clients(self):
+        client=self.connection('alice');self.assertEqual(client.request('/v1/team/state')['member'],'alice')
+        self.store.revoke('group','alice-pc')
+        with self.assertRaisesRegex(CrawlError,'team_unauthorized'):client.request('/v1/team/state')
+        self.store.member('group','bob','collector',active=False)
+        self.assertEqual(self.call('/v1/team/state',self.tokens['bob'])[0],401)
+        self.now[0]+=91*86400
+        self.assertEqual(self.call('/v1/team/state',self.tokens['reader'])[0],401)
+
+    def test_expired_or_deleted_rate_storage_fails_without_reinitializing(self):
+        self.store.rate_path.write_bytes(b'')
+        code,body,_=self.call('/v1/team/state',self.tokens['alice'])
+        self.assertEqual(code,503);self.assertEqual(self.store.rate_path.stat().st_size,0)
+        with self.assertRaises(TeamError):TeamApplication(self.root/'service',host='team.fixture.test')
+
+    def test_connection_loss_blocks_upstream_and_retains_prior_local_quotas(self):
+        client=self.connection('alice');ledger=TeamLedger(self.root/'alice/rates.sqlite',client,clock=lambda:self.now[0])
+        ledger.reserve('liepin','page');self.now[0]+=16
+        with patch.object(self.http,'json',side_effect=FetchError('network_error')):
+            with self.assertRaisesRegex(CrawlError,'team_unavailable'):ledger.reserve('liepin','page')
+        self.assertEqual(ledger.summary('liepin')['page']['day'],1)
+        self.assertEqual(client.quota('liepin','summary')['page']['day'],1)
+
+    def test_cooldown_and_publisher_rules_propagate_between_devices(self):
+        a=self.connection('alice');b=self.connection('bob')
+        la=TeamLedger(self.root/'alice/rates.sqlite',a,clock=lambda:self.now[0]);lb=TeamLedger(self.root/'bob/rates.sqlite',b,clock=lambda:self.now[0])
+        la.set_publisher('liepin','https://www.liepin.com',delay=20)
+        la.reserve('liepin','request',origin='https://www.liepin.com')
+        self.now[0]+=1
+        with self.assertRaises(RateLimit):lb.reserve('liepin','request',origin='https://www.liepin.com')
+        self.now[0]+=20;la.cool('liepin',600)
+        with self.assertRaises(RateLimit):lb.reserve('liepin','page')
+
+    def test_request_boundary_and_duplicate_json_reject_before_data_access(self):
+        for extra in ({'wsgi.url_scheme':'http'},{'HTTP_HOST':'attacker.test'},{'HTTP_COOKIE':'SECRET'},
+                      {'HTTP_ORIGIN':'https://attacker.test'},{'QUERY_STRING':'secret=SECRET'}):
+            status,body,_=self.call('/v1/team/state',self.tokens['alice'],**extra)
+            self.assertEqual(status,400);self.assertNotIn('SECRET',json.dumps(body))
+        self.assertEqual(self.call('/v1/team/state')[0],401)
+        self.assertEqual(self.call('/v1/sync/ack',self.tokens['alice'],raw=b'{"source_scope":["fixture"],"revision":1,"revision":2}')[0],400)
+        self.assertEqual(self.call('/healthz')[0],200)
+
+    def test_two_devices_full_delta_and_acknowledgements_are_independent(self):
+        a=self.connection('alice');b=self.connection('bob')
+        first=TeamSync(self.root/'alice',connection=a).run();self.assertEqual(first['jobs'],2);self.assertTrue(first['acknowledged'])
+        self.assertEqual(b.request('/v1/team/state')['watermarks'],[])
+        self.catalog.publish(fixture.REGISTRY,[fixture.job('one',title='Updated Architect'),fixture.job('three')],observed_at={'fixture':self.now[0]})
+        second=TeamSync(self.root/'alice',connection=a).run()
+        self.assertEqual(second['mode'],'changes');self.assertEqual(second['jobs'],2);self.assertTrue(second['acknowledged'])
+        other=TeamSync(self.root/'bob',connection=b).run();self.assertEqual(other['mode'],'snapshot');self.assertEqual(other['revision'],second['revision'])
+        left=json.loads((self.root/'alice/team_sync/snapshot.json').read_text(encoding='utf-8'))
+        right=json.loads((self.root/'bob/team_sync/snapshot.json').read_text(encoding='utf-8'))
+        self.assertEqual(sorted(left['jobs'],key=lambda j:j['id']),sorted(right['jobs'],key=lambda j:j['id']))
+        self.assertEqual({j['id'] for j in left['jobs']},{'one','three'})
+
+    def test_watermark_cannot_advance_without_a_completed_authorized_read(self):
+        value={'source_scope':['fixture'],'revision':1}
+        self.assertEqual(self.call('/v1/sync/ack',self.tokens['alice'],data=value)[0],409)
+        status,first,_=self.call('/v1/sync/read',self.tokens['alice'],data={'source_scope':['fixture'],'limit':1})
+        self.assertEqual(status,200);self.assertFalse(first['complete'])
+        self.assertEqual(self.call('/v1/sync/ack',self.tokens['alice'],data=value)[0],409)
+        self.assertEqual(self.call('/v1/sync/read',self.tokens['bob'],data={'source_scope':['fixture'],'limit':1,'cursor':first['next_cursor']})[0],409)
+        self.catalog.publish(fixture.REGISTRY,[fixture.job('one')],observed_at={'fixture':self.now[0]})
+        self.assertEqual(self.call('/v1/sync/read',self.tokens['alice'],data={'source_scope':['fixture'],'limit':1,'cursor':first['next_cursor']})[0],409)
+
+    def test_failed_partial_sync_preserves_the_previous_complete_cache(self):
+        client=self.connection('alice');sync=TeamSync(self.root/'alice',connection=client)
+        sync.run();path=self.root/'alice/team_sync/snapshot.json';before=path.read_bytes()
+        self.catalog.publish(fixture.REGISTRY,[fixture.job('new')],observed_at={'fixture':self.now[0]})
+        original=client.request
+        def malformed(path,*,payload=None):
+            value=original(path,payload=payload)
+            if path=='/v1/sync/read':value['events'][0]['job']={'source':'fixture','id':'new','password':'SECRET'}
+            return value
+        with patch.object(client,'request',side_effect=malformed),self.assertRaises(ValueError):sync.run()
+        self.assertEqual(path.read_bytes(),before)
+
+    def test_public_query_enters_the_original_task_and_report_pipeline(self):
+        import time
+        connection=self.connection('alice',public=True);workspace=Workspace(self.root/'alice')
+        client=PublicDataClient(workspace.root/'team_public_cache',connection.origin,connection.registry,
+                                transport=AuthenticatedPublicTransport(connection))
+        tasks=PublicTasks(workspace,hybrid_client=client);self.addCleanup(tasks.close)
+        tasks.search({'consent':True,'query':fixture.query().payload()})
+        deadline=time.monotonic()+20
+        while time.monotonic()<deadline:
+            state=tasks.snapshot()
+            if state['status'] not in {'running','queued'}:break
+            time.sleep(0.01)
+        self.assertEqual(state['status'],'completed',state)
+        self.assertEqual(workspace.status()['counts']['full_text'],2)
+        self.assertTrue(workspace.status()['runs'])
+        self.assertTrue(workspace.report(state['report_id'])['manifest'])
+        transmitted=json.dumps(self.http.calls)
+        self.assertNotIn('password',transmitted);self.assertNotIn('resume',transmitted)
+        for file in workspace.root.rglob('*.json'):
+            if '.team' not in file.parts:self.assertNotIn(self.tokens['alice'],file.read_text(encoding='utf-8'))
+
+    def test_optional_configuration_is_offline_and_cannot_silently_fall_back(self):
+        connection=self.connection('alice',public=True)
+        with patch('socket.socket.connect',side_effect=AssertionError('state must be offline')):
+            self.assertTrue(local_state(self.root/'alice')['configured'])
+            self.assertIsInstance(public_client(Workspace(self.root/'alice')),PublicDataClient)
+        (self.root/'alice/.team/connection.json').write_text('{}',encoding='utf-8')
+        self.assertIn('error',local_state(self.root/'alice'))
+        unavailable=public_client(Workspace(self.root/'alice'))
+        self.assertEqual(unavailable.execution_mode,'remote_service')
+        with self.assertRaises(ValueError):unavailable._scope(fixture.query())
+        with self.assertRaises(TeamError):connection.request('/v1/team/state')
+
+    def test_member_erasure_revokes_tokens_without_refunding_resource_quota(self):
+        client=self.connection('alice');client.reserve('liepin','page')
+        with patch('sys.stdout',new=io.StringIO()):
+            result=service_main(['--data',str(self.root/'service'),'erase-member','--tenant','group','--member','alice'])
+        self.assertEqual(result,0);self.assertEqual(self.call('/v1/team/state',self.tokens['alice'])[0],401)
+        self.assertEqual(self.store.quota(self.tokens['bob'],{'resource':'account','site':'liepin','operation':'summary'})['result']['page']['day'],1)
+
+    def test_operator_cannot_silently_relax_limits_or_rebind_existing_account(self):
+        self.store.resource('group','account','liepin',['https://www.liepin.com'],limits=Limits(pages_day=10))
+        with self.assertRaises(TeamError):self.store.resource('group','account','liepin',['https://www.liepin.com'])
+        with self.assertRaises(TeamError):self.store.resource('group','account','boss',['https://www.liepin.com'],limits=Limits(pages_day=10))
+
+    def test_simultaneous_device_reservations_have_only_one_winner(self):
+        a=self.connection('alice');b=self.connection('bob');results=[];barrier=threading.Barrier(2)
+        def reserve(connection):
+            barrier.wait()
+            try:connection.reserve('liepin','page');results.append('accepted')
+            except RateLimit:results.append('limited')
+        threads=[threading.Thread(target=reserve,args=(connection,)) for connection in (a,b)]
+        for thread in threads:thread.start()
+        for thread in threads:thread.join(10)
+        self.assertTrue(all(not thread.is_alive() for thread in threads));self.assertCountEqual(results,['accepted','limited'])
+
+    def test_withdrawal_stops_search_and_old_delta_delivery(self):
+        token=self.tokens['alice']
+        self.catalog.withdraw('fixture')
+        self.assertEqual(self.call('/v1/jobs/search',token,data=fixture.query().payload())[0],403)
+        self.assertEqual(self.call('/v1/sync/read',token,data={'source_scope':['fixture'],'after_revision':1})[0],403)
+        with self.catalog.connection() as (conn,meta):
+            self.assertEqual(conn.execute('SELECT COUNT(*) FROM jobs').fetchone()[0],0)
+            self.assertEqual(conn.execute('SELECT COUNT(*) FROM changes').fetchone()[0],0)
+
+    def test_stale_source_and_pruned_delta_require_explicit_refresh(self):
+        token=self.store.issue('group','alice','long-lived',days=90)
+        self.now[0]+=31*86400
+        self.assertEqual(self.call('/v1/jobs/search',token,data=fixture.query().payload())[0],503)
+        self.catalog.publish(fixture.REGISTRY,[fixture.job('new')],observed_at={'fixture':self.now[0]})
+        # after=1 was pruned; the published observation remains available as a
+        # full snapshot while a stale delta cannot be fabricated.
+        self.assertEqual(self.call('/v1/sync/read',token,data={'source_scope':['fixture'],'after_revision':1})[0],200)
+        self.now[0]+=31*86400
+        self.catalog.publish(fixture.REGISTRY,[fixture.job('newest')],observed_at={'fixture':self.now[0]})
+        self.assertEqual(self.call('/v1/sync/read',token,data={'source_scope':['fixture'],'after_revision':1})[0],409)
+
+    def test_source_refresh_checks_distribution_before_any_provider_call(self):
+        from dataclasses import replace
+        from unittest.mock import Mock
+        from vibe_job_radar.public_boards import ANTHROPIC
+        from vibe_job_radar.team_refresh import refresh_approved
+        approval=self.root/'approval.json'
+        private_json(approval,{'schema_version':1,'sources':[asdict(ANTHROPIC.source)],'jobs':[]})
+        factory=Mock(side_effect=AssertionError('unapproved source must not be contacted'))
+        with self.assertRaises(TeamError):refresh_approved(self.root/'service',approval,ANTHROPIC.source.key,client_factory=factory)
+        factory.assert_not_called()
+
+    def test_source_refresh_publishes_the_full_validated_catalog(self):
+        from dataclasses import replace
+        from unittest.mock import Mock
+        from vibe_job_radar.local_public import LocalPublicDataClient
+        from vibe_job_radar.public_boards import ANTHROPIC
+        from vibe_job_radar.team_refresh import refresh_approved
+        from test_local_public import payload
+        root=self.root/'refresh-service';TeamStore(root).initialize();TeamCatalog(root).initialize()
+        approved=replace(ANTHROPIC.source,distribution_approved=True,contract='ARTIFICIAL approval for authored fixtures only')
+        approval=self.root/'approved-refresh.json'
+        private_json(approval,{'schema_version':1,'sources':[asdict(approved)],'jobs':[]})
+        transport=Mock();transport.json.return_value=payload()
+        result=refresh_approved(root,approval,ANTHROPIC.source.key,client_factory=lambda workspace:LocalPublicDataClient(workspace,transport=transport))
+        self.assertEqual(result['source_requests'],1)
+        self.assertEqual(result['jobs'],len(payload()['jobs']))
+        self.assertEqual(len(TeamCatalog(root).gateway().jobs),len(payload()['jobs']))
+        transport.json.assert_called_once_with(ANTHROPIC.api_url)
+
+    def test_service_token_echo_cannot_be_saved_as_job_content(self):
+        connection=self.connection('alice')
+        with patch.object(self.http,'json',return_value={'schema_version':1,'text':self.tokens['alice']}):
+            with self.assertRaisesRegex(CrawlError,'team_response_invalid'):connection.request('/v1/team/state')
+
+    def test_credential_replacement_requires_restart_instead_of_switching_identity(self):
+        a=self.connection('alice');self.connection('bob')
+        (self.root/'alice/.team/credential.json').write_bytes((self.root/'bob/.team/credential.json').read_bytes())
+        with self.assertRaisesRegex(TeamError,'team_connection_changed'):a.request('/v1/team/state')
+
+    def test_request_reservation_cannot_omit_publisher_origin(self):
+        request={'resource':'account','site':'liepin','operation':'reserve','kind':'request'}
+        self.assertEqual(self.call('/v1/team/quota',self.tokens['alice'],data=request)[0],400)
+
+    def test_importing_an_old_or_undated_snapshot_does_not_claim_freshness(self):
+        self.catalog.publish(fixture.REGISTRY,[fixture.job('old')])
+        self.assertEqual(self.call('/v1/jobs/search',self.tokens['alice'],data=fixture.query().payload())[0],503)
+        self.catalog.publish(fixture.REGISTRY,[fixture.job('old')],observed_at={'fixture':self.now[0]-8*86400})
+        self.assertEqual(self.call('/v1/jobs/search',self.tokens['alice'],data=fixture.query().payload())[0],503)
+        with self.assertRaises(TeamError):self.catalog.publish(fixture.REGISTRY,[fixture.job('old')],observed_at={'fixture':self.now[0]+3600})

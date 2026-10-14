@@ -1,0 +1,22 @@
+{
+  "tenant": "research-team",
+  "resource": "research-account",
+  "site": "liepin",
+  "origins": [
+    "https://www.liepin.com",
+    "https://passport.liepin.com",
+    "https://api-c.liepin.com",
+    "https://concat.lietou-static.com",
+    "https://image0.lietou-static.com"
+  ],
+  "limits": {
+    "page_interval": 15,
+    "pages_hour": 60,
+    "pages_day": 200,
+    "request_interval": 0.5,
+    "requests_hour": 600,
+    "requests_day": 3000,
+    "login_interval": 300,
+    "logins_day": 3
+  }
+}

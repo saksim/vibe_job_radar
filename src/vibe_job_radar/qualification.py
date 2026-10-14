@@ -15,7 +15,7 @@ from pathlib import Path
 ROOT_FILES = {'README.md','README_CLI.md','START_HERE.html','LICENSE','pyproject.toml',
               'start_windows.bat','start_macos.command','get_real_example_windows.bat',
               '.env.example','.gitattributes','.gitignore'}
-SOURCE_DIRS = {'src','scripts','tests','docs','examples','demo_output','.github'}
+SOURCE_DIRS = {'src','scripts','tests','docs','examples','demo_output','.github','deploy'}
 TEST_CERTIFICATES = {'tests/fixtures/connection_test_only.pem',
                      'tests/fixtures/encrypted_dns_test_only.pem'}
 CHECKS = ('unit-tests', 'user-guide', 'offline-demo', 'source-doctor')
@@ -35,6 +35,8 @@ def source_files(root: Path) -> dict[str, Path]:
             continue
         for path in base.rglob('*'):
             rel = path.relative_to(root)
+            if '.team' in rel.parts or path.name == 'credential.json' or path.name.endswith('-credential.json'):
+                raise ValueError('private team connection inside source payload')
             if '.radar-sessions' in rel.parts:
                 raise ValueError('private browser state inside source payload')
             if '.radar-acceptance' in rel.parts:

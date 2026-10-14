@@ -48,11 +48,13 @@ class LocalServer(ThreadingHTTPServer):
         self.guidance = CollectionGuidance(workspace)
         self.evidence = EvidenceService(workspace)
         self.quality = QualityService(workspace)
+        from .team_client import TeamUI
+        self.team = TeamUI(workspace)
         self.guided = GuidedService(workspace)
         self.handoff = CollectionHandoff(self.collector, self.guided)
         if public_client is _DEFAULT_PUBLIC_CLIENT:
-            from .local_public import LocalPublicDataClient
-            public_client = LocalPublicDataClient(workspace)
+            from .team_client import public_client as configured_public_client
+            public_client = configured_public_client(workspace)
         self.public_tasks = PublicTasks(workspace, hybrid_client=public_client)
         self.public_schedule = PublicSchedule(workspace, self.public_tasks)
         self.public_queue = PublicQueue(workspace, self.public_tasks)
@@ -74,6 +76,7 @@ class LocalServer(ThreadingHTTPServer):
             self.public_schedule.close()
 
     def server_close(self):
+        self.team.close()
         self.workspace.close_network()
         self.public_queue.close()
         self.collection_runner.close()
@@ -179,16 +182,18 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = unquote(urlsplit(self.path).path)
-        public = path in {"/quality", "/quality.js", "/", "/app.js", "/report-sources.js", "/advanced", "/advanced.js", "/collection-help.js", "/guided", "/guided.js", "/network-settings.js", "/public-schedule.js", "/public-history.js", "/public-queue.js", "/windows-startup.js"}
+        public = path in {"/quality", "/quality.js", "/", "/app.js", "/report-sources.js", "/advanced", "/advanced.js", "/collection-help.js", "/guided", "/guided.js", "/network-settings.js", "/public-schedule.js", "/public-history.js", "/team.js", "/public-queue.js", "/windows-startup.js"}
         if not self._authorized(token_required=not public):
             return
         try:
             if public:
-                name = {"/quality": "quality.html", "/quality.js": "quality.js", "/": "workbench.html", "/app.js": "workbench.js", "/report-sources.js": "report_sources.js", "/advanced": "advanced.html", "/advanced.js": "advanced.js", "/collection-help.js": "collection_help.js", "/guided": "guided.html", "/guided.js": "guided.js", "/network-settings.js": "network_settings.js", "/public-schedule.js": "public_schedule.js", "/public-history.js": "public_history.js", "/public-queue.js": "public_queue.js", "/windows-startup.js": "windows_startup.js"}[path]
+                name = {"/quality": "quality.html", "/quality.js": "quality.js", "/": "workbench.html", "/app.js": "workbench.js", "/report-sources.js": "report_sources.js", "/advanced": "advanced.html", "/advanced.js": "advanced.js", "/collection-help.js": "collection_help.js", "/guided": "guided.html", "/guided.js": "guided.js", "/network-settings.js": "network_settings.js", "/public-schedule.js": "public_schedule.js", "/public-history.js": "public_history.js", "/team.js": "team.js", "/public-queue.js": "public_queue.js", "/windows-startup.js": "windows_startup.js"}[path]
                 mime = "text/html" if name.endswith(".html") else "text/javascript"
                 self._respond(200, files("vibe_job_radar").joinpath(name).read_bytes(), mime + "; charset=utf-8")
             elif path == "/api/network/state":
                 self._json(200, self.server.workspace.network_state())
+            elif path == "/api/team/state":
+                self._json(200, self.server.team.state())
             elif path == "/api/public/state":
                 self._json(200, self.server.public_tasks.state())
             elif path == "/api/public/history":
@@ -263,7 +268,7 @@ class Handler(BaseHTTPRequestHandler):
             self._body_consumed = True
             if len(raw) != length:
                 raise ValueError
-            data = (decode_json(raw) if urlsplit(self.path).path.startswith("/api/quality/")
+            data = (decode_json(raw) if urlsplit(self.path).path.startswith(("/api/quality/", "/api/team/"))
                     else json.loads(raw.decode("utf-8")))
             if not isinstance(data, dict):
                 raise ValueError
@@ -285,6 +290,9 @@ class Handler(BaseHTTPRequestHandler):
         if route.startswith("/api/windows/startup/"):
             target = self.server.windows_startup
             methods = {"/api/windows/startup/" + name: name for name in ("enable", "disable")}
+        elif route.startswith("/api/team/"):
+            target = self.server.team
+            methods = {"/api/team/" + name: name for name in ("check", "sync")}
         elif route.startswith("/api/public/schedule/"):
             target = self.server.public_schedule
             methods = {"/api/public/schedule/" + name: name for name in ("configure", "disable")}
@@ -356,12 +364,24 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-browser", action="store_true")
     modes=parser.add_mutually_exclusive_group()
     modes.add_argument("--doctor", action="store_true", help="离线检查 Python、SQLite 和目录写入能力")
+    modes.add_argument("--team-install", type=Path, help="从管理员配置文件安装本机团队连接，然后退出")
+    parser.add_argument("--team-credential", type=Path, help="仅配合 --team-install 的设备凭据文件；不要把令牌写入命令行")
     modes.add_argument('--public-worker',action='store_true',help='仅运行已确认的公开查询计划和待办，不启动网页服务器或浏览器')
     modes.add_argument('--native-browser-check',action='store_true',help='检查新临时原生浏览器的空白页、请求拒绝与退出；不连接招聘网站')
     parser.add_argument('--native-browser-channel',choices=['bundled','msedge','chrome'],help='仅用于原生组件检查，默认配套Chromium')
     args = parser.parse_args(argv)
     if not 0 <= args.port <= 65535:
         parser.error("port 必须为 0～65535")
+    if args.team_install:
+        if not args.team_credential or args.port:parser.error("团队安装需要 --team-credential，且不启动服务端口")
+        from .team_client import install_connection
+        try:
+            print(json.dumps(install_connection(args.workspace,args.team_install,args.team_credential),ensure_ascii=False))
+            return 0
+        except (OSError,ValueError,CrawlError):
+            print("团队连接安装失败；核对管理员文件及工作区，原数据保留。",file=sys.stderr)
+            return 2
+    if args.team_credential:parser.error("--team-credential 仅配合 --team-install")
     if args.native_browser_check:
         if args.port:parser.error('原生组件检查不启动服务，请移除--port')
         from .guided.native_check import run_cli

@@ -1,0 +1,226 @@
+"""Authenticated service for reviewed public data and metadata-only coordination."""
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import os
+import re
+import sqlite3
+import sys
+import threading
+import time
+from collections import deque
+from contextlib import closing
+from pathlib import Path
+
+from .guided.rate import Limits, RateLedger, RateLimit
+from .guided.contracts import CrawlError
+from .public_contract import ContractError, PublicQuery
+from .team_store import TeamError, TeamStore, strict_json, safe_path
+from .team_catalog import TeamCatalog, read_snapshot
+
+
+class TeamApplication:
+    def __init__(self, root, *, host, clock=time.time):
+        if not isinstance(host,str) or not re.fullmatch(r'[a-z0-9.-]+',host) or '.' not in host:
+            raise TeamError('team_host_invalid')
+        self.store=TeamStore(root,clock=clock);self.catalog=TeamCatalog(root,clock=clock)
+        self.host=host;self.clock=clock
+        self._admission_lock=threading.Lock();self._arrivals=deque(maxlen=2000)
+        self._started=time.monotonic()
+        # Startup fails on missing/corrupt state; never recreates an empty ledger.
+        with self.store.connection():pass
+        with self.catalog.connection():pass
+
+    def _admit(self):
+        now=time.monotonic()
+        with self._admission_lock:
+            while self._arrivals and self._arrivals[0]<=now-60:self._arrivals.popleft()
+            if len(self._arrivals)>=2000:raise TeamError('team_capacity_wait',429,wait=60)
+            self._arrivals.append(now)
+
+    def _body(self,environ):
+        if environ.get('CONTENT_TYPE','').split(';')[0].strip()!='application/json':raise TeamError()
+        length=environ.get('CONTENT_LENGTH','')
+        if not isinstance(length,str) or not length.isdigit() or not 0<int(length)<=16000:raise TeamError()
+        raw=environ['wsgi.input'].read(int(length))
+        if len(raw)!=int(length):raise TeamError()
+        value=strict_json(raw)
+        if not isinstance(value,dict):raise TeamError()
+        return value
+
+    def __call__(self,environ,start_response):
+        status=200;headers=[]
+        try:
+            self._admit()
+            if (environ.get('wsgi.url_scheme')!='https' or environ.get('HTTP_HOST') not in {self.host,self.host+':443'}
+                    or environ.get('HTTP_COOKIE') or environ.get('QUERY_STRING') or environ.get('HTTP_ORIGIN')
+                    or environ.get('HTTP_TRANSFER_ENCODING')):
+                raise TeamError('team_request_boundary',400)
+            path=environ.get('PATH_INFO','');method=environ.get('REQUEST_METHOD','GET')
+            if path=='/healthz' and method=='GET':
+                with self.store.connection():pass
+                with self.catalog.connection():pass
+                data={'status':'ready','schema_version':1}
+            else:
+                auth=environ.get('HTTP_AUTHORIZATION','')
+                if not auth.startswith('Bearer '):raise TeamError('team_unauthorized',401)
+                token=auth[7:]
+                with self.store.connection() as conn:who=self.store.principal(conn,token)
+                # A second durable limit protects service capacity across devices
+                # and restarts; source/account limits remain independently stricter.
+                ingress=RateLedger(self.store.rate_path,Limits(request_interval=0.05,requests_hour=3600,requests_day=20000),clock=self.clock)
+                ingress.reserve('api:'+who['tenant'],'request')
+                if path=='/v1/team/state' and method=='GET':
+                    data=self.store.state(token)
+                    data['source_updates']=self.catalog.source_state(data['sources'])
+                elif path=='/v1/team/metrics' and method=='GET':
+                    data={**self.store.metrics(token),'uptime_seconds':round(time.monotonic()-self._started)}
+                elif path=='/v1/team/quota' and method=='POST':data=self.store.quota(token,self._body(environ))
+                elif path=='/v1/sync/ack' and method=='POST':
+                    value=self._body(environ)
+                    if set(value)!={'source_scope','revision'}:raise TeamError()
+                    data=self.store.sync_seen(token,value['source_scope'],value['revision'],acknowledge=True)
+                elif path=='/v1/sync/read' and method=='POST':
+                    value=self._body(environ)
+                    with self.store.connection() as conn:self.store.authorize(conn,who,value.get('source_scope'))
+                    data=self.catalog.sync(who,value)
+                    if data['complete']:self.store.sync_seen(token,value['source_scope'],data['revision'])
+                elif path in {'/v1/catalog/sources','/v1/jobs/search'} or re.fullmatch(r'/v1/jobs/[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+',path):
+                    gateway=self.catalog.gateway()
+                    if path=='/v1/catalog/sources' and method=='GET':
+                        state=self.store.state(token)
+                        data={'schema_version':1,'sources':[{'id':s.key,'label':s.label,'domains':list(s.domains),'contract':s.contract}
+                              for s in gateway.registry.values() if s.distribution_approved and s.key in state['sources']]}
+                    elif path=='/v1/jobs/search' and method=='POST':
+                        value=self._body(environ);query=PublicQuery.from_dict(value)
+                        with self.store.connection() as conn:self.store.authorize(conn,who,list(query.source_scope))
+                        self.catalog.require_fresh(list(query.source_scope))
+                        data=gateway.search(value)
+                    elif path.startswith('/v1/jobs/') and method=='GET':
+                        source,ident=path.removeprefix('/v1/jobs/').split('.')
+                        with self.store.connection() as conn:self.store.authorize(conn,who,[source])
+                        self.catalog.require_fresh([source])
+                        row=next((j for j in gateway.jobs if j['source']==source and j['id']==ident),None)
+                        if row is None:raise TeamError('public_job_not_found',404)
+                        from .utils import utc_now
+                        data={'schema_version':1,'jobs':[row],'next_cursor':'','generated_at':utc_now()}
+                    else:raise TeamError('team_route_not_found',404)
+                else:raise TeamError('team_route_not_found',404)
+        except RateLimit as error:
+            status=429;data={'error':'team_rate_wait','reason':error.code}
+            headers.append(('Retry-After',str(max(1,math.ceil(error.wait)))))
+        except TeamError as error:
+            status=error.status;data={'error':error.code}
+            if error.wait is not None:headers.append(('Retry-After',str(max(1,math.ceil(error.wait)))))
+        except (ContractError,ValueError,TypeError,KeyError,UnicodeError):
+            status=400;data={'error':'team_request_invalid'}
+        except (OSError,sqlite3.Error,CrawlError):
+            status=503;data={'error':'team_storage_unavailable'}
+        reason={200:'OK',400:'Bad Request',401:'Unauthorized',403:'Forbidden',404:'Not Found',409:'Conflict',429:'Too Many Requests',503:'Service Unavailable'}[status]
+        body=json.dumps(data,ensure_ascii=False,allow_nan=False).encode()
+        start_response(f'{status} {reason}',[('Content-Type','application/json; charset=utf-8'),('Content-Length',str(len(body))),
+                       ('Cache-Control','no-store'),('X-Content-Type-Options','nosniff'),*headers])
+        return [body]
+
+
+def private_json(path,value):
+    path=Path(path);safe_path(path)
+    descriptor=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+    with os.fdopen(descriptor,'w',encoding='utf-8') as stream:
+        json.dump(value,stream,ensure_ascii=False,indent=2);stream.write('\n')
+
+
+def serve(root,config):
+    raw=strict_json(Path(config).read_bytes())
+    if (not isinstance(raw,dict) or set(raw)!={'schema_version','host','port','threads','connection_limit'}
+            or raw['schema_version']!=1 or type(raw['port']) is not int or not 1024<=raw['port']<=65535
+            or type(raw['threads']) is not int or not 1<=raw['threads']<=8
+            or type(raw['connection_limit']) is not int or not 4<=raw['connection_limit']<=100):
+        raise TeamError('team_server_config_invalid')
+    app=TeamApplication(root,host=raw['host'])
+    from waitress import serve as waitress_serve
+    from .collection import writer_lock
+    # A single process owns this local SQLite deployment. Multiple enrolled
+    # devices use its HTTP API; never mount this directory on a network share.
+    with writer_lock(Path(root)):
+        waitress_serve(app,listen='127.0.0.1:'+str(raw['port']),threads=raw['threads'],
+                       connection_limit=raw['connection_limit'],backlog=64,channel_timeout=20,
+                       max_request_header_size=8192,max_request_body_size=16000,
+                       trusted_proxy='127.0.0.1',trusted_proxy_count=1,
+                       trusted_proxy_headers={'x-forwarded-proto'},clear_untrusted_proxy_headers=True,
+                       expose_tracebacks=False,ident='vibe-radar')
+
+
+def main(argv=None):
+    parser=argparse.ArgumentParser(description='公开团队服务与跨设备配额管理；不读取私人工作区。')
+    parser.add_argument('--data',type=Path,required=True)
+    subs=parser.add_subparsers(dest='command',required=True)
+    subs.add_parser('init')
+    run=subs.add_parser('serve');run.add_argument('--config',type=Path,required=True)
+    member=subs.add_parser('member');member.add_argument('--tenant',required=True);member.add_argument('--member',required=True)
+    member.add_argument('--role',choices=['reader','collector','admin'],required=True);member.add_argument('--disable',action='store_true')
+    issue=subs.add_parser('device');issue.add_argument('--tenant',required=True);issue.add_argument('--member',required=True)
+    issue.add_argument('--device',required=True);issue.add_argument('--days',type=int,default=30);issue.add_argument('--output',type=Path,required=True)
+    revoke=subs.add_parser('revoke');revoke.add_argument('--tenant',required=True);revoke.add_argument('--device',required=True)
+    resource=subs.add_parser('resource');resource.add_argument('--file',type=Path,required=True)
+    grant=subs.add_parser('grant');grant.add_argument('--tenant',required=True);grant.add_argument('--member',required=True)
+    grant.add_argument('--value',required=True);grant.add_argument('--source',action='store_true');grant.add_argument('--remove',action='store_true')
+    publish=subs.add_parser('publish');publish.add_argument('--snapshot',type=Path,required=True)
+    withdraw=subs.add_parser('withdraw');withdraw.add_argument('--source',required=True)
+    refresh=subs.add_parser('refresh');refresh.add_argument('--approval',type=Path,required=True);refresh.add_argument('--source',required=True)
+    backup=subs.add_parser('backup');backup.add_argument('--output',type=Path,required=True)
+    erase=subs.add_parser('erase-member');erase.add_argument('--tenant',required=True);erase.add_argument('--member',required=True)
+    args=parser.parse_args(argv);store=TeamStore(args.data);catalog=TeamCatalog(args.data)
+    try:
+        result={'ok':True,'operation':args.command}
+        if args.command=='init':store.initialize();catalog.initialize()
+        elif args.command=='serve':serve(args.data,args.config)
+        elif args.command=='member':store.member(args.tenant,args.member,args.role,active=not args.disable)
+        elif args.command=='device':
+            # Refuse an existing output before minting an otherwise orphaned token.
+            if args.output.exists():raise TeamError('team_output_exists',409)
+            token=store.issue(args.tenant,args.member,args.device,days=args.days)
+            private_json(args.output,{'schema_version':1,'device_token':token})
+        elif args.command=='revoke':store.revoke(args.tenant,args.device)
+        elif args.command=='resource':
+            value=strict_json(args.file.read_bytes())
+            if not isinstance(value,dict) or set(value)!={'tenant','resource','site','origins','limits'}:raise TeamError()
+            store.resource(value['tenant'],value['resource'],value['site'],value['origins'],limits=Limits(**value['limits']))
+        elif args.command=='grant':store.grant(args.tenant,args.member,args.value,source=args.source,remove=args.remove)
+        elif args.command=='publish':
+            registry,jobs,observations=read_snapshot(args.snapshot);result=catalog.publish(registry,jobs,observed_at=observations)
+        elif args.command=='withdraw':result=catalog.withdraw(args.source)
+        elif args.command=='refresh':
+            from .team_refresh import refresh_approved
+            result=refresh_approved(args.data,args.approval,args.source)
+        elif args.command=='backup':
+            from .collection import writer_lock
+            with writer_lock(args.data):
+                with store.connection():pass
+                with catalog.connection():pass
+                args.output.mkdir(mode=0o700,parents=True,exist_ok=False)
+                for name in ('control.sqlite','rates.sqlite','catalog.sqlite'):
+                    with closing(sqlite3.connect((args.data/name).resolve().as_uri()+'?mode=ro',uri=True)) as source:
+                        with closing(sqlite3.connect(args.output/name)) as target:source.backup(target)
+                    (args.output/name).chmod(0o600)
+        else:
+            from .team_store import ident
+            ident(args.tenant);ident(args.member)
+            with store.connection(write=True) as conn:
+                conn.execute('PRAGMA secure_delete=ON')
+                device_ids=[r[0] for r in conn.execute('SELECT id FROM devices WHERE tenant=? AND member=?',(args.tenant,args.member))]
+                for device in device_ids:
+                    for table in ('watermarks','sync_views'):conn.execute(f'DELETE FROM {table} WHERE device=?',(device,))
+                    conn.execute('DELETE FROM audit WHERE tenant=? AND target=?',(args.tenant,device))
+                for table in ('devices','grants','source_grants','members'):
+                    conn.execute(f'DELETE FROM {table} WHERE tenant=? AND member=?',(args.tenant,args.member))
+                conn.execute('DELETE FROM audit WHERE tenant=? AND (actor=? OR target=?)',(args.tenant,args.member,args.member))
+                # Resource quotas remain: deleting membership cannot refund visits.
+        print(json.dumps(result,ensure_ascii=False));return 0
+    except (TeamError,ContractError,CrawlError,OSError,ValueError,TypeError,ImportError) as error:
+        print(json.dumps({'ok':False,'error':getattr(error,'code','team_operation_failed')}),file=sys.stderr);return 2
+
+
+if __name__=='__main__':raise SystemExit(main())

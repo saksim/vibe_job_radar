@@ -26,7 +26,8 @@ class PublicWorker:
     def __init__(self, workspace, *, client=None):
         self.stop = threading.Event()
         self._signalled = False
-        self.tasks = PublicTasks(workspace, hybrid_client=client if client is not None else LocalPublicDataClient(workspace),
+        from .team_client import public_client
+        self.tasks = PublicTasks(workspace, hybrid_client=client if client is not None else public_client(workspace),
                                  stop_requested=self._stop_requested)
         self.schedule = PublicSchedule(workspace, self.tasks, stop_requested=self._stop_requested)
         self.queue = PublicQueue(workspace, self.tasks, stop_requested=self._stop_requested)
