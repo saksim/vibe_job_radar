@@ -151,6 +151,24 @@ class TeamTests(unittest.TestCase):
         with patch.object(self.app.store,'connection',side_effect=AssertionError('revoked digest remained cached')):
             self.assertEqual(self.call('/v1/team/state',self.tokens['alice'])[0],429)
 
+    def test_corrupt_catalog_secret_fails_startup_health_and_query(self):
+        with closing(sqlite3.connect(self.catalog.path)) as conn:
+            original=conn.execute("SELECT value FROM meta WHERE key='secret'").fetchone()[0]
+        for secret in ['z'*64,'00 '*21+' ',b'0'*64,'0'*63,'0'*65,'é'*64]:
+            with self.subTest(kind=type(secret).__name__,length=len(secret)):
+                with closing(sqlite3.connect(self.catalog.path)) as conn:
+                    conn.execute("UPDATE meta SET value=? WHERE key='secret'",(secret,));conn.commit()
+                with self.assertRaisesRegex(TeamError,'team_catalog_invalid'):
+                    TeamApplication(self.store.root,host='team.fixture.test',clock=lambda:self.now[0])
+                for path,data in [('/healthz',None),('/v1/jobs/search',fixture.query().payload())]:
+                    status,body,_=self.call(path,self.tokens['alice'],data=data)
+                    self.assertEqual((status,body['error']),(503,'team_catalog_invalid'))
+        with closing(sqlite3.connect(self.catalog.path)) as conn:
+            conn.execute("UPDATE meta SET value=? WHERE key='secret'",(original.upper(),));conn.commit()
+        TeamApplication(self.store.root,host='team.fixture.test',clock=lambda:self.now[0])
+        self.assertEqual(self.call('/healthz')[0],200)
+        self.assertEqual(self.call('/v1/jobs/search',self.tokens['alice'],data=fixture.query().payload())[0],200)
+
     def test_health_and_authenticated_capacity_are_independent(self):
         import time
         self.app._health_arrivals.extend([time.monotonic()]*2000)
