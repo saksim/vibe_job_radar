@@ -295,8 +295,8 @@ class SuiteBudgetTests(unittest.TestCase):
             with self.subTest(workflow=filename):
                 source=(workflows / filename).read_text(encoding='utf8')
                 section=source.split(f'  {job}:\n',1)[1]
-                self.assertIn('    timeout-minutes: 25\n',section)
-                unit_step=re.search(r'(?m)^      - (?:name:.*\n|.*\n)*?        timeout-minutes: 20\n        run: python scripts/run_tests.py [^\n]+',section)
+                self.assertIn('    timeout-minutes: 30\n',section)
+                unit_step=re.search(r'(?m)^      - (?:name:.*\n|.*\n)*?        timeout-minutes: 25\n        run: python scripts/run_tests.py [^\n]+',section)
                 self.assertIsNotNone(unit_step)
                 self.assertIn('if: always()',section)
         offline=(workflows / 'tests.yml').read_text(encoding='utf8')

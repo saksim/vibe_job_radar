@@ -17,6 +17,11 @@ from .public_contract import ContractError, PublicQuery, validate_batch, checked
 from .utils import utc_now
 
 
+def encode_snapshot(jobs):
+    """One byte representation for capacity checks and revision identity."""
+    return json.dumps(jobs,sort_keys=True,ensure_ascii=False).encode('utf-8')
+
+
 class PublicGateway:
     def __init__(self, registry, jobs, *, cursor_secret=None, clock=time.time):
         self.registry, self.clock=checked_registry(registry),clock
@@ -38,7 +43,7 @@ class PublicGateway:
                 raise ContractError('public_duplicate_result')
             seen.add(key); self.jobs.append(checked)
         self.jobs.sort(key=lambda j:(j['source'],j['id']))
-        encoded=json.dumps(self.jobs,sort_keys=True,ensure_ascii=False).encode()
+        encoded=encode_snapshot(self.jobs)
         if len(encoded)>50_000_000:
             raise ContractError('public_snapshot_too_large')
         self.revision=hashlib.sha256(encoded).hexdigest()

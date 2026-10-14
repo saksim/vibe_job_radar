@@ -1,0 +1,17 @@
+[Unit]
+Description=Refresh one approved Vibe Job Radar source (%i)
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=radar
+Group=radar
+WorkingDirectory=/var/lib/vibe-radar
+ExecStart=/opt/vibe-radar/venv/bin/vibe-radar-service --data /var/lib/vibe-radar refresh --approval /etc/vibe-radar/approvals/%i.json --source %i
+TimeoutStartSec=120
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/vibe-radar

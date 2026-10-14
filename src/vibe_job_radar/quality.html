@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JD 独立质量复核 · Vibe Job Radar</title>
+<style>
+:root{font-family:system-ui,"Microsoft YaHei",sans-serif;color:#192b3f;background:#f3f6fa;line-height:1.65}
+*{box-sizing:border-box}[hidden]{display:none!important}body{margin:0}main{max-width:1200px;margin:auto;padding:24px 20px 64px}
+h1{font-size:28px;margin:10px 0}h2{font-size:20px;margin:0 0 12px}h3{font-size:17px}a{color:#245e9d}
+section{background:white;border:1px solid #dce3ec;border-radius:12px;padding:20px;margin:18px 0}
+.grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:20px}.wide{grid-column:1/-1}
+label{display:block;font-weight:600;margin:8px 0}input,textarea,select{font:inherit;width:100%;padding:8px 10px;border:1px solid #aebdd0;border-radius:6px;background:white;color:inherit}
+textarea{resize:vertical}input[type=checkbox]{width:auto;margin-right:8px}.check{font-weight:400}.choices{display:flex;gap:8px 18px;flex-wrap:wrap}.choices label{font-weight:400}
+button{font:inherit;cursor:pointer;padding:8px 14px;border:1px solid #265b94;border-radius:7px;background:#265b94;color:white;margin:5px 8px 5px 0}
+button.secondary{background:white;color:#265b94}button:disabled{opacity:.5;cursor:wait}
+.muted,small{color:#536a83;overflow-wrap:anywhere}.warning{border-left:4px solid #d49538;background:#fff8e9;padding:10px 14px}
+#notice{position:sticky;top:8px;z-index:2;white-space:pre-wrap;background:#eef5ff;border:1px solid #b8cce0;border-radius:8px;padding:12px}#notice:empty{display:none}
+#source-text{height:430px;white-space:pre-wrap}#source-info,#summary,#document-info{overflow-wrap:anywhere}
+.requirement{border-top:1px solid #dce3ec;padding:10px 0}.quote{white-space:pre-wrap;overflow-wrap:anywhere}
+#metrics{display:flex;flex-wrap:wrap;gap:12px 24px}.metric{min-width:140px}.metric strong{display:block;font-size:24px}
+details{margin:16px 0}summary{cursor:pointer;font-weight:600}pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:360px;overflow:auto}
+@media(max-width:760px){.grid{grid-template-columns:1fr}main{padding:16px 12px}section{padding:14px}h1{font-size:24px}}
+</style>
+<script src="/quality.js" defer></script>
+</head>
+<body><main>
+<header><a id="back" href="/">← 返回原报告</a><h1>JD 独立质量复核</h1>
+<p class="muted">阅读原文，独立标注要求；保存草稿后可继续。本页不会改写原报告或个人材料。</p>
+<p id="source-info"></p></header><p id="notice" role="status" aria-live="polite"></p>
+<section id="summary" hidden><h2>这份报告的复核进度</h2><p id="coverage"></p><div id="metrics"></div>
+<p class="muted">指标只覆盖本人明确确认且满足评估条件的样本；没有标注时显示“待确认”。精确位置不同也计入差异。</p>
+<button id="export" class="secondary">导出复核包（包含原文）</button><button id="reload" class="secondary">重新打开已保存版本</button>
+<details><summary>导入离线标注</summary><p>选择从本页导出的包中的 annotations.json，可继续编辑或导入文档对标注。会保存为新版本。</p>
+<input id="import-file" type="file" accept=".json,application/json" aria-label="选择标注 JSON">
+<label class="check"><input id="import-confirm" type="checkbox">我已核对文件中“真人确认”标签确实来自独立人工复核</label>
+<button id="import" class="secondary">导入并保存新版本</button></details></section>
+<section id="editor" hidden><label for="document">选择要复核的 JD</label><select id="document"></select>
+<p id="document-info" class="muted"></p><div class="grid">
+<div><h2 id="source-title">原始正文</h2><p id="source-meta" class="muted"></p>
+<textarea id="source-text" readonly aria-label="原始 JD 正文，可选中要求文字"></textarea>
+<p class="muted">在正文中选中一个完整要求条款，再指定能力、关系和强度。不要省略决定否定或强度的上下文。</p></div>
+<div><h2>独立标注</h2><label for="author">复核者</label><input id="author" maxlength="120" autocomplete="off" placeholder="本人确认时必填">
+<label class="check"><input id="roles-reviewed" type="checkbox">已独立核对岗位方向（一个也不选表示不属于这些方向）</label><div id="roles" class="choices"></div>
+<label for="capability">所选原文对应能力</label><select id="capability"><option value="">请选择能力</option></select>
+<label for="relation">与 AI 辅助编程的关系</label><select id="relation"><option value="">请选择关系</option><option value="direct">明确 AI 辅助编程</option><option value="contextual">上下文明确属于 AI 辅助工程</option><option value="role_related">普通岗位能力</option></select>
+<label for="strength">要求强度</label><select id="strength"><option value="">请选择强度</option><option value="required">必须</option><option value="expected">职责 / 期望</option><option value="preferred">优先 / 加分</option><option value="not_required">明确不要求</option><option value="prohibited">明确禁止 / 限制</option><option value="unspecified">未明确强度</option></select>
+<button id="add" class="secondary">添加选中的要求</button><p id="selection" class="muted"></p></div>
+<div class="wide"><h3>已标注的要求</h3><div id="requirements"></div>
+<label for="notes">来源、正文完整性、岗位身份疑点及判断依据</label><textarea id="notes" rows="3"></textarea>
+<label class="check"><input id="complete" type="checkbox">我已逐段检查整篇正文，补齐所有适用能力要求（明确没有要求时也需确认）</label>
+<p class="warning">“保存草稿”不进入质量指标。“本人确认并保存”表示你已独立核对当前 JD；工具不验证复核者身份。</p>
+<button id="save">保存草稿</button><button id="confirm" class="secondary">本人确认并保存</button>
+<details><summary>查看本份 JD 的原报告预测，辅助定位差异</summary><p class="muted">原预测在导出包的 predictions.json 中；请先完成独立标注。不要复制预测作为标准答案。</p></details></div>
+</div></section>
+<section id="pairs" hidden><h2>独立核对重复岗位</h2>
+<p>选择本报告内的两份原文，核对公司、城市、岗位身份和正文。相同文字不自动表示同一岗位；工具不会替你确认。</p>
+<p id="pair-availability" class="muted"></p><div id="pair-content">
+<div class="grid"><div><label for="pair-left">左侧 JD</label><select id="pair-left"></select><p id="pair-left-meta" class="muted"></p><pre id="pair-left-text"></pre></div>
+<div><label for="pair-right">右侧 JD</label><select id="pair-right"></select><p id="pair-right-meta" class="muted"></p><pre id="pair-right-text"></pre></div></div>
+<label for="pair-decision">是否为同一招聘岗位</label><select id="pair-decision"><option value="">尚未裁决</option><option value="same">同一岗位</option><option value="different">不同岗位</option></select>
+<label for="pair-author">文档对复核者</label><input id="pair-author" maxlength="120" autocomplete="off">
+<label for="pair-notes">身份、来源及判断依据</label><textarea id="pair-notes" rows="3"></textarea>
+<button id="pair-save">保存文档对草稿</button><button id="pair-confirm" class="secondary">本人确认文档对</button>
+<p class="muted">保存草稿可撤回已确认状态。只有原报告中适用的完整正文对参与去重指标，不会修改原岗位分组或原报告。</p>
+</div><h3>已保存的文档对</h3><div id="pair-list"></div></section>
+<footer class="muted">全文、标注和版本历史仅保存在本机工作区。合成演示的结果不能作为真实质量验收。</footer>
+</main></body></html>

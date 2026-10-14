@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
 from .catalog_changes import compare_catalogs, validate_change
+from .source_history import SourceHistory
 from .collection import writer_lock
 from .guided.rate import Limits, RateLedger, RateLimit
 from .html_parser import plain_text
@@ -98,6 +99,7 @@ class LocalPublicDataClient:
         self.workspace, self.clock = workspace, clock
         self.registry = {key: board.source for key, board in BOARDS.items()}
         self.root = workspace.root / 'local_public'
+        self.history_warning = ''
         self.path = self.root / 'anthropic-board-v2.json'
         self.legacy_path = self.root / 'anthropic-board-v1.json'
         self.key_path = self.root / 'cursor.key'
@@ -131,8 +133,9 @@ class LocalPublicDataClient:
         if self.ledger is None:
             # Match the existing example's database, scope AND limits. Switching
             # entrypoints or query terms cannot reset its request budget.
-            self.ledger = RateLedger(rate_root / 'rates.sqlite',
-                Limits(request_interval=30, requests_hour=12, requests_day=24), clock=self.clock)
+            from .team_client import workspace_ledger
+            self.ledger = workspace_ledger(self.workspace.root, rate_root / 'rates.sqlite',
+                Limits(request_interval=30, requests_hour=12, requests_day=24), clock=self.clock, local_factory=RateLedger, policy_factory=lambda:self.workspace.network_policy())
 
     def _scope(self, query):
         if (not isinstance(query, PublicQuery) or len(query.source_scope) != 1
@@ -148,6 +151,18 @@ class LocalPublicDataClient:
 
     def _guard(self, board):
         return self.failure_guard if board == ANTHROPIC else CacheFailureGuard(self.root, board.api_url)
+
+    def history(self):
+        return {**SourceHistory(self.root).read(self.clock()), "write_warning": self.history_warning}
+
+    def _remember(self, board, kind, now, **details):
+        try:
+            SourceHistory(self.root).remember(board, kind, now, **details)
+            self.history_warning = ""
+        except (InputError, ValueError, OSError):
+            # Optional metadata cannot discard a valid catalog or replace the
+            # original source failure. Surface its separate failure to the UI.
+            self.history_warning = "来源历史无法保存；原目录与报告结果仍有效，请检查工作区。 "
 
     def _validation(self,board):
         return CatalogValidation(self.root,board)
@@ -232,6 +247,7 @@ class LocalPublicDataClient:
                 'checked_at':checked_at,'not_modified':not_modified,
                 'observed_at': snapshot['observed_at'], 'network_requests': requests, 'refresh_error': error,
                 'execution_mode': self.execution_mode, 'available_jobs': len(snapshot['jobs']),
+                'history_warning': self.history_warning,
                 'matching_jobs': len(jobs), 'returned_jobs': len(batch['jobs']),
                 # A 304 confirms the same representation; it is not another
                 # complete snapshot comparison. Preserve that old audit on disk.
@@ -272,7 +288,7 @@ class LocalPublicDataClient:
                 return self._select(query, cached, now, cached=True)
             check_stopped()
             try:
-                self.ledger.reserve(SCOPE, 'request')
+                self.ledger.reserve(SCOPE, 'request', origin='https://'+urlsplit(board.api_url).hostname)
             except RateLimit as exc:
                 if hard_failure:
                     raise FetchError(hard_failure) from None
@@ -309,10 +325,12 @@ class LocalPublicDataClient:
                             or response.payload is not None):
                         raise FetchError('invalid_not_modified')
                     validator.save(cached,response.etag,now)
+                    self._remember(board, 'not_modified', now, snapshot=cached)
                     return self._select(query,cached,now,cached=True,requests=1)
                 if response.status!=200:raise FetchError(f'http_{response.status}')
                 payload=response.payload
             except FetchError as exc:
+                self._remember(board, 'fetch_error', now, code=exc.code)
                 if exc.code == 'http_429':
                     self._rate_blocked.add(host)
                     self.ledger.cool(SCOPE, max(300, exc.retry_after or 0))
@@ -335,6 +353,7 @@ class LocalPublicDataClient:
                 if len((json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False)+'\n').encode('utf-8')) > MAX_BYTES:
                     raise ContractError('public_cache_invalid')
             except ContractError as exc:
+                self._remember(board, 'structure_error', now, code=exc.code)
                 guard.record(exc.code, now)
                 raise
             path, _ = self._paths(board)
@@ -343,4 +362,5 @@ class LocalPublicDataClient:
             atomic_json(path, value)
             validator.save(value,response.etag if valid_etag(response.etag) else None,now)
             guard.clear()
+            self._remember(board, 'snapshot', now, snapshot=value, payload=payload)
             return self._select(query, value, now, cached=False, requests=1)

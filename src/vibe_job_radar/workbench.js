@@ -173,6 +173,7 @@ function showReport(report) {
   reportSources.setRun(report.manifest.mode === 'real_sample' ? report.id : '');
   $("report").hidden = false;
   $("report-title").textContent = `${report.manifest.mode === "synthetic_demo" ? "合成演示（不是市场事实）" : "真实输入样本（不是全市场）"} · ${report.id.slice(0, 8)}`;
+  $("quality-review").href = "/quality#report=" + report.id;
   $("report-message").textContent = report.message;
   const s = report.manifest.stats;
   $("report-stats").textContent = `正文岗位组 ${s.full_text_job_groups} · 要求行 ${s.requirement_rows} · 已接受正向要求 ${s.accepted_positive_requirement_rows} · 待复核 ${s.review_queue_rows}`;

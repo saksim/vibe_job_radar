@@ -356,7 +356,8 @@ class SafeHTTP:
         if not isinstance(data,dict):raise FetchError('invalid_api_shape')
         return data
 
-    def json(self, url: str, *, method: str = "GET", headers: dict | None = None, payload: dict | None = None) -> dict:
+    def json(self, url: str, *, method: str = "GET", headers: dict | None = None, payload: dict | None = None,
+             error_codes: dict | None = None) -> dict:
         hdr = {"Accept": "application/json", **(headers or {})}
         body = None
         if payload is not None:
@@ -364,6 +365,14 @@ class SafeHTTP:
             hdr["Content-Type"] = "application/json"
         result = self.request(url, method=method, headers=hdr, body=body)
         if result.status != 200:
+            # Only callers opting into fixed codes can receive a service error.
+            # Never forward arbitrary remote text, fields or oversized bodies.
+            if error_codes and result.status in error_codes and len(result.body)<=1024:
+                try:value=self._json_payload(result)
+                except FetchError:value={}
+                if (set(value)=={'error'} and isinstance(value['error'],str)
+                        and value['error'] in error_codes[result.status]):
+                    raise FetchError(value['error'])
             raise FetchError(f"http_{result.status}")
         return self._json_payload(result)
 

@@ -24,7 +24,8 @@ class SharedSiteRate:
             # Same file, platform key and original Limits as GuidedService.
             # This is lazy: previews, cached bodies and API-only tasks do not
             # create a second ledger or reserve upstream visits.
-            ledger = RateLedger(root / 'rates.sqlite')
+            from .team_client import workspace_ledger
+            ledger = workspace_ledger(self.root, root / 'rates.sqlite', local_factory=RateLedger)
             adapter = SimpleNamespace(key=self.platform, domains=(), resource_domains=())
             self._wire = PinnedTransport(adapter, ledger, threading.Event())
         return self._wire

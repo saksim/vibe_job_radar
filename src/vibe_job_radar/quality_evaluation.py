@@ -100,6 +100,11 @@ def evaluate_packet(packet: str | Path, annotations: str | Path | None = None):
     manifest, data = load_packet(packet)
     annotation_path = Path(annotations) if annotations is not None else Path(packet) / "annotations.json"
     raw = annotation_path.read_bytes()
+    return evaluate_annotations(manifest, data, raw)
+
+
+def evaluate_annotations(manifest, data, raw):
+    """Evaluate exact annotation bytes against an already verified packet."""
     value = decode_json(raw)
     documents = validate_annotations(value, manifest, data)
     corpus = {d["record_id"]: d for d in data["corpus"]}
