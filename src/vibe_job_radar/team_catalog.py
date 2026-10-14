@@ -16,7 +16,7 @@ from pathlib import Path
 from .public_contract import PublicSource, checked_registry
 from .public_gateway import PublicGateway
 from .team_store import TeamError, strict_json, safe_path
-from .utils import parse_time
+from .utils import parse_time, utc_now
 
 MAX_SNAPSHOT_BYTES=50_000_000
 
@@ -244,4 +244,4 @@ class TeamCatalog:
                                    'target':target,'offset':offset+limit,'mode':mode,'expires':expires},meta['secret']) if more else ''
             observations=[dict(r) for r in conn.execute('SELECT id,observed,revision FROM sources WHERE id IN ('+placeholders+')',scope)]
             return {'schema_version':1,'mode':mode,'events':events,'next_cursor':next_cursor,
-                    'revision':target,'complete':not more,'sources':observations}
+                    'revision':target,'complete':not more,'sources':observations,'generated_at':utc_now()}

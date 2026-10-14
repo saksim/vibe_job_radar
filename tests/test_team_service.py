@@ -209,6 +209,55 @@ class TeamTests(unittest.TestCase):
         with patch.object(client,'request',side_effect=malformed),self.assertRaises(ValueError):sync.run()
         self.assertEqual(path.read_bytes(),before)
 
+    def test_reset_recovers_damaged_cache_only_after_a_valid_download(self):
+        client=self.connection('alice');sync=TeamSync(self.root/'alice',connection=client)
+        sync.run();path=self.root/'alice/team_sync/snapshot.json'
+        for old in (b'{',b'{}',b'null'):
+            with self.subTest(old=old):
+                path.write_bytes(old)
+                with patch.object(client,'request',side_effect=TeamError('team_unavailable')):
+                    with self.assertRaises(TeamError):sync.run(reset=True)
+                self.assertEqual(path.read_bytes(),old)
+                self.assertEqual(sync.run(reset=True)['jobs'],2)
+        # An oversized corrupt file is rejected normally but explicit reset does
+        # not read it into memory or require manual removal.
+        with path.open('wb') as stream:stream.truncate(51_000_001)
+        with self.assertRaisesRegex(TeamError,'team_sync_cache_invalid'):sync.run()
+        self.assertEqual(sync.run(reset=True)['jobs'],2)
+        self.assertLess(path.stat().st_size,10000)
+
+    def test_sync_uses_server_envelope_with_bounded_skew_and_persists_it(self):
+        from datetime import datetime,timedelta,timezone
+        local=datetime.now(timezone.utc);server=local+timedelta(seconds=120)
+        job=fixture.job('ahead');job['collected_at']=(local+timedelta(seconds=90)).isoformat()
+        with patch('vibe_job_radar.public_gateway.utc_now',return_value=server.isoformat()):
+            self.catalog.publish(fixture.REGISTRY,[job],observed_at={'fixture':self.now[0]})
+        client=self.connection('alice');sync=TeamSync(self.root/'alice',connection=client,clock=local.timestamp)
+        with patch('vibe_job_radar.team_catalog.utc_now',return_value=server.isoformat()):
+            self.assertEqual(sync.run()['jobs'],1)
+        path=self.root/'alice/team_sync/snapshot.json'
+        saved=json.loads(path.read_text(encoding='utf-8'))
+        self.assertEqual(saved['generated_at'],server.isoformat());self.assertEqual(saved['schema_version'],2)
+        # Replay the cached future-to-this-device row using its validated envelope.
+        self.assertEqual(sync.run()['mode'],'changes')
+        before=path.read_bytes()
+        with patch('vibe_job_radar.team_catalog.utc_now',return_value=(local+timedelta(seconds=301)).isoformat()):
+            with self.assertRaisesRegex(TeamError,'team_sync_timestamp_invalid'):sync.run(reset=True)
+        self.assertEqual(path.read_bytes(),before)
+        # A row collected after its own server envelope is still invalid.
+        with patch('vibe_job_radar.team_catalog.utc_now',return_value=local.isoformat()):
+            with self.assertRaisesRegex(ValueError,'public_timestamp_invalid'):sync.run(reset=True)
+        self.assertEqual(path.read_bytes(),before)
+
+    def test_original_sync_cache_migrates_without_losing_jobs(self):
+        client=self.connection('alice');sync=TeamSync(self.root/'alice',connection=client)
+        sync.run();path=self.root/'alice/team_sync/snapshot.json'
+        saved=json.loads(path.read_text(encoding='utf-8'));saved.pop('generated_at');saved['schema_version']=1
+        path.write_text(json.dumps(saved),encoding='utf-8')
+        self.assertEqual(sync.run()['mode'],'changes')
+        upgraded=json.loads(path.read_text(encoding='utf-8'))
+        self.assertEqual(upgraded['schema_version'],2);self.assertEqual(upgraded['jobs'],saved['jobs'])
+
     def test_public_query_enters_the_original_task_and_report_pipeline(self):
         import time
         connection=self.connection('alice',public=True);workspace=Workspace(self.root/'alice')
@@ -255,12 +304,18 @@ class TeamTests(unittest.TestCase):
         with self.assertRaises(TeamError):self.store.resource('group','account','boss',['https://www.liepin.com'],limits=Limits(pages_day=10))
 
     def test_simultaneous_device_reservations_have_only_one_winner(self):
-        a=self.connection('alice');b=self.connection('bob');results=[];barrier=threading.Barrier(2)
-        def reserve(connection):
+        # Separate database connections contend on the account ledger itself;
+        # the HTTP ingress throttle must not supply the losing reservation.
+        stores=[TeamStore(self.root/'service',clock=lambda:self.now[0]) for _ in range(2)]
+        results=[];barrier=threading.Barrier(2)
+        def reserve(store,token):
             barrier.wait()
-            try:connection.reserve('liepin','page');results.append('accepted')
+            try:
+                store.quota(token,{'resource':'account','site':'liepin','operation':'reserve','kind':'page'})
+                results.append('accepted')
             except RateLimit:results.append('limited')
-        threads=[threading.Thread(target=reserve,args=(connection,)) for connection in (a,b)]
+        threads=[threading.Thread(target=reserve,args=(store,self.tokens[member]))
+                 for store,member in zip(stores,('alice','bob'))]
         for thread in threads:thread.start()
         for thread in threads:thread.join(10)
         self.assertTrue(all(not thread.is_alive() for thread in threads));self.assertCountEqual(results,['accepted','limited'])
@@ -399,11 +454,24 @@ class TeamTests(unittest.TestCase):
         with closing(sqlite3.connect(self.store.path)) as conn:
             self.assertEqual(conn.execute('SELECT COUNT(*) FROM audit').fetchone()[0],0)
 
-    def test_connection_requires_a_domain_instead_of_persisting_an_invalid_ip_origin(self):
+    def test_invalid_service_domains_do_not_activate_or_block_connection_install(self):
         from vibe_job_radar.team_client import origin
-        for value in ['https://[2606:4700:4700::1111]','https://8.8.8.8']:
-            with self.assertRaisesRegex(TeamError,'team_connection_invalid'):origin(value)
+        from urllib.parse import urlsplit
+        self.connection('alice');destination=self.root/'domain-retry'
+        config=self.root/'domain-config.json';credential=self.root/'alice-credential.json'
+        saved=json.loads((self.root/'alice-config.json').read_text(encoding='utf-8'))
+        for value in ['https://localhost','https://[2606:4700:4700::1111]','https://8.8.8.8',
+                      'https://team..test','https://-team.test','https://team.test-']:
+            with self.subTest(origin=value):
+                config.write_text(json.dumps({**saved,'origin':value}),encoding='utf-8')
+                with self.assertRaisesRegex(TeamError,'team_connection_invalid'):
+                    install_connection(destination,config,credential)
+                self.assertFalse((destination/'.team').exists())
+                with self.assertRaisesRegex(TeamError,'team_host_invalid'):
+                    TeamApplication(self.root/'service',host=urlsplit(value).hostname)
         self.assertEqual(origin('https://team.fixture.test:443/'),'https://team.fixture.test')
+        config.write_text(json.dumps(saved),encoding='utf-8');install_connection(destination,config,credential)
+        self.assertEqual(TeamConnection(destination,transport=self.http).request('/v1/team/state')['member'],'alice')
 
     def test_team_panel_uses_its_workspace_proxy_policy(self):
         import os

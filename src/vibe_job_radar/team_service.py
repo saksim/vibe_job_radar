@@ -17,14 +17,13 @@ from pathlib import Path
 from .guided.rate import Limits, RateLedger, RateLimit
 from .guided.contracts import CrawlError
 from .public_contract import ContractError, PublicQuery
-from .team_store import TeamError, TeamStore, strict_json, safe_path, private_json
+from .team_store import TeamError, TeamStore, strict_json, safe_path, private_json, service_host
 from .team_catalog import TeamCatalog, read_snapshot
 
 
 class TeamApplication:
     def __init__(self, root, *, host, clock=time.time):
-        if not isinstance(host,str) or not re.fullmatch(r'[a-z0-9.-]+',host) or '.' not in host:
-            raise TeamError('team_host_invalid')
+        service_host(host)
         self.store=TeamStore(root,clock=clock);self.catalog=TeamCatalog(root,clock=clock)
         self.host=host;self.clock=clock
         self._admission_lock=threading.Lock();self._arrivals=deque(maxlen=2000)

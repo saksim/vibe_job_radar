@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import ipaddress
 import json
 import os
 import re
@@ -19,7 +18,7 @@ from .network import SafeHTTP, FetchError
 from .network_policy import current_policy
 from .public_contract import PublicSource, checked_registry, ContractError
 from .public_data import PublicDataClient
-from .team_store import TeamError, strict_json, ident, TOKEN, safe_path
+from .team_store import TeamError, strict_json, ident, TOKEN, safe_path, service_host
 from .utils import atomic_json
 from .workspace import InputError
 
@@ -30,9 +29,7 @@ def origin(value):
         if (p.scheme!='https' or not p.hostname or p.username is not None or p.password is not None
                 or p.port not in (None,443) or p.path not in ('','/') or p.query or p.fragment
                 or any(ord(c)<33 for c in value) or len(value)>2048):raise ValueError()
-        try:address=ipaddress.ip_address(p.hostname)
-        except ValueError:address=None
-        if address is not None:raise ValueError()
+        service_host(p.hostname)
     except (ValueError,TypeError) as error:raise TeamError('team_connection_invalid') from error
     return 'https://'+p.hostname
 

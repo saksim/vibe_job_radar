@@ -6,6 +6,7 @@ Device secrets are random capabilities stored only as SHA-256 digests.
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import math
 import os
@@ -30,6 +31,17 @@ class TeamError(ValueError):
     def __init__(self, code='team_request_invalid', status=400, *, wait=None):
         self.code, self.status, self.wait = code, status, wait
         super().__init__(code)
+
+
+def service_host(value):
+    if (not isinstance(value,str) or len(value)>253 or '.' not in value
+            or any(not re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?',label)
+                   for label in value.split('.'))):
+        raise TeamError('team_host_invalid')
+    try:address=ipaddress.ip_address(value)
+    except ValueError:address=None
+    if address is not None:raise TeamError('team_host_invalid')
+    return value
 
 
 def ident(value):
