@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import sqlite3
+import stat
 import sys
 import threading
 import tempfile
@@ -58,6 +59,45 @@ def sync_directory(path):
     descriptor=os.open(path,os.O_RDONLY|os.O_DIRECTORY)
     try:os.fsync(descriptor)
     finally:os.close(descriptor)
+
+
+def backup_database(source, target):
+    safe_path(source)
+    with closing(sqlite3.connect(source.resolve().as_uri()+'?mode=ro',uri=True)) as connection:
+        with closing(sqlite3.connect(target)) as destination:connection.backup(destination)
+    target.chmod(0o600)
+
+
+def backup_refresh_state(root, staged):
+    from .collection import writer_lock
+    workspace=safe_path(root/'refresh-workspace')
+    if not workspace.exists():return
+    # Only the service refresher's durable public state is included. Refuse
+    # links/special files instead of following them into an unrelated workspace.
+    def check(path, directory=False):
+        safe_path(path);info=path.lstat()
+        if (getattr(info,'st_file_attributes',0)&0x400
+                or not (stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode))):
+            raise TeamError('team_storage_unsafe',503)
+    check(workspace,True)
+    target=staged/'refresh-workspace';target.mkdir(mode=0o700)
+    with writer_lock(workspace):
+        cache=safe_path(workspace/'local_public')
+        if cache.exists():
+            check(cache,True)
+            copied=target/'local_public';copied.mkdir(mode=0o700)
+            for path in cache.iterdir():
+                if path.name=='.writer.lock':continue
+                check(path)
+                shutil.copyfile(path,copied/path.name)
+                (copied/path.name).chmod(0o600)
+        rates=safe_path(workspace/'public_examples'/'rates.sqlite')
+        if rates.exists():
+            check(rates.parent,True);check(rates)
+            copied=target/'public_examples';copied.mkdir(mode=0o700)
+            # SQLite's backup API includes committed WAL contents, unlike a raw
+            # file copy. No copied lock or journal is restored as persistent state.
+            backup_database(rates,copied/'rates.sqlite')
 
 
 class TeamApplication:
@@ -254,23 +294,27 @@ def main(argv=None):
             result=refresh_approved(args.data,args.approval,args.source)
         elif args.command=='backup':
             from .collection import writer_lock
-            with writer_lock(args.data):
+            from .team_refresh import refresh_operation
+            with writer_lock(args.data),refresh_operation(args.data):
                 store.expire_rate_history()
                 catalog.expire_changes()
                 safe_path(args.output)
                 if args.output.exists():raise TeamError('team_output_exists',409)
                 args.output.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
-                # No published output exists until all three databases are
-                # copied and protected. Failure leaves the same path retryable.
+                # Publish only after service databases and any refresh state
+                # are copied and protected. Failure leaves the path retryable.
                 with tempfile.TemporaryDirectory(prefix='.team-backup-',dir=args.output.parent) as directory:
                     staged=Path(directory)
                     for name in ('control.sqlite','rates.sqlite','catalog.sqlite'):
-                        with closing(sqlite3.connect((args.data/name).resolve().as_uri()+'?mode=ro',uri=True)) as source:
-                            with closing(sqlite3.connect(staged/name)) as target:source.backup(target)
-                        (staged/name).chmod(0o600)
+                        backup_database(args.data/name,staged/name)
+                    backup_refresh_state(args.data,staged)
                     if os.name!='nt':
-                        for path in staged.iterdir():
-                            with path.open('rb') as stream:os.fsync(stream.fileno())
+                        paths=list(staged.rglob('*'))
+                        for path in paths:
+                            if path.is_file():
+                                with path.open('rb') as stream:os.fsync(stream.fileno())
+                        for path in reversed(paths):
+                            if path.is_dir():sync_directory(path)
                     sync_directory(staged)
                     if args.output.exists():raise TeamError('team_output_exists',409)
                     identity=staged.stat()
