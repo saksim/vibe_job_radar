@@ -699,6 +699,43 @@ class TeamTests(unittest.TestCase):
         self.assertEqual(len(TeamCatalog(root).gateway().jobs),len(payload()['jobs']))
         transport.json.assert_called_once_with(ANTHROPIC.api_url)
 
+    def test_refresh_and_backup_share_one_lock_through_catalog_publication(self):
+        from dataclasses import replace
+        from unittest.mock import Mock
+        from vibe_job_radar.local_public import LocalPublicDataClient
+        from vibe_job_radar.public_boards import ANTHROPIC
+        from vibe_job_radar.team_refresh import refresh_approved,refresh_operation
+        from vibe_job_radar.workspace import InputError
+        from test_local_public import payload
+        root=self.root/'refresh-atomic';TeamStore(root).initialize();TeamCatalog(root).initialize()
+        approved=replace(ANTHROPIC.source,distribution_approved=True,contract='ARTIFICIAL fixture approval')
+        approval=self.root/'approved-atomic-refresh.json'
+        private_json(approval,{'schema_version':1,'sources':[asdict(approved)],'jobs':[]})
+        output=self.root/'atomic-refresh-backup'
+        args=['--data',str(root),'backup','--output',str(output)]
+        factory=Mock(side_effect=AssertionError('contending refresh must not start acquisition'))
+        with patch('sys.stdout',new=io.StringIO()),patch('sys.stderr',new=io.StringIO()):
+            with refresh_operation(root):
+                with self.assertRaises(InputError):refresh_approved(root,approval,ANTHROPIC.source.key,client_factory=factory)
+                self.assertEqual(service_main(args),2)
+            factory.assert_not_called();self.assertFalse(output.exists())
+            transport=Mock();transport.json.return_value=payload()
+            original=TeamCatalog.publish;observed=[]
+            def publish(catalog,*args_,**kwargs):
+                # The lock must still be held after search finishes, until the
+                # catalog's transaction publishes the matching snapshot.
+                observed.append(service_main(args))
+                self.assertFalse(output.exists())
+                return original(catalog,*args_,**kwargs)
+            with patch.object(TeamCatalog,'publish',publish):
+                refresh_approved(root,approval,ANTHROPIC.source.key,
+                    client_factory=lambda workspace:LocalPublicDataClient(workspace,transport=transport))
+            self.assertEqual(observed,[2])
+            self.assertEqual(service_main(args),0)
+        self.assertEqual(len(TeamCatalog(output).gateway().jobs),len(payload()['jobs']))
+        self.assertTrue((output/'refresh-workspace/public_examples/rates.sqlite').is_file())
+        transport.json.assert_called_once_with(ANTHROPIC.api_url)
+
     def test_service_token_echo_cannot_be_saved_as_job_content(self):
         connection=self.connection('alice')
         with patch.object(self.http,'json',return_value={'schema_version':1,'text':self.tokens['alice']}):

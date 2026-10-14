@@ -294,7 +294,8 @@ def main(argv=None):
             result=refresh_approved(args.data,args.approval,args.source)
         elif args.command=='backup':
             from .collection import writer_lock
-            with writer_lock(args.data):
+            from .team_refresh import refresh_operation
+            with writer_lock(args.data),refresh_operation(args.data):
                 store.expire_rate_history()
                 catalog.expire_changes()
                 safe_path(args.output)
