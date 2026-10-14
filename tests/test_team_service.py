@@ -135,6 +135,22 @@ class TeamTests(unittest.TestCase):
         self.assertEqual(self.connection('alice').request('/v1/team/state')['member'],'alice')
         self.assertEqual(len(self.app._arrivals),1)
 
+    def test_unknown_credential_checks_are_bounded_before_database_access(self):
+        import time
+        client=self.connection('alice')
+        self.assertEqual(client.request('/v1/team/state')['member'],'alice')
+        unknown='vjr_'+'x'*43
+        self.assertEqual(self.call('/v1/team/state',unknown)[0],401)
+        self.app._authentication_arrivals.extend([time.monotonic()]*2000)
+        with patch.object(self.app.store,'connection',side_effect=AssertionError('unbounded database validation')):
+            self.assertEqual(self.call('/v1/team/state',unknown)[0],429)
+            self.assertEqual(self.call('/v1/team/state',self.tokens['bob'])[0],429)
+        self.assertEqual(client.request('/v1/team/state')['member'],'alice')
+        self.store.revoke('group','alice-pc')
+        self.assertEqual(self.call('/v1/team/state',self.tokens['alice'])[0],401)
+        with patch.object(self.app.store,'connection',side_effect=AssertionError('revoked digest remained cached')):
+            self.assertEqual(self.call('/v1/team/state',self.tokens['alice'])[0],429)
+
     def test_health_and_authenticated_capacity_are_independent(self):
         import time
         self.app._health_arrivals.extend([time.monotonic()]*2000)
@@ -149,26 +165,36 @@ class TeamTests(unittest.TestCase):
 
     def test_backup_parent_sync_failure_retracts_only_the_published_directory(self):
         from vibe_job_radar.team_service import sync_directory
-        for replacement in [False,True]:
-            output=self.root/('backup-parent-'+str(replacement));displaced=self.root/'operator-moved-backup'
+        original_rename=Path.rename
+        for replacement in ['none','before','during']:
+            parent=self.root/('backup-case-'+replacement);parent.mkdir()
+            output=parent/'backup';displaced=parent/'operator-moved-backup'
+            def replace_output():
+                original_rename(output,displaced);output.mkdir()
+                (output/'operator-note.txt').write_text('keep',encoding='utf-8')
+            def rename(path,destination):
+                if replacement=='during' and path==output and Path(destination).parent.name.startswith('.team-backup-recovery-'):
+                    replace_output()
+                return original_rename(path,destination)
             def fail_parent(path):
                 if path==output.parent:
                     self.assertEqual(sorted(p.name for p in output.iterdir()),['catalog.sqlite','control.sqlite','rates.sqlite'])
-                    if replacement:
-                        output.rename(displaced);output.mkdir()
-                        (output/'operator-note.txt').write_text('keep',encoding='utf-8')
+                    if replacement=='before':replace_output()
                     raise OSError('fixture parent sync failure')
                 return sync_directory(path)
-            with patch('vibe_job_radar.team_service.TeamStore',return_value=self.store),patch('vibe_job_radar.team_service.TeamCatalog',return_value=self.catalog),patch('sys.stdout',new=io.StringIO()),patch('sys.stderr',new=io.StringIO()):
+            with patch('vibe_job_radar.team_service.TeamStore',return_value=self.store),patch('vibe_job_radar.team_service.TeamCatalog',return_value=self.catalog),patch('sys.stdout',new=io.StringIO()),patch('sys.stderr',new=io.StringIO()) as errors:
                 args=['--data',str(self.store.root),'backup','--output',str(output)]
-                with patch('vibe_job_radar.team_service.sync_directory',side_effect=fail_parent):
+                with patch('vibe_job_radar.team_service.sync_directory',side_effect=fail_parent),patch.object(Path,'rename',rename):
                     self.assertEqual(service_main(args),2)
-                self.assertEqual(list(output.parent.glob('.team-backup-*')),[])
-                if replacement:
-                    self.assertEqual((output/'operator-note.txt').read_text(encoding='utf-8'),'keep')
+                self.assertFalse(output.exists())
+                recovery=list(parent.glob('.team-backup-recovery-*'))
+                if replacement!='none':
+                    self.assertIn('team_backup_recovery_required',errors.getvalue())
+                    self.assertEqual(len(recovery),1)
+                    self.assertEqual((recovery[0]/'snapshot'/'operator-note.txt').read_text(encoding='utf-8'),'keep')
                     self.assertEqual(sorted(p.name for p in displaced.iterdir()),['catalog.sqlite','control.sqlite','rates.sqlite'])
                 else:
-                    self.assertFalse(output.exists())
+                    self.assertEqual(list(parent.glob('.team-backup-*')),[])
                     self.assertEqual(service_main(args),0)
                     self.assertEqual(sorted(p.name for p in output.iterdir()),['catalog.sqlite','control.sqlite','rates.sqlite'])
 

@@ -2,23 +2,25 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
 import re
+import shutil
 import sqlite3
 import sys
 import threading
 import tempfile
 import time
-from collections import deque
+from collections import deque, OrderedDict
 from contextlib import closing
 from pathlib import Path
 
 from .guided.rate import Limits, RateLedger, RateLimit
 from .guided.contracts import CrawlError
 from .public_contract import ContractError, PublicQuery
-from .team_store import TeamError, TeamStore, strict_json, safe_path, private_json, service_host
+from .team_store import TeamError, TeamStore, TOKEN, strict_json, safe_path, private_json, service_host
 from .team_catalog import TeamCatalog, read_snapshot
 
 
@@ -65,18 +67,43 @@ class TeamApplication:
         self.host=host;self.clock=clock
         self._admission_lock=threading.Lock();self._arrivals=deque(maxlen=2000)
         self._health_arrivals=deque(maxlen=2000)
+        self._authentication_arrivals=deque(maxlen=2000)
+        self._known_credentials=OrderedDict()
         self._started=time.monotonic()
         # Startup fails on missing/corrupt state; never recreates an empty ledger.
         with self.store.connection():pass
         with self.catalog.connection():pass
 
-    def _admit(self, *, health=False):
+    def _admit(self, *, health=False, authentication=False):
         now=time.monotonic()
         with self._admission_lock:
-            arrivals=self._health_arrivals if health else self._arrivals
+            arrivals=(self._health_arrivals if health else
+                      self._authentication_arrivals if authentication else self._arrivals)
             while arrivals and arrivals[0]<=now-60:arrivals.popleft()
             if len(arrivals)>=2000:raise TeamError('team_capacity_wait',429,wait=60)
             arrivals.append(now)
+
+    def _authenticate(self,token):
+        if not isinstance(token,str) or not TOKEN.fullmatch(token):
+            raise TeamError('team_unauthorized',401)
+        digest=hashlib.sha256(token.encode()).hexdigest()
+        with self._admission_lock:known=digest in self._known_credentials
+        # Previously validated digests bypass only the separate first-use
+        # admission bucket, never the authoritative permission/revocation read.
+        # Both paths are bounded before any database validation begins.
+        self._admit(authentication=not known)
+        try:
+            with self.store.connection() as conn:who=self.store.principal(conn,token)
+        except TeamError as error:
+            if error.status==401:
+                with self._admission_lock:self._known_credentials.pop(digest,None)
+            raise
+        if not known:self._admit()
+        with self._admission_lock:
+            self._known_credentials[digest]=None
+            self._known_credentials.move_to_end(digest)
+            while len(self._known_credentials)>2000:self._known_credentials.popitem(last=False)
+        return who
 
     def _body(self,environ):
         if environ.get('CONTENT_TYPE','').split(';')[0].strip()!='application/json':raise TeamError()
@@ -105,8 +132,7 @@ class TeamApplication:
                 auth=environ.get('HTTP_AUTHORIZATION','')
                 if not auth.startswith('Bearer '):raise TeamError('team_unauthorized',401)
                 token=auth[7:]
-                with self.store.connection() as conn:who=self.store.principal(conn,token)
-                self._admit()
+                who=self._authenticate(token)
                 # A second durable limit protects service capacity across devices
                 # and restarts; source/account limits remain independently stricter.
                 ingress=RateLedger(self.store.rate_path,Limits(request_interval=0.05,requests_hour=3600,requests_day=20000),clock=self.clock)
@@ -251,13 +277,19 @@ def main(argv=None):
                     staged.rename(args.output)
                     try:sync_directory(args.output.parent)
                     except OSError:
-                        # Retract only our just-published directory, never an
-                        # operator's replacement. TemporaryDirectory then
-                        # removes the uncommitted backup and permits retry.
-                        current=args.output.lstat()
-                        if ((current.st_dev,current.st_ino)==(identity.st_dev,identity.st_ino)
-                                and not staged.exists()):
-                            args.output.rename(staged)
+                        # Atomically claim the current name before examining
+                        # identity. This sibling is outside automatic cleanup:
+                        # an operator's replacement must never be deleted.
+                        recovery=Path(tempfile.mkdtemp(prefix='.team-backup-recovery-',dir=args.output.parent))
+                        retained=recovery/'snapshot'
+                        try:args.output.rename(retained)
+                        except OSError:
+                            recovery.rmdir()
+                            raise
+                        current=retained.lstat()
+                        if (current.st_dev,current.st_ino)!=(identity.st_dev,identity.st_ino):
+                            raise TeamError('team_backup_recovery_required',503)
+                        shutil.rmtree(recovery)
                         raise
         else:
             from .team_store import ident
