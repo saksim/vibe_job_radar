@@ -223,6 +223,72 @@ class TeamTests(unittest.TestCase):
                 self.assertEqual(service_main(args),2)
                 self.assertEqual({p.name:p.read_bytes() for p in output.iterdir()},before)
 
+    def test_backup_restores_refresh_quotas_cache_etag_and_failure_state(self):
+        from dataclasses import replace
+        from vibe_job_radar.local_public import LocalPublicDataClient,SCOPE
+        from vibe_job_radar.network import JSONRepresentation
+        from vibe_job_radar.public_boards import ANTHROPIC,BOARDS
+        from vibe_job_radar.team_refresh import refresh_approved
+        from test_local_public import payload
+        import time
+        self.now[0]=time.time()-3*3600
+        root=self.root/'refresh-roundtrip'
+        store=TeamStore(root,clock=lambda:self.now[0]);store.initialize()
+        catalog=TeamCatalog(root,clock=lambda:self.now[0]);catalog.initialize()
+        approval=self.root/'backup-approval.json'
+        approved=replace(ANTHROPIC.source,distribution_approved=True,contract='ARTIFICIAL fixture approval')
+        private_json(approval,{'schema_version':1,'sources':[asdict(approved)],'jobs':[]})
+        calls=[]
+        class Transport:
+            def conditional_json(instance,url,*,etag=None):
+                calls.append(etag)
+                return JSONRepresentation(304,None,'"fixture"') if etag else JSONRepresentation(200,payload(),'"fixture"')
+        factory=lambda workspace:LocalPublicDataClient(workspace,transport=Transport(),clock=lambda:self.now[0])
+        refresh_approved(store.root,approval,ANTHROPIC.source.key,client_factory=factory)
+        workspace=Workspace(store.root/'refresh-workspace');self.addCleanup(workspace.close_network)
+        client=factory(workspace);client._prepare()
+        other=next(board for board in BOARDS.values() if board!=ANTHROPIC)
+        client._guard(other).record('http_403',self.now[0])
+        for _ in range(11):
+            self.now[0]+=31;client.ledger.reserve(SCOPE,'request')
+        rate_path=workspace.root/'public_examples/rates.sqlite'
+        output=self.root/'restored-refresh'
+        # Keep a committed WAL frame live while backing up. A raw main-file
+        # copy would lose this independently retained cooldown.
+        with closing(sqlite3.connect(rate_path)) as live:
+            live.execute('PRAGMA journal_mode=WAL');live.execute('PRAGMA wal_autocheckpoint=0')
+            live.execute('INSERT OR REPLACE INTO cooldown VALUES(?,?)',('fixture-retained',self.now[0]+900));live.commit()
+            with patch('vibe_job_radar.team_service.TeamStore',return_value=store),patch('vibe_job_radar.team_service.TeamCatalog',return_value=catalog),patch('sys.stdout',new=io.StringIO()):
+                self.assertEqual(service_main(['--data',str(store.root),'backup','--output',str(output)]),0)
+        restored_workspace=Workspace(output/'refresh-workspace');self.addCleanup(restored_workspace.close_network)
+        restored=factory(restored_workspace);restored._prepare()
+        self.assertEqual(restored._guard(other).read(self.now[0]),'http_403')
+        for path in client.root.iterdir():
+            if path.name!='.writer.lock':self.assertEqual((restored.root/path.name).read_bytes(),path.read_bytes())
+        with closing(sqlite3.connect(restored_workspace.root/'public_examples/rates.sqlite')) as saved:
+            self.assertEqual(saved.execute('SELECT until FROM cooldown WHERE site=?',('fixture-retained',)).fetchone()[0],self.now[0]+900)
+        with self.assertRaises(RateLimit):restored.ledger.reserve(SCOPE,'request')
+        self.now[0]+=3601
+        result=refresh_approved(output,approval,ANTHROPIC.source.key,client_factory=factory)
+        self.assertEqual(result['source_requests'],1);self.assertEqual(calls,[None,'"fixture"'])
+        for _ in range(11):
+            self.now[0]+=31;restored.ledger.reserve(SCOPE,'request')
+        self.now[0]+=3601
+        with self.assertRaises(RateLimit):restored.ledger.reserve(SCOPE,'request')
+
+    def test_refresh_backup_copy_failure_is_retryable_without_partial_publication(self):
+        cache=self.store.root/'refresh-workspace/local_public';cache.mkdir(parents=True)
+        (cache/'cursor.key').write_bytes(b'fixture cursor state')
+        output=self.root/'refresh-backup-failure'
+        args=['--data',str(self.store.root),'backup','--output',str(output)]
+        with patch('vibe_job_radar.team_service.TeamStore',return_value=self.store),patch('vibe_job_radar.team_service.TeamCatalog',return_value=self.catalog),patch('sys.stdout',new=io.StringIO()),patch('sys.stderr',new=io.StringIO()):
+            with patch('vibe_job_radar.team_service.shutil.copyfile',side_effect=OSError('fixture copy failure')):
+                self.assertEqual(service_main(args),2)
+            self.assertFalse(output.exists());self.assertEqual(list(self.root.glob('.team-backup-*')),[])
+            self.assertEqual(service_main(args),0)
+        self.assertEqual((output/'refresh-workspace/local_public/cursor.key').read_bytes(),b'fixture cursor state')
+        self.assertFalse((output/'refresh-workspace/local_public/.writer.lock').exists())
+
     def test_failed_initial_database_publication_removes_only_its_own_links(self):
         from vibe_job_radar.team_service import initialize_service
         import os
