@@ -36,8 +36,9 @@ jobs:
           name: workspace-compatibility-${{ matrix.os }}
           path: browser-acceptance/compatibility/
   test:
-    # Full suite has a fixed 20m step budget; leave 5m for setup and artifacts.
-    timeout-minutes: 25
+    # Preserve the full matrix; 3,046 tests already took 1,197s on Windows.
+    # Allow 25m for the suite and 5m for setup/evidence, without automatic retries.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -58,7 +59,7 @@ jobs:
         if: runner.os == 'Windows' && matrix.python == '3.12'
         run: python -m pip install "truststore>=0.10.4,<0.11"
       - name: Run the full offline regression
-        timeout-minutes: 20
+        timeout-minutes: 25
         run: python scripts/run_tests.py --report acceptance/results.json --progress --suite-snapshot-after 600
       - run: python scripts/run_demo.py
       - run: python scripts/start_workbench.py --doctor --workspace .ci-source-workspace

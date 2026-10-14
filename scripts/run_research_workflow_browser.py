@@ -9,6 +9,7 @@ import json
 import sys
 import tempfile
 import threading
+import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -69,7 +70,7 @@ def main() -> int:
                         for key, value in {
                             'title':'时间序列算法工程师', 'company':'人工研究夹具（非招聘事实）',
                             'source_ref':'research-browser:approved-fixture',
-                            'text':'要求熟练使用 Cursor 进行 AI 辅助编程，编写单元测试并进行代码审查。',
+                            'text':'😀要求熟练使用 Cursor 进行 AI 辅助编程，编写单元测试并进行代码审查。',
                             'rights_note':'人工测试输入，仅验证界面；不是平台授权或本人工作。'
                         }.items():
                             form.locator(f'[name={key}]').fill(value)
@@ -136,6 +137,65 @@ def main() -> int:
                         page.screenshot(path=str(out / 'research-mobile.png'), full_page=True)
 
                         page.locator('#brief-roles').screenshot(path=str(out / 'role-sample-mobile.png'))
+                        # Explicit synthetic human flags exercise the UI only; they are
+                        # never real labels or a claim about the user's corpus.
+                        page.locator('#quality-review').click()
+                        expect(page.locator('#coverage')).to_contain_text('本人已确认 0')
+                        expect(page.locator('#metrics')).to_contain_text('待确认')
+                        assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+                        original_text = page.locator('#source-text').input_value()
+                        quote = original_text[1:]
+                        page.locator('#source-text').evaluate("(e) => { e.focus(); e.setSelectionRange(2, e.value.length); }")
+                        page.locator('#capability').select_option('ai_coding')
+                        page.locator('#relation').select_option('direct')
+                        page.locator('#strength').select_option('required')
+                        page.locator('#add').click()
+                        expect(page.locator('#requirements')).to_contain_text(quote)
+                        page.locator('#author').fill('人工质量夹具（非真人验收）')
+                        page.locator('#roles-reviewed').check()
+                        page.locator('#roles input[value=time_series]').check()
+                        page.locator('#complete').check()
+                        def locked_editor(route):
+                            assert page.evaluate("[...document.querySelectorAll('button,input,select,textarea')].every(e => e.disabled)")
+                            route.continue_()
+                        page.route('**/api/quality/save', locked_editor)
+                        page.locator('#save').click()
+                        expect(page.locator('#source-info')).to_contain_text('标注版本 1')
+                        expect(page.locator('#coverage')).to_contain_text('本人已确认 0')
+                        page.locator('#confirm').click()
+                        expect(page.locator('#source-info')).to_contain_text('标注版本 2')
+                        expect(page.locator('#coverage')).to_contain_text('本人已确认 1')
+                        page.reload()
+                        expect(page.locator('#source-info')).to_contain_text('标注版本 2')
+                        expect(page.locator('#requirements')).to_contain_text(quote)
+                        with page.expect_download() as quality_download:
+                            page.locator('#export').click()
+                        quality_download.value.save_as(str(out / 'quality-fixture.zip'))
+                        with zipfile.ZipFile(out / 'quality-fixture.zip') as archive:
+                            labels = json.loads(archive.read('annotations.json'))
+                            saved = labels['documents'][0]['requirements'][0]
+                            assert saved['start'] == 1 and saved['quote'] == quote
+                            assert json.loads(archive.read('quality-evaluation.json'))['coverage']['extraction_evaluated_documents'] == 1
+                        # A second writer cannot silently change the exported version.
+                        latest = server.quality.open({'report_id':source_id})
+                        server.quality.save({'report_id':source_id,'expected_revision':latest['revision'],
+                                             'document':latest['annotations']['documents'][0], 'confirm_human':True})
+                        page.locator('#export').click()
+                        expect(page.locator('#notice')).to_contain_text('标注版本已更新')
+                        page.locator('#reload').click()
+                        expect(page.locator('#source-info')).to_contain_text('标注版本 3')
+                        page.locator('details').filter(has=page.locator('#import')).locator('summary').click()
+                        oversized = json.dumps({'notes':'\\' * 520000}).encode()
+                        assert len(oversized) < 1900000
+                        page.locator('#import-file').set_input_files({'name':'large.json','mimeType':'application/json','buffer':oversized})
+                        page.locator('#import').click()
+                        expect(page.locator('#notice')).to_contain_text('编码后超过 2 MB')
+                        expect(page.locator('#author')).to_be_enabled()
+                        page.screenshot(path=str(out / 'quality-review-mobile.png'), full_page=True)
+                        assert hashlib.sha256(workspace.report_file(source_id, 'requirements.jsonl').read_bytes()).hexdigest() == before_hash
+                        result['checks'].append('report-pinned independent quality UI: Unicode selection, non-gold draft, explicit synthetic confirmation, locked pending edits, stale export conflict, encoded import limit and unchanged original')
+                        page.locator('#back').click()
+                        expect(page.locator('#report-title')).to_contain_text(source_id[:8])
                         with page.expect_download() as download:
                             page.get_by_role('button', name='research_brief.md', exact=True).click()
                         download.value.save_as(str(out / 'fixture-research-brief.md'))
@@ -163,6 +223,44 @@ def main() -> int:
                         expect(page.locator('#notice')).to_contain_text('未自动加载其他报告')
                         expect(page.locator('#source-run')).to_have_value('')
                         result['checks'].append('readable guide downloads, narrow-screen layout holds, invalid report never falls back to another batch')
+                        # A separate synthetic report supplies source pairs without
+                        # changing the original one-job research/evidence flow.
+                        sys.path.insert(0, str(ROOT / 'tests'))
+                        from test_quality_review import fixture_report, TEXT
+                        pair_run = 'b' * 32
+                        fixture_report(workspace.root / 'reports' / pair_run, manual_sources=True)
+                        pair_state = server.quality.open({'report_id':pair_run})
+                        records = [row['record_id'] for row in pair_state['corpus']
+                                   if row['dedup_eligible'] and row['text'] == TEXT]
+                        page.goto(server.origin + '/quality#report=' + pair_run)
+                        expect(page.locator('#pair-content')).to_be_visible()
+                        page.locator('#pair-left').select_option(records[0])
+                        page.locator('#pair-right').select_option(records[1])
+                        expect(page.locator('#pair-left-text')).to_have_text(TEXT)
+                        expect(page.locator('#pair-left-meta')).to_contain_text('authored-fixture:')
+                        page.locator('#notes').fill('unsaved JD notes must survive pair save')
+                        page.locator('#pair-author').fill('人工去重夹具（非真人验收）')
+                        page.locator('#pair-decision').select_option('same')
+                        page.locator('#pair-save').click()
+                        expect(page.locator('#source-info')).to_contain_text('标注版本 1')
+                        expect(page.locator('#notes')).to_have_value('unsaved JD notes must survive pair save')
+                        page.locator('#pair-notes').fill('unsaved pair notes must survive JD save')
+                        page.locator('#save').click()
+                        expect(page.locator('#source-info')).to_contain_text('标注版本 2')
+                        expect(page.locator('#pair-notes')).to_have_value('unsaved pair notes must survive JD save')
+                        page.locator('#pair-confirm').click()
+                        expect(page.locator('#source-info')).to_contain_text('标注版本 3')
+                        expect(page.locator('#pair-list')).to_contain_text('本人已确认')
+                        actual = server.quality.open({'report_id':pair_run})
+                        assert actual['evaluation']['deduplication']['comparable_human_pairs'] == 1
+                        page.locator('#pair-save').click()
+                        expect(page.locator('#source-info')).to_contain_text('标注版本 4')
+                        actual = server.quality.open({'report_id':pair_run})
+                        assert actual['evaluation']['deduplication']['comparable_human_pairs'] == 0
+                        assert len(actual['annotations']['dedup_pairs']) == 1
+                        assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+                        page.locator('#pairs').screenshot(path=str(out / 'quality-pairs-mobile.png'))
+                        result['checks'].append('independent side-by-side pair review: draft, confirmation, revoke, preserve other unsaved editor and 390px layout; synthetic pair only')
                         assert not result['page_errors'], result['page_errors']
                         assert not result['external_browser_requests'], result['external_browser_requests']
                         result['success'] = True

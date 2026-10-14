@@ -1,0 +1,20 @@
+name: promotion-policy
+on:
+  pull_request:
+    branches: [dev, release, main]
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+permissions:
+  contents: read
+jobs:
+  promotion-route:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check dev to release to main and release outcomes
+        run: python scripts/check_promotion.py

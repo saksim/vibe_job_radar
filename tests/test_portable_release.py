@@ -12,6 +12,7 @@ import zipfile
 from unittest.mock import patch
 
 SCRIPT = Path(__file__).resolve().parents[1]/'scripts/prepare_portable_release.py'
+NOTES = '## 解决了什么\n- #318 发行缺少变更说明。\n## 提高了什么\n- 可追溯实际修复。\n## 验证结果\n- 离线夹具通过。\n## 剩余问题\n- #319 现场验收待完成。\n'
 
 
 class PortableReleaseTests(unittest.TestCase):
@@ -76,6 +77,22 @@ class PortableReleaseTests(unittest.TestCase):
         sums=(out/'SHA256SUMS.txt').read_text(encoding='utf8')
         for path in out.iterdir():
             if path.name!='SHA256SUMS.txt':self.assertIn(self.mod.file_hash(path)+'  '+path.name,sums)
+
+    def test_release_outcomes_are_in_body_asset_and_checksums(self):
+        output=self.root/'with-notes'
+        result=self.mod.assemble(self.package,self.manifest,self.evidence,
+                                 self.run,{},self.artifacts,output,NOTES)
+        self.assertEqual((output/'CHANGES.md').read_text(encoding='utf8'),NOTES)
+        self.assertTrue((output/'UPGRADE_AND_LIMITATIONS.md').read_text(encoding='utf8').startswith(NOTES))
+        digest=self.mod.file_hash(output/'CHANGES.md')
+        self.assertEqual(result['change_notes_sha256'],digest)
+        self.assertIn(digest+'  CHANGES.md',(output/'SHA256SUMS.txt').read_text(encoding='utf8'))
+
+    def test_missing_draft_outcomes_fail_before_network_or_output(self):
+        output=self.root/'no-notes'
+        with patch.object(self.mod,'api',side_effect=AssertionError('no remote work')), self.assertRaises(ValueError):
+            self.mod.prepare(self.repo,self.run['id'],output,True)
+        self.assertFalse(output.exists())
 
     def test_failed_pending_pr_fork_or_missing_ci_cannot_prepare_release(self):
         for defect in ('failed','pending','pull_request','fork','missing'):
@@ -174,7 +191,7 @@ class PortableReleaseTests(unittest.TestCase):
     def test_selected_artifacts_only_and_draft_creation_never_rebuilds(self):
         with patch.object(self.mod,'api',side_effect=lambda repo,suffix:self.api_fixture(suffix)), \
              patch.object(self.mod,'gh',side_effect=self.gh_fixture) as command:
-            result=self.mod.prepare(self.repo,self.run['id'],self.root/'download',True)
+            result=self.mod.prepare(self.repo,self.run['id'],self.root/'download',True,NOTES)
         calls=[call.args for call in command.call_args_list]
         self.assertEqual(len(calls),4)
         self.assertIn('draft_url',result)
@@ -192,7 +209,7 @@ class PortableReleaseTests(unittest.TestCase):
         with patch.object(self.mod,'api',side_effect=response), \
              patch.object(self.mod,'gh',side_effect=self.gh_fixture) as command, \
              self.assertRaises(ValueError):
-            self.mod.prepare(self.repo,self.run['id'],self.root/'changed',True)
+            self.mod.prepare(self.repo,self.run['id'],self.root/'changed',True,NOTES)
         self.assertTrue(all(call.args[:2]==('run','download') for call in command.call_args_list))
 
     def test_existing_draft_or_tag_blocks_creation_and_keeps_preparation(self):
@@ -207,7 +224,7 @@ class PortableReleaseTests(unittest.TestCase):
                 with patch.object(self.mod,'api',side_effect=response), \
                      patch.object(self.mod,'gh',side_effect=self.gh_fixture) as command, \
                      self.assertRaises(ValueError):
-                    self.mod.prepare(self.repo,self.run['id'],self.root/existing,True)
+                    self.mod.prepare(self.repo,self.run['id'],self.root/existing,True,NOTES)
                 self.assertTrue((self.root/existing/'prepared.json').is_file())
                 self.assertTrue(all(call.args[:2]==('run','download') for call in command.call_args_list))
 
@@ -235,7 +252,7 @@ class PortableReleaseTests(unittest.TestCase):
                 with patch.object(self.mod,'api',side_effect=response), \
                      patch.object(self.mod,'gh',side_effect=self.gh_fixture) as command, \
                      self.assertRaises(ValueError):
-                    self.mod.prepare(self.repo,self.run['id'],self.root/defect,True)
+                    self.mod.prepare(self.repo,self.run['id'],self.root/defect,True,NOTES)
                 self.assertTrue(all(c.args[:2]==('run','download') for c in command.call_args_list))
 
     def test_release_inventory_after_first_hundred_can_create_or_detect_collision(self):
@@ -256,10 +273,10 @@ class PortableReleaseTests(unittest.TestCase):
                      patch.object(self.mod,'gh',side_effect=self.gh_fixture) as command:
                     if collision:
                         with self.assertRaises(ValueError):
-                            self.mod.prepare(self.repo,self.run['id'],output,True)
+                            self.mod.prepare(self.repo,self.run['id'],output,True,NOTES)
                         self.assertTrue(all(c.args[:2]==('run','download') for c in command.call_args_list))
                     else:
-                        result=self.mod.prepare(self.repo,self.run['id'],output,True)
+                        result=self.mod.prepare(self.repo,self.run['id'],output,True,NOTES)
                         self.assertIn('draft_url',result)
                 self.assertEqual(pages,[1,2])
 

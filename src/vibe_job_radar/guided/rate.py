@@ -226,6 +226,10 @@ class RateLedger:
             due, code = max(candidates, key=lambda item: item[0])
             if due > now:
                 raise RateLimit(due - now, code, next_allowed_at=due)
+            # Optional team admission runs after local checks while holding the
+            # local reservation transaction. A failed/uncertain service call
+            # leaves no local grant and never authorizes the upstream request.
+            self._before_reservation(site, kind, origin)
             # Both budgets are consumed together, after ALL constraints pass.
             conn.execute('INSERT INTO visits VALUES (?,?,?)', (site, kind, now))
             if kind == 'request' and origin is not None:
@@ -235,6 +239,10 @@ class RateLedger:
             conn.execute('DELETE FROM visits WHERE ts<?', (now - 172800,))
             conn.execute('DELETE FROM publisher_visits WHERE ts<?', (now-MAX_PUBLISHER_WINDOW,))
             conn.commit()
+
+    def _before_reservation(self, site, kind, origin):
+        """Extension point for an explicitly enrolled cross-device coordinator."""
+        return None
 
     def cool(self, site: str, seconds: float = 300) -> None:
         if not math.isfinite(seconds):

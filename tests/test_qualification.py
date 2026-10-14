@@ -24,6 +24,19 @@ class QualificationTests(unittest.TestCase):
                 'source':fingerprint(self.root),'source_unchanged':True,
                 'tests':{'tests_run':3,'success':True,'failures':0,'errors':0,'skipped':0},
                 'steps':[{'name':n,'returncode':0} for n in ('unit-tests','user-guide','offline-demo','source-doctor')]}
+    def test_deployment_configuration_is_bound_but_team_credentials_are_rejected(self):
+        evidence=self.evidence()
+        folder=self.root/'deploy/team';folder.mkdir(parents=True)
+        (folder/'service.example.json').write_text('{}',encoding='utf-8')
+        with self.assertRaises(ValueError):require_local_evidence(self.root,evidence)
+        for name,body in [('operator-credential.json',{}),('alice-device.json',{}),
+                          ('renamed.json',{'schema_version':1,'device_token':'fixture-token'}),
+                          ('sealed.json',{'scheme':'windows-dpapi','value':'fixture'})]:
+            path=folder/name;path.write_text(json.dumps(body),encoding='utf-8')
+            with self.assertRaises(ValueError):fingerprint(self.root)
+            path.unlink()
+        fingerprint(self.root)
+
     def test_same_source_accepts(self):
         self.assertEqual(require_local_evidence(self.root,self.evidence()),fingerprint(self.root))
     def test_changed_python_source_rejects_old_report(self):
