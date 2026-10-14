@@ -51,23 +51,32 @@ def initialize_service(root):
                 raise
 
 
+def sync_directory(path):
+    if os.name=='nt':return
+    descriptor=os.open(path,os.O_RDONLY|os.O_DIRECTORY)
+    try:os.fsync(descriptor)
+    finally:os.close(descriptor)
+
+
 class TeamApplication:
     def __init__(self, root, *, host, clock=time.time):
         service_host(host)
         self.store=TeamStore(root,clock=clock);self.catalog=TeamCatalog(root,clock=clock)
         self.host=host;self.clock=clock
         self._admission_lock=threading.Lock();self._arrivals=deque(maxlen=2000)
+        self._health_arrivals=deque(maxlen=2000)
         self._started=time.monotonic()
         # Startup fails on missing/corrupt state; never recreates an empty ledger.
         with self.store.connection():pass
         with self.catalog.connection():pass
 
-    def _admit(self):
+    def _admit(self, *, health=False):
         now=time.monotonic()
         with self._admission_lock:
-            while self._arrivals and self._arrivals[0]<=now-60:self._arrivals.popleft()
-            if len(self._arrivals)>=2000:raise TeamError('team_capacity_wait',429,wait=60)
-            self._arrivals.append(now)
+            arrivals=self._health_arrivals if health else self._arrivals
+            while arrivals and arrivals[0]<=now-60:arrivals.popleft()
+            if len(arrivals)>=2000:raise TeamError('team_capacity_wait',429,wait=60)
+            arrivals.append(now)
 
     def _body(self,environ):
         if environ.get('CONTENT_TYPE','').split(';')[0].strip()!='application/json':raise TeamError()
@@ -82,13 +91,13 @@ class TeamApplication:
     def __call__(self,environ,start_response):
         status=200;headers=[]
         try:
-            self._admit()
             if (environ.get('wsgi.url_scheme')!='https' or environ.get('HTTP_HOST') not in {self.host,self.host+':443'}
                     or environ.get('HTTP_COOKIE') or environ.get('QUERY_STRING') or environ.get('HTTP_ORIGIN')
                     or environ.get('HTTP_TRANSFER_ENCODING')):
                 raise TeamError('team_request_boundary',400)
             path=environ.get('PATH_INFO','');method=environ.get('REQUEST_METHOD','GET')
             if path=='/healthz' and method=='GET':
+                self._admit(health=True)
                 self.store.expire_rate_history()
                 self.catalog.expire_changes()
                 data={'status':'ready','schema_version':1}
@@ -97,6 +106,7 @@ class TeamApplication:
                 if not auth.startswith('Bearer '):raise TeamError('team_unauthorized',401)
                 token=auth[7:]
                 with self.store.connection() as conn:who=self.store.principal(conn,token)
+                self._admit()
                 # A second durable limit protects service capacity across devices
                 # and restarts; source/account limits remain independently stricter.
                 ingress=RateLedger(self.store.rate_path,Limits(request_interval=0.05,requests_hour=3600,requests_day=20000),clock=self.clock)
@@ -235,15 +245,20 @@ def main(argv=None):
                     if os.name!='nt':
                         for path in staged.iterdir():
                             with path.open('rb') as stream:os.fsync(stream.fileno())
-                        descriptor=os.open(staged,os.O_RDONLY|os.O_DIRECTORY)
-                        try:os.fsync(descriptor)
-                        finally:os.close(descriptor)
+                    sync_directory(staged)
                     if args.output.exists():raise TeamError('team_output_exists',409)
+                    identity=staged.stat()
                     staged.rename(args.output)
-                    if os.name!='nt':
-                        descriptor=os.open(args.output.parent,os.O_RDONLY|os.O_DIRECTORY)
-                        try:os.fsync(descriptor)
-                        finally:os.close(descriptor)
+                    try:sync_directory(args.output.parent)
+                    except OSError:
+                        # Retract only our just-published directory, never an
+                        # operator's replacement. TemporaryDirectory then
+                        # removes the uncommitted backup and permits retry.
+                        current=args.output.lstat()
+                        if ((current.st_dev,current.st_ino)==(identity.st_dev,identity.st_ino)
+                                and not staged.exists()):
+                            args.output.rename(staged)
+                        raise
         else:
             from .team_store import ident
             ident(args.tenant);ident(args.member)

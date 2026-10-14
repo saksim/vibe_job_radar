@@ -125,6 +125,53 @@ class TeamTests(unittest.TestCase):
             self.assertEqual({p.name:p.read_bytes() for p in root.iterdir() if p.is_file() and p.name!='.writer.lock'},before)
             self.assertEqual(note.read_text(encoding='utf-8'),'keep')
 
+    def test_anonymous_requests_do_not_consume_authenticated_capacity(self):
+        for _ in range(2001):
+            self.assertEqual(self.call('/v1/team/state')[0],401)
+        self.assertEqual(self.call('/v1/team/state','invalid-token')[0],401)
+        self.assertEqual(self.call('/v1/team/state',self.tokens['alice'],HTTP_ORIGIN='https://untrusted.test')[0],400)
+        self.assertEqual(self.call('/healthz')[0],200)
+        self.assertEqual(len(self.app._arrivals),0)
+        self.assertEqual(self.connection('alice').request('/v1/team/state')['member'],'alice')
+        self.assertEqual(len(self.app._arrivals),1)
+
+    def test_health_and_authenticated_capacity_are_independent(self):
+        import time
+        self.app._health_arrivals.extend([time.monotonic()]*2000)
+        self.assertEqual(self.call('/healthz')[0],429)
+        self.assertEqual(self.call('/v1/team/state',self.tokens['alice'])[0],200)
+        self.app._arrivals.extend([time.monotonic()]*2000)
+        status,body,headers=self.call('/v1/team/state',self.tokens['alice'])
+        self.assertEqual((status,body['error'],headers['Retry-After']),(429,'team_capacity_wait','60'))
+        self.assertEqual(self.call('/v1/team/state')[0],401)
+        self.app._health_arrivals.clear()
+        self.assertEqual(self.call('/healthz')[0],200)
+
+    def test_backup_parent_sync_failure_retracts_only_the_published_directory(self):
+        from vibe_job_radar.team_service import sync_directory
+        for replacement in [False,True]:
+            output=self.root/('backup-parent-'+str(replacement));displaced=self.root/'operator-moved-backup'
+            def fail_parent(path):
+                if path==output.parent:
+                    self.assertEqual(sorted(p.name for p in output.iterdir()),['catalog.sqlite','control.sqlite','rates.sqlite'])
+                    if replacement:
+                        output.rename(displaced);output.mkdir()
+                        (output/'operator-note.txt').write_text('keep',encoding='utf-8')
+                    raise OSError('fixture parent sync failure')
+                return sync_directory(path)
+            with patch('vibe_job_radar.team_service.TeamStore',return_value=self.store),patch('vibe_job_radar.team_service.TeamCatalog',return_value=self.catalog),patch('sys.stdout',new=io.StringIO()),patch('sys.stderr',new=io.StringIO()):
+                args=['--data',str(self.store.root),'backup','--output',str(output)]
+                with patch('vibe_job_radar.team_service.sync_directory',side_effect=fail_parent):
+                    self.assertEqual(service_main(args),2)
+                self.assertEqual(list(output.parent.glob('.team-backup-*')),[])
+                if replacement:
+                    self.assertEqual((output/'operator-note.txt').read_text(encoding='utf-8'),'keep')
+                    self.assertEqual(sorted(p.name for p in displaced.iterdir()),['catalog.sqlite','control.sqlite','rates.sqlite'])
+                else:
+                    self.assertFalse(output.exists())
+                    self.assertEqual(service_main(args),0)
+                    self.assertEqual(sorted(p.name for p in output.iterdir()),['catalog.sqlite','control.sqlite','rates.sqlite'])
+
     def test_backup_failure_never_publishes_partial_output_and_same_path_can_retry(self):
         original_connect=sqlite3.connect;original_chmod=Path.chmod
         for failure in ['database','chmod']:
