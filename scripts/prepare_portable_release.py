@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import zipfile
 
+from release_summary import validate_summary
 from build_windows_portable import native_components_valid
 from url_pac_acceptance import valid_evidence as valid_url_pac
 from wpad_dns_evidence import valid_wpad_dns_evidence
@@ -181,9 +182,11 @@ def validate_candidate(candidate, manifest, source_evidence, sha):
             'portable_evidence': proof}
 
 
-def assemble(candidate, manifest, source_evidence, selected, qualified, artifacts, output):
+def assemble(candidate, manifest, source_evidence, selected, qualified, artifacts, output, change_notes=None):
     output = Path(output)
     require(not output.exists() and not output.is_symlink(), 'Output already exists')
+    if change_notes is not None:
+        change_notes = validate_summary(change_notes)
     result = validate_candidate(candidate, manifest, source_evidence, selected['head_sha'])
     repo = selected['head_repository']['full_name']
     require(REPO.fullmatch(repo), 'Invalid repository')
@@ -202,6 +205,9 @@ def assemble(candidate, manifest, source_evidence, selected, qualified, artifact
                   'ci': qualified, 'artifacts': artifacts, 'rebuilt_for_release': False,
                   'signed': False, 'live_sites_certified': False,
                   'clean_machine_certified': False}
+    if change_notes is not None:
+        (output/'CHANGES.md').write_text(change_notes, encoding='utf-8')
+        provenance['change_notes_sha256'] = file_hash(output/'CHANGES.md')
     write_json(output/'provenance.json', provenance)
     notes = (
         f"# Windows x64 便携候选 {result['version']}\n\n"
@@ -224,14 +230,18 @@ def assemble(candidate, manifest, source_evidence, selected, qualified, artifact
         "移除子进程Python PATH的验证不等于未安装Python的个人电脑已验收。"
         "本机配套Chromium曾有未定位崩溃，明确选择Edge的历史通过也不替代本包现场验收。\n"
     )
+    if change_notes is not None:
+        notes = change_notes + '\n' + notes
     (output/'UPGRADE_AND_LIMITATIONS.md').write_text(notes, encoding='utf-8')
     checksums = ''.join(f'{file_hash(p)}  {p.name}\n' for p in sorted(output.iterdir()) if p.is_file())
     (output/'SHA256SUMS.txt').write_text(checksums, encoding='utf-8')
     return provenance
 
 
-def prepare(repo, run_id, out, create_draft=False):
+def prepare(repo, run_id, out, create_draft=False, change_notes=None):
     require(REPO.fullmatch(repo) and type(run_id) is int and run_id > 0, 'Invalid run selection')
+    if create_draft or change_notes is not None:
+        change_notes = validate_summary(change_notes)
     out = Path(out)
     require(not out.exists() and not out.is_symlink(), 'Output already exists; inspect previous attempt')
     selected = api(repo, f'actions/runs/{run_id}')
@@ -262,7 +272,7 @@ def prepare(repo, run_id, out, create_draft=False):
     manifest = read_json(evidence/'portable-candidate/manifest.json')
     source = read_json(evidence/'release-verification/result.json')
     payload = out/'assets'
-    result = assemble(packages[0], manifest, source, selected, qualified, artifacts, payload)
+    result = assemble(packages[0], manifest, source, selected, qualified, artifacts, payload, change_notes)
     write_json(out/'prepared.json', result)
     if create_draft:
         # Never edit/overwrite a tag or an existing draft, including after an
@@ -291,9 +301,15 @@ def main():
     parser.add_argument('--run-id', required=True, type=canonical_run_id)
     parser.add_argument('--out', type=Path, default=Path('release-draft'))
     parser.add_argument('--create-draft', action='store_true')
+    parser.add_argument('--change-notes', type=Path, help='Reviewed UTF-8 outcomes; required to create a draft')
     args = parser.parse_args()
     try:
-        result = prepare(args.repository, args.run_id, args.out, args.create_draft)
+        change_notes = None
+        if args.change_notes is not None:
+            require(args.change_notes.is_file() and not args.change_notes.is_symlink()
+                    and args.change_notes.stat().st_size <= 65536, 'Invalid release summary file')
+            change_notes = args.change_notes.read_text(encoding='utf-8-sig')
+        result = prepare(args.repository, args.run_id, args.out, args.create_draft, change_notes)
     except (ValueError, KeyError, TypeError, OSError, zipfile.BadZipFile, subprocess.SubprocessError) as error:
         print(f'Release preparation stopped: {error}')
         return 1
