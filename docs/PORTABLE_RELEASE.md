@@ -2,6 +2,12 @@
 
 关联 #318 / #210。发行入口复用已经通过 main CI 的候选 ZIP，保留原构建记录和原字节，不重新构建、运行程序或重复测试。得到的是**未签名的预发行草稿**，不能当作签名正式发行、实站认证或干净机器验收。
 
+## 晋升与变更说明
+
+功能先进入 dev，再由 dev → release → main 晋升；见 [分支晋升](BRANCH_PROMOTION.md)。晋升 PR 须写清解决了什么、提高了什么、验证结果和剩余问题。
+
+创建发行草稿时另提供同样四段的已审查 UTF-8 Markdown，关联 Issue/PR。Actions 输入 change_notes；本机用 --change-notes path/to/changes.md。脚本在下载前检查说明，正文进入草稿、CHANGES.md 与校验清单，provenance.json 保存其摘要。仅本机准备旧包文件时可以省略；创建草稿不可省略。此要求不修改已有草稿或下载包。
+
 ## 维护者操作
 
 在 Actions 选择工作流 prepare-portable-release，仅从 main 手动运行，输入 windows-portable-candidate 的成功 **push/main run ID**。该提交的8个现有验证工作流必须已完成并成功；PR、fork、缺项、仍在运行或失败的检查不能用于发行准备。选择的候选产物尚须在保留期内。运行ID必须使用不含前导零、正号或空格的正十进制格式；同一ID的Actions任务串行运行且不取消正在上传的任务。本机CLI须由维护者避免并发启动相同候选。
