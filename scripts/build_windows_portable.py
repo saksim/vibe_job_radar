@@ -199,6 +199,8 @@ def build_candidate(out,evidence_path,*,verify_login_startup=False,verify_system
             'system_pac_verified':report.get('system_pac_verified') is True,
             'wpad_dns_verified':report.get('wpad_dns_verified') is True,
             'url_pac_worker_verified':report.get('url_pac_worker_verified') is True,
+            'workspace_proxy_credentials_verified':report.get('workspace_proxy_credentials_verified') is True,
+            'digest_proxy_credentials_verified':report.get('digest_proxy_credentials_verified') is True,
             'automatic_update_verified':report.get('automatic_update_verified') is True})
         return dest
 
