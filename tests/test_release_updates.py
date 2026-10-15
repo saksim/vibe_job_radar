@@ -84,6 +84,82 @@ class ReleaseUpdateTests(unittest.TestCase):
         self.assertEqual(keep.read_text(encoding='utf-8'),'private original')
         self.assertEqual(updates.file_digest(Path(state['archive'])),state['sha256'])
 
+    def test_partial_metadata_failure_reuses_verified_bytes_after_fresh_latest(self):
+        service=self.service();original=self.fixture.small
+        def fail_last(asset,stop):
+            if asset['name']=='source-verification.json':
+                self.fixture.calls.append(asset['name'])
+                raise updates.FetchError('encrypted_dns_expired_answer','private request detail')
+            return original(asset,stop)
+        with patch.object(self.fixture,'small',side_effect=fail_last):
+            service.check({'consent':True});failed=self.wait(service)
+        self.assertEqual(failed['status'],'failed')
+        self.assertEqual(failed['error_code'],'encrypted_dns_expired_answer')
+        self.assertIsNone(service._selected)
+        service.check({'consent':True});ready=self.wait(service)
+        self.assertEqual(ready['status'],'available',ready)
+        self.assertEqual(self.fixture.calls.count('latest'),2)
+        for name in updates.SMALL_ASSETS:
+            self.assertEqual(self.fixture.calls.count(name),2 if name=='source-verification.json' else 1)
+        self.assertFalse((self.workspace.root/'updates').exists())
+
+    def test_cached_bytes_cannot_replace_fresh_official_selection(self):
+        service=self.service();service.check({'consent':True});self.wait(service)
+        before=len(self.fixture.calls)
+        with patch.object(self.fixture,'latest',side_effect=updates.FetchError('encrypted_dns_unavailable')):
+            service.check({'consent':True});state=self.wait(service)
+        self.assertEqual(state['status'],'failed');self.assertIsNone(service._selected)
+        self.assertEqual(len(self.fixture.calls),before)
+        self.fixture.release['prerelease']=True
+        service.check({'consent':True});state=self.wait(service)
+        self.assertEqual(state['status'],'failed');self.assertIsNone(service._selected)
+        self.assertEqual(self.fixture.calls[-1],'latest')
+
+    def test_digest_changes_corrupt_cache_and_instance_isolation(self):
+        service=self.service();service.check({'consent':True});self.wait(service)
+        changed=next(a for a in self.fixture.release['assets'] if a['name']=='CHANGES.md')
+        service._metadata_cache[(changed['digest'],changed['size'])]=b'corrupt cache'
+        service.check({'consent':True});state=self.wait(service)
+        self.assertEqual(state['status'],'available',state)
+        self.assertEqual(self.fixture.calls.count('CHANGES.md'),2)
+        fresh=ReleaseFixture(entries=[('VibeJobRadar/new.txt',b'new official bytes')])
+        service.factory=lambda:fresh
+        service.check({'consent':True});state=self.wait(service)
+        self.assertEqual(state['status'],'available',state)
+        self.assertEqual(state['sha256'],json.loads(fresh.data['manifest.json'])['sha256'])
+        self.assertTrue({'latest','manifest.json','provenance.json','SHA256SUMS.txt'}<=set(fresh.calls))
+        self.assertNotIn('CHANGES.md',fresh.calls)
+        self.assertLessEqual(len(service._metadata_cache),7)
+        self.assertLessEqual(sum(map(len,service._metadata_cache.values())),7_000_000)
+        fresh.calls.clear();separate=self.service(fresh)
+        separate.check({'consent':True});self.assertEqual(self.wait(separate)['status'],'available')
+        self.assertEqual(set(fresh.calls),{'latest'}|updates.SMALL_ASSETS)
+
+    def test_bad_response_not_cached_and_cancel_applies_to_cache_hits(self):
+        service=self.service();original=self.fixture.small
+        def corrupt(asset,stop):
+            raw=original(asset,stop)
+            return b'invalid response' if asset['name']=='CHANGES.md' else raw
+        with patch.object(self.fixture,'small',side_effect=corrupt):
+            service.check({'consent':True});self.assertEqual(self.wait(service)['status'],'failed')
+        service.check({'consent':True});self.assertEqual(self.wait(service)['status'],'available')
+        self.assertEqual(self.fixture.calls.count('CHANGES.md'),2)
+        before=list(self.fixture.calls);stopped=threading.Event();stopped.set()
+        with self.assertRaises(updates.UpdateError):
+            updates.inspect_release(self.fixture.release,self.fixture,stopped,metadata_cache=service._metadata_cache)
+        self.assertEqual(self.fixture.calls,before)
+
+    def test_network_error_messages_never_expose_exception_details(self):
+        for code in ('encrypted_dns_unavailable','encrypted_dns_expired_answer','pac_failed','untrusted-secret-code'):
+            with self.subTest(code=code):
+                service=self.service()
+                with patch.object(self.fixture,'latest',side_effect=updates.FetchError(code,'https://private.invalid/?token=secret')):
+                    service.check({'consent':True});state=self.wait(service)
+                self.assertEqual(state['status'],'failed')
+                self.assertNotIn('token=secret',state['message'])
+                self.assertNotIn('untrusted-secret-code',state['message'])
+                self.assertEqual(state['error_code'],code if code in updates.UPDATE_NETWORK_MESSAGES else None)
+
     def test_current_or_newer_runtime_cannot_download_a_downgrade(self):
         for version in ('0.4.0','0.5.0'):
             service=self.service(version=version);service.check({'consent':True});state=self.wait(service)

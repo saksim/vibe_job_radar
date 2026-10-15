@@ -1,6 +1,6 @@
 # Vibe Job Radar｜招聘要求与个人证据工作台
 
-0.5.0 增加[独立授权的 PAC DNS 助手](docs/FULL_URL_PAC.md)和[Windows 备份、就绪确认、自动重启升级](docs/UPDATES.md)，保留原手动下载、网络模式、采集与报告功能。正式发行使用标准版本 Tag 和公开 Release，保持 dev → release → main 晋升。解决内容、验证与剩余条件见[0.5.0发行说明](docs/RELEASE_0_5_0.md)，可下载版本见[Releases](https://github.com/saksim/vibe_job_radar/releases)。Windows包仍未签名；0.4.1及更早版本首次取得新升级器需手动启动0.5.0。
+0.5.1 补齐更新检查中断后的会话恢复与明确网络错误（[补丁说明](docs/RELEASE_0_5_1.md)）；0.5.0 增加[独立授权的 PAC DNS 助手](docs/FULL_URL_PAC.md)和[Windows 备份、就绪确认、自动重启升级](docs/UPDATES.md)，保留原手动下载、网络模式、采集与报告功能。正式发行使用标准版本 Tag 和公开 Release，保持 dev → release → main 晋升。解决内容、验证与剩余条件见[0.5.0发行说明](docs/RELEASE_0_5_0.md)，可下载版本见[Releases](https://github.com/saksim/vibe_job_radar/releases)。Windows包仍未签名；0.4.1及更早版本首次取得新升级器需手动启动新版。
 
 0.3.0 增加[报告内独立质量复核](docs/QUALITY_REVIEW.md)、[来源更新历史](docs/SOURCE_HISTORY.md)和可选[团队协作服务](docs/TEAM_SERVICE.md)：在原报告上标注 JD、核对重复岗位；查看目录更新与失败；为已登记设备提供共享配额、成员权限和版本同步。原采集、个人材料、报告和CLI继续保留。具体变化、验证与剩余条件见 [0.3.0 发行说明](docs/RELEASE_0_3_0.md)。
 
