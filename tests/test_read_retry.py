@@ -133,6 +133,8 @@ class ReadRetryBackendTests(unittest.TestCase):
 
 
 class ReadRetryWorkerTests(unittest.TestCase):
+    FUNCTIONAL_WAIT_SECONDS = 30
+
     def setUp(self):
         tmp=tempfile.TemporaryDirectory();self.addCleanup(tmp.cleanup)
         self.workspace=Workspace(tmp.name);self.now=1000.0;self.failures=0;self.instances=[]
@@ -167,7 +169,7 @@ class ReadRetryWorkerTests(unittest.TestCase):
         self.ident=self.service.create({'platform':'fixture','keyword':'时间序列','roles':['time_series'],
             'max_pages':1,'max_jobs':1,'consent':True,'rights_note':'ARTIFICIAL RETRY TEST'})['id']
 
-    def wait(self,code,*,retry_used=None,timeout=30):
+    def wait(self,code,*,retry_used=None,timeout=FUNCTIONAL_WAIT_SECONDS):
         before=self.write_probe.snapshot()
         sqlite_before=self.sqlite_probe.snapshot()
         # Functional state assertions include several real durable writes.
