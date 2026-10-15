@@ -40,6 +40,9 @@ _DEFAULT_PUBLIC_CLIENT = object()
 class LocalServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = False
+    # A cold page opens several connections before the accept thread can run.
+    # Keep a bounded pending queue so a brief scheduling pause does not drop JS.
+    request_queue_size = 64
 
     def __init__(self, workspace: Workspace, port: int = 0, *, public_client=_DEFAULT_PUBLIC_CLIENT):
         self.workspace = workspace
