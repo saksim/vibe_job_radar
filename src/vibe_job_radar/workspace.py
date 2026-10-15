@@ -144,6 +144,14 @@ class Workspace:
         from .network_settings import save_pac
         return save_pac(self, data)
 
+    def network_domain_pac_preferences(self, data):
+        from .network_settings import save_pac
+        return save_pac(self, data, portable_domain=True)
+
+    def network_domain_pac_dns_preferences(self, data):
+        from .network_settings import save_pac
+        return save_pac(self, data, portable_domain=True, dns_helpers=True)
+
     def network_url_pac_dns_preferences(self, data):
         from .network_settings import save_pac
         return save_pac(self, data, full_url=True, dns_helpers=True)

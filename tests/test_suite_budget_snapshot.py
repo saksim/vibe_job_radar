@@ -322,7 +322,11 @@ class SuiteBudgetTests(unittest.TestCase):
         self.assertEqual(len(search_steps),3)
         for step in search_steps:
             self.assertIn('        timeout-minutes: 5\n',step)
-        self.assertEqual(native.count('        timeout-minutes: 3\n'),11)
+        self.assertEqual(native.count('        timeout-minutes: 3\n'),14)
+        domain_steps=[s for s in steps if 'scripts/run_native_pac_browser.py --controlled --portable-domain' in s]
+        self.assertEqual(len(domain_steps),3)
+        for step in domain_steps:
+            self.assertIn('        timeout-minutes: 3\n',step)
         wpad_steps=[s for s in steps if 'scripts/run_native_pac_browser.py --controlled --wpad' in s]
         self.assertEqual(len(wpad_steps),1)
         self.assertIn('        timeout-minutes: 3\n',wpad_steps[0])
