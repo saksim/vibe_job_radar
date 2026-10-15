@@ -35,7 +35,7 @@ class ResumeDownloadTests(unittest.TestCase):
                     self.send_response(302);self.send_header('Location','https://release-assets.githubusercontent.com/fixture?fresh=1')
                     self.send_header('Content-Length','0');self.end_headers();return
                 offset=int(self.headers.get('Range','bytes=0-')[6:-1]);owner.offsets.append(offset)
-                status=206 if offset and owner.mode!='ignore' else 200
+                status=206 if offset and not owner.mode.startswith('ignore') else 200
                 start=offset if status==206 else 0;body=owner.raw[start:]
                 self.send_response(status)
                 if status==206:
@@ -46,6 +46,7 @@ class ResumeDownloadTests(unittest.TestCase):
                 self.send_header('Content-Length',str(len(body)))
                 self.end_headers()
                 if owner.mode=='interrupt':body=body[:owner.cut]
+                if owner.mode=='ignore_interrupt':body=body[:41]
                 if owner.mode=='corrupt':body=bytes([body[0]^1])+body[1:]
                 self.wfile.write(body);self.wfile.flush();self.close_connection=True
         self.server=ThreadingHTTPServer(('127.0.0.1',0),Handler)
@@ -139,6 +140,28 @@ finally:s.close()
                 service.download(self.check(service));state=self.wait(service)
                 self.assertEqual(state['status'],'failed',state);self.assertFalse(path.exists())
                 self.assertFalse((path.parent/self.package['name']).exists())
+
+    def test_full_response_interruption_preserves_longer_original_prefix(self):
+        service,path=self.interrupt();self.mode='ignore_interrupt'
+        service.download(self.check(service));state=self.wait(service)
+        self.assertEqual(state['status'],'failed',state);self.assertEqual(state['retained_bytes'],self.cut)
+        self.assertEqual(path.read_bytes(),self.raw[:self.cut])
+        self.assertEqual(list(path.parent.glob('.full-response-*')),[])
+        self.mode='resume';service.download(self.check(service));state=self.wait(service)
+        self.assertEqual(state['status'],'ready',state);self.assertEqual(self.offsets,[0,self.cut,self.cut])
+        self.assertEqual(Path(state['archive']).read_bytes(),self.raw)
+
+    def test_complete_transfer_error_retains_all_bytes_for_offline_validation(self):
+        service=self.service();data=self.check(service);original=self.fixture.stream
+        def late_failure(asset,out,stop,progress):
+            out.write(self.raw);progress(len(self.raw));raise updates.DownloadInterrupted('deadline after final read')
+        self.fixture.stream=late_failure
+        service.download(data);state=self.wait(service)
+        self.assertEqual(state['status'],'failed',state);self.assertEqual(state['retained_bytes'],len(self.raw))
+        self.fixture.stream=original;before=len(self.requests)
+        service.download(self.check(service));state=self.wait(service)
+        self.assertEqual(state['status'],'ready',state);self.assertEqual(len(self.requests),before)
+        self.assertEqual(Path(state['archive']).read_bytes(),self.raw)
 
     def test_asset_identity_change_never_appends_to_old_prefix(self):
         old,path=self.interrupt();self.fixture.release['id']+=1;self.mode='resume'

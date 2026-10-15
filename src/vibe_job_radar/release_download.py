@@ -8,6 +8,7 @@ import hashlib
 import http.client
 import os
 import stat
+import tempfile
 
 from .collection import writer_lock
 from .network import FetchError
@@ -58,6 +59,31 @@ def open_prefix(path):
         os.close(fd);raise
 
 
+class TransferTarget:
+    """A full-response fallback cannot truncate the only persistent prefix."""
+    def __init__(self, stream, path, identity):
+        self.stream=stream;self.path=path;self.identity=identity;self.replacement=None
+
+    def tell(self):return self.stream.tell()
+    def write(self, block):return self.stream.write(block)
+
+    def seek(self, offset):
+        require(offset==0 and self.replacement is None)
+        fd,name=tempfile.mkstemp(prefix='.full-response-',suffix='.partial',dir=self.path.parent)
+        self.path=type(self.path)(name);info=os.fstat(fd);self.identity=(info.st_dev,info.st_ino)
+        self.replacement=os.fdopen(fd,'w+b');self.stream=self.replacement
+        return self.stream.seek(0)
+
+    def truncate(self):
+        require(self.replacement is not None)
+        return self.stream.truncate()
+
+    def close(self):
+        if self.replacement is not None:
+            try:self.replacement.close()
+            finally:remove_private_file(self.path,self.identity)
+
+
 def download_package(selected, updates, factory, cancelled, save):
     # The permanent OS lock marker is never removed. Hold it until after the
     # prefix handle closes and owned-file cleanup finishes, including failures.
@@ -65,7 +91,7 @@ def download_package(selected, updates, factory, cancelled, save):
         path=io_path(partial_path(updates,selected));package=io_path(updates/selected['package']['name'])
         if package.exists():
             require(file_digest(package)==selected['sha256']);return
-        size=selected['package']['size'];keep=False;identity=None
+        size=selected['package']['size'];keep=False;identity=None;target=None
         try:
             out,identity=open_prefix(path)
             with out:
@@ -74,6 +100,7 @@ def download_package(selected, updates, factory, cancelled, save):
                 save(downloaded_bytes=offset,total_bytes=size,resumed_bytes=offset,retained_bytes=0,
                      message='正在继续下载并核验完整软件包。' if offset else '正在下载并核验完整软件包。')
                 out.seek(offset)
+                target=TransferTarget(out,path,identity)
                 reused=offset
                 def progress(count):
                     nonlocal reused
@@ -81,31 +108,35 @@ def download_package(selected, updates, factory, cancelled, save):
                     save(downloaded_bytes=count,total_bytes=size,resumed_bytes=reused)
                 try:
                     if offset<size:
-                        factory().stream(selected['package'],out,cancelled,progress)
-                    out.flush();os.fsync(out.fileno())
-                    require(os.fstat(out.fileno()).st_size==size)
-                    out.seek(0);hasher=hashlib.sha256()
+                        factory().stream(selected['package'],target,cancelled,progress)
+                    active=target.stream
+                    active.flush();os.fsync(active.fileno())
+                    require(os.fstat(active.fileno()).st_size==size)
+                    active.seek(0);hasher=hashlib.sha256()
                     while True:
-                        check_stop(cancelled);block=out.read(1024*1024)
+                        check_stop(cancelled);block=active.read(1024*1024)
                         if not block:break
                         hasher.update(block)
                     require(hasher.hexdigest()==selected['sha256'])
                     check_stop(cancelled)
-                    current=plain(path)
-                    require((current.st_dev,current.st_ino)==identity and current.st_size==size)
-                    os.link(path,package)  # Never overwrite a pre-existing package.
+                    current=plain(target.path)
+                    require((current.st_dev,current.st_ino)==target.identity and current.st_size==size)
+                    os.link(target.path,package)  # Never overwrite a pre-existing package.
                 except (OSError,http.client.HTTPException,FetchError,LocalProxyError,DownloadInterrupted):
                     # Bytes remain untrusted. The final complete hash rejects
                     # corruption, changed assets and any partial disk write.
                     out.flush();os.fsync(out.fileno());current=plain(path)
-                    keep=(current.st_dev,current.st_ino)==identity and 0<current.st_size<size
+                    keep=(current.st_dev,current.st_ino)==identity and 0<current.st_size<=size
                     if keep:save(retained_bytes=current.st_size)
                     raise
                 except UpdateError:
-                    if cancelled.is_set():
+                    if cancelled.is_set() or target.replacement is not None:
                         out.flush();os.fsync(out.fileno());current=plain(path)
                         keep=(current.st_dev,current.st_ino)==identity and 0<current.st_size<=size
                         if keep:save(retained_bytes=current.st_size)
                     raise
         finally:
-            if identity is not None and not keep:remove_private_file(path,identity)
+            try:
+                if target is not None:target.close()
+            finally:
+                if identity is not None and not keep:remove_private_file(path,identity)
