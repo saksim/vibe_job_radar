@@ -24,6 +24,7 @@ from urllib.parse import urljoin, urlsplit
 from ._version import __version__
 from .network import SafeHTTP, PinnedHTTPSConnection, validate_public_url, USER_AGENT, FetchError
 from .workspace import InputError
+from .workspace_proxy_auth import MESSAGES as WORKSPACE_PROXY_AUTH_MESSAGES
 
 REPOSITORY = 'saksim/vibe_job_radar'
 API = 'https://api.github.com/repos/'+REPOSITORY+'/releases/latest'
@@ -38,6 +39,7 @@ WORKFLOWS = {'.github/workflows/'+name for name in ('tests.yml','browser.yml','b
 MAX_ZIP = 1024**3
 MAX_EXPANDED = 3*1024**3
 UPDATE_NETWORK_MESSAGES = {
+    **WORKSPACE_PROXY_AUTH_MESSAGES,
     'encrypted_dns_unavailable': '加密DNS服务连接失败，请核对当前网络后重新检查。',
     'encrypted_dns_expired_answer': '加密DNS解析结果已过期，请稍后重新检查。',
     'pac_failed': 'PAC脚本进程执行或清理失败，请检查网络设置后重试。',

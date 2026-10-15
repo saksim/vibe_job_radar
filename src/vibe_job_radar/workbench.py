@@ -301,7 +301,7 @@ class Handler(BaseHTTPRequestHandler):
             self._body_consumed = True
             if len(raw) != length:
                 raise ValueError
-            data = (decode_json(raw) if urlsplit(self.path).path.startswith(("/api/quality/", "/api/team/", "/api/releases/"))
+            data = (decode_json(raw) if urlsplit(self.path).path.startswith(("/api/quality/", "/api/team/", "/api/releases/", "/api/network/proxy-auth"))
                     else json.loads(raw.decode("utf-8")))
             if not isinstance(data, dict):
                 raise ValueError
@@ -312,6 +312,8 @@ class Handler(BaseHTTPRequestHandler):
         methods = {"/api/job": "add_job", "/api/import": "import_file", "/api/plan": "plan",
                    "/api/discover": "discover", "/api/analyze": "analyze", "/api/network/preferences": "network_preferences",
                    "/api/network/proxy": "network_proxy_preferences",
+                   "/api/network/proxy-auth": "network_proxy_auth_preferences",
+                   "/api/network/proxy-auth/clear": "network_proxy_auth_clear",
                    "/api/network/pac": "network_pac_preferences",
                    "/api/network/pac-url": "network_url_pac_preferences",
                    "/api/network/pac-url-dns": "network_url_pac_dns_preferences",

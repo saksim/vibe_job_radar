@@ -155,7 +155,7 @@ class PublicQueue:
             raise InputError('所选来源尚未批准本机查询。')
         policy=self.workspace.network_policy()
         if policy.error:raise InputError('网络设置未就绪，请处理后再确认待办。')
-        return query,self.tasks._binding('search',query),policy.fingerprint
+        return query,self.tasks._binding('search',query),policy.background_fingerprint
 
     def state(self):
         with self._lock:

@@ -168,7 +168,7 @@ class PublicSchedule:
             raise InputError('所选来源尚未批准本机公开查询。')
         policy=self.workspace.network_policy()
         if policy.error:raise InputError('当前网络配置未就绪，请处理后再确认计划。')
-        return request.payload(),self.tasks._binding('search',request.payload()),policy.fingerprint
+        return request.payload(),self.tasks._binding('search',request.payload()),policy.background_fingerprint
 
     def _now(self):
         now=self.clock()
