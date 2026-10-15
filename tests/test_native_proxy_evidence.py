@@ -128,22 +128,24 @@ class NativeProxyEvidenceTests(unittest.TestCase):
         fixture = SimpleNamespace(greetings=[SECRET], authentication=[(SECRET, SECRET)],
             connects=[SECRET, SECRET])
         source = SimpleNamespace(requests=[{'body': SECRET, 'headers': SECRET}] * 3)
-        result = {}
-        evidence.update_proxy_evidence(result, 'socks5-normal', source=source, fixture=fixture,
-            backend=backend, source_start=2, error=hidden, action='search')
-        text = json.dumps(result)
-        self.assertNotIn(SECRET, text)
-        self.assertEqual(result['failure']['error_type'], 'other')
-        self.assertEqual(result['failure']['error_code'], 'unknown')
-        facts = result['failure']['connection_facts']
-        self.assertEqual(facts['guard_error_code'], 'unknown')
-        self.assertEqual(facts['backend_error_code'], 'unknown')
-        self.assertEqual(facts['source_requests'], 3)
-        self.assertEqual(facts['stage_source_requests'], 1)
-        self.assertEqual(facts['upstream_authentications'], 1)
-        self.assertEqual(facts['guard_active_sockets'], 1)
-        self.assertEqual(len(result['connection_facts']), 1)
-        self.assertEqual(len(facts), 12)
+        for stage in ('socks5-normal', 'http-digest-normal', 'http-digest-rejected'):
+            result = {}
+            evidence.update_proxy_evidence(result, stage, source=source, fixture=fixture,
+                backend=backend, source_start=2, error=hidden, action='search')
+            text = json.dumps(result)
+            self.assertNotIn(SECRET, text)
+            self.assertEqual(result['failure']['error_type'], 'other')
+            self.assertEqual(result['failure']['error_code'], 'unknown')
+            facts = result['failure']['connection_facts']
+            self.assertEqual(facts['guard_error_code'], 'unknown')
+            self.assertEqual(facts['backend_error_code'], 'unknown')
+            self.assertEqual(facts['source_requests'], 3)
+            self.assertEqual(facts['stage_source_requests'], 1)
+            self.assertEqual(facts['upstream_authentications'], 1)
+            self.assertEqual(facts['guard_active_sockets'], 1)
+            self.assertEqual(len(result['connection_facts']), 1)
+            self.assertEqual(len(facts), 12)
+
 
     def test_final_checkpoint_preserves_first_failure_and_reports_later_total(self):
         source = SimpleNamespace(requests=[1, 2])
