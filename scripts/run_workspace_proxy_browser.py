@@ -21,6 +21,7 @@ def verify_auth_ui(page, context, server, workspace, expand, result):
         expect(page.locator('#workspace-proxy-mode option[value=http_auth]')).to_be_disabled()
         expect(page.locator('#workspace-proxy-mode option[value=socks5_auth]')).to_be_disabled()
         expect(page.locator('#workspace-proxy-mode option[value=http_digest_auth]')).to_be_disabled()
+        expect(page.locator('#workspace-proxy-mode option[value=http_ntlm_auth]')).to_be_disabled()
         result['checks'].append('non-Windows UI does not offer unsupported persistent credentials; existing routes remain available')
         return
     from playwright.sync_api import expect
@@ -57,6 +58,17 @@ def verify_auth_ui(page, context, server, workspace, expand, result):
         expect(page.locator('#workspace-proxy-password')).to_have_value('')
         expect(page.locator('#workspace-proxy-status')).to_contain_text('已加密保存')
     assert Workspace(workspace.root).network_policy().describe()['proxy_authentication_method']=='digest'
+    from vibe_job_radar.ntlm_worker import available as ntlm_available
+    if ntlm_available():
+        enter('http_ntlm_auth');save_auth()
+        for path in ('/guided','/advanced','/'):
+            page.goto(server.origin+path);expand(page)
+            expect(page.locator('#workspace-proxy-mode')).to_have_value('http_ntlm_auth')
+            expect(page.locator('#workspace-proxy-password')).to_have_value('')
+        assert Workspace(workspace.root).network_policy().describe()['proxy_authentication_method']=='ntlmv2'
+        result['checks'].append('explicit NTLMv2 persists across three pages with no secret echo or network request')
+    else:
+        expect(page.locator('#workspace-proxy-mode option[value=http_ntlm_auth]')).to_be_disabled()
     enter('socks5_auth');save_auth()
     stale.locator('#workspace-proxy-username').fill('ARTIFICIAL-STALE')
     stale.locator('#workspace-proxy-password').fill(secret)

@@ -27,7 +27,7 @@
   proxy.innerHTML = `<legend>本工作区的代理</legend>
     <p>自动模式沿用应用或系统配置。固定入口支持本机代理（Windows可加密保存凭据），或已授权给此来宾的匿名宿主机代理；更换后请停止并重开已有采集会话。</p>
     <label for="workspace-proxy-mode">连接方式</label>
-    <select id="workspace-proxy-mode"><option value="auto">自动发现</option><option value="http">固定本机 HTTP</option><option value="socks5">固定本机 SOCKS5</option><option value="http_auth" disabled>本机 HTTP Basic＋保存凭据</option><option value="http_digest_auth" disabled>本机 HTTP Digest＋保存凭据</option><option value="socks5_auth" disabled>本机 SOCKS5＋保存凭据</option><option value="vm_http">宿主机 HTTP</option><option value="vm_socks5">宿主机 SOCKS5</option><option value="pac" disabled>已导入的 Windows 域名 PAC</option><option value="pac_domain" disabled>已导入的跨平台域名 PAC</option><option value="pac_domain_dns" disabled>跨平台域名 PAC 与 DNS 助手</option><option value="pac_url" disabled>已导入的完整网址 PAC</option><option value="pac_url_dns" disabled>完整网址 PAC 与 DNS 助手</option><option value="system_pac" disabled>已许可的系统 PAC</option><option value="wpad" disabled>已确认的 WPAD</option></select>
+    <select id="workspace-proxy-mode"><option value="auto">自动发现</option><option value="http">固定本机 HTTP</option><option value="socks5">固定本机 SOCKS5</option><option value="http_auth" disabled>本机 HTTP Basic＋保存凭据</option><option value="http_digest_auth" disabled>本机 HTTP Digest＋保存凭据</option><option value="http_ntlm_auth" disabled>本机 HTTP NTLMv2＋保存凭据</option><option value="socks5_auth" disabled>本机 SOCKS5＋保存凭据</option><option value="vm_http">宿主机 HTTP</option><option value="vm_socks5">宿主机 SOCKS5</option><option value="pac" disabled>已导入的 Windows 域名 PAC</option><option value="pac_domain" disabled>已导入的跨平台域名 PAC</option><option value="pac_domain_dns" disabled>跨平台域名 PAC 与 DNS 助手</option><option value="pac_url" disabled>已导入的完整网址 PAC</option><option value="pac_url_dns" disabled>完整网址 PAC 与 DNS 助手</option><option value="system_pac" disabled>已许可的系统 PAC</option><option value="wpad" disabled>已确认的 WPAD</option></select>
     <label for="workspace-proxy-endpoint">已配置的代理地址和端口</label>
     <input id="workspace-proxy-endpoint" type="text" autocomplete="off" spellcheck="false" style="max-width:100%;box-sizing:border-box" placeholder="填写你的本机代理入口，不含账号密码" disabled>
     <p id="workspace-proxy-scope"></p>
@@ -174,8 +174,8 @@
   const proxyUsername = proxy.querySelector('#workspace-proxy-username');
   const proxyPassword = proxy.querySelector('#workspace-proxy-password');
   const authClear = proxy.querySelector('#clear-workspace-proxy-auth');
-  let authAvailable = false, authSaved = false, savedMode = '', savedEndpoint = '';
-  const isAuth = () => ['http_auth', 'http_digest_auth', 'socks5_auth'].includes(mode.value);
+  let authAvailable = false, ntlmAvailable = false, authSaved = false, savedMode = '', savedEndpoint = '';
+  const isAuth = () => ['http_auth', 'http_digest_auth', 'http_ntlm_auth', 'socks5_auth'].includes(mode.value);
   function clearSecretInputs() { proxyUsername.value = ''; proxyPassword.value = ''; }
   let revision = null, busy = false;
   function selection() {
@@ -188,7 +188,7 @@
     proxyUsername.disabled = proxyPassword.disabled = !auth || !authAvailable;
     authClear.hidden = !auth;
     authClear.disabled = !authSaved || mode.value !== savedMode || endpoint.value !== savedEndpoint;
-    if (auth && !authAvailable) proxyButton.disabled = true;
+    if (auth && (!authAvailable || (mode.value === 'http_ntlm_auth' && !ntlmAvailable))) proxyButton.disabled = true;
     proxyButton.textContent = auth ? '加密保存工作区代理凭据' : '保存工作区代理';
     endpoint.placeholder = vm ? '填写宿主机已授权监听的 RFC1918 IPv4 和端口' : '填写你的本机代理入口，不含账号密码';
     proxy.querySelector('#workspace-proxy-consent-label').textContent = vm
@@ -218,6 +218,8 @@
     dnsDisclosure.textContent = dnsDisclosures[dnsScope.value] || '';
     revision = value.revision;
     authAvailable = value.proxy_auth_available === true;
+    ntlmAvailable = value.proxy_ntlm_available === true;
+    mode.querySelector('option[value=http_ntlm_auth]').disabled = !authAvailable || !ntlmAvailable;
     authSaved = value.proxy_auth_saved === true;
     savedMode = value.proxy_mode || 'auto'; savedEndpoint = value.proxy_endpoint || '';
     for (const name of ['http_auth','http_digest_auth','socks5_auth']) mode.querySelector('option[value='+name+']').disabled = !authAvailable;

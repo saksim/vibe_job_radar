@@ -15,9 +15,11 @@ import subprocess
 import zipfile
 
 from release_summary import validate_summary
+from release_artifacts import select_artifacts, download_artifact
 from build_windows_portable import native_components_valid
 from url_pac_acceptance import valid_evidence as valid_url_pac
 from domain_pac_acceptance import valid_evidence as valid_domain_pac
+from ntlm_proxy_acceptance import valid_evidence as valid_ntlm
 from automatic_update_acceptance import valid_evidence as valid_automatic_update
 from wpad_dns_evidence import valid_wpad_dns_evidence
 
@@ -31,7 +33,7 @@ ARTIFACTS = ('windows-x64-portable-candidate', 'windows-portable-evidence')
 REQUIRED_PORTABLE_FLAGS = (
     'startup_registration_verified', 'startup_worker_verified',
     'system_pac_verified', 'wpad_dns_verified', 'url_pac_worker_verified', 'automatic_update_verified',
-    'workspace_proxy_credentials_verified', 'digest_proxy_credentials_verified', 'domain_pac_worker_verified',
+    'workspace_proxy_credentials_verified', 'digest_proxy_credentials_verified', 'domain_pac_worker_verified', 'ntlm_proxy_worker_verified',
 )
 HEX = re.compile(r'[0-9a-f]{64}')
 REPO = re.compile(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+')
@@ -175,6 +177,7 @@ def validate_candidate(candidate, manifest, source_evidence, sha):
     require(native_components_valid(proof.get('native_components'))
             and valid_url_pac(proof.get('url_pac'))
             and valid_domain_pac(proof.get('domain_pac'))
+            and valid_ntlm(proof.get('ntlm_proxy'))
             and valid_automatic_update(proof.get('automatic_update'))
             and valid_wpad_dns_evidence(proof.get('wpad_dns')),
             'Executable acceptance details are missing or invalid')
@@ -264,22 +267,16 @@ def prepare(repo, run_id, out, create_draft=False, change_notes=None, *, channel
             'Invalid selected source revision')
     qualified = qualified_runs(repo, selected)
     listing = api(repo, f'actions/runs/{run_id}/artifacts?per_page=100')
-    require(listing['total_count'] == len(listing['artifacts']), 'Incomplete artifact listing')
-    artifacts = {}
-    for name in ARTIFACTS:
-        rows = [a for a in listing['artifacts'] if a['name'] == name and not a['expired']]
-        require(len(rows) == 1, 'Missing, expired or ambiguous candidate artifact')
-        artifacts[name] = {'id': rows[0]['id'], 'digest': rows[0].get('digest')}
+    artifacts = select_artifacts(selected, listing, ARTIFACTS)
     out.mkdir(parents=True)
     for name in ARTIFACTS:
-        gh('run', 'download', str(run_id), '--repo', repo, '--name', name, '--dir', str(out/name))
+        download_artifact(repo, artifacts[name], out/name)
     current = api(repo, f'actions/runs/{run_id}')
     require(current['run_attempt'] == selected['run_attempt']
             and current['head_sha'] == selected['head_sha'] and current['conclusion'] == 'success',
             'Selected build changed during download')
-    refreshed = api(repo, f'actions/runs/{run_id}/artifacts?per_page=100')['artifacts']
-    require(all([(a['id'], a.get('digest')) for a in refreshed if a['name'] == name and not a['expired']]
-                == [(record['id'], record['digest'])] for name, record in artifacts.items()),
+    refreshed = api(repo, f'actions/runs/{run_id}/artifacts?per_page=100')
+    require(select_artifacts(current, refreshed, ARTIFACTS) == artifacts,
             'Candidate artifacts changed during download')
     packages = list((out/ARTIFACTS[0]).glob('*.zip'))
     require(len(packages) == 1, 'Candidate artifact must contain one ZIP')

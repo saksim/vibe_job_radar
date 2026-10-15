@@ -54,6 +54,7 @@ CODES = frozenset('''operation_error network_error dns_error non_public_address
     encrypted_dns_budget encrypted_dns_clock_rollback
     local_proxy_configuration_conflict local_proxy_configuration_invalid
     local_proxy_credentials_invalid local_proxy_credentials_require_explicit local_proxy_auth_failed
+    local_proxy_ntlm_unavailable local_proxy_ntlm_busy local_proxy_ntlm_timeout
     workspace_proxy_auth_unavailable workspace_proxy_auth_unreadable workspace_proxy_auth_missing workspace_proxy_auth_save_failed
     local_proxy_connection_failed local_socks_configuration_invalid
     vm_proxy_configuration_invalid vm_proxy_explicit_required vm_proxy_connection_failed vm_proxy_timeout
@@ -85,6 +86,7 @@ LOCAL_POLICIES = {
     'pac_url_invalid_target': 'url_validation', 'pac_url_required': 'pac_url_scope',
     'pac_url_cache_limit': 'pac_url_session_limit', 'pac_url_unavailable': 'pac_url_component',
     'pac_domain_unavailable': 'pac_domain_component',
+    'local_proxy_ntlm_unavailable': 'proxy_ntlm_component',
 }
 # Only fixed path components/query NAMES survive; unknown segments and names
 # might themselves contain a credential. Values/fragments/userinfo never survive.

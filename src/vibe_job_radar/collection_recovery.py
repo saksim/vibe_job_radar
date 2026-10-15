@@ -110,5 +110,9 @@ def explain(state: dict) -> dict:
 from .network_settings import DNS_MESSAGES
 
 REASONS.update({code: ("网络解析未完成", message) for code, message in DNS_MESSAGES.items()})
+from .proxy_credentials import ERROR_MESSAGES as PROXY_AUTH_MESSAGES
+REASONS.update({code: ('NTLMv2代理认证未完成', message)
+                for code, message in PROXY_AUTH_MESSAGES.items()
+                if code.startswith('local_proxy_ntlm_')})
 from .vm_proxy import ERROR_MESSAGES as VM_MESSAGES
 REASONS.update({code: ("宿主机代理未连接", message) for code, message in VM_MESSAGES.items()})

@@ -25,7 +25,8 @@ class PortableReleaseTests(unittest.TestCase):
         self.root=Path(self.temp.name);self.repo='example/research';self.sha='a'*40
         self.runs=[{'id':i,'run_attempt':1,'path':path,'head_sha':self.sha,
                     'head_repository':{'full_name':self.repo},'head_branch':'main',
-                    'event':'push','status':'completed','conclusion':'success'}
+                    'event':'push','status':'completed','conclusion':'success',
+                    'run_started_at':'2026-10-15T22:00:00Z','updated_at':'2026-10-15T22:30:00Z'}
                    for i,path in enumerate(sorted(self.mod.WORKFLOWS),100)]
         self.run=next(x for x in self.runs if x['path'].endswith('windows-portable.yml'))
         self.source={'algorithm':'sha256-file-manifest-v1','sha256':'b'*64,
@@ -40,17 +41,23 @@ class PortableReleaseTests(unittest.TestCase):
                     'files':{'VibeJobRadar.exe':'d'*64}}
         self.required_flags=('startup_registration_verified','startup_worker_verified',
                              'system_pac_verified','wpad_dns_verified','url_pac_worker_verified','automatic_update_verified',
-                             'workspace_proxy_credentials_verified','digest_proxy_credentials_verified','domain_pac_worker_verified')
+                             'workspace_proxy_credentials_verified','digest_proxy_credentials_verified','domain_pac_worker_verified','ntlm_proxy_worker_verified')
         self.proof.update({flag:True for flag in self.required_flags})
         from test_native_component_portable import good_component
         from test_url_pac_evidence import good_url_proof
         from test_domain_pac_evidence import good_domain_proof
+        from test_ntlm_evidence import good_ntlm_proof
         from test_wpad_dns_evidence import good_evidence
         self.proof.update(native_components={c:good_component(c) for c in ('bundled','chrome')},
-                          url_pac=good_url_proof(),domain_pac=good_domain_proof(),wpad_dns=good_evidence())
+                          url_pac=good_url_proof(),domain_pac=good_domain_proof(),ntlm_proxy=good_ntlm_proof(),wpad_dns=good_evidence())
         from automatic_update_acceptance import FIELDS
         self.proof['automatic_update']=dict(schema_version=1,**{key:True for key in FIELDS})
-        self.artifacts={name:{'id':i,'digest':None} for i,name in enumerate(self.mod.ARTIFACTS,200)}
+        self.artifacts={name:{'id':i,'digest':'sha256:'+'e'*64,'size_in_bytes':100,
+                              'created_at':'2026-10-15T22:29:00Z'}
+                        for i,name in enumerate(self.mod.ARTIFACTS,200)}
+        self.download_calls=[]
+        downloader=patch.object(self.mod,'download_artifact',side_effect=self.download_fixture)
+        downloader.start();self.addCleanup(downloader.stop)
         self.package,self.manifest=self.archive()
 
     def archive(self):
@@ -166,23 +173,26 @@ class PortableReleaseTests(unittest.TestCase):
         if suffix.startswith('actions/runs?'):
             return {'total_count':len(self.runs),'workflow_runs':copy.deepcopy(self.runs)}
         if suffix.endswith('/artifacts?per_page=100'):
-            return {'total_count':2,'artifacts':[{'name':name,'expired':False,**row}
+            return {'total_count':2,'artifacts':[{'name':name,'expired':False,
+                      'workflow_run':{'id':self.run['id'],'head_sha':self.sha},**row}
                                                for name,row in self.artifacts.items()]}
         if suffix.startswith('git/matching-refs/tags/'):return []
         if suffix=='releases?per_page=100&page=1':return []
         raise AssertionError(suffix)
 
+    def download_fixture(self,repo,record,destination):
+        self.assertEqual(repo,self.repo)
+        self.download_calls.append((record['id'],destination))
+        name=next(name for name,row in self.artifacts.items() if row['id']==record['id'])
+        destination.mkdir(parents=True)
+        if name==self.mod.ARTIFACTS[0]:shutil.copyfile(self.package,destination/self.package.name)
+        else:
+            for file,data in (('portable-candidate/manifest.json',self.manifest),
+                              ('release-verification/result.json',self.evidence)):
+                path=destination/file;path.parent.mkdir(parents=True,exist_ok=True)
+                path.write_text(json.dumps(data),encoding='utf8')
+
     def gh_fixture(self,*args):
-        if args[:2]==('run','download'):
-            destination=Path(args[args.index('--dir')+1]);destination.mkdir(parents=True)
-            name=args[args.index('--name')+1]
-            if name==self.mod.ARTIFACTS[0]:shutil.copyfile(self.package,destination/self.package.name)
-            else:
-                for file,data in (('portable-candidate/manifest.json',self.manifest),
-                                  ('release-verification/result.json',self.evidence)):
-                    path=destination/file;path.parent.mkdir(parents=True,exist_ok=True)
-                    path.write_text(json.dumps(data),encoding='utf8')
-            return ''
         if args[:3]==('api','--method','POST'):
             body=json.loads(Path(args[-1]).read_text(encoding='utf8'))
             self.assertTrue(body['draft']);self.assertTrue(body['prerelease'])
@@ -256,10 +266,10 @@ class PortableReleaseTests(unittest.TestCase):
              patch.object(self.mod,'gh',side_effect=self.gh_fixture) as command:
             result=self.mod.prepare(self.repo,self.run['id'],self.root/'download',True,NOTES)
         calls=[call.args for call in command.call_args_list]
-        self.assertEqual(len(calls),4)
+        self.assertEqual(len(calls),2)
         self.assertIn('draft_url',result)
-        self.assertEqual([c[c.index('--name')+1] for c in calls if c[:2]==('run','download')],
-                         list(self.mod.ARTIFACTS))
+        self.assertEqual(self.download_calls,
+                         [(row['id'],self.root/'download'/name) for name,row in self.artifacts.items()])
 
     def test_changed_artifact_during_download_stops_before_draft(self):
         queries=[0]
@@ -273,7 +283,7 @@ class PortableReleaseTests(unittest.TestCase):
              patch.object(self.mod,'gh',side_effect=self.gh_fixture) as command, \
              self.assertRaises(ValueError):
             self.mod.prepare(self.repo,self.run['id'],self.root/'changed',True,NOTES)
-        self.assertTrue(all(call.args[:2]==('run','download') for call in command.call_args_list))
+        command.assert_not_called()
 
     def test_existing_draft_or_tag_blocks_creation_and_keeps_preparation(self):
         for existing in ('tag','draft'):
@@ -290,7 +300,7 @@ class PortableReleaseTests(unittest.TestCase):
                      self.assertRaises(ValueError):
                     self.mod.prepare(self.repo,self.run['id'],self.root/existing,True,NOTES)
                 self.assertTrue((self.root/existing/'prepared.json').is_file())
-                self.assertTrue(all(call.args[:2]==('run','download') for call in command.call_args_list))
+                command.assert_not_called()
 
 
     def test_candidate_tag_prefix_does_not_block_distinct_stable_tag(self):
@@ -325,7 +335,7 @@ class PortableReleaseTests(unittest.TestCase):
                      patch.object(self.mod,'gh',side_effect=self.gh_fixture) as command, \
                      self.assertRaises(ValueError):
                     self.mod.prepare(self.repo,self.run['id'],self.root/defect,True,NOTES)
-                self.assertTrue(all(c.args[:2]==('run','download') for c in command.call_args_list))
+                command.assert_not_called()
 
     def test_release_inventory_after_first_hundred_can_create_or_detect_collision(self):
         for collision in (False,True):
@@ -346,7 +356,7 @@ class PortableReleaseTests(unittest.TestCase):
                     if collision:
                         with self.assertRaises(ValueError):
                             self.mod.prepare(self.repo,self.run['id'],output,True,NOTES)
-                        self.assertTrue(all(c.args[:2]==('run','download') for c in command.call_args_list))
+                        command.assert_not_called()
                     else:
                         result=self.mod.prepare(self.repo,self.run['id'],output,True,NOTES)
                         self.assertIn('draft_url',result)

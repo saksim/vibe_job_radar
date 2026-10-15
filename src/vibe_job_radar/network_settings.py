@@ -12,6 +12,8 @@ from .network_policy import NetworkPolicy
 from .loopback_proxy import LoopbackProxy, LocalProxyError
 from .loopback_socks import LoopbackSocks5
 from .digest_proxy import LoopbackDigestProxy
+from .ntlm_proxy import LoopbackNtlmProxy
+from . import ntlm_worker
 from .vm_proxy import VmHTTPProxy, VmSocks5Proxy, ERROR_MESSAGES as VM_MESSAGES
 from .proxy_credentials import configured as credentials_configured, ERROR_MESSAGES as AUTH_MESSAGES
 from . import workspace_proxy_auth
@@ -66,6 +68,8 @@ def _proxy(mode, endpoint):
             if endpoint != '':
                 raise ValueError()
             return None
+        if mode == 'http_ntlm_auth':
+            return LoopbackNtlmProxy.from_url(endpoint)
         if mode == 'http_digest_auth':
             return LoopbackDigestProxy.from_url(endpoint)
         return PROXY_PARSERS[workspace_proxy_auth.MODES.get(mode, mode)].from_url(endpoint)
@@ -82,7 +86,7 @@ def _endpoint(mode, proxy):
 
 def _proxy_consent(mode):
     if mode in workspace_proxy_auth.MODES:
-        return workspace_proxy_auth.CONSENT
+        return workspace_proxy_auth.consent_version(mode)
     return '' if mode == 'auto' else VM_CONSENT if mode.startswith('vm_') else PROXY_CONSENT
 
 
@@ -102,7 +106,7 @@ def read_settings(workspace):
         if path.stat().st_size > 4096:
             raise ValueError
         value = json.loads(path.read_text(encoding='utf-8'), object_pairs_hook=_unique_object)
-        if not isinstance(value, dict) or type(value.get('schema_version')) is not int or value['schema_version'] not in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10):
+        if not isinstance(value, dict) or type(value.get('schema_version')) is not int or value['schema_version'] not in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11):
             raise ValueError
         expected = set(default) | (set(PROXY_DEFAULT) if value['schema_version'] >= 2 else set())
         if value['schema_version'] in PAC_SCOPES:
@@ -111,7 +115,7 @@ def read_settings(workspace):
             expected |= SYSTEM_PAC_FIELDS
         if value['schema_version'] == 5:
             expected |= WPAD_FIELDS
-        if value['schema_version'] == 8:
+        if value['schema_version'] in (8, 11):
             expected.add(workspace_proxy_auth.FIELD)
         if (set(value) != expected
                 or value['mode'] not in MODES or type(value['revision']) is not int
@@ -125,12 +129,13 @@ def read_settings(workspace):
             if (value['proxy_endpoint'] != _endpoint(value['proxy_mode'], proxy)
                     or value['proxy_consent_version'] != _proxy_consent(value['proxy_mode'])):
                 raise ValueError
-        elif value['schema_version'] == 8:
-            if value['proxy_mode'] not in workspace_proxy_auth.MODES:
+        elif value['schema_version'] in (8, 11):
+            if (value['proxy_mode'] not in workspace_proxy_auth.MODES
+                    or value['schema_version'] != workspace_proxy_auth.schema_version(value['proxy_mode'])):
                 raise ValueError
             proxy = _proxy(value['proxy_mode'], value['proxy_endpoint'])
             if (value['proxy_endpoint'] != _endpoint(value['proxy_mode'], proxy)
-                    or value['proxy_consent_version'] != workspace_proxy_auth.CONSENT):
+                    or value['proxy_consent_version'] != workspace_proxy_auth.consent_version(value['proxy_mode'])):
                 raise ValueError
             workspace_proxy_auth.validate_envelope(value[workspace_proxy_auth.FIELD])
         elif value['schema_version'] in PAC_SCOPES:
@@ -223,6 +228,8 @@ def capture_policy(workspace, *, settings=None):
             if _environment_conflict():
                 raise LocalProxyError('workspace_proxy_environment_conflict')
             proxy = _proxy(mode, settings['proxy_endpoint'])
+            if mode == 'http_ntlm_auth' and not ntlm_worker.available():
+                raise LocalProxyError('local_proxy_ntlm_unavailable')
             credentials = workspace_proxy_auth.restore(workspace.root, mode, settings['proxy_endpoint'],
                                                        settings[workspace_proxy_auth.FIELD])
             # Hash the randomized protected envelope, never a plaintext secret
@@ -249,9 +256,10 @@ def state(workspace):
     policy = capture_policy(workspace, settings=settings)
     return {**PROXY_DEFAULT, **public, 'disclosure': DISCLOSURE, 'provider': 'Cloudflare',
             'proxy_auth_available': workspace_proxy_auth.available(),
+            'proxy_ntlm_available': ntlm_worker.available(),
             'proxy_auth_saved': settings.get(workspace_proxy_auth.FIELD) is not None,
             'proxy_auth_disclosure': workspace_proxy_auth.DISCLOSURE,
-            'proxy_auth_message': workspace_proxy_auth.MESSAGES.get(policy.error, ''),
+            'proxy_auth_message': {**AUTH_MESSAGES, **workspace_proxy_auth.MESSAGES}.get(policy.error, ''),
             'dns_disclosures': {'fake_ip_doh': DISCLOSURE, 'public_doh': PUBLIC_DNS_DISCLOSURE},
             'pac_available': pac_native.available(), 'pac_disclosure': PAC_DISCLOSURE,
             'pac_url_available': pac_url_worker.available(), 'pac_url_disclosure': pac_url.DISCLOSURE,
@@ -327,9 +335,10 @@ def save_proxy_auth(workspace, data):
         except LocalProxyError as exc:
             raise InputError({**AUTH_MESSAGES, **workspace_proxy_auth.MESSAGES}[exc.code]) from None
         value = {**{k: v for k, v in previous.items() if k not in ALL_ROUTE_FIELDS},
-                 'schema_version': 8, 'revision': previous['revision']+1, 'updated_at': utc_now(),
+                 'schema_version': workspace_proxy_auth.schema_version(data['mode']),
+                 'revision': previous['revision']+1, 'updated_at': utc_now(),
                  'proxy_mode': data['mode'], 'proxy_endpoint': endpoint,
-                 'proxy_consent_version': workspace_proxy_auth.CONSENT, workspace_proxy_auth.FIELD: envelope}
+                 'proxy_consent_version': workspace_proxy_auth.consent_version(data['mode']), workspace_proxy_auth.FIELD: envelope}
         atomic_json(workspace.root/'network-preferences.json', value)
     workspace.dns_resolver.clear()
     return {**state(workspace), 'message': '已加密保存本工作区代理凭据；未联网测试。请停止并重开已有采集会话以采用新凭据，原任务和数据保留。'}

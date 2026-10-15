@@ -189,6 +189,8 @@ class NetworkPolicy:
             value.append('explicit_public_doh_v1')
         if getattr(self.proxy, 'auth_scheme', None) == 'digest':
             value.append('explicit_http_digest_v1')
+        if getattr(self.proxy, 'auth_scheme', None) == 'ntlmv2':
+            value.append('explicit_http_ntlmv2_v1')
         if self.pac_url_mode:
             value.append('explicit_full_url_pac_v1')
         if self.pac_domain_mode:
@@ -244,8 +246,8 @@ class NetworkPolicy:
                   'vm_host_proxy_scope': 'explicit_workspace_anonymous_rfc1918_ipv4',
                   'proxy_authentication_configured': bool(self.proxy and self.proxy.credentials is not None),
                   'network_tested': False}
-        if getattr(self.proxy, 'auth_scheme', None) == 'digest':
-            result['proxy_authentication_method'] = 'digest'
+        if getattr(self.proxy, 'auth_scheme', None) in {'digest', 'ntlmv2'}:
+            result['proxy_authentication_method'] = self.proxy.auth_scheme
         if self.pac_url_mode:
             result.update(pac_scope='explicit_trusted_full_https_url', native_browser_supported=False)
         if self.pac_domain_mode or getattr(self.pac, 'kind', None) == 'portable_domain_pac':

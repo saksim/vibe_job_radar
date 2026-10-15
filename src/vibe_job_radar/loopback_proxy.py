@@ -51,8 +51,15 @@ class LoopbackProxy:
                 raise LocalProxyError('local_proxy_credentials_require_explicit')
             return None
         method = os.environ.get(AUTH_ENV, 'basic')
-        if method not in {'basic', 'digest'}:
+        if method not in {'basic', 'digest', 'ntlmv2'}:
             raise LocalProxyError('local_proxy_credentials_invalid')
+        if method == 'ntlmv2':
+            from .ntlm_proxy import LoopbackNtlmProxy
+            from .ntlm_worker import available
+            proxy = LoopbackNtlmProxy.from_url(raw).with_environment_credentials()
+            if not available():
+                raise LocalProxyError('local_proxy_ntlm_unavailable')
+            return proxy
         if method == 'digest':
             from .digest_proxy import LoopbackDigestProxy
             return LoopbackDigestProxy.from_url(raw).with_environment_credentials()
