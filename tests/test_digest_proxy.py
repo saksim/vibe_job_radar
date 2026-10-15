@@ -46,6 +46,14 @@ class DigestVectorTests(unittest.TestCase):
                     cnonce='f2/wE4q74E6zIJEtWaHKaf5wv/H5QzzpXusqGemxURZJ')
                 self.assertEqual(fields(header)['response'], expected)
 
+    def test_case_insensitive_qop_challenge_and_server_echo(self):
+        for offered, expected in [('AUTH','auth'),('Auth, AUTH-INT','auth'),('AUTH-INT','auth-int')]:
+            with self.subTest(offered=offered):
+                challenge=select_challenge(['Digest realm="x", nonce="n", algorithm=SHA-256, qop="'+offered+'"'])
+                header,proof=challenge.authorize(b'user',b'password','CONNECT',IP4+':443')
+                self.assertEqual(fields(header)['qop'],expected)
+                proof.verify(['rspauth="'+proof.response+'", qop='+expected.upper()+', nc=00000001, cnonce="'+proof.cnonce+'"'])
+
     def test_mixed_offers_select_strongest_supported_without_basic_fallback(self):
         selected = select_challenge(['Negotiate', 'Basic realm="ignored", Digest realm="a,b", '
             'nonce="n", algorithm=MD5, Digest realm = "strong", nonce="n", algorithm=SHA-256',
@@ -114,6 +122,7 @@ class HTTPDigestProxyTests(unittest.TestCase):
         env=patch.dict(os.environ,{**basic.AUTH,AUTH_ENV:'digest'});env.start();self.addCleanup(env.stop)
         self.realm='ARTIFICIAL-DIGEST-REALM';self.nonce='ARTIFICIAL-SERVER-NONCE'
         self.algorithm='SHA-256';self.qop='auth';self.userhash=False
+        self.uppercase_qop=False
         self.reject_auth=False;self.bad_proof=False;self.anonymous_success=False
         self.challenge_override=None;self.authentication=[];self.challenge_count=0
         self.authenticate_proxy=self.authenticate
@@ -124,7 +133,7 @@ class HTTPDigestProxyTests(unittest.TestCase):
             self.challenge_count+=1
             challenge=self.challenge_override or ('Digest realm="'+self.realm+'", nonce="'+self.nonce+'", '
                 'opaque="ARTIFICIAL-OPAQUE", algorithm='+self.algorithm+
-                (', qop="'+self.qop+'"' if self.qop else '')+(', userhash=true' if self.userhash else ''))
+                (', qop="'+(self.qop.upper() if self.uppercase_qop else self.qop)+'"' if self.qop else '')+(', userhash=true' if self.userhash else ''))
             return (200 if self.anonymous_success else 407), [('Proxy-Authenticate',challenge)]
         self.authentication.append(header)
         if self.reject_auth or not header.startswith('Digest '):
@@ -148,7 +157,7 @@ class HTTPDigestProxyTests(unittest.TestCase):
         if not valid:return 407,[]
         proof='0'*len(response('')) if self.bad_proof else response('')
         info='rspauth="'+proof+'"'
-        if self.qop:info+=', qop='+self.qop+', nc=00000001, cnonce="'+values['cnonce']+'"'
+        if self.qop:info+=', qop='+(self.qop.upper() if self.uppercase_qop else self.qop)+', nc=00000001, cnonce="'+values['cnonce']+'"'
         return 200,[('Proxy-Authentication-Info',info)]
 
     def test_real_tls_all_algorithms_sessions_and_qop_without_origin_credentials(self):
@@ -157,6 +166,7 @@ class HTTPDigestProxyTests(unittest.TestCase):
             ('SHA-512-256-sess','auth',True),('MD5','',False)]:
             with self.subTest(algorithm=algorithm,qop=qop):
                 self.algorithm,self.qop,self.userhash=algorithm,qop,userhash
+                self.uppercase_qop=algorithm.endswith('-sess')
                 self.assertTrue(self.perform(lambda:SafeHTTP({HOST},interval=0).json('https://'+HOST+'/jobs'))['ok'])
         self.assertEqual(len(self.requests),7);self.assertEqual(len(self.connects),14)
         self.assertEqual(self.challenge_count,7);self.assertEqual(len(self.authentication),7)

@@ -112,7 +112,10 @@ class DigestProof:
         values = _parameters(_segments(','.join(headers)))
         # nextnonce is not cached: each tunnel starts a fresh challenge.
         for key, expected in (('cnonce', self.cnonce), ('qop', self.qop), ('nc', self.nc)):
-            if key in values and values[key] != expected:
+            actual = values.get(key)
+            if key == 'qop' and actual is not None:
+                actual = actual.lower()
+            if key in values and actual != expected:
                 raise DigestError()
         if 'rspauth' in values:
             supplied = values['rspauth']
@@ -152,7 +155,7 @@ class DigestChallenge:
         except (ValueError, TypeError):
             raise DigestError() from None
         if 'qop' in values:
-            offered = [v.strip() for v in values['qop'].split(',')]
+            offered = [v.strip().lower() for v in values['qop'].split(',')]
             if 'auth' in offered:
                 qop = 'auth'
             elif 'auth-int' in offered:
