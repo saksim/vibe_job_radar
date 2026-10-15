@@ -54,7 +54,7 @@ def main():
                         page.locator('#workspace-pac-file').set_input_files({'name':name,'mimeType':'application/x-ns-proxy-autoconfig','buffer':body})
                     def save():
                         page.locator('#workspace-pac-consent').check()
-                        with page.expect_response(lambda r:r.url.endswith(('/api/network/pac','/api/network/pac-url'))) as response:
+                        with page.expect_response(lambda r:r.url.endswith(('/api/network/pac','/api/network/pac-url','/api/network/pac-url-dns'))) as response:
                             page.locator('#save-workspace-pac').click()
                         assert response.value.status==200
                         expect(page.locator('#save-workspace-pac')).to_be_enabled()
@@ -135,6 +135,20 @@ def main():
                         assert url_calls.call_count==2 and calls.call_count==2
                         assert not workspace.db.exists() and not result['external_requests'] and not result['page_errors']
                         result['full_url_checks'].append('rollback revokes URL grant; old domain evaluator count unchanged; zero jobs or external requests')
+                    page.locator('#workspace-pac-consent').check()
+                    page.locator('#workspace-pac-kind').select_option('url_dns')
+                    expect(page.locator('#workspace-pac-consent')).not_to_be_checked()
+                    expect(page.locator('#workspace-pac-disclosure')).to_contain_text('DNS')
+                    file(b'function FindProxyForURL(){return isInNet(dnsResolve("localhost"),"127.0.0.0","255.0.0.0")?"DIRECT":"INVALID";}','dns-helpers.pac');save()
+                    for path in ('/guided','/advanced','/'):
+                        page.goto(server.origin+path);expand()
+                        expect(page.locator('#workspace-pac-kind')).to_have_value('url_dns')
+                        expect(page.locator('#workspace-proxy-mode')).to_have_value('pac_url_dns')
+                    assert check(True)['target_requested'] is False
+                    assert workspace.network_state()['schema_version']==7
+                    assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
+                    page.locator('#network-preferences').screenshot(path=str(out/'pac-dns-mobile.png'))
+                    result['full_url_checks'].append('separate DNS-helper consent persists across all pages; actual localhost DNS helper passes without a target request')
                     result.update(success=True,full_url_success=True,url_engine_version=pac_url_worker.ENGINE_VERSION,browser_version=browser.version)
                 finally:browser.close()
         finally:

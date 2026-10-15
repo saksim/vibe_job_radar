@@ -7,7 +7,7 @@ from pathlib import Path
 import sys
 import tempfile
 import threading
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 ROOT=Path(__file__).resolve().parents[1]
 sys.path[:0]=[str(ROOT/'src'),str(ROOT/'tests')]
@@ -59,6 +59,7 @@ def main():
                     expect(page.locator('#release-current')).to_contain_text('0.3.0')
                     assert not fixture.calls
                     expect(page.locator('#release-download')).to_be_disabled()
+                    expect(page.locator('#release-auto-controls')).to_be_hidden()
                     result['checks'].append('opening the workbench and version panel remains offline')
                     page.locator('#release-check').click()
                     expect(page.locator('#release-download')).to_be_enabled(timeout=10000)
@@ -77,6 +78,31 @@ def main():
                     assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
                     page.locator('#release-panel').screenshot(path=str(out/'updates-ready-mobile.png'))
                     result['checks'].append('download prepares a separate checked directory at 390px and preserves old program/workspace')
+                    installer=MagicMock()
+                    installer.preflight=server.upgrade_preflight
+                    installer.install.return_value={'status':'restarting','message':'真实HTTP已确认；验收不执行人工包'}
+                    server.releases.installer=installer
+                    page.locator('#release-panel summary').first.click()
+                    page.locator('#release-panel summary').first.click()
+                    expect(page.locator('#release-auto-controls')).to_be_visible()
+                    expect(page.locator('#release-install')).to_be_disabled()
+                    page.locator('#release-install-consent').check()
+                    with patch.object(server.public_tasks,'busy',return_value=True):
+                        page.locator('#release-install').click()
+                        expect(page.locator('#release-status')).to_contain_text('请先等待或停止')
+                        expect(page.locator('#release-install-consent')).not_to_be_checked()
+                    installer.install.assert_not_called()
+                    page.locator('#release-install-consent').check()
+                    page.locator('#release-install').click()
+                    expect(page.locator('#release-status')).to_contain_text('验收不执行人工包')
+                    installer.install.assert_called_once()
+                    assert keep.read_text(encoding='utf8')=='original workspace'
+                    result['checks'].append('automatic upgrade needs fresh separate consent; busy tasks block it; HTTP passes verified ZIP to installer once without executing authored bytes')
+                    page.reload();page.locator('#release-panel summary').first.click()
+                    # A restarted UI would be a fresh service; reset only this test service.
+                    server.releases._save(status='idle',message='test service reset')
+                    page.reload();page.locator('#release-panel summary').first.click()
+                    expect(page.locator('#release-check')).to_be_enabled()
                     with patch.object(fixture,'latest',side_effect=OSError('private failure detail')):
                         page.locator('#release-check').click()
                         expect(page.locator('#release-status')).to_contain_text('版本操作未完成',timeout=10000)

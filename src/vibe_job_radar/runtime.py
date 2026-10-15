@@ -31,4 +31,7 @@ def prepare_portable():
     # Windows ZIP tools can extract it without enabling system long paths.
     # Bind to the executable, never the launching cwd. Explicit caches remain
     # explicit; this changes only this application process's environment.
-    os.environ.setdefault('PLAYWRIGHT_BROWSERS_PATH',str(Path(sys.executable).resolve().parent/'browsers'))
+    bundled=str(Path(sys.executable).resolve().parent/'browsers')
+    if 'PLAYWRIGHT_BROWSERS_PATH' not in os.environ:
+        os.environ['PLAYWRIGHT_BROWSERS_PATH']=bundled
+        os.environ['VIBE_RADAR_BUNDLED_BROWSER_PATH']=bundled

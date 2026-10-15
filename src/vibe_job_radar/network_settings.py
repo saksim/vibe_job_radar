@@ -92,10 +92,10 @@ def read_settings(workspace):
         if path.stat().st_size > 4096:
             raise ValueError
         value = json.loads(path.read_text(encoding='utf-8'), object_pairs_hook=_unique_object)
-        if not isinstance(value, dict) or type(value.get('schema_version')) is not int or value['schema_version'] not in (1, 2, 3, 4, 5, 6):
+        if not isinstance(value, dict) or type(value.get('schema_version')) is not int or value['schema_version'] not in (1, 2, 3, 4, 5, 6, 7):
             raise ValueError
         expected = set(default) | (set(PROXY_DEFAULT) if value['schema_version'] >= 2 else set())
-        if value['schema_version'] in (3, 6):
+        if value['schema_version'] in (3, 6, 7):
             expected |= PAC_FIELDS
         if value['schema_version'] == 4:
             expected |= SYSTEM_PAC_FIELDS
@@ -111,10 +111,11 @@ def read_settings(workspace):
             if (value['proxy_endpoint'] != _endpoint(value['proxy_mode'], proxy)
                     or value['proxy_consent_version'] != _proxy_consent(value['proxy_mode'])):
                 raise ValueError
-        elif value['schema_version'] in (3, 6):
-            url_scope = value['schema_version'] == 6
-            if (value['proxy_mode'] != ('pac_url' if url_scope else 'pac') or value['proxy_endpoint'] != ''
-                    or value['proxy_consent_version'] != (pac_url.CONSENT if url_scope else PAC_CONSENT)
+        elif value['schema_version'] in (3, 6, 7):
+            url_scope = value['schema_version'] in (6, 7)
+            dns_scope = value['schema_version'] == 7
+            if (value['proxy_mode'] != ('pac_url_dns' if dns_scope else 'pac_url' if url_scope else 'pac') or value['proxy_endpoint'] != ''
+                    or value['proxy_consent_version'] != (pac_url.DNS_CONSENT if dns_scope else pac_url.CONSENT if url_scope else PAC_CONSENT)
                     or not _pac_name(value['pac_name'])
                     or not isinstance(value['pac_sha256'], str) or not re.fullmatch('[0-9a-f]{64}', value['pac_sha256'])
                     or not isinstance(value['pac_id'], str) or not re.fullmatch('[0-9a-f]{32}', value['pac_id'])):
@@ -171,23 +172,24 @@ def capture_policy(workspace, *, settings=None):
                     None if pac_native.available() else 'pac_unavailable')
         except LocalProxyError as exc:
             policy = NetworkPolicy('explicit_workspace', error=exc.code, pac_id=settings['pac_id'])
-    elif mode in {'pac', 'pac_url'}:
+    elif mode in {'pac', 'pac_url', 'pac_url_dns'}:
         try:
             source = _pac_source(workspace, settings)
         except InputError:
             return NetworkPolicy('explicit_workspace', error='pac_file_invalid', pac_id=settings['pac_id'],
-                                 pac_url_mode=mode == 'pac_url')
+                                 pac_url_mode=mode in {'pac_url', 'pac_url_dns'})
         def permitted():
             current = read_settings(workspace)
             return (current.get('pac_id') == settings['pac_id']
                     and current.get('pac_sha256') == settings['pac_sha256']
                     and current.get('proxy_mode') == mode
-                    and (mode != 'pac_url' or not workspace._network_closed.is_set())
+                    and (mode == 'pac' or not workspace._network_closed.is_set())
                     and not _environment_conflict()
                     and _pac_source(workspace, current) == source)
-        url_scope = mode == 'pac_url'
+        url_scope = mode in {'pac_url', 'pac_url_dns'}
         available = pac_url_worker.available() if url_scope else pac_native.available()
-        snapshot = pac_url.UrlPacSnapshot(source, permitted) if url_scope else PacSnapshot(source, permitted)
+        snapshot = (pac_url.UrlPacSnapshot(source, permitted, dns_helpers=mode == 'pac_url_dns')
+                    if url_scope else PacSnapshot(source, permitted))
         policy = NetworkPolicy('explicit_workspace', pac=snapshot, pac_id=settings['pac_id'], pac_url_mode=url_scope,
             error='workspace_proxy_environment_conflict' if _environment_conflict() else
                   None if available else 'pac_url_unavailable' if url_scope else 'pac_unavailable')
@@ -207,6 +209,7 @@ def state(workspace):
             'dns_disclosures': {'fake_ip_doh': DISCLOSURE, 'public_doh': PUBLIC_DNS_DISCLOSURE},
             'pac_available': pac_native.available(), 'pac_disclosure': PAC_DISCLOSURE,
             'pac_url_available': pac_url_worker.available(), 'pac_url_disclosure': pac_url.DISCLOSURE,
+            'pac_url_dns_disclosure': pac_url.DNS_DISCLOSURE,
             'system_pac': system_pac.preview(), 'system_pac_disclosure': system_pac.DISCLOSURE,
             'wpad': workspace.wpad_discovery.state(settings['revision']), 'wpad_disclosure': wpad.DISCLOSURE,
             'network_tested': False, 'policy': capture_policy(workspace, settings=settings).describe()}
@@ -281,7 +284,8 @@ def _pac_source(workspace, settings):
         raise InputError('PAC副本缺失或校验失败，已停止联网；可重新导入或选择自动模式。') from None
 
 
-def save_pac(workspace, data, *, full_url=False):
+def save_pac(workspace, data, *, full_url=False, dns_helpers=False):
+    if dns_helpers and not full_url:raise InputError('DNS助手须单独选择完整网址PAC范围。')
     if (not isinstance(data, dict) or set(data) != {'name', 'script', 'revision', 'consent'}
             or type(data['revision']) is not int or data['consent'] is not True
             or not _pac_name(data['name'])):
@@ -307,9 +311,9 @@ def save_pac(workspace, data, *, full_url=False):
         else:
             atomic_text(path, data['script'])
         value = {**{k:v for k,v in previous.items() if k not in ALL_PAC_FIELDS},
-            'schema_version': 6 if full_url else 3, 'revision': previous['revision']+1,
-            'updated_at': utc_now(), 'proxy_mode': 'pac_url' if full_url else 'pac', 'proxy_endpoint': '',
-            'proxy_consent_version': pac_url.CONSENT if full_url else PAC_CONSENT, 'pac_name': data['name'],
+            'schema_version': 7 if dns_helpers else 6 if full_url else 3, 'revision': previous['revision']+1,
+            'updated_at': utc_now(), 'proxy_mode': 'pac_url_dns' if dns_helpers else 'pac_url' if full_url else 'pac', 'proxy_endpoint': '',
+            'proxy_consent_version': pac_url.DNS_CONSENT if dns_helpers else pac_url.CONSENT if full_url else PAC_CONSENT, 'pac_name': data['name'],
             'pac_sha256': sha, 'pac_id': secrets.token_hex(16)}
         atomic_json(workspace.root/'network-preferences.json', value)
     workspace.dns_resolver.clear()
@@ -399,7 +403,7 @@ def check_pac(workspace, data):
     if not isinstance(data, dict) or set(data) != {'revision'} or type(data['revision']) is not int:
         raise InputError('仅接受当前网络偏好修订号。')
     settings = read_settings(workspace)
-    if settings['revision'] != data['revision'] or settings.get('proxy_mode') not in {'pac', 'pac_url', 'system_pac', 'wpad'}:
+    if settings['revision'] != data['revision'] or settings.get('proxy_mode') not in {'pac', 'pac_url', 'pac_url_dns', 'system_pac', 'wpad'}:
         raise InputError('PAC设置已改变或尚未导入，请刷新后重试。')
     policy = capture_policy(workspace, settings=settings)
     try:
