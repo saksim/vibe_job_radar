@@ -12,7 +12,8 @@ from .network_policy import NetworkPolicy
 from .loopback_proxy import LoopbackProxy, LocalProxyError
 from .loopback_socks import LoopbackSocks5
 from .vm_proxy import VmHTTPProxy, VmSocks5Proxy, ERROR_MESSAGES as VM_MESSAGES
-from .proxy_credentials import configured as credentials_configured
+from .proxy_credentials import configured as credentials_configured, ERROR_MESSAGES as AUTH_MESSAGES
+from . import workspace_proxy_auth
 from .html_parser import _unique_object
 from .utils import atomic_json, atomic_text, utc_now
 from .workspace import InputError
@@ -33,6 +34,7 @@ PAC_FIELDS = {'pac_name', 'pac_sha256', 'pac_id'}
 SYSTEM_PAC_FIELDS = {'system_pac_config_id', 'pac_id'}
 WPAD_FIELDS = {'wpad_config_id', 'pac_id'}
 ALL_PAC_FIELDS = PAC_FIELDS | SYSTEM_PAC_FIELDS | WPAD_FIELDS
+ALL_ROUTE_FIELDS = ALL_PAC_FIELDS | {workspace_proxy_auth.FIELD}
 PAC_DISCLOSURE = ('只导入你信任的本地PAC文件（UTF-8，最多64KiB）。Windows会执行脚本，原生DNS函数可能解析域名。'
     '脚本只收到HTTPS根地址和域名，不含职位路径、关键词、Cookie或密码。仅接受DIRECT、匿名本机PROXY和明确SOCKS5；'
     '完整检查返回项，只采用第一项，失败不自动直连。不会自动读取系统PAC、发现WPAD或修改系统代理。')
@@ -54,13 +56,13 @@ def _dns_consent(mode):
 
 def _proxy(mode, endpoint):
     try:
-        if not isinstance(mode, str) or mode not in PROXY_MODES or not isinstance(endpoint, str):
+        if not isinstance(mode, str) or mode not in PROXY_MODES | workspace_proxy_auth.MODES.keys() or not isinstance(endpoint, str):
             raise ValueError()
         if mode == 'auto':
             if endpoint != '':
                 raise ValueError()
             return None
-        return PROXY_PARSERS[mode].from_url(endpoint)
+        return PROXY_PARSERS[workspace_proxy_auth.MODES.get(mode, mode)].from_url(endpoint)
     except (ValueError, TypeError, LocalProxyError):
         raise InputError('请按所选模式填写匿名HTTP或SOCKS5代理及端口：本机模式只接受loopback，宿主机模式只接受RFC1918 IPv4。不能包含账号密码、路径、其他远程地址或代理DNS。') from None
 
@@ -69,10 +71,12 @@ def _endpoint(mode, proxy):
     if proxy is None:
         return ''
     host = '[' + proxy.host + ']' if ':' in proxy.host else proxy.host
-    return f'{mode.removeprefix("vm_")}://{host}:{proxy.port}'
+    return f'{workspace_proxy_auth.MODES.get(mode, mode).removeprefix("vm_")}://{host}:{proxy.port}'
 
 
 def _proxy_consent(mode):
+    if mode in workspace_proxy_auth.MODES:
+        return workspace_proxy_auth.CONSENT
     return '' if mode == 'auto' else VM_CONSENT if mode.startswith('vm_') else PROXY_CONSENT
 
 
@@ -92,7 +96,7 @@ def read_settings(workspace):
         if path.stat().st_size > 4096:
             raise ValueError
         value = json.loads(path.read_text(encoding='utf-8'), object_pairs_hook=_unique_object)
-        if not isinstance(value, dict) or type(value.get('schema_version')) is not int or value['schema_version'] not in (1, 2, 3, 4, 5, 6, 7):
+        if not isinstance(value, dict) or type(value.get('schema_version')) is not int or value['schema_version'] not in (1, 2, 3, 4, 5, 6, 7, 8):
             raise ValueError
         expected = set(default) | (set(PROXY_DEFAULT) if value['schema_version'] >= 2 else set())
         if value['schema_version'] in (3, 6, 7):
@@ -101,16 +105,28 @@ def read_settings(workspace):
             expected |= SYSTEM_PAC_FIELDS
         if value['schema_version'] == 5:
             expected |= WPAD_FIELDS
+        if value['schema_version'] == 8:
+            expected.add(workspace_proxy_auth.FIELD)
         if (set(value) != expected
                 or value['mode'] not in MODES or type(value['revision']) is not int
                 or not 1 <= value['revision'] < 2**31 or not isinstance(value['updated_at'], str)
                 or value['consent_version'] != _dns_consent(value['mode'])):
             raise ValueError
         if value['schema_version'] == 2:
+            if value['proxy_mode'] not in PROXY_MODES:
+                raise ValueError
             proxy = _proxy(value['proxy_mode'], value['proxy_endpoint'])
             if (value['proxy_endpoint'] != _endpoint(value['proxy_mode'], proxy)
                     or value['proxy_consent_version'] != _proxy_consent(value['proxy_mode'])):
                 raise ValueError
+        elif value['schema_version'] == 8:
+            if value['proxy_mode'] not in workspace_proxy_auth.MODES:
+                raise ValueError
+            proxy = _proxy(value['proxy_mode'], value['proxy_endpoint'])
+            if (value['proxy_endpoint'] != _endpoint(value['proxy_mode'], proxy)
+                    or value['proxy_consent_version'] != workspace_proxy_auth.CONSENT):
+                raise ValueError
+            workspace_proxy_auth.validate_envelope(value[workspace_proxy_auth.FIELD])
         elif value['schema_version'] in (3, 6, 7):
             url_scope = value['schema_version'] in (6, 7)
             dns_scope = value['schema_version'] == 7
@@ -193,6 +209,16 @@ def capture_policy(workspace, *, settings=None):
         policy = NetworkPolicy('explicit_workspace', pac=snapshot, pac_id=settings['pac_id'], pac_url_mode=url_scope,
             error='workspace_proxy_environment_conflict' if _environment_conflict() else
                   None if available else 'pac_url_unavailable' if url_scope else 'pac_unavailable')
+    elif mode in workspace_proxy_auth.MODES:
+        try:
+            if _environment_conflict():
+                raise LocalProxyError('workspace_proxy_environment_conflict')
+            proxy = _proxy(mode, settings['proxy_endpoint'])
+            credentials = workspace_proxy_auth.restore(workspace.root, mode, settings['proxy_endpoint'],
+                                                       settings[workspace_proxy_auth.FIELD])
+            policy = NetworkPolicy('explicit_workspace', replace(proxy, credentials=credentials))
+        except LocalProxyError as exc:
+            policy = NetworkPolicy('explicit_workspace', error=exc.code)
     elif (proxy := _proxy(mode, settings.get('proxy_endpoint', ''))) is None:
         policy = NetworkPolicy.capture()
     elif _environment_conflict():
@@ -205,14 +231,20 @@ def capture_policy(workspace, *, settings=None):
 
 def state(workspace):
     settings = read_settings(workspace)
-    return {**PROXY_DEFAULT, **settings, 'disclosure': DISCLOSURE, 'provider': 'Cloudflare',
+    public = {k: v for k, v in settings.items() if k != workspace_proxy_auth.FIELD}
+    policy = capture_policy(workspace, settings=settings)
+    return {**PROXY_DEFAULT, **public, 'disclosure': DISCLOSURE, 'provider': 'Cloudflare',
+            'proxy_auth_available': workspace_proxy_auth.available(),
+            'proxy_auth_saved': settings.get(workspace_proxy_auth.FIELD) is not None,
+            'proxy_auth_disclosure': workspace_proxy_auth.DISCLOSURE,
+            'proxy_auth_message': workspace_proxy_auth.MESSAGES.get(policy.error, ''),
             'dns_disclosures': {'fake_ip_doh': DISCLOSURE, 'public_doh': PUBLIC_DNS_DISCLOSURE},
             'pac_available': pac_native.available(), 'pac_disclosure': PAC_DISCLOSURE,
             'pac_url_available': pac_url_worker.available(), 'pac_url_disclosure': pac_url.DISCLOSURE,
             'pac_url_dns_disclosure': pac_url.DNS_DISCLOSURE,
             'system_pac': system_pac.preview(), 'system_pac_disclosure': system_pac.DISCLOSURE,
             'wpad': workspace.wpad_discovery.state(settings['revision']), 'wpad_disclosure': wpad.DISCLOSURE,
-            'network_tested': False, 'policy': capture_policy(workspace, settings=settings).describe()}
+            'network_tested': False, 'policy': policy.describe()}
 
 
 def save(workspace, data):
@@ -237,6 +269,7 @@ def save(workspace, data):
 
 def save_proxy(workspace, data):
     if (not isinstance(data, dict) or set(data) != {'mode', 'endpoint', 'revision', 'consent'}
+            or not isinstance(data['mode'], str) or data['mode'] not in PROXY_MODES
             or type(data['revision']) is not int or type(data['consent']) is not bool
             or (data['mode'] != 'auto' and data['consent'] is not True)):
         raise InputError('请确认本工作区匿名代理及修订号；不接受凭据或额外参数。')
@@ -248,7 +281,7 @@ def save_proxy(workspace, data):
         previous = read_settings(workspace)
         if previous['revision'] >= 2**31-1 or previous['revision'] != data['revision']:
             raise InputError('网络偏好已更新或修订号达到上限，请刷新后重试；原设置保留。')
-        value = {**{k:v for k,v in previous.items() if k not in ALL_PAC_FIELDS},
+        value = {**{k:v for k,v in previous.items() if k not in ALL_ROUTE_FIELDS},
                  'schema_version': 2, 'revision': previous['revision'] + 1,
                  'updated_at': utc_now(), 'proxy_mode': data['mode'],
                  'proxy_endpoint': _endpoint(data['mode'], proxy),
@@ -256,6 +289,51 @@ def save_proxy(workspace, data):
         atomic_json(workspace.root/'network-preferences.json', value)
     workspace.dns_resolver.clear()
     return {**state(workspace), 'message': '已保存本工作区代理，未进行联网测试。请停止并重开已有采集会话以采用新设置；其他工作区和系统设置未修改。'}
+
+
+def save_proxy_auth(workspace, data):
+    if (not isinstance(data, dict) or set(data) != {'mode', 'endpoint', 'username', 'password', 'revision', 'consent'}
+            or type(data['revision']) is not int or data['consent'] is not True
+            or not isinstance(data['mode'], str) or data['mode'] not in workspace_proxy_auth.MODES):
+        raise InputError('请明确选择本机认证代理并同意Windows加密保存；不接受额外参数。')
+    proxy = _proxy(data['mode'], data['endpoint'])
+    endpoint = _endpoint(data['mode'], proxy)
+    if _environment_conflict():
+        raise InputError(PROXY_CONFLICT)
+    from .collection import writer_lock
+    with writer_lock(workspace.root):
+        previous = read_settings(workspace)
+        if previous['revision'] >= 2**31-1 or previous['revision'] != data['revision']:
+            raise InputError('网络偏好已更新或修订号达到上限，请刷新后重新输入；原设置保留。')
+        try:
+            envelope = workspace_proxy_auth.seal(workspace.root, data['mode'], endpoint,
+                                                data['username'], data['password'])
+        except LocalProxyError as exc:
+            raise InputError({**AUTH_MESSAGES, **workspace_proxy_auth.MESSAGES}[exc.code]) from None
+        value = {**{k: v for k, v in previous.items() if k not in ALL_ROUTE_FIELDS},
+                 'schema_version': 8, 'revision': previous['revision']+1, 'updated_at': utc_now(),
+                 'proxy_mode': data['mode'], 'proxy_endpoint': endpoint,
+                 'proxy_consent_version': workspace_proxy_auth.CONSENT, workspace_proxy_auth.FIELD: envelope}
+        atomic_json(workspace.root/'network-preferences.json', value)
+    workspace.dns_resolver.clear()
+    return {**state(workspace), 'message': '已加密保存本工作区代理凭据；未联网测试。请停止并重开已有采集会话以采用新凭据，原任务和数据保留。'}
+
+
+def clear_proxy_auth(workspace, data):
+    if (not isinstance(data, dict) or set(data) != {'revision', 'consent'}
+            or type(data['revision']) is not int or data['consent'] is not True):
+        raise InputError('请明确确认清除当前工作区代理凭据及修订号。')
+    from .collection import writer_lock
+    with writer_lock(workspace.root):
+        previous = read_settings(workspace)
+        if (previous.get('proxy_mode') not in workspace_proxy_auth.MODES
+                or previous['revision'] >= 2**31-1 or previous['revision'] != data['revision']):
+            raise InputError('网络偏好已更新或没有工作区代理凭据，请刷新后重试；原设置保留。')
+        value = {**previous, 'revision': previous['revision']+1, 'updated_at': utc_now(),
+                 workspace_proxy_auth.FIELD: None}
+        atomic_json(workspace.root/'network-preferences.json', value)
+    workspace.dns_resolver.clear()
+    return {**state(workspace), 'message': '已清除当前保存的代理凭据，保持所选入口并停止新连接；不会匿名连接或直连。请关闭已有会话；工作区备份中的旧加密副本需按原备份管理。'}
 
 
 def _pac_name(name):
@@ -310,7 +388,7 @@ def save_pac(workspace, data, *, full_url=False, dns_helpers=False):
                 raise InputError('PAC副本冲突；原设置保留。')
         else:
             atomic_text(path, data['script'])
-        value = {**{k:v for k,v in previous.items() if k not in ALL_PAC_FIELDS},
+        value = {**{k:v for k,v in previous.items() if k not in ALL_ROUTE_FIELDS},
             'schema_version': 7 if dns_helpers else 6 if full_url else 3, 'revision': previous['revision']+1,
             'updated_at': utc_now(), 'proxy_mode': 'pac_url_dns' if dns_helpers else 'pac_url' if full_url else 'pac', 'proxy_endpoint': '',
             'proxy_consent_version': pac_url.DNS_CONSENT if dns_helpers else pac_url.CONSENT if full_url else PAC_CONSENT, 'pac_name': data['name'],
@@ -336,7 +414,7 @@ def save_system_pac(workspace, data):
         except LocalProxyError as exc: raise InputError(system_pac.MESSAGES[exc.code]) from None
         if source.config_id != data['config_id']:
             raise InputError(system_pac.MESSAGES['system_pac_changed'])
-        value = {**{k:v for k,v in previous.items() if k not in ALL_PAC_FIELDS},
+        value = {**{k:v for k,v in previous.items() if k not in ALL_ROUTE_FIELDS},
             'schema_version': 4, 'revision': previous['revision']+1, 'updated_at': utc_now(),
             'proxy_mode': 'system_pac', 'proxy_endpoint': '', 'proxy_consent_version': system_pac.CONSENT,
             'system_pac_config_id': source.config_id, 'pac_id': secrets.token_hex(16)}
@@ -386,7 +464,7 @@ def save_wpad(workspace, data):
         if previous['revision'] >= 2**31-1 or previous['revision'] != data['revision']:
             raise InputError('网络偏好已更新或修订号达到上限，请刷新后重试；原设置保留。')
         def commit(config_id):
-            value = {**{k:v for k,v in previous.items() if k not in ALL_PAC_FIELDS},
+            value = {**{k:v for k,v in previous.items() if k not in ALL_ROUTE_FIELDS},
                 'schema_version': 5, 'revision': previous['revision']+1, 'updated_at': utc_now(),
                 'proxy_mode': 'wpad', 'proxy_endpoint': '', 'proxy_consent_version': wpad.CONSENT,
                 'wpad_config_id': config_id, 'pac_id': secrets.token_hex(16)}
@@ -419,6 +497,7 @@ def check_pac(workspace, data):
 
 
 DNS_MESSAGES = {
+    **workspace_proxy_auth.MESSAGES,
     **VM_MESSAGES,
     **pac_url.MESSAGES,
     **system_pac.MESSAGES,

@@ -25,15 +25,24 @@
   const proxy = document.createElement('fieldset');
   proxy.style.cssText = 'min-width:0;max-width:100%';
   proxy.innerHTML = `<legend>本工作区的代理</legend>
-    <p>自动模式沿用应用或系统配置。固定入口支持匿名本机代理，或已授权给此来宾的宿主机代理；更换后请停止并重开已有采集会话。</p>
+    <p>自动模式沿用应用或系统配置。固定入口支持本机代理（Windows可加密保存凭据），或已授权给此来宾的匿名宿主机代理；更换后请停止并重开已有采集会话。</p>
     <label for="workspace-proxy-mode">连接方式</label>
-    <select id="workspace-proxy-mode"><option value="auto">自动发现</option><option value="http">固定本机 HTTP</option><option value="socks5">固定本机 SOCKS5</option><option value="vm_http">宿主机 HTTP</option><option value="vm_socks5">宿主机 SOCKS5</option><option value="pac" disabled>已导入的域名 PAC</option><option value="pac_url" disabled>已导入的完整网址 PAC</option><option value="pac_url_dns" disabled>完整网址 PAC 与 DNS 助手</option><option value="system_pac" disabled>已许可的系统 PAC</option><option value="wpad" disabled>已确认的 WPAD</option></select>
+    <select id="workspace-proxy-mode"><option value="auto">自动发现</option><option value="http">固定本机 HTTP</option><option value="socks5">固定本机 SOCKS5</option><option value="http_auth" disabled>本机 HTTP＋保存凭据</option><option value="socks5_auth" disabled>本机 SOCKS5＋保存凭据</option><option value="vm_http">宿主机 HTTP</option><option value="vm_socks5">宿主机 SOCKS5</option><option value="pac" disabled>已导入的域名 PAC</option><option value="pac_url" disabled>已导入的完整网址 PAC</option><option value="pac_url_dns" disabled>完整网址 PAC 与 DNS 助手</option><option value="system_pac" disabled>已许可的系统 PAC</option><option value="wpad" disabled>已确认的 WPAD</option></select>
     <label for="workspace-proxy-endpoint">已配置的代理地址和端口</label>
     <input id="workspace-proxy-endpoint" type="text" autocomplete="off" spellcheck="false" style="max-width:100%;box-sizing:border-box" placeholder="填写你的本机代理入口，不含账号密码" disabled>
     <p id="workspace-proxy-scope"></p>
     <label><input id="workspace-proxy-consent" type="checkbox" disabled><span id="workspace-proxy-consent-label">确认仅在此工作区使用上述匿名本机代理</span></label>
-    <p>认证代理继续使用应用专用配置；检测到冲突时停止。不会将凭据转交给这里的新地址。保存不会访问代理或招聘网站。</p>
+    <fieldset id="workspace-proxy-auth-fields" hidden style="min-width:0;max-width:100%">
+      <legend>代理凭据</legend><p id="workspace-proxy-auth-disclosure"></p>
+      <label for="workspace-proxy-username">代理用户名</label>
+      <input id="workspace-proxy-username" type="text" autocomplete="off" spellcheck="false" maxlength="255" style="max-width:100%;box-sizing:border-box">
+      <label for="workspace-proxy-password">代理密码</label>
+      <input id="workspace-proxy-password" type="password" autocomplete="new-password" maxlength="255" style="max-width:100%;box-sizing:border-box">
+      <p>用户名和密码各1–255个可打印ASCII字符；用户名不含冒号。每次保存均须重新输入，完成或失败后清空输入框。</p>
+    </fieldset>
+    <p>已有应用专用配置继续可用；检测到冲突时停止。保存不会访问代理或招聘网站。</p>
     <button id="save-workspace-proxy" type="button">保存工作区代理</button>
+    <button id="clear-workspace-proxy-auth" type="button" hidden>清除已保存凭据并停止新连接</button>
     <p id="workspace-proxy-status" role="status" aria-live="polite">正在读取工作区代理。</p>`;
   controls.append(proxy);
   const pac = document.createElement('fieldset');
@@ -156,22 +165,38 @@
   const consent = proxy.querySelector('#workspace-proxy-consent');
   const proxyButton = proxy.querySelector('#save-workspace-proxy');
   const proxyMessage = proxy.querySelector('#workspace-proxy-status');
+  const authFields = proxy.querySelector('#workspace-proxy-auth-fields');
+  const proxyUsername = proxy.querySelector('#workspace-proxy-username');
+  const proxyPassword = proxy.querySelector('#workspace-proxy-password');
+  const authClear = proxy.querySelector('#clear-workspace-proxy-auth');
+  let authAvailable = false, authSaved = false, savedMode = '', savedEndpoint = '';
+  const isAuth = () => ['http_auth', 'socks5_auth'].includes(mode.value);
+  function clearSecretInputs() { proxyUsername.value = ''; proxyPassword.value = ''; }
   let revision = null, busy = false;
   function selection() {
     endpoint.disabled = consent.disabled = ['auto', 'pac', 'pac_url', 'pac_url_dns', 'system_pac', 'wpad'].includes(mode.value);
     proxyButton.disabled = ['pac', 'pac_url', 'pac_url_dns', 'system_pac', 'wpad'].includes(mode.value);
     consent.checked = false;
-    const vm = mode.value.startsWith('vm_');
+    const vm = mode.value.startsWith('vm_'), auth = isAuth();
+    clearSecretInputs();
+    authFields.hidden = !auth;
+    proxyUsername.disabled = proxyPassword.disabled = !auth || !authAvailable;
+    authClear.hidden = !auth;
+    authClear.disabled = !authSaved || mode.value !== savedMode || endpoint.value !== savedEndpoint;
+    if (auth && !authAvailable) proxyButton.disabled = true;
+    proxyButton.textContent = auth ? '加密保存工作区代理凭据' : '保存工作区代理';
     endpoint.placeholder = vm ? '填写宿主机已授权监听的 RFC1918 IPv4 和端口' : '填写你的本机代理入口，不含账号密码';
     proxy.querySelector('#workspace-proxy-consent-label').textContent = vm
       ? '确认该地址是宿主机授权给此来宾的匿名代理入口，仅在此工作区使用'
+      : auth ? '同意按上述说明将代理凭据加密保存在当前Windows账号和此工作区，仅交付上述本机入口'
       : '确认仅在此工作区使用上述匿名本机代理';
     proxy.querySelector('#workspace-proxy-scope').textContent = vm
       ? '来宾的127.0.0.1不是宿主机。请填写已知的HTTP或SOCKS5完整地址，不自动猜网关或开启监听；代理可看到目标IP和流量时间。具体虚拟机环境尚需实测。'
       : '本机模式只接受此系统的loopback地址。';
   }
   mode.addEventListener('change', selection);
-  endpoint.addEventListener('input', () => { consent.checked = false; });
+  endpoint.addEventListener('input', () => { consent.checked = false; clearSecretInputs(); authClear.disabled = true; });
+  for (const field of [proxyUsername, proxyPassword]) field.addEventListener('input', () => { consent.checked = false; });
   async function call(path, data) {
     const token = sessionStorage.getItem('radar-session') || '';
     const response = await fetch(path, {method: data ? 'POST' : 'GET', cache: 'no-store',
@@ -187,6 +212,11 @@
     dnsDisclosures = value.dns_disclosures || {fake_ip_doh:value.disclosure || ''};
     dnsDisclosure.textContent = dnsDisclosures[dnsScope.value] || '';
     revision = value.revision;
+    authAvailable = value.proxy_auth_available === true;
+    authSaved = value.proxy_auth_saved === true;
+    savedMode = value.proxy_mode || 'auto'; savedEndpoint = value.proxy_endpoint || '';
+    for (const name of ['http_auth','socks5_auth']) mode.querySelector('option[value='+name+']').disabled = !authAvailable;
+    proxy.querySelector('#workspace-proxy-auth-disclosure').textContent = value.proxy_auth_disclosure || '';
     mode.value = value.proxy_mode || 'auto';
     endpoint.value = value.proxy_endpoint || '';
     selection();
@@ -198,6 +228,9 @@
         : mode.value === 'system_pac' ? '按已许可系统PAC选择域名路线；尚未进行网络测试。'
         : mode.value === 'wpad' ? '按已确认WPAD来源选择域名路线；尚未进行网络测试。'
         : '已保存 '+endpoint.value+'，仅对本工作区生效；尚未进行网络测试。');
+    if (isAuth()) proxyMessage.textContent = value.proxy_auth_message ||
+      (value.policy?.code === 'workspace_proxy_environment_conflict' ? proxyMessage.textContent :
+        (authSaved ? '代理凭据已加密保存；页面不会回显，尚未联网测试。' : '未保存代理凭据，新连接已停止。'));
     pacState = value;
     pacKind.value = mode.value === 'pac_url_dns' ? 'url_dns' : mode.value === 'pac_url' ? 'url' : 'domain';
     renderPacScope();
@@ -228,9 +261,20 @@
   }
   button.addEventListener('click', () => save('/api/network/preferences',
     {mode: toggle.checked ? dnsScope.value : 'system', consent: toggle.checked}, message));
-  proxyButton.addEventListener('click', () => save('/api/network/proxy',
-    {mode: mode.value, endpoint: mode.value === 'auto' ? '' : endpoint.value,
-      consent: mode.value === 'auto' ? false : consent.checked}, proxyMessage));
+  proxyButton.addEventListener('click', async () => {
+    if (busy || revision === null) return;
+    const auth = isAuth();
+    try {
+      await save(auth ? '/api/network/proxy-auth' : '/api/network/proxy',
+        {mode: mode.value, endpoint: mode.value === 'auto' ? '' : endpoint.value,
+          consent: mode.value === 'auto' ? false : consent.checked,
+          ...(auth ? {username:proxyUsername.value, password:proxyPassword.value} : {})}, proxyMessage);
+    } finally { clearSecretInputs(); consent.checked = false; }
+  });
+  authClear.addEventListener('click', () => {
+    clearSecretInputs();
+    save('/api/network/proxy-auth/clear', {consent:true}, proxyMessage);
+  });
   pacButton.addEventListener('click', async () => {
     if (busy || revision === null) return;
     const file = pacFile.files[0];

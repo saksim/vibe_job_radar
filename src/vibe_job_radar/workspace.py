@@ -132,6 +132,14 @@ class Workspace:
         from .network_settings import save_proxy
         return save_proxy(self, data)
 
+    def network_proxy_auth_preferences(self, data):
+        from .network_settings import save_proxy_auth
+        return save_proxy_auth(self, data)
+
+    def network_proxy_auth_clear(self, data):
+        from .network_settings import clear_proxy_auth
+        return clear_proxy_auth(self, data)
+
     def network_pac_preferences(self, data):
         from .network_settings import save_pac
         return save_pac(self, data)

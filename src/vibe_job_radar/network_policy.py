@@ -215,7 +215,9 @@ class NetworkPolicy:
                   'fake_ip_scope': 'target_system_dns_not_used' if self.public_dns else 'opt_in_198.18.0.0/15_only',
                   'encrypted_dns_provider': 'Cloudflare' if self.encrypted_dns else None,
                   'proxy_credentials_supported': True,
-                  'proxy_credentials_scope': 'explicit_application_loopback_only',
+                  'proxy_credentials_scope': ('explicit_workspace_windows_dpapi_loopback'
+                      if self.source == 'explicit_workspace' and self.proxy and self.proxy.credentials is not None
+                      else 'explicit_application_loopback_only'),
                   'vm_host_proxy_supported': True,
                   'vm_host_proxy_scope': 'explicit_workspace_anonymous_rfc1918_ipv4',
                   'proxy_authentication_configured': bool(self.proxy and self.proxy.credentials is not None),
