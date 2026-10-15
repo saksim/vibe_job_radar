@@ -24,7 +24,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install developer-only native browser tools
-        run: python -m pip install "playwright>=1.48,<2" "packaging>=24.2" "cryptography>=43" "quickjs-ng==0.17.0.1"
+        run: python -m pip install "playwright>=1.48,<2" "packaging>=24.2" "cryptography>=43" "quickjs-ng==0.17.0.1" "pyspnego==0.12.4"
       - name: Install Chromium and isolated test trust tooling
         if: runner.os == 'Linux'
         run: |
@@ -137,7 +137,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install developer-only native tools
-        run: python -m pip install "playwright>=1.48,<2" "packaging>=24.2" "cryptography>=43" "quickjs-ng==0.17.0.1"
+        run: python -m pip install "playwright>=1.48,<2" "packaging>=24.2" "cryptography>=43" "quickjs-ng==0.17.0.1" "pyspnego==0.12.4"
       - name: Verify installed native Chrome authentication against artificial local TLS
         timeout-minutes: 3
         run: python scripts/run_native_auth_probe.py --controlled --channel chrome ${{ matrix.mode == 'headed' && '--headed' || '' }}

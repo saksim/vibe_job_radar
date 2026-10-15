@@ -9,7 +9,8 @@ import os
 from .loopback_proxy import LocalProxyError
 from .proxy_credentials import ProxyCredentials
 
-MODES = {'http_auth': 'http', 'http_digest_auth': 'http', 'socks5_auth': 'socks5'}
+MODES = {'http_auth': 'http', 'http_digest_auth': 'http', 'http_ntlm_auth': 'http', 'socks5_auth': 'socks5'}
+NTLM_CONSENT = 'workspace-loopback-explicit-ntlmv2-current-user-dpapi-v1'
 CONSENT = 'workspace-loopback-current-user-dpapi-v1'
 FIELD = 'proxy_auth'
 MESSAGES = {
@@ -18,10 +19,19 @@ MESSAGES = {
     'workspace_proxy_auth_missing': '此代理的已保存凭据已清除；请重新输入，或明确选择其他连接方式。新连接已停止，原任务和数据保留。',
     'workspace_proxy_auth_save_failed': 'Windows未能加密代理凭据，原网络配置保留；没有写入明文或进行连接测试。',
 }
-DISCLOSURE = ('只使用你信任的本机HTTP Basic、HTTP Digest或SOCKS5用户名密码代理，并明确选择认证方式，不填写招聘账号密码。'
+DISCLOSURE = ('只使用你信任的本机HTTP Basic、HTTP Digest、NTLMv2或SOCKS5用户名密码代理，并明确选择认证方式，不填写招聘账号密码。'
     '凭据以当前Windows账号加密，绑定本工作区位置和代理入口；重启后可继续使用，不在页面回显。'
     '迁移工作区或更换Windows账号、入口时需要重新输入。代理握手本身仍是本机协议，'
-    '不保证其他同账号程序无法读取；不承诺清除所有内存副本。保存不联网。')
+    '不保证其他同账号程序无法读取；不承诺清除所有内存副本。保存不联网。'
+    'NTLMv2只使用本次输入的代理账号（可填域\\用户名），不自动使用Windows登录身份，不协商Kerberos或NTLMv1。')
+
+
+def consent_version(mode):
+    return NTLM_CONSENT if mode == 'http_ntlm_auth' else CONSENT
+
+
+def schema_version(mode):
+    return 11 if mode == 'http_ntlm_auth' else 8
 
 
 def available():
@@ -42,7 +52,7 @@ def validate_envelope(value):
 
 
 def _context(root, mode, endpoint):
-    value = [CONSENT, os.path.normcase(str(root.resolve())), mode, endpoint]
+    value = [consent_version(mode), os.path.normcase(str(root.resolve())), mode, endpoint]
     return hashlib.sha256(json.dumps(value, ensure_ascii=True, separators=(',', ':')).encode()).digest()
 
 

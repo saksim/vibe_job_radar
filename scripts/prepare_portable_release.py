@@ -18,6 +18,7 @@ from release_summary import validate_summary
 from build_windows_portable import native_components_valid
 from url_pac_acceptance import valid_evidence as valid_url_pac
 from domain_pac_acceptance import valid_evidence as valid_domain_pac
+from ntlm_proxy_acceptance import valid_evidence as valid_ntlm
 from automatic_update_acceptance import valid_evidence as valid_automatic_update
 from wpad_dns_evidence import valid_wpad_dns_evidence
 
@@ -31,7 +32,7 @@ ARTIFACTS = ('windows-x64-portable-candidate', 'windows-portable-evidence')
 REQUIRED_PORTABLE_FLAGS = (
     'startup_registration_verified', 'startup_worker_verified',
     'system_pac_verified', 'wpad_dns_verified', 'url_pac_worker_verified', 'automatic_update_verified',
-    'workspace_proxy_credentials_verified', 'digest_proxy_credentials_verified', 'domain_pac_worker_verified',
+    'workspace_proxy_credentials_verified', 'digest_proxy_credentials_verified', 'domain_pac_worker_verified', 'ntlm_proxy_worker_verified',
 )
 HEX = re.compile(r'[0-9a-f]{64}')
 REPO = re.compile(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+')
@@ -175,6 +176,7 @@ def validate_candidate(candidate, manifest, source_evidence, sha):
     require(native_components_valid(proof.get('native_components'))
             and valid_url_pac(proof.get('url_pac'))
             and valid_domain_pac(proof.get('domain_pac'))
+            and valid_ntlm(proof.get('ntlm_proxy'))
             and valid_automatic_update(proof.get('automatic_update'))
             and valid_wpad_dns_evidence(proof.get('wpad_dns')),
             'Executable acceptance details are missing or invalid')

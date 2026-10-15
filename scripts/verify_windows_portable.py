@@ -1232,6 +1232,44 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
                 result['digest_proxy_credentials_verified']=True
                 result['checks'].append('actual frozen Digest mode and DPAPI credentials survive independent restart; clear stops route; original report and Basic/SOCKS support retained')
             finally:digest_restarted.close()
+            result['stage']='ntlm_component_and_saved_proxy'
+            from ntlm_proxy_acceptance import verify_component as verify_ntlm_component
+            ntlm_proof={'component':verify_ntlm_component(exe,cwd,env),
+                        'credentials_reopened':False,'clear_stops_route':False,'original_report_retained':False}
+            ntlm_original=RunningApp(exe,workspace,cwd,env)
+            try:
+                previous=ntlm_original.json('/api/network/state')
+                saved=ntlm_original.json('/api/network/proxy-auth',dict(mode='http_ntlm_auth',
+                    endpoint='http://127.0.0.1:18994',username='RADAR\\fixture',
+                    password='ArtificialOnlyPassword!42',revision=previous['revision'],consent=True))
+                if (saved['schema_version']!=11 or saved['policy'].get('proxy_authentication_method')!='ntlmv2'
+                        or saved['policy']['code']!='policy_selected' or 'proxy_auth' in saved):
+                    raise AssertionError('frozen explicit NTLMv2 mode was not applied')
+                ntlm_bytes=(workspace/'network-preferences.json').read_bytes()
+                if b'ArtificialOnlyPassword!42' in ntlm_bytes or b'fixture' in ntlm_bytes:
+                    raise AssertionError('frozen NTLM credentials were not protected')
+            finally:ntlm_original.close()
+            ntlm_restarted=RunningApp(exe,workspace,cwd,env)
+            try:
+                restored=ntlm_restarted.json('/api/network/state')
+                if (restored['proxy_mode']!='http_ntlm_auth' or not restored['proxy_auth_saved']
+                        or restored['policy'].get('proxy_authentication_method')!='ntlmv2'
+                        or restored['policy']['code']!='policy_selected'
+                        or (workspace/'network-preferences.json').read_bytes()!=ntlm_bytes):
+                    raise AssertionError('frozen NTLM credentials did not survive independent restart')
+                ntlm_proof['credentials_reopened']=True
+                cleared=ntlm_restarted.json('/api/network/proxy-auth/clear',dict(revision=restored['revision'],consent=True))
+                if cleared['policy']['code']!='workspace_proxy_auth_missing':
+                    raise AssertionError('cleared NTLM route did not stop')
+                ntlm_proof['clear_stops_route']=True
+                ntlm_restarted.json('/api/network/proxy',dict(mode='auto',endpoint='',revision=cleared['revision'],consent=False))
+                if ntlm_restarted.json('/api/report/'+ident)['id']!=ident:
+                    raise AssertionError('NTLM restart changed the original report')
+                ntlm_proof['original_report_retained']=True
+            finally:ntlm_restarted.close()
+            result['ntlm_proxy']=ntlm_proof
+            result['ntlm_proxy_worker_verified']=True
+            result['checks'].append('actual frozen NTLMv2 isolated artificial protocol and cleanup; DPAPI restart/clear retain original report; proxy TCP is covered separately by native acceptance')
             result['stage']='automatic_update_handoff'
             from automatic_update_acceptance import verify as verify_automatic_update
             result['automatic_update']=verify_automatic_update(bundle,root/'automatic-update',cwd,env)
