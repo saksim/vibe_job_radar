@@ -101,6 +101,7 @@ htmlcov/
 *.xls
 *.txt
 !requirements.txt
+!scripts/requirements-posix-build.txt
 !docs/licenses/QUICKJS_NG_NOTICES.txt
 *.pdf
 *.tar

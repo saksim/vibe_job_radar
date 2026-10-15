@@ -28,6 +28,8 @@ WORKFLOWS = {
     '.github/workflows/browser-choice.yml', '.github/workflows/browser-health.yml',
     '.github/workflows/native-browser.yml', '.github/workflows/vm-proxy.yml',
     '.github/workflows/windows-native-tls.yml', '.github/workflows/windows-portable.yml',
+    '.github/workflows/python-distribution.yml', '.github/workflows/live-public-example.yml',
+    '.github/workflows/posix-portable.yml',
 }
 ARTIFACTS = ('windows-x64-portable-candidate', 'windows-portable-evidence')
 REQUIRED_PORTABLE_FLAGS = (
