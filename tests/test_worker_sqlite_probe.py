@@ -177,7 +177,7 @@ class WorkerSqliteProbeTests(unittest.TestCase):
             queue = case.service._queue
             with queue.all_tasks_done:
                 self.assertTrue(queue.all_tasks_done.wait_for(
-                    lambda: queue.unfinished_tasks == 0, timeout=10),
+                    lambda: queue.unfinished_tasks == 0, timeout=case.FUNCTIONAL_WAIT_SECONDS),
                     'first retry diagnostic fixture preparation did not finish')
             first = case.wait('read_retry_wait')
             self.assertEqual(first['read_retry']['used'], 1)
@@ -219,11 +219,16 @@ class WorkerSqliteProbeTests(unittest.TestCase):
         original = retry_tests.ReadRetryWorkerTests.setUp
         previous = threading.getprofile()
         scenarios = (
-            'test_read_retry_timeout_records_pending_sqlite_before_cleanup',
-            'test_second_retry_wait_retains_pending_sqlite_and_original_budget',
+            ('test_read_retry_timeout_records_pending_sqlite_before_cleanup', 1, 2, 1),
+            ('test_second_retry_wait_retains_pending_sqlite_and_original_budget', 2, 2, 2),
+            # First-retry fixture writes use the functional allowance. This
+            # exceeds its former 10s gate, then the second action still must
+            # expose the deliberately held SQLite call at exactly the original
+            # 5s diagnostic deadline; no product timeout or assertion changes.
+            ('test_second_retry_wait_retains_pending_sqlite_and_original_budget', 1, 11, 2),
         )
-        for measured_call, name in enumerate(scenarios, start=1):
-            with self.subTest(wait=name):
+        for name, delayed_call, delay_seconds, expected_calls in scenarios:
+            with self.subTest(wait=name, delayed_call=delayed_call, delay_seconds=delay_seconds):
                 delays = []
                 page_calls = 0
                 def setup(case):
@@ -233,23 +238,19 @@ class WorkerSqliteProbeTests(unittest.TestCase):
                         nonlocal page_calls
                         if threading.current_thread() is case.service._thread and kind == 'page':
                             page_calls += 1
-                            if page_calls == measured_call:
-                                # Delay only the measured action, leaving the
-                                # first retry's preparation budget untouched.
-                                # Older Windows/Python monotonic() uses
-                                # GetTickCount64; its coarse ticks can undercount
-                                # this interval. Measure the same real delay
-                                # with the high-resolution performance counter.
+                            if page_calls == delayed_call:
+                                # Use the high-resolution counter because the
+                                # older Windows monotonic clock has coarse ticks.
                                 start = time.perf_counter_ns()
-                                time.sleep(2)
+                                time.sleep(delay_seconds)
                                 delays.append(time.perf_counter_ns() - start)
                         return reserve(site, kind, **kwargs)
                     case.ledger.reserve = prepare
                 with patch.object(retry_tests.ReadRetryWorkerTests, 'setUp', setup):
                     getattr(WorkerSqliteProbeTests(name), name)()
-                self.assertEqual(page_calls, measured_call)
+                self.assertEqual(page_calls, expected_calls)
                 self.assertEqual(len(delays), 1)
-                self.assertGreaterEqual(delays[0], 2_000_000_000)
+                self.assertGreaterEqual(delays[0], delay_seconds * 1_000_000_000)
                 self.assertIs(threading.getprofile(), previous)
 
     def test_shutdown_read_wait_records_scheduler_insert_before_cleanup(self):
