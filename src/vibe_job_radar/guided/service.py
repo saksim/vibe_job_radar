@@ -150,6 +150,9 @@ MESSAGES = {
 from ..network_settings import DNS_MESSAGES
 MESSAGES.update(DNS_MESSAGES)
 MESSAGES.update(HEALTH_MESSAGES)
+from ..proxy_credentials import ERROR_MESSAGES as PROXY_AUTH_MESSAGES
+MESSAGES.update({code: message for code, message in PROXY_AUTH_MESSAGES.items()
+                 if code.startswith('local_proxy_ntlm_')})
 MESSAGES.update({
     'local_proxy_configuration_conflict': 'HTTP与SOCKS专用覆盖同时存在。只保留一种；任务不会猜测路线。',
     'local_socks_configuration_invalid': 'SOCKS5配置无效。仅支持无userinfo的本机socks5入口，凭据需单独设置；不会将socks5h或SOCKS4降级。',
