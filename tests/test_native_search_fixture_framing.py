@@ -4,6 +4,7 @@ import json
 import socket
 import sys
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -62,3 +63,31 @@ class NativeSearchFixtureFramingTests(unittest.TestCase):
             self.assertTrue(data)
             body.extend(data)
         self.assertEqual(json.loads(body), {'flag': 1, 'data': []})
+
+    def test_idle_handshake_does_not_block_another_fixture_connection(self):
+        from run_native_browser_acceptance import Fixture
+        for kind in ('search', 'native'):
+            with self.subTest(kind=kind):
+                entered=threading.Event();release=threading.Event();lock=threading.Lock();first=[True]
+                def handshake(sock, **unused):
+                    with lock:
+                        block=first[0];first[0]=False
+                    if block:
+                        entered.set();release.wait(5)
+                    return sock
+                # Actual concurrent TCP/HTTP with a deterministic stalled TLS
+                # handshake double; no certificate installation or TLS claim.
+                with patch.object(fixture.ssl, 'SSLContext') as context:
+                    context.return_value.wrap_socket.side_effect=handshake
+                    server=(fixture.SearchFixture(Path(self.directory.name)) if kind=='search'
+                            else Fixture(Path(self.directory.name),'good.pem'))
+                idle=socket.create_connection(server.server.server_address,timeout=2)
+                try:
+                    self.assertTrue(entered.wait(2))
+                    with socket.create_connection(server.server.server_address,timeout=2) as active:
+                        active.sendall(b'GET /robots.txt HTTP/1.1\r\nHost: jobs.fixture.test\r\nConnection: close\r\n\r\n')
+                        self.assertTrue(active.recv(256).startswith(b'HTTP/1.1 200'),
+                                        'idle handshake held the accept loop')
+                    self.assertFalse(release.is_set())
+                finally:
+                    release.set();idle.close();server.close()

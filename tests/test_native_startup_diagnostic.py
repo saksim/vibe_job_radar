@@ -7,6 +7,8 @@ import unittest
 from unittest.mock import patch
 
 from vibe_job_radar.guided.browser_health import BrowserStartupError
+from vibe_job_radar.guided.browser_health import failed_report
+from vibe_job_radar.guided.cdp_connection import CDPConnection, CDPCommandTimeout
 from vibe_job_radar.guided.contracts import CrawlError
 from vibe_job_radar.guided.native_check import check_native_browser
 
@@ -19,6 +21,33 @@ def verifier_module():
 
 
 class NativeStartupDiagnosticTests(unittest.TestCase):
+    def test_command_deadline_reaches_startup_ui_as_timeout_without_raw_command(self):
+        transport = SimpleNamespace(send=lambda value: None, close=lambda: None)
+        connection = CDPConnection(transport)
+        with patch('vibe_job_radar.guided.cdp_connection.time.monotonic', side_effect=[0,31]):
+            with self.assertRaises(CDPCommandTimeout) as caught:
+                connection.root.send('Browser.getVersion', {'PRIVATE': 'DATA'}, timeout=30)
+        error = caught.exception
+        self.assertEqual(error.code, 'native_protocol_error')
+        self.assertFalse(connection.pending)
+        report = failed_report({'stage':'launch', 'launch_tested':True}, error)
+        self.assertEqual(report['code'], 'browser_launch_timeout')
+        row = self.component_failure(report, error)
+        self.assertEqual(row['startup_failure']['error_type'], 'CDPCommandTimeout')
+        self.assertEqual(row['startup_failure']['cause_code'], 'native_protocol_error')
+        self.assertNotIn('PRIVATE', str(report) + str(row))
+
+    def test_protocol_rejection_does_not_become_a_deadline_timeout(self):
+        transport = SimpleNamespace(send=lambda value: None, close=lambda: None,
+            recv=lambda **kw: '{"id":1,"error":{"code":-32601,"message":"PRIVATE timeout"}}')
+        connection = CDPConnection(transport)
+        with self.assertRaises(CrawlError) as caught:
+            connection.root.send('Browser.getVersion')
+        self.assertNotIsInstance(caught.exception, CDPCommandTimeout)
+        report = failed_report({'stage':'launch'}, caught.exception)
+        self.assertEqual(report['code'], 'browser_launch_failed')
+        self.assertNotIn('PRIVATE', str(report))
+
     def component_failure(self, report, cause=None):
         error = BrowserStartupError(report)
         error.__cause__ = cause

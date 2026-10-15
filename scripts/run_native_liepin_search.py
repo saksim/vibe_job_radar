@@ -19,6 +19,7 @@ import threading
 import time
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlencode, urlsplit
+from native_tls_fixture import NativeTLSFixtureServer
 
 from run_native_browser_acceptance import (ROOT, HOST, URL, NativeBackend, RateLedger,
     Limits, GuidedService, Registry, Store, NetworkPolicy, use_policy, Workspace,
@@ -182,13 +183,7 @@ fetch('https://""" + API_HOST + PATH + """', {
                     'pagination':{'currentPage':0,'pageSize':40}}}), 'application/json')
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.load_cert_chain(str(root / 'good.pem'))
-        class Server(http.server.ThreadingHTTPServer):
-            daemon_threads = True
-            def get_request(self):
-                conn, address = super().get_request(); conn.settimeout(5)
-                try: return context.wrap_socket(conn, server_side=True), address
-                except Exception: conn.close(); raise
-        self.server = Server(('127.0.0.1', 0), Handler)
+        self.server = NativeTLSFixtureServer(('127.0.0.1', 0), Handler, context)
         self.thread = threading.Thread(target=self.server.serve_forever, kwargs={'poll_interval':.05}, daemon=True)
         self.thread.start()
     def close(self):
