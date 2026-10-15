@@ -6,6 +6,15 @@ on:
         description: Successful windows-portable-candidate push run on main
         required: true
         type: string
+      channel:
+        description: Release channel (stable uses vMAJOR.MINOR.PATCH)
+        type: choice
+        options: [prerelease, stable]
+        default: prerelease
+      publish:
+        description: Publish after all eight uploaded assets and exact main CI are verified
+        type: boolean
+        default: false
       change_notes:
         description: 'Markdown sections: 解决了什么, 提高了什么, 验证结果, 剩余问题; include Issue/PR links'
         required: true
@@ -16,7 +25,7 @@ concurrency:
 permissions:
   contents: read
 jobs:
-  unsigned-draft:
+  unsigned-release:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -35,14 +44,18 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Reuse qualified candidate and create unsigned draft
+      - name: Reuse qualified candidate and prepare selected unsigned release
         env:
           GH_TOKEN: ${{ github.token }}
           CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
           CHANGE_NOTES: ${{ inputs.change_notes }}
+          RELEASE_CHANNEL: ${{ inputs.channel }}
+          PUBLISH_RELEASE: ${{ inputs.publish }}
         run: |
           python -c "import os,pathlib; pathlib.Path('.release-temp/changes.md').write_text(os.environ['CHANGE_NOTES'], encoding='utf-8')"
-          python scripts/prepare_portable_release.py --repository "$GITHUB_REPOSITORY" --run-id "$CANDIDATE_RUN_ID" --out release-draft --create-draft --change-notes .release-temp/changes.md
+          publish_args=()
+          if [ "$PUBLISH_RELEASE" = "true" ]; then publish_args+=(--publish); fi
+          python scripts/prepare_portable_release.py --repository "$GITHUB_REPOSITORY" --run-id "$CANDIDATE_RUN_ID" --out release-draft --create-draft --channel "$RELEASE_CHANNEL" --change-notes .release-temp/changes.md "${publish_args[@]}"
       - name: Retain preparation result including partial upload failures
         if: always()
         uses: actions/upload-artifact@v4
@@ -53,5 +66,7 @@ jobs:
             release-draft/prepared.json
             release-draft/create-draft-request.json
             release-draft/created-draft.json
+            release-draft/publish-request.json
+            release-draft/published-release.json
             release-draft/assets/provenance.json
             release-draft/assets/SHA256SUMS.txt

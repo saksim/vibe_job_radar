@@ -15,6 +15,7 @@ body{overflow-wrap:anywhere}
 <script src="/public-schedule.js" defer></script>
 <script src="/public-history.js" defer></script>
 <script src="/team.js" defer></script>
+<script src="/release-updates.js" defer></script>
 <script src="/public-queue.js" defer></script>
 <script src="/windows-startup.js" defer></script>
 </head>
@@ -137,6 +138,13 @@ body{overflow-wrap:anywhere}
 <h3>下载报告文件</h3><p class="muted">先读本批研究结论；需要带走时下载 research_brief.md，再按需下载原文清单、分岗位模板和缺口表。dashboard.html 下载后在本机浏览器打开。完整来源审计可能包含原始职位文本，请勿不加检查地公开。</p><div id="files" class="files"></div>
 <details><summary>本次审计信息与警告</summary><pre id="manifest"></pre></details></div>
 <h3>历史报告（最近 30 次）</h3><div id="runs"></div></section>
+<section><details id="release-panel"><summary>版本与升级</summary>
+<p id="release-current"></p><p>点击检查后连接官方GitHub仓库；不会上传岗位、报告或个人材料。当前Windows包未签名，下载后会核对完整性并解压到独立目录。</p>
+<button id="release-check" type="button" class="secondary">检查稳定版</button><button id="release-download" type="button" disabled>下载并准备新版</button>
+<a id="release-link" target="_blank" rel="noreferrer" hidden>查看发行说明</a><pre id="release-status" role="status" aria-live="polite">展开只读取本机状态。</pre>
+<p class="muted">准备完成后，停止任务和计划、关闭旧程序并备份整个工作区，再启动新版并选择原工作区。保留旧程序和备份用于回退。</p>
+<details id="release-notes-panel" hidden><summary>本次版本变化</summary><pre id="release-notes"></pre></details>
+</details></section>
 <section id="network-preferences"><details><summary>网络自动适配（不必关闭 VPN/TUN）</summary>
 <label for="network-dns-scope">加密解析范围</label>
 <select id="network-dns-scope"><option value="fake_ip_doh">仅修复系统映射地址</option><option value="public_doh">公共域名使用 Cloudflare</option></select>

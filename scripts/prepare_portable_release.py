@@ -1,4 +1,4 @@
-"""Promote an existing verified main candidate to an unsigned release draft.
+"""Promote an existing verified main candidate to an unsigned release.
 
 No build, executable invocation, live-site traffic, workspace migration or
 signing occurs here. Only the explicitly selected run's two artifacts are used.
@@ -109,7 +109,10 @@ def qualified_runs(repo, selected):
 
 
 def require_unused_release(repo, tag):
-    require(not api(repo, f"git/matching-refs/tags/{tag}"), 'Release tag already exists')
+    matches = api(repo, f"git/matching-refs/tags/{tag}")
+    require(isinstance(matches, list) and all(isinstance(row, dict) and isinstance(row.get('ref'), str)
+                                             for row in matches), 'Invalid tag listing')
+    require(not any(row['ref'] == 'refs/tags/'+tag for row in matches), 'Release tag already exists')
     page = 1
     while True:
         releases = api(repo, f'releases?per_page=100&page={page}')
@@ -182,7 +185,8 @@ def validate_candidate(candidate, manifest, source_evidence, sha):
             'portable_evidence': proof}
 
 
-def assemble(candidate, manifest, source_evidence, selected, qualified, artifacts, output, change_notes=None):
+def assemble(candidate, manifest, source_evidence, selected, qualified, artifacts, output, change_notes=None, *, channel="prerelease"):
+    require(channel in {'prerelease', 'stable'}, 'Invalid release channel')
     output = Path(output)
     require(not output.exists() and not output.is_symlink(), 'Output already exists')
     if change_notes is not None:
@@ -191,6 +195,9 @@ def assemble(candidate, manifest, source_evidence, selected, qualified, artifact
     repo = selected['head_repository']['full_name']
     require(REPO.fullmatch(repo), 'Invalid repository')
     tag = f"v{result['version']}-candidate.{selected['head_sha'][:12]}.{selected['id']}.{selected['run_attempt']}"
+    if channel == "stable":
+        require(re.fullmatch(r"(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})",result["version"]), "Stable release requires a canonical version")
+        tag = "v"+result["version"]
     output.mkdir(parents=True)
     archive = output/Path(candidate).name
     shutil.copyfile(candidate, archive)
@@ -198,7 +205,8 @@ def assemble(candidate, manifest, source_evidence, selected, qualified, artifact
     write_json(output/'manifest.json', manifest)
     write_json(output/'source-verification.json', source_evidence)
     write_json(output/'portable-verification.json', result['portable_evidence'])
-    provenance = {'schema_version': 1, 'status': 'unsigned_prerelease_draft',
+    provenance = {'schema_version': 1, 'status': 'unsigned_prerelease_draft' if channel == 'prerelease' else 'unsigned_stable_release_payload',
+                  'release_channel': channel,
                   'repository': repo, 'tag': tag, 'source_revision': selected['head_sha'],
                   'source_sha256': result['source_sha256'], 'candidate_sha256': result['zip_sha256'],
                   'candidate_run': {'id': selected['id'], 'attempt': selected['run_attempt']},
@@ -211,7 +219,7 @@ def assemble(candidate, manifest, source_evidence, selected, qualified, artifact
     write_json(output/'provenance.json', provenance)
     notes = (
         f"# Windows x64 便携候选 {result['version']}\n\n"
-        f"未签名的预发行草稿；源码提交 {selected['head_sha']}。\n"
+        f"发行渠道：{'稳定版' if channel == 'stable' else '预发行'}；未签名；源码提交 {selected['head_sha']}。\n"
         f"复用[已通过的原候选构建](https://github.com/{repo}/actions/runs/{selected['id']})，"
         "发布准备没有重新构建或重复执行测试。\n\n"
         "下载 ZIP 和 SHA256SUMS.txt 后，使用 PowerShell Get-FileHash -Algorithm SHA256 核对文件。"
@@ -238,7 +246,9 @@ def assemble(candidate, manifest, source_evidence, selected, qualified, artifact
     return provenance
 
 
-def prepare(repo, run_id, out, create_draft=False, change_notes=None):
+def prepare(repo, run_id, out, create_draft=False, change_notes=None, *, channel="prerelease", publish=False):
+    require(channel in {"prerelease", "stable"}, "Invalid release channel")
+    require(type(publish) is bool and (not publish or create_draft), "Publishing requires explicit draft creation")
     require(REPO.fullmatch(repo) and type(run_id) is int and run_id > 0, 'Invalid run selection')
     if create_draft or change_notes is not None:
         change_notes = validate_summary(change_notes)
@@ -272,7 +282,7 @@ def prepare(repo, run_id, out, create_draft=False, change_notes=None):
     manifest = read_json(evidence/'portable-candidate/manifest.json')
     source = read_json(evidence/'release-verification/result.json')
     payload = out/'assets'
-    result = assemble(packages[0], manifest, source, selected, qualified, artifacts, payload, change_notes)
+    result = assemble(packages[0], manifest, source, selected, qualified, artifacts, payload, change_notes, channel=channel)
     write_json(out/'prepared.json', result)
     if create_draft:
         # Never edit/overwrite a tag or an existing draft, including after an
@@ -284,15 +294,44 @@ def prepare(repo, run_id, out, create_draft=False, change_notes=None):
                 'Qualifying CI changed during preparation')
         body = (payload/'UPGRADE_AND_LIMITATIONS.md').read_text(encoding='utf-8')
         request = {'tag_name': result['tag'], 'target_commitish': selected['head_sha'],
-                   'name': f"Windows portable {result['tag']} (unsigned candidate)",
-                   'body': body, 'draft': True, 'prerelease': True}
+                   'name': f"Windows portable {result['tag']} (unsigned)",
+                   'body': body, 'draft': True, 'prerelease': channel == 'prerelease'}
         write_json(out/'create-draft-request.json', request)
         response = json.loads(gh('api', '--method', 'POST', f'repos/{repo}/releases',
                                  '--input', str(out/'create-draft-request.json')))
         write_json(out/'created-draft.json', response)
         gh('release', 'upload', result['tag'], '--repo', repo, *map(str, sorted(payload.iterdir())))
         result['draft_url'] = response['html_url']
+        if publish:
+            uploaded = api(repo, f"releases/{response['id']}")
+            validate_uploaded(uploaded, payload, result, selected['head_sha'], channel)
+            require(qualified_runs(repo, api(repo, f'actions/runs/{run_id}')) == qualified,
+                    'Qualifying CI changed before publication')
+            request = {'draft': False, 'prerelease': channel == 'prerelease',
+                       'make_latest': 'true' if channel == 'stable' else 'false'}
+            write_json(out/'publish-request.json', request)
+            published = json.loads(gh('api','--method','PATCH',f"repos/{repo}/releases/{response['id']}",
+                                      '--input',str(out/'publish-request.json')))
+            write_json(out/'published-release.json', published)
+            require(published.get('draft') is False and published.get('prerelease') == (channel == 'prerelease')
+                    and published.get('tag_name') == result['tag'], 'Publication response mismatch; inspect remote release')
+            result['release_url'] = published['html_url']
+            result['published'] = True
     return result
+
+
+def validate_uploaded(release, payload, result, sha, channel):
+    require(release.get('draft') is True and release.get('tag_name') == result['tag']
+            and release.get('target_commitish') == sha
+            and release.get('prerelease') == (channel == 'prerelease'), 'Draft identity mismatch')
+    expected = {p.name:p for p in payload.iterdir() if p.is_file()}
+    assets = release.get('assets', [])
+    require(len(expected) == 8 and len(assets) == 8
+            and {a.get('name') for a in assets} == set(expected), 'Incomplete uploaded assets')
+    for asset in assets:
+        path = expected[asset['name']]
+        require(asset.get('state') == 'uploaded' and asset.get('size') == path.stat().st_size
+                and asset.get('digest') == 'sha256:'+file_hash(path), 'Uploaded asset digest mismatch')
 
 
 def main():
@@ -301,6 +340,8 @@ def main():
     parser.add_argument('--run-id', required=True, type=canonical_run_id)
     parser.add_argument('--out', type=Path, default=Path('release-draft'))
     parser.add_argument('--create-draft', action='store_true')
+    parser.add_argument('--channel', choices=('prerelease','stable'), default='prerelease')
+    parser.add_argument('--publish', action='store_true', help='Publish only after exact uploaded asset and CI verification')
     parser.add_argument('--change-notes', type=Path, help='Reviewed UTF-8 outcomes; required to create a draft')
     args = parser.parse_args()
     try:
@@ -309,7 +350,7 @@ def main():
             require(args.change_notes.is_file() and not args.change_notes.is_symlink()
                     and args.change_notes.stat().st_size <= 65536, 'Invalid release summary file')
             change_notes = args.change_notes.read_text(encoding='utf-8-sig')
-        result = prepare(args.repository, args.run_id, args.out, args.create_draft, change_notes)
+        result = prepare(args.repository, args.run_id, args.out, args.create_draft, change_notes, channel=args.channel, publish=args.publish)
     except (ValueError, KeyError, TypeError, OSError, zipfile.BadZipFile, subprocess.SubprocessError) as error:
         print(f'Release preparation stopped: {error}')
         return 1

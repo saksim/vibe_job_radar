@@ -188,6 +188,65 @@ class PortableReleaseTests(unittest.TestCase):
             self.assertNotIn('--clobber',args);return ''
         raise AssertionError(args)
 
+    def test_stable_tag_keeps_unsigned_disclosure_and_default_draft(self):
+        result=self.mod.assemble(self.package,self.manifest,self.evidence,self.run,{},self.artifacts,
+                                 self.root/'stable',NOTES,channel='stable')
+        self.assertEqual(result['tag'],'v0.2.0')
+        self.assertEqual(result['release_channel'],'stable');self.assertFalse(result['signed'])
+        notes=(self.root/'stable'/'UPGRADE_AND_LIMITATIONS.md').read_text(encoding='utf-8')
+        self.assertIn('稳定版',notes);self.assertIn('未签名',notes);self.assertNotIn('预发行草稿',notes)
+        with patch.object(self.mod,'api',side_effect=AssertionError('no network')):
+            with self.assertRaises(ValueError):self.mod.prepare(self.repo,self.run['id'],self.root/'refused',publish=True)
+            with self.assertRaises(ValueError):self.mod.prepare(self.repo,self.run['id'],self.root/'refused',channel='other')
+
+    def test_publication_requires_exact_eight_uploaded_assets(self):
+        result=self.mod.assemble(self.package,self.manifest,self.evidence,self.run,{},self.artifacts,
+                                 self.root/'payload',NOTES,channel='stable')
+        payload=self.root/'payload'
+        release={'draft':True,'prerelease':False,'tag_name':'v0.2.0','target_commitish':self.sha,
+                 'assets':[{'name':p.name,'state':'uploaded','size':p.stat().st_size,
+                            'digest':'sha256:'+self.mod.file_hash(p)} for p in payload.iterdir()]}
+        self.mod.validate_uploaded(release,payload,result,self.sha,'stable')
+        for field in ('missing','digest','size','tag','target','channel'):
+            damaged=copy.deepcopy(release)
+            if field=='missing':damaged['assets'].pop()
+            elif field=='digest':damaged['assets'][0]['digest']='sha256:'+'f'*64
+            elif field=='size':damaged['assets'][0]['size']+=1
+            elif field=='tag':damaged['tag_name']='v0.1.0'
+            elif field=='target':damaged['target_commitish']='e'*40
+            else:damaged['prerelease']=True
+            with self.subTest(field=field),self.assertRaises(ValueError):
+                self.mod.validate_uploaded(damaged,payload,result,self.sha,'stable')
+
+    def test_explicit_stable_publication_happens_only_after_verified_upload(self):
+        output=self.root/'publish';events=[]
+        def api(repo,suffix):
+            if suffix=='releases/300':
+                payload=output/'assets';events.append('verify-upload')
+                return {'draft':True,'prerelease':False,'tag_name':'v0.2.0','target_commitish':self.sha,
+                        'assets':[{'name':p.name,'state':'uploaded','size':p.stat().st_size,
+                                   'digest':'sha256:'+self.mod.file_hash(p)} for p in payload.iterdir()]}
+            return self.api_fixture(suffix)
+        def gh(*args):
+            if args[:3]==('api','--method','POST'):
+                request=json.loads(Path(args[-1]).read_text(encoding='utf-8'))
+                self.assertTrue(request['draft']);self.assertFalse(request['prerelease'])
+                self.assertEqual(request['tag_name'],'v0.2.0');events.append('draft')
+                return json.dumps({'id':300,'html_url':'https://example.invalid/draft'})
+            if args[:2]==('release','upload'):events.append('upload');return ''
+            if args[:3]==('api','--method','PATCH'):
+                self.assertEqual(events,['draft','upload','verify-upload'])
+                request=json.loads(Path(args[-1]).read_text(encoding='utf-8'))
+                self.assertEqual(request,{'draft':False,'prerelease':False,'make_latest':'true'})
+                events.append('publish')
+                return json.dumps({'id':300,'draft':False,'prerelease':False,'tag_name':'v0.2.0',
+                                   'html_url':'https://example.invalid/published'})
+            return self.gh_fixture(*args)
+        with patch.object(self.mod,'api',side_effect=api),patch.object(self.mod,'gh',side_effect=gh):
+            result=self.mod.prepare(self.repo,self.run['id'],output,True,NOTES,channel='stable',publish=True)
+        self.assertTrue(result['published']);self.assertTrue((output/'published-release.json').is_file())
+        self.assertEqual(events[-1],'publish')
+
     def test_selected_artifacts_only_and_draft_creation_never_rebuilds(self):
         with patch.object(self.mod,'api',side_effect=lambda repo,suffix:self.api_fixture(suffix)), \
              patch.object(self.mod,'gh',side_effect=self.gh_fixture) as command:
@@ -216,7 +275,8 @@ class PortableReleaseTests(unittest.TestCase):
         for existing in ('tag','draft'):
             with self.subTest(existing=existing):
                 def response(repo,suffix):
-                    if existing=='tag' and suffix.startswith('git/matching-refs/tags/'):return [{'ref':'existing'}]
+                    if existing=='tag' and suffix.startswith('git/matching-refs/tags/'):
+                        return [{'ref':'refs/tags/'+suffix.split('tags/',1)[1]}]
                     if existing=='draft' and suffix=='releases?per_page=100&page=1':
                         prepared=json.loads((self.root/existing/'prepared.json').read_text(encoding='utf8'))
                         return [{'tag_name':prepared['tag']}]
@@ -228,6 +288,14 @@ class PortableReleaseTests(unittest.TestCase):
                 self.assertTrue((self.root/existing/'prepared.json').is_file())
                 self.assertTrue(all(call.args[:2]==('run','download') for call in command.call_args_list))
 
+
+    def test_candidate_tag_prefix_does_not_block_distinct_stable_tag(self):
+        def response(repo,suffix):
+            if suffix.startswith('git/matching-refs/'):
+                return [{'ref':'refs/tags/v0.4.0-candidate.abcdef.1.1'}]
+            return []
+        with patch.object(self.mod,'api',side_effect=response):
+            self.mod.require_unused_release(self.repo,'v0.4.0')
 
     def test_run_selection_rejects_noncanonical_concurrency_aliases(self):
         self.assertEqual(self.mod.canonical_run_id('123'),123)

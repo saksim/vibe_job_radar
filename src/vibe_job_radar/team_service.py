@@ -183,6 +183,9 @@ class TeamApplication:
                 elif path=='/v1/team/metrics' and method=='GET':
                     data={**self.store.metrics(token),'uptime_seconds':round(time.monotonic()-self._started)}
                 elif path=='/v1/team/quota' and method=='POST':data=self.store.quota(token,self._body(environ))
+                elif path=='/v1/team/task' and method=='POST':
+                    from .team_ownership import service_task
+                    data=service_task(self.store,token,self._body(environ))
                 elif path=='/v1/sync/ack' and method=='POST':
                     value=self._body(environ)
                     if set(value)!={'source_scope','revision'}:raise TeamError()
@@ -344,10 +347,11 @@ def main(argv=None):
                 for device in device_ids:
                     for table in ('watermarks','sync_views'):conn.execute(f'DELETE FROM {table} WHERE device=?',(device,))
                     conn.execute("DELETE FROM audit WHERE tenant=? AND target=? AND action IN ('device_issued','device_revoked')",(args.tenant,device))
-                for table in ('devices','grants','source_grants','members'):
+                for table in ('task_leases','devices','grants','source_grants','members'):
                     conn.execute(f'DELETE FROM {table} WHERE tenant=? AND member=?',(args.tenant,args.member))
-                # Audit actors are operator actions, not member identities. A
-                # resource/source may legitimately use the same opaque ID.
+                conn.execute("DELETE FROM audit WHERE tenant=? AND actor=? AND action IN ('task_acquired','task_released')",(args.tenant,args.member))
+                # Operator targets may share opaque IDs with resources/sources;
+                # member erasure only removes explicitly member/device actions.
                 conn.execute("DELETE FROM audit WHERE tenant=? AND target=? AND action='member_changed'",(args.tenant,args.member))
                 # Resource quotas remain: deleting membership cannot refund visits.
         print(json.dumps(result,ensure_ascii=False));return 0
