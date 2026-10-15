@@ -40,6 +40,8 @@ MAX_ZIP = 1024**3
 MAX_EXPANDED = 3*1024**3
 UPDATE_NETWORK_MESSAGES = {
     **WORKSPACE_PROXY_AUTH_MESSAGES,
+    'non_public_address': '升级域名未解析为允许的公网地址，可能涉及VPN映射或私网DNS。请在“网络自动适配”核对DNS设置并阅读修复模式说明；未连接该目标，也未自动改换网络。',
+    'dns_error': '升级域名的系统DNS解析失败，请检查当前网络或在“网络自动适配”核对DNS设置后重试。',
     'encrypted_dns_unavailable': '加密DNS服务连接失败，请核对当前网络后重新检查。',
     'encrypted_dns_expired_answer': '加密DNS解析结果已过期，请稍后重新检查。',
     'pac_failed': 'PAC脚本进程执行或清理失败，请检查网络设置后重试。',

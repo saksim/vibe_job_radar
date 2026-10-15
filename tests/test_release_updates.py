@@ -150,7 +150,7 @@ class ReleaseUpdateTests(unittest.TestCase):
         self.assertEqual(self.fixture.calls,before)
 
     def test_network_error_messages_never_expose_exception_details(self):
-        for code in ('encrypted_dns_unavailable','encrypted_dns_expired_answer','pac_failed','untrusted-secret-code'):
+        for code in ('non_public_address','dns_error','encrypted_dns_unavailable','encrypted_dns_expired_answer','pac_failed','untrusted-secret-code'):
             with self.subTest(code=code):
                 service=self.service()
                 with patch.object(self.fixture,'latest',side_effect=updates.FetchError(code,'https://private.invalid/?token=secret')):
