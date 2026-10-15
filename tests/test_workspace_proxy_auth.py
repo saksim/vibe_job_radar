@@ -124,6 +124,19 @@ class WorkspaceProxyAuthTests(AuthCase):
         self.assertEqual(old.proxy.credentials.basic_header(), wire.BASIC)
         self.assertNotEqual(new.proxy.credentials, old.proxy.credentials)
 
+    def test_background_identity_survives_process_key_change_but_live_identity_does_not(self):
+        self.save(); before = self.workspace.network_policy()
+        with patch('vibe_job_radar.proxy_credentials._BINDING_KEY', b'different artificial process'):
+            restarted = self.workspace.network_policy()
+        self.assertNotEqual(before.fingerprint, restarted.fingerprint)
+        self.assertEqual(before.background_fingerprint, restarted.background_fingerprint)
+        self.assertEqual(before._saved_session_network(), restarted._saved_session_network())
+        self.save(password='changed')
+        changed = self.workspace.network_policy()
+        self.assertNotEqual(before.background_fingerprint, changed.background_fingerprint)
+        self.assertNotEqual(before.fingerprint, changed.fingerprint)
+        self.assertNotEqual(before._saved_session_network(), changed._saved_session_network())
+
     def test_clear_stops_selected_route_even_when_blob_cannot_decrypt(self):
         self.save(); saved = json.loads(self.raw())
         saved[auth.FIELD]['payload'] = base64.b64encode(b'artificial invalid blob').decode()
@@ -239,3 +252,62 @@ print("restored")
         self.assertEqual(other.network_policy().error,'workspace_proxy_auth_unreadable')
         self.workspace.network_proxy_auth_clear(dict(revision=1,consent=True))
         self.assertEqual(self.workspace.network_policy().error,'workspace_proxy_auth_missing')
+
+    def test_real_restarted_schedule_and_queue_dispatch_with_unchanged_saved_credentials(self):
+        if os.name != 'nt':
+            with self.assertRaisesRegex(InputError, 'Windows'): self.save()
+            return
+        import time
+        from unittest.mock import Mock
+        from test_local_public import query
+        from vibe_job_radar.local_public import LocalPublicDataClient
+        from vibe_job_radar.public_schedule import PublicSchedule, DAY
+        from vibe_job_radar.public_queue import PublicQueue
+        from vibe_job_radar.public_tasks import PublicTasks
+        original_root = self.workspace.root
+        program = '''import json,sys
+from unittest.mock import Mock,patch
+from test_local_public import payload
+from vibe_job_radar.workspace import Workspace
+from vibe_job_radar.local_public import LocalPublicDataClient
+from vibe_job_radar.public_tasks import PublicTasks
+from vibe_job_radar.public_queue import PublicQueue
+from vibe_job_radar.public_schedule import PublicSchedule
+w=Workspace(sys.argv[1]);kind=sys.argv[2];now=float(sys.argv[3]);p=w.network_policy()
+assert p.background_fingerprint==sys.argv[4] and p.fingerprint!=sys.argv[5]
+wire=Mock();wire.json.return_value=payload()
+tasks=PublicTasks(w,hybrid_client=LocalPublicDataClient(w,transport=wire,clock=lambda:now))
+owner=(PublicSchedule if kind=='schedule' else PublicQueue)(w,tasks,clock=lambda:now)
+try:
+ with patch('socket.create_connection',side_effect=AssertionError('no external network')):
+  owner.tick()
+  with tasks._lock: worker=tasks._thread
+  assert worker is not None,owner.state()
+  worker.join(15);assert not worker.is_alive()
+  task=tasks.snapshot();assert task['status']=='completed',task.get('code')
+  owner.tick();assert owner.state()['code']!='conditions_changed'
+  assert task['report_id'] and w.report(task['report_id'])
+  assert wire.json.call_count==1
+ print(json.dumps(dict(success=True,kind=kind,report_created=True)))
+finally: owner.close();tasks.close()
+'''
+        for kind in ('schedule', 'queue'):
+            self.workspace = Workspace(original_root/kind)
+            self.save()
+            policy = self.workspace.network_policy(); now = time.time()
+            tasks = PublicTasks(self.workspace, hybrid_client=LocalPublicDataClient(self.workspace, transport=Mock()))
+            owner = (PublicSchedule if kind == 'schedule' else PublicQueue)(self.workspace, tasks, clock=lambda:now)
+            try:
+                data = dict(query=query().payload(), consent=True, revision=0)
+                if kind == 'schedule': owner.configure(data)
+                else: owner.enqueue(data)
+            finally: owner.close(); tasks.close()
+            env = dict(os.environ)
+            checkout = Path(__file__).resolve().parents[1]
+            env['PYTHONPATH'] = os.pathsep.join((str(checkout/'src'), str(checkout/'tests')))
+            child = subprocess.run([sys.executable,'-c',program,str(self.workspace.root),kind,
+                str(now+DAY+1 if kind=='schedule' else now+1),policy.background_fingerprint,policy.fingerprint],
+                env=env,capture_output=True,text=True,encoding='utf-8',timeout=25,
+                creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+            self.assertEqual(child.returncode,0,child.stderr)
+            self.assertEqual(json.loads(child.stdout),dict(success=True,kind=kind,report_created=True))

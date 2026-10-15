@@ -216,7 +216,12 @@ def capture_policy(workspace, *, settings=None):
             proxy = _proxy(mode, settings['proxy_endpoint'])
             credentials = workspace_proxy_auth.restore(workspace.root, mode, settings['proxy_endpoint'],
                                                        settings[workspace_proxy_auth.FIELD])
-            policy = NetworkPolicy('explicit_workspace', replace(proxy, credentials=credentials))
+            # Hash the randomized protected envelope, never a plaintext secret
+            # or stable password verifier. Restore validated it before binding.
+            envelope_id = hashlib.sha256(json.dumps(settings[workspace_proxy_auth.FIELD],
+                sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+            policy = NetworkPolicy('explicit_workspace', replace(proxy, credentials=credentials),
+                                   credential_scope_id=envelope_id)
         except LocalProxyError as exc:
             policy = NetworkPolicy('explicit_workspace', error=exc.code)
     elif (proxy := _proxy(mode, settings.get('proxy_endpoint', ''))) is None:

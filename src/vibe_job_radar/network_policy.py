@@ -83,8 +83,12 @@ class NetworkPolicy:
     pac_route_host: str = field(default='', repr=False)
     public_dns: bool = False
     pac_url_mode: bool = False
+    credential_scope_id: str = ''
 
     def __post_init__(self):
+        if (not isinstance(self.credential_scope_id, str) or (self.credential_scope_id and
+                (len(self.credential_scope_id) != 64 or any(c not in '0123456789abcdef' for c in self.credential_scope_id)))):
+            raise ValueError('invalid protected credential identity')
         if type(self.pac_url_mode) is not bool:
             raise ValueError('invalid PAC scope')
         if type(self.public_dns) is not bool or (self.public_dns and self.encrypted_dns is not True):
@@ -183,6 +187,8 @@ class NetworkPolicy:
             value.append('explicit_public_doh_v1')
         if self.pac_url_mode:
             value.append('explicit_full_url_pac_v1')
+        if self.credential_scope_id:
+            value.extend(('protected_workspace_proxy_v1', self.credential_scope_id))
         if self.proxy and self.proxy.credentials is not None:
             value.append('authenticated_saved_session_v2' if saved_session
                          else self.proxy.credentials.binding)
@@ -195,6 +201,16 @@ class NetworkPolicy:
         # Public/live policy IDs retain the original process-local credential
         # binding. Never expose a stable credential-derived value here.
         value = self._identity()
+        return hashlib.sha256(json.dumps(value, separators=(',', ':')).encode()).hexdigest()[:16]
+
+    @property
+    def background_fingerprint(self) -> str:
+        # Only the protected workspace route has a persisted, non-secret
+        # credential identity. Other routes retain their original semantics.
+        # Live browser checks still use fingerprint and its process-keyed HMAC.
+        if not self.credential_scope_id:
+            return self.fingerprint
+        value = self._identity(saved_session=True)
         return hashlib.sha256(json.dumps(value, separators=(',', ':')).encode()).hexdigest()[:16]
 
     def _saved_session_network(self) -> str:
