@@ -1,7 +1,8 @@
 """Fixed, bounded facts for the artificial native proxy acceptance only."""
 from vibe_job_radar.guided.native_errors import native_failure_code
 
-STAGES = {'http-normal', 'http-rejected', 'socks5-normal', 'socks5-rejected'}
+STAGES = {'http-normal', 'http-rejected', 'socks5-normal', 'socks5-rejected',
+          'http-digest-normal', 'http-digest-rejected'}
 ACTIONS = {'create', 'search', 'detail', 'rejected_search', 'verify', 'close', 'setup_or_cleanup'}
 CODES = {'paused', 'network_error', 'dns_error', 'robots_unavailable',
          'tls_verification_failed', 'tls_handshake_failed', 'native_proxy_auth_failed',

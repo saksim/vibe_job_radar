@@ -30,6 +30,7 @@ ARTIFACTS = ('windows-x64-portable-candidate', 'windows-portable-evidence')
 REQUIRED_PORTABLE_FLAGS = (
     'startup_registration_verified', 'startup_worker_verified',
     'system_pac_verified', 'wpad_dns_verified', 'url_pac_worker_verified', 'automatic_update_verified',
+    'workspace_proxy_credentials_verified', 'digest_proxy_credentials_verified',
 )
 HEX = re.compile(r'[0-9a-f]{64}')
 REPO = re.compile(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+')

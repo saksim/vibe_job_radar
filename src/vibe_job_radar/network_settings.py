@@ -11,6 +11,7 @@ from dataclasses import replace
 from .network_policy import NetworkPolicy
 from .loopback_proxy import LoopbackProxy, LocalProxyError
 from .loopback_socks import LoopbackSocks5
+from .digest_proxy import LoopbackDigestProxy
 from .vm_proxy import VmHTTPProxy, VmSocks5Proxy, ERROR_MESSAGES as VM_MESSAGES
 from .proxy_credentials import configured as credentials_configured, ERROR_MESSAGES as AUTH_MESSAGES
 from . import workspace_proxy_auth
@@ -62,6 +63,8 @@ def _proxy(mode, endpoint):
             if endpoint != '':
                 raise ValueError()
             return None
+        if mode == 'http_digest_auth':
+            return LoopbackDigestProxy.from_url(endpoint)
         return PROXY_PARSERS[workspace_proxy_auth.MODES.get(mode, mode)].from_url(endpoint)
     except (ValueError, TypeError, LocalProxyError):
         raise InputError('请按所选模式填写匿名HTTP或SOCKS5代理及端口：本机模式只接受loopback，宿主机模式只接受RFC1918 IPv4。不能包含账号密码、路径、其他远程地址或代理DNS。') from None

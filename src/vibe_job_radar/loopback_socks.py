@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from urllib.parse import urlsplit
 
 from .loopback_proxy import LocalProxyError, LoopbackProxy
-from .proxy_credentials import configured as credentials_configured
+from .proxy_credentials import AUTH_ENV, configured as credentials_configured
 
 
 @dataclass(frozen=True)
@@ -24,6 +24,8 @@ class LoopbackSocks5(LoopbackProxy):
 
     @classmethod
     def from_environment(cls) -> LoopbackSocks5 | None:
+        if AUTH_ENV in os.environ:
+            raise LocalProxyError('local_proxy_credentials_invalid')
         raw = os.environ.get('VIBE_RADAR_SOCKS_PROXY', '')
         if not raw.strip():
             if credentials_configured():

@@ -9,6 +9,7 @@ import secrets
 
 USERNAME_ENV = 'VIBE_RADAR_PROXY_USERNAME'
 PASSWORD_ENV = 'VIBE_RADAR_PROXY_PASSWORD'
+AUTH_ENV = 'VIBE_RADAR_PROXY_AUTH'
 _BINDING_KEY = secrets.token_bytes(32)
 ERROR_MESSAGES = {
     'local_proxy_credentials_invalid': '代理用户名和密码必须同时提供，并符合受支持的字符和长度；未发送凭据或目标请求。',
@@ -18,7 +19,7 @@ ERROR_MESSAGES = {
 
 
 def configured() -> bool:
-    return USERNAME_ENV in os.environ or PASSWORD_ENV in os.environ
+    return any(key in os.environ for key in (USERNAME_ENV, PASSWORD_ENV, AUTH_ENV))
 
 
 class ProxyCredentials:
@@ -73,6 +74,9 @@ class ProxyCredentials:
 
     def basic_header(self):
         return 'Basic ' + base64.b64encode(self._username + b':' + self._password).decode('ascii')
+
+    def digest_authorization(self, challenge, method, uri):
+        return challenge.authorize(self._username, self._password, method, uri)
 
     def socks_frame(self):
         return b'\x01' + bytes((len(self._username),)) + self._username + bytes((len(self._password),)) + self._password

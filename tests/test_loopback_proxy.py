@@ -129,14 +129,19 @@ class RealProxyTests(unittest.TestCase):
                 status=owner.proxy_status
                 if owner.expected_proxy_auth is not None and headers.get('proxy-authorization')!=owner.expected_proxy_auth:
                     status=407
+                response_headers=[]
+                authenticate=getattr(owner,'authenticate_proxy',None)
+                if authenticate is not None:
+                    status,response_headers=authenticate(first,headers)
+                extra=''.join(key+': '+value+'\r\n' for key,value in response_headers).encode('latin-1')
                 if status!=200:
-                    self.wfile.write(f'HTTP/1.1 {status} {owner.proxy_reason}\r\nContent-Length: 0\r\n\r\n'.encode());self.wfile.flush();return
+                    self.wfile.write(f'HTTP/1.1 {status} {owner.proxy_reason}\r\n'.encode()+extra+b'Content-Length: 0\r\n\r\n');self.wfile.flush();return
                 expected=(f'[{owner.symbol}]' if ':' in owner.symbol else owner.symbol)+':443'
                 if first.split()[:2]!=['CONNECT',expected]:return
                 # Deliberate test-only mapping in the controlled proxy server.
                 upstream=owner.real_dial(getattr(owner,'upstream_address',owner.target.server_address),2)
                 try:
-                    self.wfile.write(b'HTTP/1.1 200 Connection established\r\n\r\n');self.wfile.flush()
+                    self.wfile.write(b'HTTP/1.1 200 Connection established\r\n'+extra+b'\r\n');self.wfile.flush()
                     peers={self.connection:upstream,upstream:self.connection}
                     while True:
                         ready,_,_=select.select(list(peers),[],[],3)

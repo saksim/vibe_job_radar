@@ -1,5 +1,7 @@
 # Vibe Job Radar｜招聘要求与个人证据工作台
 
+0.8.0 增加[显式 HTTP Digest 本机代理认证](docs/HTTP_DIGEST_PROXY.md)，覆盖三个工作台、CLI 与 Windows 加密保存/重启，保留已有 Basic、SOCKS5 和自动升级。
+
 0.6.0 增加[工作台内本机代理凭据配置与 Windows 加密保存](docs/WORKSPACE_PROXY_CREDENTIALS.md)，支持重启恢复、明确修改与清除，保留已有网络与升级功能。
 
 0.5.1 补齐更新检查中断后的会话恢复与明确网络错误（[补丁说明](docs/RELEASE_0_5_1.md)）；0.5.0 增加[独立授权的 PAC DNS 助手](docs/FULL_URL_PAC.md)和[Windows 备份、就绪确认、自动重启升级](docs/UPDATES.md)，保留原手动下载、网络模式、采集与报告功能。正式发行使用标准版本 Tag 和公开 Release，保持 dev → release → main 晋升。解决内容、验证与剩余条件见[0.5.0发行说明](docs/RELEASE_0_5_0.md)，可下载版本见[Releases](https://github.com/saksim/vibe_job_radar/releases)。Windows包仍未签名；0.4.1及更早版本首次取得新升级器需手动启动新版。
