@@ -13,6 +13,68 @@ from vibe_job_radar.workbench import LocalServer
 from vibe_job_radar.workspace import Workspace
 
 
+def verify_auth_ui(page, context, server, workspace, expand, result):
+    """Only artificial local credentials; actual DPAPI on Windows, refusal elsewhere."""
+    from vibe_job_radar.workspace_proxy_auth import available
+    if not available():
+        from playwright.sync_api import expect
+        expect(page.locator('#workspace-proxy-mode option[value=http_auth]')).to_be_disabled()
+        expect(page.locator('#workspace-proxy-mode option[value=socks5_auth]')).to_be_disabled()
+        result['checks'].append('non-Windows UI does not offer unsupported persistent credentials; existing routes remain available')
+        return
+    from playwright.sync_api import expect
+    secret='ARTIFICIAL-UI-PROXY-SECRET'
+    def enter(kind='http_auth'):
+        page.locator('#workspace-proxy-mode').select_option(kind)
+        page.locator('#workspace-proxy-endpoint').fill(('socks5' if kind=='socks5_auth' else 'http')+'://127.0.0.1:18993')
+        page.locator('#workspace-proxy-username').fill('ARTIFICIAL-UI-USER')
+        page.locator('#workspace-proxy-password').fill(secret)
+        page.locator('#workspace-proxy-consent').check()
+    def save_auth(status=200):
+        with page.expect_response(lambda r:r.url.endswith('/api/network/proxy-auth')) as response:
+            page.locator('#save-workspace-proxy').click()
+        assert response.value.status==status
+        text=response.value.text()
+        assert secret not in text and 'ARTIFICIAL-UI-USER' not in text and '"proxy_auth":' not in text
+        expect(page.locator('#workspace-proxy-password')).to_have_value('')
+        expect(page.locator('#workspace-proxy-username')).to_have_value('')
+        expect(page.locator('#save-workspace-proxy')).to_be_enabled()
+    enter();save_auth()
+    private_before=(workspace.root/'network-preferences.json').read_bytes()
+    assert secret.encode() not in private_before and b'ARTIFICIAL-UI-USER' not in private_before
+    assert Workspace(workspace.root).network_policy().proxy.credentials is not None
+    stale=context.new_page();stale.goto(server.entry_url);expand(stale)
+    for path in ('/guided','/advanced','/'):
+        page.goto(server.origin+path);expand(page)
+        expect(page.locator('#workspace-proxy-mode')).to_have_value('http_auth')
+        expect(page.locator('#workspace-proxy-password')).to_have_value('')
+        expect(page.locator('#workspace-proxy-status')).to_contain_text('已加密保存')
+    enter('socks5_auth');save_auth()
+    stale.locator('#workspace-proxy-username').fill('ARTIFICIAL-STALE')
+    stale.locator('#workspace-proxy-password').fill(secret)
+    stale.locator('#workspace-proxy-consent').check()
+    with stale.expect_response(lambda r:r.url.endswith('/api/network/proxy-auth')) as response:
+        stale.locator('#save-workspace-proxy').click()
+    assert response.value.status==400
+    expect(stale.locator('#workspace-proxy-password')).to_have_value('')
+    stale.close()
+    assert workspace.network_state()['proxy_mode']=='socks5_auth'
+    page.set_viewport_size({'width':390,'height':844})
+    assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
+    with page.expect_response(lambda r:r.url.endswith('/api/network/proxy-auth/clear')) as response:
+        page.locator('#clear-workspace-proxy-auth').click()
+    assert response.value.status==200
+    expect(page.locator('#workspace-proxy-status')).to_contain_text('已清除')
+    assert workspace.network_policy().error=='workspace_proxy_auth_missing'
+    assert json.loads((workspace.root/'network-preferences.json').read_bytes())['proxy_auth'] is None
+    page.locator('#workspace-proxy-mode').select_option('auto')
+    with page.expect_response(lambda r:r.url.endswith('/api/network/proxy')) as response:
+        page.locator('#save-workspace-proxy').click()
+    assert response.value.status==200
+    assert workspace.network_policy().proxy is None
+    result['checks'].append('Windows three-page UI encrypts/reloads/changes credentials, clears inputs after success or stale conflict, protects narrow layout and stops cleared route without connecting')
+
+
 def main():
     from playwright.sync_api import sync_playwright, expect
     vm='--vm' in sys.argv
@@ -105,6 +167,8 @@ def main():
                     assert not result['external_requests'] and not result['page_errors']
                     assert all(not w.db.exists() for w in workspaces)
                     result['checks'].append('return to auto preserves DNS, leaves versioned rollback guard and creates no jobs or external requests')
+                    if not vm: verify_auth_ui(page,context,server,workspace,expand,result)
+                    assert not result['external_requests'] and not result['page_errors']
                     result.update(success=True,browser_version=browser.version,proxy_scope='vm_host' if vm else 'loopback')
                 finally:browser.close()
         finally:

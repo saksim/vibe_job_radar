@@ -194,7 +194,7 @@ class PublicTasks:
         with self._lock:
             try:
                 policy=self.workspace.network_policy()
-                unchanged=(self.mode()=='local_direct' and not policy.error and policy.fingerprint==policy_id
+                unchanged=(self.mode()=='local_direct' and not policy.error and policy.background_fingerprint==policy_id
                            and self._binding('search',query)==binding)
             except (InputError,ContractError):
                 unchanged=False

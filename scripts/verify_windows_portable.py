@@ -1051,12 +1051,36 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
                     result['startup_registration_verified']=True
                     result['startup_worker_verified']=True
                     result['checks'].append('ephemeral CI: actual exe explicitly registers both fixed HKCU launch modes, exact registered worker command runs with disabled plan, second exe observes/removes each; cleanup leaves no entry or enabled plan; actual Windows logon not tested')
+                result['stage']='workspace_proxy_credentials_save'
+                proxy_state=app.json('/api/network/state')
+                proxy_saved=app.json('/api/network/proxy-auth',dict(mode='http_auth',endpoint='http://127.0.0.1:18990',
+                    username='ARTIFICIAL-PORTABLE-USER',password='ARTIFICIAL-PORTABLE-SECRET',
+                    revision=proxy_state['revision'],consent=True))
+                if (not proxy_saved['proxy_auth_saved'] or 'proxy_auth' in proxy_saved
+                        or not proxy_saved['policy']['proxy_authentication_configured']
+                        or proxy_saved['policy']['code']!='policy_selected'):
+                    raise AssertionError('frozen workspace credential save failed')
+                private_proxy_bytes=(workspace/'network-preferences.json').read_bytes()
+                if any(value in private_proxy_bytes for value in (b'ARTIFICIAL-PORTABLE-USER',b'ARTIFICIAL-PORTABLE-SECRET')):
+                    raise AssertionError('frozen proxy credentials were stored in plaintext')
             finally:app.close()
             # All requested writes finished before stopping this owned test
             # process. A fresh executable process must reopen the same report.
             result['stage']='restart_preserves_report'
             restarted=RunningApp(exe,workspace,cwd,env)
             try:
+                proxy_restored=restarted.json('/api/network/state')
+                if (not proxy_restored['proxy_auth_saved'] or 'proxy_auth' in proxy_restored
+                        or not proxy_restored['policy']['proxy_authentication_configured']
+                        or proxy_restored['policy']['code']!='policy_selected'
+                        or (workspace/'network-preferences.json').read_bytes()!=private_proxy_bytes):
+                    raise AssertionError('frozen restart did not restore protected proxy credentials')
+                proxy_cleared=restarted.json('/api/network/proxy-auth/clear',dict(revision=proxy_restored['revision'],consent=True))
+                if proxy_cleared['proxy_auth_saved'] or proxy_cleared['policy']['code']!='workspace_proxy_auth_missing':
+                    raise AssertionError('clearing frozen proxy credentials did not stop the selected route')
+                restarted.json('/api/network/proxy',dict(mode='auto',endpoint='',revision=proxy_cleared['revision'],consent=False))
+                result['workspace_proxy_credentials_verified']=True
+                result['checks'].append('actual frozen current-user DPAPI credential save and separate-process restoration; no plaintext/status echo; clear stops route; original automatic mode restored without dialing')
                 if restarted.json('/api/report/'+ident)['id']!=ident:raise AssertionError('portable restart lost report')
                 if restarted.json('/api/report/'+reader_report['id'])['requirements']!=reader_report['requirements']:
                     raise AssertionError('portable restart changed the report read beside a writer')
