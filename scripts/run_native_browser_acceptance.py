@@ -26,6 +26,7 @@ import tempfile
 import threading
 import time
 from unittest.mock import patch
+from native_tls_fixture import NativeTLSFixtureServer
 
 ROOT=Path(__file__).resolve().parents[1]
 sys.path[:0]=[str(ROOT/'src'),str(ROOT/'tests')]
@@ -156,16 +157,7 @@ class Fixture:
                 else:self.send('unexpected write',status=405)
         context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER);context.load_cert_chain(str(root/certificate))
         context.set_servername_callback(lambda sock,host,ctx:self.sni.append(host))
-        class Server(http.server.ThreadingHTTPServer):
-            daemon_threads=True
-            def get_request(self):
-                # Browser speculative CONNECTs must not block fixture cleanup
-                # indefinitely while the server waits for a TLS ClientHello.
-                sock,address=super().get_request();sock.settimeout(5)
-                try:return context.wrap_socket(sock,server_side=True),address
-                except Exception:
-                    sock.close();raise
-        self.server=Server(('127.0.0.1',0),Handler)
+        self.server=NativeTLSFixtureServer(('127.0.0.1',0),Handler,context)
         self.thread=threading.Thread(target=self.server.serve_forever,kwargs={'poll_interval':.05},daemon=True);self.thread.start()
     def close(self):self.server.shutdown();self.server.server_close();self.thread.join(timeout=2)
 
@@ -179,6 +171,9 @@ def main():
     result={'success':False,'scope':'Artificial local TLS source; native browser, real production controller/tunnel/service. Not live-site/VPN certification.','checks':[]}
     services=[];backends=[];fixtures=[]
     def checkpoint(stage):
+        # Diagnose an inactive stage, not ordinary progress across a suite
+        # that lasts longer than 75s. The outer CI deadline stays unchanged.
+        faulthandler.dump_traceback_later(75,repeat=True)
         result['stage']=stage
         (out/'results.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
         print('Native fixture stage: '+stage,flush=True)

@@ -25,6 +25,7 @@
     $("release-current").textContent = "当前版本：" + state.current_version + (state.version ? " / 最新稳定版：" + state.version : "");
     let text = state.message || "";
     if (state.total_bytes) text += " " + Math.floor(100 * state.downloaded_bytes / state.total_bytes) + "%";
+    if (state.retained_bytes) text += "\n已保留 " + (state.retained_bytes / 1048576).toFixed(1) + " MB，重新检查后可继续下载。";
     if (state.directory) text += "\n新版目录：" + state.directory;
     if (state.last_install) {
       text += "\n" + state.last_install.message;

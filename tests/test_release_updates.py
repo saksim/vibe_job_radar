@@ -150,7 +150,7 @@ class ReleaseUpdateTests(unittest.TestCase):
         self.assertEqual(self.fixture.calls,before)
 
     def test_network_error_messages_never_expose_exception_details(self):
-        for code in ('encrypted_dns_unavailable','encrypted_dns_expired_answer','pac_failed','untrusted-secret-code'):
+        for code in ('non_public_address','dns_error','encrypted_dns_unavailable','encrypted_dns_expired_answer','pac_failed','untrusted-secret-code'):
             with self.subTest(code=code):
                 service=self.service()
                 with patch.object(self.fixture,'latest',side_effect=updates.FetchError(code,'https://private.invalid/?token=secret')):
@@ -185,7 +185,7 @@ class ReleaseUpdateTests(unittest.TestCase):
         with patch.object(self.fixture,'stream',side_effect=lambda asset,out,stop,progress:out.write(b'corrupt')):
             service.download({'consent':True,'release_id':42,'sha256':state['sha256']});result=self.wait(service)
         self.assertEqual(result['status'],'failed')
-        folder=self.workspace.root/'updates';self.assertEqual(list(folder.iterdir()),[])
+        folder=self.workspace.root/'updates';self.assertEqual([p for p in folder.iterdir() if p.name!='.writer.lock'],[])
         package=folder/service._selected['package']['name'];package.write_bytes(b'operator original')
         service.check({'consent':True});state=self.wait(service)
         service.download({'consent':True,'release_id':42,'sha256':state['sha256']});result=self.wait(service)
@@ -256,7 +256,7 @@ class ReleaseUpdateTests(unittest.TestCase):
         self.assertEqual(state['status'],'failed')
         self.assertEqual(injected,[True])
         folder=self.workspace.root/'updates'
-        self.assertEqual([p.name for p in folder.iterdir()],[service._selected['package']['name']])
+        self.assertEqual([p.name for p in folder.iterdir() if p.name!='.writer.lock'],[service._selected['package']['name']])
         self.assertEqual(keep.read_bytes(),b'original workspace')
         self.assertEqual(updates.file_digest(folder/service._selected['package']['name']),service._selected['sha256'])
 

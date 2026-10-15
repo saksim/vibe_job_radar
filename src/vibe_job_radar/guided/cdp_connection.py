@@ -14,6 +14,12 @@ import time
 from .contracts import CrawlError
 
 
+class CDPCommandTimeout(CrawlError):
+    """Keep the existing stop code while distinguishing an elapsed deadline."""
+    def __init__(self):
+        super().__init__('native_protocol_error')
+
+
 class InterceptionGone(CrawlError):
     """A rejected continuation; only separately matched cancellation can retire it."""
     def __init__(self, response_order):
@@ -117,7 +123,7 @@ class CDPConnection:
                     and self._events[0][2] < self._response_order[ident])):
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    raise CrawlError('native_protocol_error')
+                    raise CDPCommandTimeout()
                 self.pump(min(.05, remaining))
             response = self.responses.pop(ident)
             if 'error' in response:

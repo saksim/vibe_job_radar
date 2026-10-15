@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections import Counter
 import json
 import sys
+import time
 from pathlib import Path
 from urllib.parse import urlsplit
 from unittest.mock import patch
@@ -47,6 +48,36 @@ class ObservedBackend(acceptance.NativeBackend):
                 self.probe['startup_diagnostic'] = report
             raise
         self._guard_evidence = install_guard_observer(self.tunnel)
+
+    def _launch_browser(self, options):
+        # Observe the owned Chrome control startup without changing its
+        # commands, deadlines, launch flags or transport decisions. Never keep
+        # protocol parameters, results, process arguments or exception text.
+        from vibe_job_radar.guided.cdp_connection import CDPConnection
+        call = CDPConnection.call
+        rows = self.probe.setdefault('startup_commands', [])
+        allowed = {'Browser.getVersion', 'Target.setDiscoverTargets', 'Browser.close'}
+        def observed(connection, session, method, params, *, timeout=30):
+            row = {'method': method if method in allowed else 'other'}
+            if len(rows) < 8:
+                rows.append(row)
+            started = time.monotonic()
+            try:
+                value = call(connection, session, method, params, timeout=timeout)
+                row['success'] = True
+                return value
+            except Exception as exc:
+                row['success'] = False
+                code = getattr(exc, 'code', '')
+                row['code'] = code if code in {'native_protocol_error', 'browser_closed',
+                    'native_observation_limit'} else 'other'
+                row['bridge_running'] = connection.socket.process.poll() is None
+                row['transport_failed'] = connection.socket.failed.is_set()
+                raise
+            finally:
+                row['elapsed_ms'] = round((time.monotonic() - started) * 1000)
+        with patch.object(CDPConnection, 'call', observed):
+            return super()._launch_browser(options)
 
     def close(self):
         try:
