@@ -27,6 +27,7 @@ import threading
 import time
 from unittest.mock import patch
 from native_tls_fixture import NativeTLSFixtureServer
+from native_fixture_lifecycle import close_service
 
 ROOT=Path(__file__).resolve().parents[1]
 sys.path[:0]=[str(ROOT/'src'),str(ROOT/'tests')]
@@ -186,6 +187,11 @@ def main():
         backends.clear()
         for f in fixtures:f.close()
         fixtures.clear()
+    def close_owned_service(service):
+        observation = {}
+        result.setdefault('service_shutdowns', []).append(observation)
+        close_service(service, observation)
+        services.remove(service)
     faulthandler.dump_traceback_later(75,repeat=True)
     try:
         from playwright._impl._errors import TargetClosedError
@@ -266,7 +272,8 @@ def main():
                     assert diagnostic['observer_errors']==0
                     (out/'diagnostic.json').write_text(json.dumps(diagnostic,ensure_ascii=False,indent=2),encoding='utf-8')
                     result['checks'].append('same batch detail persisted and existing report generated; opt-in trace has no query/body/cookie secret')
-                    service.close();services.remove(service)
+                    checkpoint('service-close-before-restore')
+                    close_owned_service(service)
                     checkpoint('native-session-restore')
                     previous_report = task['report_id']
                     initial_count = len(good.requests)
@@ -287,7 +294,8 @@ def main():
                     assert task['saved_session_status']=='cleared'
                     assert not (workspace.root/'.radar-sessions/fixture.json').exists()
                     assert not service._backends and not service._session_leases
-                    service.close();services.remove(service)
+                    checkpoint('service-close-after-forget')
+                    close_owned_service(service)
                     checkpoint('native-recorded-liepin-layout')
                     # This artificial origin uses the published representation,
                     # never a real recruiting URL or copied third-party JD. Use
@@ -329,7 +337,8 @@ def main():
                         else:
                             result['checks'].append('observed headings and IT-department duty survive '+case+' native parser, full Store record and original report')
                         result.setdefault('recorded_layout_cases',[]).append({'case':case,'full_body_preserved':True,'report_full_text_job_groups':1})
-                        service.close();services.remove(service)
+                        checkpoint('service-close-recorded-layout')
+                        close_owned_service(service)
                     good.recorded_body=RECORDED_BODY;good.recorded_semantic=False
                     checkpoint('native-redirect')
                     b=backend('redirect');b.open(URL+'/redirect');assert b.page.url==URL+'/search'

@@ -20,6 +20,9 @@ from vibe_job_radar.workspace import Workspace,InputError
 QUERY={'platform':'fixture','keyword':'时间序列','roles':['time_series'],'consent':True,
        'rights_note':'人工离线所有权测试','max_pages':1,'max_jobs':1}
 
+with patch.object(sys, 'path', [str(Path(__file__).resolve().parents[1] / 'scripts'), *sys.path]):
+    from native_fixture_lifecycle import close_service
+
 
 class GuidedOwnershipTests(unittest.TestCase):
     def setUp(self):
@@ -189,6 +192,75 @@ class GuidedOwnershipTests(unittest.TestCase):
 
     def test_idle_shutdown_keeps_owner_until_browser_close_finishes(self):
         self.close_idle_with_barrier()
+
+    def test_native_fixture_handoff_waits_for_actual_worker_and_owner_release(self):
+        ident=self.start();self.release.set();self.idle(self.first)
+        backend=self.first._backends[ident]
+        entered,release=threading.Event(),threading.Event()
+        worker=self.first._thread;join=worker.join;close=backend.close
+        observation={}
+        def held_close():
+            entered.set()
+            if not release.wait(10):raise AssertionError('cleanup not released')
+            close()
+        def bounded_join(timeout):
+            if timeout==5:
+                self.assertTrue(entered.wait(5))
+                self.assertTrue(self.other.state()['owned_elsewhere'])
+                with self.assertRaises(GuidedTaskBusy):self.other.create(QUERY)
+                return  # Model the existing product close budget expiring.
+            release.set()
+            join(timeout)
+        try:
+            with patch.object(backend,'close',side_effect=held_close):
+                with patch.object(worker,'join',side_effect=bounded_join):
+                    close_service(self.first,observation,timeout=10)
+            self.assertTrue(observation['pending_after_close'])
+            self.assertTrue(observation['ownership_released'])
+            self.assertFalse(observation['worker_alive'])
+            self.other.create(QUERY);self.idle(self.other)
+            self.assertEqual(self.factory.call_count,1)
+        finally:
+            release.set();join(10)
+
+    def test_native_fixture_rejects_uncertain_close_without_releasing_owner(self):
+        ident=self.start();self.release.set();self.idle(self.first)
+        backend=self.first._backends[ident];observation={}
+        try:
+            with patch.object(backend,'close',side_effect=RuntimeError('artificial close failure')):
+                with self.assertRaisesRegex(RuntimeError,'closure is uncertain'):
+                    close_service(self.first,observation,timeout=10)
+            self.assertTrue(observation['closure_uncertain'])
+            self.assertFalse(observation['ownership_released'])
+            with self.assertRaises(GuidedTaskBusy):self.other.create(QUERY)
+        finally:
+            backend.close();self.first._ownership.release()
+
+    def test_native_fixture_waits_after_service_clears_its_worker_reference(self):
+        retired,release=threading.Event(),threading.Event()
+        original=self.first._worker
+        def held_thread_exit():
+            original()
+            retired.set()
+            if not release.wait(10):raise AssertionError('retired thread not released')
+        self.first._worker=held_thread_exit
+        self.start();self.release.set();self.idle(self.first)
+        worker=self.first._thread;join=worker.join;observation={}
+        def bounded_join(timeout):
+            if timeout==5:
+                self.assertTrue(retired.wait(5))
+                self.assertIsNone(self.first._thread)
+                self.assertTrue(worker.is_alive())
+                return
+            release.set();join(timeout)
+        try:
+            with patch.object(worker,'join',side_effect=bounded_join):
+                close_service(self.first,observation,timeout=10)
+            self.assertTrue(observation['pending_after_close'])
+            self.assertFalse(worker.is_alive())
+            self.assertTrue(observation['ownership_released'])
+        finally:
+            release.set();join(10)
 
     def test_late_close_failure_keeps_original_owner_after_join_returns(self):
         self.close_idle_with_barrier(fail=True)
