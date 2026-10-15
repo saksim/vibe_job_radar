@@ -42,7 +42,9 @@ def prepare(repo,run_id,out,notes,*,publish=False):
     require(selected.get('path')=='.github/workflows/python-distribution.yml'
         and selected.get('event')=='push' and selected.get('head_branch')=='main'
         and selected.get('status')=='completed' and selected.get('conclusion')=='success'
+        and selected.get('head_repository',{}).get('full_name')==repo
         and re.fullmatch('[0-9a-f]{40}',sha), 'select a successful exact-main Python distribution run')
+    require(api(repo,'git/ref/heads/main').get('object',{}).get('sha')==sha, 'main advanced; qualify the current main')
     runs=api(repo,f'actions/runs?head_sha={sha}&event=push&per_page=100')['workflow_runs']
     windows=[r for r in runs if r['path']=='.github/workflows/windows-portable.yml'
              and r['head_sha']==sha and r['conclusion']=='success']
