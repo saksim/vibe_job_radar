@@ -1,5 +1,7 @@
 # Vibe Job Radar｜招聘要求与个人证据工作台
 
+0.9.0 增加[跨平台域名 PAC](docs/PORTABLE_DOMAIN_PAC.md)：只传根地址和域名，HTTP、请求桥与原生浏览器共用路线，DNS 助手另行选择；保留全部已有网络模式和升级功能。
+
 0.8.0 增加[显式 HTTP Digest 本机代理认证](docs/HTTP_DIGEST_PROXY.md)，覆盖三个工作台、CLI 与 Windows 加密保存/重启，保留已有 Basic、SOCKS5 和自动升级。
 
 0.6.0 增加[工作台内本机代理凭据配置与 Windows 加密保存](docs/WORKSPACE_PROXY_CREDENTIALS.md)，支持重启恢复、明确修改与清除，保留已有网络与升级功能。

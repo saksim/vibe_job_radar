@@ -843,6 +843,11 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
                 result['url_pac']=verify_url_pac(app,frozen_executable=True)
                 result['url_pac_worker_verified']=True
                 result['checks'].append('frozen exe executes the optional full-URL worker with path/query/host intact, rejects unavailable DNS helpers without fallback, and rolls schema6 back to automatic mode without target requests')
+                result['stage']='portable_domain_pac_worker'
+                from domain_pac_acceptance import verify_app as verify_domain_pac
+                result['domain_pac']=verify_domain_pac(app,frozen_executable=True)
+                result['domain_pac_worker_verified']=True
+                result['checks'].append('frozen exe domain PAC receives only canonical root and host, requires separate DNS scope, and rolls back without target requests')
                 if verify_system_pac:
                     from system_pac_acceptance import configured_source,verify_app
                     result['stage']='configured_system_pac_setup'

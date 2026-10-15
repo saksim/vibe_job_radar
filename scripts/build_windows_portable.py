@@ -170,7 +170,7 @@ def build_candidate(out,evidence_path,*,verify_login_startup=False,verify_system
         if verify_wpad_dns:verification.append('--verify-wpad-dns')
         subprocess.run(verification,cwd=ROOT,check=True,timeout=360)
         report=json.loads(runtime_evidence.read_text(encoding='utf-8'))
-        validate_runtime_evidence(bundle,report,require_login_startup=verify_login_startup,require_system_pac=verify_system_pac,require_wpad_dns=verify_wpad_dns,require_url_pac=True,require_environment=True,require_automatic_update=True)
+        validate_runtime_evidence(bundle,report,require_login_startup=verify_login_startup,require_system_pac=verify_system_pac,require_wpad_dns=verify_wpad_dns,require_url_pac=True,require_domain_pac=True,require_environment=True,require_automatic_update=True)
         if fingerprint(ROOT)!=expected:raise ValueError('source changed during portable build')
         part=stage/'candidate.zip'
         with zipfile.ZipFile(part,'w',zipfile.ZIP_DEFLATED) as archive:
@@ -199,6 +199,7 @@ def build_candidate(out,evidence_path,*,verify_login_startup=False,verify_system
             'system_pac_verified':report.get('system_pac_verified') is True,
             'wpad_dns_verified':report.get('wpad_dns_verified') is True,
             'url_pac_worker_verified':report.get('url_pac_worker_verified') is True,
+            'domain_pac_worker_verified':report.get('domain_pac_worker_verified') is True,
             'workspace_proxy_credentials_verified':report.get('workspace_proxy_credentials_verified') is True,
             'digest_proxy_credentials_verified':report.get('digest_proxy_credentials_verified') is True,
             'automatic_update_verified':report.get('automatic_update_verified') is True})
@@ -233,12 +234,14 @@ def native_components_valid(rows):
         and all(native_component_valid(rows[channel],channel) for channel in rows))
 
 
-def validate_runtime_evidence(bundle,report,*,require_login_startup=False,require_system_pac=False,require_wpad_dns=False,require_url_pac=False,require_environment=False,require_automatic_update=False):
+def validate_runtime_evidence(bundle,report,*,require_login_startup=False,require_system_pac=False,require_wpad_dns=False,require_url_pac=False,require_domain_pac=False,require_environment=False,require_automatic_update=False):
     from automatic_update_acceptance import valid_evidence as valid_automatic_update
     if require_wpad_dns:
         from wpad_dns_evidence import valid_wpad_dns_evidence
     if require_url_pac:
         from url_pac_acceptance import valid_evidence as valid_url_pac
+    if require_domain_pac:
+        from domain_pac_acceptance import valid_evidence as valid_domain_pac
     if (not isinstance(report,dict) or report.get('success') is not True
             or report.get('verified_browser')!='bundled'
             or (require_environment and (report.get('runtime_environment_verified') is not True
@@ -251,6 +254,8 @@ def validate_runtime_evidence(bundle,report,*,require_login_startup=False,requir
             or (require_system_pac and report.get('system_pac_verified') is not True)
             or (require_url_pac and (report.get('url_pac_worker_verified') is not True
                                     or not valid_url_pac(report.get('url_pac'))))
+            or (require_domain_pac and (report.get('domain_pac_worker_verified') is not True
+                                       or not valid_domain_pac(report.get('domain_pac'))))
             or (require_wpad_dns and (report.get('wpad_dns_verified') is not True
                                       or not valid_wpad_dns_evidence(report.get('wpad_dns'))))
             or not isinstance(report.get('files'),dict) or not report['files']
