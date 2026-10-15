@@ -63,6 +63,7 @@ jobs:
           python scripts/run_guided_owner_browser.py
           python scripts/run_research_workflow_browser.py
           python scripts/run_team_service_browser.py
+          python scripts/run_release_updates_browser.py
           python scripts/run_native_login_browser.py
           python scripts/run_login_detail_return_browser.py
           python scripts/run_login_detail_return_browser.py --pending-action

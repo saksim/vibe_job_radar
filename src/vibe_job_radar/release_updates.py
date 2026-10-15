@@ -1,0 +1,332 @@
+"""Explicit stable-release checking and verified, side-by-side Windows staging.
+
+Never launches an executable, replaces the running program, or migrates data.
+GitHub HTTPS/digests identify repository content, not a publisher signature.
+"""
+from __future__ import annotations
+
+import copy
+import hashlib
+import json
+import os
+import re
+import shutil
+import stat
+import tempfile
+import threading
+import time
+import zipfile
+from pathlib import Path, PurePosixPath
+from urllib.parse import urljoin, urlsplit
+
+from ._version import __version__
+from .network import SafeHTTP, PinnedHTTPSConnection, validate_public_url, USER_AGENT
+from .workspace import InputError
+
+REPOSITORY = 'saksim/vibe_job_radar'
+API = 'https://api.github.com/repos/'+REPOSITORY+'/releases/latest'
+WEB = 'https://github.com/'+REPOSITORY
+HOSTS = {'api.github.com','github.com','release-assets.githubusercontent.com','objects.githubusercontent.com'}
+VERSION = re.compile(r'(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})')
+HEX = re.compile('[0-9a-f]{64}')
+SMALL_ASSETS = {'manifest.json','provenance.json','portable-verification.json','source-verification.json',
+                'SHA256SUMS.txt','CHANGES.md','UPGRADE_AND_LIMITATIONS.md'}
+WORKFLOWS = {'.github/workflows/'+name for name in ('tests.yml','browser.yml','browser-choice.yml',
+             'browser-health.yml','native-browser.yml','vm-proxy.yml','windows-native-tls.yml','windows-portable.yml')}
+MAX_ZIP = 1024**3
+MAX_EXPANDED = 3*1024**3
+
+
+class UpdateError(ValueError):
+    pass
+
+
+def require(condition):
+    if not condition:raise UpdateError('版本或文件核验失败；已有程序和工作区未替换。')
+
+
+def version(value):
+    require(isinstance(value,str) and VERSION.fullmatch(value))
+    return tuple(int(x) for x in value.split('.'))
+
+
+def digest(data):return hashlib.sha256(data).hexdigest()
+
+
+def check_stop(cancelled):
+    if cancelled.is_set():raise UpdateError('升级准备已停止；已有程序和工作区保留。')
+
+
+def safe_url(url):
+    parsed=urlsplit(url)
+    require(parsed.scheme=='https' and parsed.hostname in HOSTS and parsed.port in (None,443)
+            and not parsed.username and not parsed.password and not parsed.fragment and len(url)<=8192)
+    return url
+
+
+class ReleaseTransport:
+    def __init__(self, policy):
+        self.policy=policy
+        self.client=SafeHTTP(HOSTS,timeout=10,max_bytes=1_000_000,interval=0,network_policy=policy)
+
+    def latest(self):return self.client.json(API)
+
+    def small(self, asset, cancelled):
+        current=asset['browser_download_url']
+        for attempt in range(4):
+            check_stop(cancelled);safe_url(current)
+            response=self.client.public_get(current)
+            if response.status in (301,302,303,307,308):
+                current=urljoin(current,response.headers.get('location',''))
+                continue
+            require(response.status==200)
+            return response.body
+        raise UpdateError('下载重定向次数超限，未继续请求。')
+
+    def stream(self, asset, destination, cancelled, progress):
+        current=asset['browser_download_url'];started=time.monotonic()
+        for attempt in range(4):
+            check_stop(cancelled);safe_url(current)
+            policy=self.policy.for_request(current)
+            host,addresses,target=validate_public_url(current,HOSTS,all_addresses=True,
+                                                     network_policy=policy,resolver=policy.resolver)
+            conn=PinnedHTTPSConnection(host,addresses,10,network_policy=policy)
+            try:
+                conn.request('GET',target,headers={'User-Agent':USER_AGENT,'Accept-Encoding':'identity'})
+                response=conn.getresponse()
+                if response.status in (301,302,303,307,308):
+                    current=urljoin(current,response.getheader('Location') or '')
+                    continue
+                require(response.status==200 and response.getheader('Content-Encoding','identity').lower()=='identity')
+                length=response.getheader('Content-Length')
+                require(length is None or length==str(asset['size']))
+                received=0
+                while True:
+                    check_stop(cancelled)
+                    if time.monotonic()-started>900:raise UpdateError('下载超过15分钟，未保留未完成的软件包。')
+                    block=response.read(min(262144,asset['size']-received+1))
+                    if not block:break
+                    received+=len(block)
+                    require(received<=asset['size'])
+                    destination.write(block);progress(received)
+                require(received==asset['size'])
+                return
+            finally:conn.close()
+        raise UpdateError('下载重定向次数超限，未继续请求。')
+
+
+def inspect_release(release, transport, cancelled):
+    require(isinstance(release,dict) and release.get('draft') is False and release.get('prerelease') is False
+            and type(release.get('id')) is int and release['id']>0)
+    tag=release.get('tag_name','')
+    require(isinstance(tag,str) and tag.startswith('v'))
+    selected=tag[1:];version(selected)
+    require(release.get('html_url')==WEB+'/releases/tag/'+tag)
+    assets=release.get('assets')
+    require(isinstance(assets,list) and len(assets)==8)
+    by_name={}
+    for asset in assets:
+        require(isinstance(asset,dict) and isinstance(asset.get('name'),str))
+        name=asset['name']
+        require(name not in by_name and '/' not in name and '\\' not in name
+                and asset.get('state')=='uploaded' and type(asset.get('size')) is int
+                and 0<asset['size']<=MAX_ZIP and type(asset.get('id')) is int and asset['id']>0
+                and asset.get('browser_download_url')==WEB+'/releases/download/'+tag+'/'+name
+                and isinstance(asset.get('digest'),str) and re.fullmatch('sha256:[0-9a-f]{64}',asset['digest']))
+        by_name[name]=asset
+    packages=set(by_name)-SMALL_ASSETS
+    require(SMALL_ASSETS<=set(by_name) and len(packages)==1)
+    package=by_name[packages.pop()]
+    require(re.fullmatch('vibe-job-radar-'+re.escape(selected)+r'-[0-9a-f]{16}-windows-x64\.zip',package['name']))
+    data={}
+    for name in sorted(SMALL_ASSETS):
+        check_stop(cancelled)
+        asset=by_name[name];require(asset['size']<=1_000_000)
+        raw=transport.small(asset,cancelled)
+        require(isinstance(raw,bytes) and len(raw)==asset['size'] and 'sha256:'+digest(raw)==asset['digest'])
+        data[name]=raw
+    sums={}
+    for line in data['SHA256SUMS.txt'].decode('utf-8').splitlines():
+        match=re.fullmatch(r'([0-9a-f]{64})  ([^/\\]+)',line)
+        require(match is not None and match[2] not in sums)
+        sums[match[2]]=match[1]
+    require(set(sums)==set(by_name)-{'SHA256SUMS.txt'})
+    require(all(by_name[name]['digest']=='sha256:'+sha for name,sha in sums.items()))
+    manifest=json.loads(data['manifest.json']);provenance=json.loads(data['provenance.json'])
+    source=json.loads(data['source-verification.json']);portable=json.loads(data['portable-verification.json'])
+    require(manifest.get('file')==package['name'] and manifest.get('sha256')==sums[package['name']]
+            and manifest.get('size_bytes')==package['size'] and manifest.get('runtime_verified') is True
+            and provenance.get('repository')==REPOSITORY and provenance.get('tag')==tag
+            and provenance.get('release_channel')=='stable' and provenance.get('signed') is False
+            and provenance.get('rebuilt_for_release') is False
+            and provenance.get('candidate_sha256')==manifest['sha256']
+            and provenance.get('change_notes_sha256')==sums['CHANGES.md']
+            and re.fullmatch('[0-9a-f]{40}',str(provenance.get('source_revision','')))
+            and isinstance(provenance.get('ci'),dict) and set(provenance['ci'])==WORKFLOWS
+            and all(isinstance(r,dict) and type(r.get('id')) is int and r['id']>0
+                    and type(r.get('attempt')) is int and r['attempt']>0 for r in provenance['ci'].values())
+            and isinstance(manifest.get('source_sha256'),str) and HEX.fullmatch(manifest['source_sha256'])
+            and source.get('success') is True and source.get('source_unchanged') is True
+            and portable.get('success') is True and source.get('source',{}).get('sha256')==manifest.get('source_sha256')
+            and manifest.get('source_sha256')==provenance.get('source_sha256'))
+    require(package['name']==f"vibe-job-radar-{selected}-{manifest['sha256'][:16]}-windows-x64.zip")
+    notes=data['CHANGES.md'].decode('utf-8')
+    for heading in ('解决了什么','提高了什么','验证结果','剩余问题'):require('## '+heading in notes)
+    return {'release_id':release['id'],'version':selected,'tag':tag,'release_url':release['html_url'],
+            'package':package,'sha256':manifest['sha256'],'revision':provenance['source_revision'],
+            'source_sha256':provenance['source_sha256'],'notes':notes[:30000],'signed':False}
+
+
+def file_digest(path):
+    require(path.is_file() and not path.is_symlink() and path.stat().st_size<=MAX_ZIP)
+    result=hashlib.sha256()
+    with path.open('rb') as stream:
+        for block in iter(lambda:stream.read(1024*1024),b''):result.update(block)
+    return result.hexdigest()
+
+
+def remove_owned_tree(path, identity, parent):
+    # Never recursively remove a replacement, junction or path outside updates.
+    if path.is_symlink() or path.resolve().parent!=parent.resolve():return
+    try:
+        current=path.stat()
+        if (current.st_dev,current.st_ino)==identity:shutil.rmtree(path)
+    except FileNotFoundError:pass
+
+
+def stage_package(package, info, updates, cancelled):
+    require(package.parent.resolve()==updates.resolve() and not package.is_symlink())
+    created=None
+    with package.open('rb') as stream:
+        # Hash and extract the same open file, not a path that could be replaced.
+        hasher=hashlib.sha256()
+        for block in iter(lambda:stream.read(1024*1024),b''):
+            check_stop(cancelled);hasher.update(block)
+        require(hasher.hexdigest()==info['sha256']);stream.seek(0)
+        with zipfile.ZipFile(stream) as archive:
+            members=archive.infolist();require(0<len(members)<=20000)
+            seen=set();total=0;files=set()
+            for member in members:
+                name=member.filename;parts=PurePosixPath(name).parts
+                require(name and not name.startswith('/') and '\\' not in name and ':' not in name
+                        and parts and parts[0]=='VibeJobRadar' and all(p not in {'.','..',''} for p in parts)
+                        and all(p==p.rstrip(' .') and not re.fullmatch(r'(?i:CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])',p.split('.')[0]) for p in parts)
+                        and not member.flag_bits&1 and member.compress_type in (zipfile.ZIP_STORED,zipfile.ZIP_DEFLATED)
+                        and stat.S_IFMT(member.external_attr>>16) in (0,stat.S_IFREG,stat.S_IFDIR))
+                normalized='/'.join(parts).casefold();require(normalized not in seen);seen.add(normalized)
+                total+=member.file_size
+                require(0<=member.file_size<=MAX_ZIP and total<=MAX_EXPANDED)
+                if not member.is_dir():files.add(name)
+            require({'VibeJobRadar/VibeJobRadar.exe','VibeJobRadar/PORTABLE.json'}<=files)
+            meta_info=archive.getinfo('VibeJobRadar/PORTABLE.json');require(meta_info.file_size<=100000)
+            meta=json.loads(archive.read(meta_info))
+            require(meta.get('version')==info['version'] and meta.get('platform')=='windows-x64'
+                    and meta.get('runtime_source',{}).get('revision')==info['revision']
+                    and meta.get('source',{}).get('sha256')==info['source_sha256'])
+            created=Path(tempfile.mkdtemp(prefix='v'+info['version']+'-',dir=updates))
+            st=created.stat();identity=(st.st_dev,st.st_ino)
+            try:
+                for member in members:
+                    check_stop(cancelled)
+                    destination=created.joinpath(*PurePosixPath(member.filename).parts)
+                    require(destination.resolve().is_relative_to(created.resolve()))
+                    if member.is_dir():destination.mkdir(parents=True,exist_ok=True,mode=0o700);continue
+                    destination.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
+                    with archive.open(member) as source, destination.open('xb') as out:
+                        remaining=member.file_size
+                        while True:
+                            check_stop(cancelled);block=source.read(min(262144,remaining+1))
+                            if not block:break
+                            remaining-=len(block);require(remaining>=0);out.write(block)
+                        require(remaining==0)
+                        out.flush();os.fsync(out.fileno())
+                (created/'READY.json').write_text(json.dumps({'version':info['version'],'sha256':info['sha256'],
+                    'revision':info['revision'],'signed':False,'workspace_migrated':False}),encoding='utf-8')
+                return created/'VibeJobRadar'
+            except BaseException:
+                remove_owned_tree(created,identity,updates)
+                raise
+
+
+class ReleaseUpdates:
+    def __init__(self, workspace, *, transport_factory=None, current_version=__version__):
+        self.workspace=workspace;self.current_version=current_version
+        self.factory=transport_factory or (lambda:ReleaseTransport(workspace.network_policy()))
+        self._lock=threading.Lock();self._thread=None;self._stop=threading.Event();self._selected=None
+        self._state={'status':'idle','current_version':current_version,'message':'检查前不会联网；只读取官方仓库稳定版本。'}
+
+    def state(self):
+        with self._lock:return copy.deepcopy(self._state)
+
+    def _save(self,**value):
+        with self._lock:self._state.update(value)
+
+    def _start(self, fn):
+        with self._lock:
+            if self._stop.is_set():raise InputError('工作台正在退出。')
+            if self._thread and self._thread.is_alive():raise InputError('版本操作正在进行，请等待完成。')
+            self._state={'status':'running','current_version':self.current_version,'message':'正在核对官方版本及文件。'}
+            self._thread=threading.Thread(target=self._run,args=(fn,),name='radar-release-update',daemon=True)
+            self._thread.start()
+            return dict(self._state)
+
+    def check(self,data):
+        if not isinstance(data,dict) or set(data)!={'consent'} or data['consent'] is not True:
+            raise InputError('请明确确认连接GitHub检查稳定版本。')
+        return self._start(self._check)
+
+    def _check(self):
+        self._selected=None
+        transport=self.factory()
+        selected=inspect_release(transport.latest(),transport,self._stop)
+        self._selected=selected
+        newer=version(selected['version'])>version(self.current_version)
+        self._save(status='available' if newer else 'current',version=selected['version'],
+                   release_id=selected['release_id'],release_url=selected['release_url'],notes=selected['notes'],sha256=selected['sha256'],
+                   size_bytes=selected['package']['size'],signed=False,
+                   message='发现较新的稳定版本，可下载并准备到独立目录。' if newer else '当前版本不低于最新稳定版。')
+
+    def download(self,data):
+        with self._lock:
+            selected=copy.deepcopy(self._selected)
+            valid=(self._state.get('status')=='available' and selected is not None
+                   and isinstance(data,dict) and data.get('consent') is True and type(data.get('release_id')) is int
+                   and data=={'consent':True,'release_id':selected['release_id'],'sha256':selected['sha256']})
+        if not valid:raise InputError('请先检查并确认当前显示的稳定版本；旧页面不能更换下载目标。')
+        return self._start(lambda:self._download(selected))
+
+    def _download(self,selected):
+        self._save(message='正在下载、校验并解压新版；旧程序和工作区保留。')
+        updates=self.workspace.root/'updates'
+        require(not updates.is_symlink() and updates.resolve().parent==self.workspace.root.resolve())
+        updates.mkdir(exist_ok=True,mode=0o700)
+        package=updates/selected['package']['name']
+        if package.exists():require(file_digest(package)==selected['sha256'])
+        else:
+            descriptor,name=tempfile.mkstemp(prefix='.download-',suffix='.partial',dir=updates)
+            temp=Path(name);st=os.fstat(descriptor);identity=(st.st_dev,st.st_ino)
+            try:
+                with os.fdopen(descriptor,'wb') as out:
+                    self.factory().stream(selected['package'],out,self._stop,
+                                          lambda count:self._save(downloaded_bytes=count,total_bytes=selected['package']['size']))
+                    out.flush();os.fsync(out.fileno())
+                require(temp.stat().st_size==selected['package']['size'] and file_digest(temp)==selected['sha256'])
+                check_stop(self._stop)
+                os.link(temp,package)  # Exclusive publication: never overwrite an existing download.
+            finally:
+                from .team_store import remove_private_file
+                remove_private_file(temp,identity)
+        directory=stage_package(package,selected,updates,self._stop)
+        self._save(status='ready',version=selected['version'],release_url=selected['release_url'],
+                   directory=str(directory),archive=str(package),sha256=selected['sha256'],signed=False,
+                   message='已校验并解压到独立目录。停止任务和计划、关闭旧程序并备份工作区后，启动新目录的VibeJobRadar.exe，继续选择原工作区。旧程序和数据保留。')
+
+    def _run(self,fn):
+        try:fn()
+        except Exception as error:
+            message=str(error) if isinstance(error,UpdateError) else '版本操作未完成，请检查网络、磁盘和官方发行状态；已有程序和工作区保留。'
+            self._save(status='failed',message=message)
+
+    def close(self):
+        self._stop.set()
+        if self._thread:self._thread.join(timeout=12)

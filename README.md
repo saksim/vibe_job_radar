@@ -1,5 +1,7 @@
 # Vibe Job Radar｜招聘要求与个人证据工作台
 
+0.4.0 增加[跨设备公开任务所有权](docs/TEAM_SERVICE.md)与[稳定版检查、校验下载和升级准备](docs/UPDATES.md)。正式发行使用标准版本 Tag 和公开 Release，保持 dev → release → main 晋升；Windows 包仍未签名，现场验收条件如实保留。变化与范围见 [0.4.0 发行说明](docs/RELEASE_0_4_0.md)，实际可下载版本见 [Releases](https://github.com/saksim/vibe_job_radar/releases)。
+
 0.3.0 增加[报告内独立质量复核](docs/QUALITY_REVIEW.md)、[来源更新历史](docs/SOURCE_HISTORY.md)和可选[团队协作服务](docs/TEAM_SERVICE.md)：在原报告上标注 JD、核对重复岗位；查看目录更新与失败；为已登记设备提供共享配额、成员权限和版本同步。原采集、个人材料、报告和CLI继续保留。具体变化、验证与剩余条件见 [0.3.0 发行说明](docs/RELEASE_0_3_0.md)。
 
 非登录工程的关闭依据、剩余现场条件及测试收敛方式见[当前收口清单](docs/NON_LOGIN_CONVERGENCE.md)；历史失败保留，工程完成与真人/实站认证分别记录。
@@ -60,7 +62,7 @@ BOSS、猎聘、51job 的浏览器采集仍需逐站现场验收，不能因入�
 
 主干已合入[工作区网页代理偏好](docs/WORKSPACE_PROXY_SETTINGS.md)：三个工作台入口可保存匿名本机HTTP/SOCKS5入口，DNS与代理共享修订号，其他工作区不受影响。已有应用专用代理/凭据冲突时停止；保存不联网测试，更换后需停止并重开采集会话。首次保存代理写入v2网络偏好，旧源码会明确拒绝，回退需先备份并恢复原v1偏好。本次 #83/#84 增加[明确指定的宿主机代理](docs/VM_HOST_PROXY.md)，使用独立模式和许可；不把来宾loopback当宿主机，不猜网关或扫描入口，实际虚拟化产品环境仍待实测。
 
-当前项目提供 Python 3.10+ 源码和 [Windows x64 便携候选包](docs/WINDOWS_PORTABLE.md)的构建与实际 exe 验收，包含 Python/Chromium，须以对应提交的成功 CI 产物为准，尚非正式签名发行或自动升级。源码用户在 Windows 可双击 `start_windows.bat`，其他系统使用原启动入口。新增的 `research_brief.md` 便于带走本批结论；底层完整原文、复核队列和历史报告保留。
+当前项目提供 Python 3.10+ 源码和 [Windows x64 便携包](docs/WINDOWS_PORTABLE.md)的构建与实际 exe 验收，包含 Python/Chromium。公开稳定版本须通过准确提交的完整 CI 并在 Release 中提供8项资产；新增升级入口校验下载并准备独立目录，尚未签名或自动替换/重启。源码用户在 Windows 可双击 `start_windows.bat`，其他系统使用原启动入口。新增的 `research_brief.md` 便于带走本批结论；底层完整原文、复核队列和历史报告保留。
 
 Windows便携包可在首页明确选择[登录后打开工作台](docs/WINDOWS_LOGIN_STARTUP.md)，默认关闭，只登记当前用户和当前工作区。原每日计划仍独立确认；移动或升级程序前关闭旧登记，再从新包启用。实际登录时机由Windows管理，不是全天服务保证。
 
