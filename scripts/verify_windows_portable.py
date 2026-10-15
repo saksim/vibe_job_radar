@@ -1198,7 +1198,35 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
                         or RateLedger(workspace/'guided/rates.sqlite').summary('liepin')!=background_counts):
                     raise AssertionError('new frozen process replayed or lost the completed background outcome')
                 result['category_background_restart_verified']=True
+                state=observed.json('/api/network/state')
+                digest_saved=observed.json('/api/network/proxy-auth',dict(mode='http_digest_auth',
+                    endpoint='http://127.0.0.1:18990',username='ARTIFICIAL-DIGEST-USER',
+                    password='ARTIFICIAL-DIGEST-SECRET',revision=state['revision'],consent=True))
+                if (digest_saved['policy'].get('proxy_authentication_method')!='digest'
+                        or digest_saved['policy']['code']!='policy_selected' or 'proxy_auth' in digest_saved):
+                    raise AssertionError('frozen explicit Digest mode did not save')
+                digest_bytes=(workspace/'network-preferences.json').read_bytes()
+                if any(value in digest_bytes for value in (b'ARTIFICIAL-DIGEST-USER',b'ARTIFICIAL-DIGEST-SECRET')):
+                    raise AssertionError('frozen Digest credentials were stored in plaintext')
             finally:observed.close()
+            result['stage']='digest_proxy_restart'
+            digest_restarted=RunningApp(exe,workspace,cwd,env)
+            try:
+                restored=digest_restarted.json('/api/network/state')
+                if (restored['proxy_mode']!='http_digest_auth' or not restored['proxy_auth_saved']
+                        or restored['policy'].get('proxy_authentication_method')!='digest'
+                        or restored['policy']['code']!='policy_selected' or 'proxy_auth' in restored
+                        or (workspace/'network-preferences.json').read_bytes()!=digest_bytes):
+                    raise AssertionError('fresh frozen process lost Digest method or encrypted credentials')
+                cleared=digest_restarted.json('/api/network/proxy-auth/clear',dict(revision=restored['revision'],consent=True))
+                if cleared['proxy_auth_saved'] or cleared['policy']['code']!='workspace_proxy_auth_missing':
+                    raise AssertionError('cleared frozen Digest route did not stop')
+                digest_restarted.json('/api/network/proxy',dict(mode='auto',endpoint='',revision=cleared['revision'],consent=False))
+                if digest_restarted.json('/api/report/'+ident)['id']!=ident:
+                    raise AssertionError('Digest restart changed the original report')
+                result['digest_proxy_credentials_verified']=True
+                result['checks'].append('actual frozen Digest mode and DPAPI credentials survive independent restart; clear stops route; original report and Basic/SOCKS support retained')
+            finally:digest_restarted.close()
             result['stage']='automatic_update_handoff'
             from automatic_update_acceptance import verify as verify_automatic_update
             result['automatic_update']=verify_automatic_update(bundle,root/'automatic-update',cwd,env)

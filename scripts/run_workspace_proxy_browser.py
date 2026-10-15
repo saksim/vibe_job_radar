@@ -20,6 +20,7 @@ def verify_auth_ui(page, context, server, workspace, expand, result):
         from playwright.sync_api import expect
         expect(page.locator('#workspace-proxy-mode option[value=http_auth]')).to_be_disabled()
         expect(page.locator('#workspace-proxy-mode option[value=socks5_auth]')).to_be_disabled()
+        expect(page.locator('#workspace-proxy-mode option[value=http_digest_auth]')).to_be_disabled()
         result['checks'].append('non-Windows UI does not offer unsupported persistent credentials; existing routes remain available')
         return
     from playwright.sync_api import expect
@@ -49,6 +50,13 @@ def verify_auth_ui(page, context, server, workspace, expand, result):
         expect(page.locator('#workspace-proxy-mode')).to_have_value('http_auth')
         expect(page.locator('#workspace-proxy-password')).to_have_value('')
         expect(page.locator('#workspace-proxy-status')).to_contain_text('已加密保存')
+    enter('http_digest_auth');save_auth()
+    for path in ('/guided','/advanced','/'):
+        page.goto(server.origin+path);expand(page)
+        expect(page.locator('#workspace-proxy-mode')).to_have_value('http_digest_auth')
+        expect(page.locator('#workspace-proxy-password')).to_have_value('')
+        expect(page.locator('#workspace-proxy-status')).to_contain_text('已加密保存')
+    assert Workspace(workspace.root).network_policy().describe()['proxy_authentication_method']=='digest'
     enter('socks5_auth');save_auth()
     stale.locator('#workspace-proxy-username').fill('ARTIFICIAL-STALE')
     stale.locator('#workspace-proxy-password').fill(secret)
@@ -72,7 +80,7 @@ def verify_auth_ui(page, context, server, workspace, expand, result):
         page.locator('#save-workspace-proxy').click()
     assert response.value.status==200
     assert workspace.network_policy().proxy is None
-    result['checks'].append('Windows three-page UI encrypts/reloads/changes credentials, clears inputs after success or stale conflict, protects narrow layout and stops cleared route without connecting')
+    result['checks'].append('Windows three-page UI encrypts/reloads/changes Basic, Digest and SOCKS5 credentials, clears inputs after success or stale conflict, protects narrow layout and stops cleared route without connecting')
 
 
 def main():
@@ -85,7 +93,7 @@ def main():
     out=ROOT/'browser-acceptance'/('vm-proxy-settings' if vm else 'workspace-proxy');out.mkdir(parents=True,exist_ok=True)
     result={'success':False,'checks':[],'external_requests':[],'page_errors':[],
         'scope':'Actual local workbench UI and preferences; no proxy probes, DNS queries, accounts or recruiting requests.'}
-    private=('VIBE_RADAR_HTTP_PROXY','VIBE_RADAR_SOCKS_PROXY','VIBE_RADAR_PROXY_USERNAME','VIBE_RADAR_PROXY_PASSWORD')
+    private=('VIBE_RADAR_HTTP_PROXY','VIBE_RADAR_SOCKS_PROXY','VIBE_RADAR_PROXY_USERNAME','VIBE_RADAR_PROXY_PASSWORD','VIBE_RADAR_PROXY_AUTH')
     clean={k:v for k,v in os.environ.items() if k not in private}
     with tempfile.TemporaryDirectory(prefix='radar-workspace-proxy-') as tmp,patch.dict(os.environ,clean,clear=True), \
             patch('urllib.request.getproxies',return_value={}), \

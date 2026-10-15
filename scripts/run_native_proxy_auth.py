@@ -19,6 +19,7 @@ sys.path[:0]=[str(ROOT/'src'),str(ROOT/'tests')]
 from run_native_browser_acceptance import trust_fixture, Fixture
 from test_native_acquisition import adapter, HOST, URL
 from test_proxy_auth import HTTPProxyAuthenticationTests, SocksProxyAuthenticationTests
+from test_digest_proxy import HTTPDigestProxyTests
 from vibe_job_radar.guided.native_browser import NativeBackend
 from vibe_job_radar.guided.contracts import CrawlError
 from vibe_job_radar.guided.rate import RateLedger, Limits
@@ -49,7 +50,7 @@ def main():
             with trust_fixture(root):
                 source=Fixture(root,'good.pem')
                 try:
-                    for protocol,cls in (('http',HTTPProxyAuthenticationTests),('socks5',SocksProxyAuthenticationTests)):
+                    for protocol,cls in (('http',HTTPProxyAuthenticationTests),('socks5',SocksProxyAuthenticationTests),('http-digest',HTTPDigestProxyTests)):
                         fixture=cls();fixture.setUp();fixture.upstream_address=source.server.server_address
                         real_dns=socket.getaddrinfo
                         def dns(host,*args,**kwargs):
@@ -100,6 +101,7 @@ def main():
                                 assert all(host==HOST for host in source.sni)
                                 checkpoint(protocol+'-rejected')
                                 if protocol=='http':fixture.expected_proxy_auth='Basic rejected'
+                                elif protocol=='http-digest':fixture.reject_auth=True
                                 else:fixture.expected_credentials=(b'rejected',b'rejected')
                                 attempts=len(fixture.connects) if protocol=='http' else len(fixture.authentication)
                                 delivered=len(source.requests)

@@ -16,6 +16,7 @@ import threading
 ROOT=Path(__file__).resolve().parents[1]
 sys.path[:0]=[str(ROOT/'src'),str(ROOT/'tests')]
 from test_proxy_auth import HTTPProxyAuthenticationTests, SocksProxyAuthenticationTests, HOST
+from test_digest_proxy import HTTPDigestProxyTests
 from vibe_job_radar.guided.adapters import builtins
 from vibe_job_radar.guided.browser import PlaywrightBackend
 from vibe_job_radar.guided.contracts import CrawlError
@@ -49,14 +50,16 @@ def restore_in_child(workspace, browser):
 def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--channel',choices=['msedge','chrome'])
+    parser.add_argument('--protocol',choices=['http','socks5','http-digest'])
     args=parser.parse_args()
     options={'channel':args.channel} if args.channel else {'executable_path':os.environ.get('RADAR_TEST_CHROMIUM')}
     browser_binding=args.channel or 'bundled'
     out=ROOT/'browser-acceptance'/'proxy-auth';out.mkdir(parents=True,exist_ok=True)
     result={'success':False,'checks':[],'source_requests':0,'browser_channel':browser_binding,
-            'scope':'Real browser, local HTTP/SOCKS authentication and verified fixture TLS; artificial credentials and targets only.'}
+            'scope':'Real browser, local HTTP Basic/Digest and SOCKS5 authentication and verified fixture TLS; artificial credentials and targets only.'}
     try:
-        for protocol,cls in (('http',HTTPProxyAuthenticationTests),('socks5',SocksProxyAuthenticationTests)):
+        for protocol,cls in (('http',HTTPProxyAuthenticationTests),('socks5',SocksProxyAuthenticationTests),('http-digest',HTTPDigestProxyTests)):
+            if args.protocol and protocol!=args.protocol:continue
             fixture=cls();fixture.setUp()
             fixture.browser_fixture=True;fixture.content_type='text/html; charset=utf-8'
             fixture.payload='<h1>人工代理验收</h1><p>本页面只来自本地测试TLS服务器。</p>'.encode('utf-8')
@@ -100,18 +103,19 @@ def main():
                         # Fresh backend performs robots then its first document;
                         # the real TLS origin must see the restored cookie there.
                         assert len(received) == 2
-                        headers = received[-1]['headers'] if protocol == 'http' else received[-1][2]
+                        headers = received[-1]['headers'] if protocol != 'socks5' else received[-1][2]
                         assert {k.lower():v for k,v in headers.items()}.get('cookie') == (
                             cookie['name'] + '=' + cookie['value'])
                         cookie_continuity = True
                     else:
                         assert restored['error'] == 'saved_session_incompatible'
                     for request in fixture.requests:
-                        headers=request['headers'] if protocol=='http' else request[2]
+                        headers=request['headers'] if protocol!='socks5' else request[2]
                         assert 'proxy-authorization' not in {key.lower() for key in headers}
                     attempts=len(fixture.connects) if protocol=='http' else len(fixture.authentication)
                     delivered=len(fixture.requests)
                     if protocol=='http':fixture.expected_proxy_auth='Basic rejected'
+                    elif protocol=='http-digest':fixture.reject_auth=True
                     else:fixture.expected_credentials=(b'rejected',b'rejected')
                     try:backend.open('https://'+HOST+'/job/2.shtml')
                     except CrawlError as error:assert error.code=='local_proxy_auth_failed',error.code

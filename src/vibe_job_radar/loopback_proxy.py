@@ -17,7 +17,7 @@ import socket
 import time
 from dataclasses import dataclass, field, replace
 from urllib.parse import urlsplit
-from .proxy_credentials import ProxyCredentials, configured as credentials_configured
+from .proxy_credentials import AUTH_ENV, ProxyCredentials, configured as credentials_configured
 
 
 class LocalProxyError(RuntimeError):
@@ -50,6 +50,12 @@ class LoopbackProxy:
             if credentials_configured():
                 raise LocalProxyError('local_proxy_credentials_require_explicit')
             return None
+        method = os.environ.get(AUTH_ENV, 'basic')
+        if method not in {'basic', 'digest'}:
+            raise LocalProxyError('local_proxy_credentials_invalid')
+        if method == 'digest':
+            from .digest_proxy import LoopbackDigestProxy
+            return LoopbackDigestProxy.from_url(raw).with_environment_credentials()
         return cls.from_url(raw).with_environment_credentials()
 
     def with_environment_credentials(self):
