@@ -193,6 +193,9 @@ class InstallTests(unittest.TestCase):
         server=LocalServer(self.workspace,public_client=None)
         self.addCleanup(server.server_close)
         server.public_schedule.start();server.public_queue.start()
+        for field in ('_closing_backends','_closure_uncertain'):
+            with patch.object(server.guided,field,True):
+                with self.assertRaises(InputError):server.upgrade_preflight()
         with patch.object(server.public_tasks,'busy',return_value=True):
             with self.assertRaises(InputError):server.upgrade_quiesce()
         self.assertFalse(server.mutation_lock.locked())

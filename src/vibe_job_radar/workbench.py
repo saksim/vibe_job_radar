@@ -90,7 +90,8 @@ class LocalServer(ThreadingHTTPServer):
 
     def upgrade_preflight(self):
         with self.guided._lock:
-            if (self.guided._busy or self.guided._backends or self.guided._ownership.foreign()):
+            if (self.guided._busy or self.guided._backends or self.guided._closing_backends
+                    or self.guided._closure_uncertain or self.guided._ownership.foreign()):
                 raise InputError('请先停止采集并关闭采集浏览器；自动升级不会中断该会话。')
         if self.public_tasks.busy() or (self.collection_runner._thread and self.collection_runner._thread.is_alive()):
             raise InputError('请先等待或停止当前公开/后台采集任务，再自动升级。')
@@ -105,7 +106,7 @@ class LocalServer(ThreadingHTTPServer):
             self.public_queue.close();self.public_schedule.close()
             self.upgrade_preflight()
             if self.public_queue.is_running() or self.public_schedule.is_running():
-                raise InputError('后台调度尚未退出，未切换版本。请稍后重新升级。')
+                raise InputError('后台调度尚未退出，未切换版本。请等待任务完成后重启当前工作台；原计划和待办保留。')
         except BaseException:
             self.mutation_lock.release()
             self.public_schedule.start();self.public_queue.start()

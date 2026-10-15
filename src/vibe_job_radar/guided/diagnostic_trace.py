@@ -29,7 +29,7 @@ RESOURCES = frozenset({'document', 'stylesheet', 'script', 'image', 'media', 'fo
 CODES = frozenset('''operation_error network_error dns_error non_public_address
     workspace_proxy_environment_conflict
     pac_unavailable pac_invalid_script pac_invalid_result pac_timeout pac_busy
-    pac_revoked pac_failed pac_cache_limit pac_file_invalid
+    pac_revoked pac_failed pac_cache_limit pac_file_invalid pac_dns_limit pac_dns_failed
     pac_url_unavailable pac_url_invalid_target pac_url_required
     pac_url_native_unsupported pac_url_cache_limit
     read_transient_failure read_retry_wait read_retry_exhausted read_retry_unavailable
@@ -79,6 +79,7 @@ LOCAL_POLICIES = {
     'native_optional_request_blocked': 'native_optional_dependency',
     'native_surface_unsupported': 'native_surface_policy', 'native_policy_changed': 'workspace_policy',
     'native_observation_limit': 'native_response_limit',
+    'pac_dns_limit': 'pac_dns_budget', 'pac_dns_failed': 'pac_system_dns',
     'pac_url_native_unsupported': 'pac_url_native_scope',
     'pac_url_invalid_target': 'url_validation', 'pac_url_required': 'pac_url_scope',
     'pac_url_cache_limit': 'pac_url_session_limit', 'pac_url_unavailable': 'pac_url_component',
