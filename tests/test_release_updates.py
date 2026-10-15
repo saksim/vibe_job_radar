@@ -3,6 +3,7 @@ import copy
 import hashlib
 import io
 import json
+import os
 import stat
 import tempfile
 import threading
@@ -140,6 +141,48 @@ class ReleaseUpdateTests(unittest.TestCase):
         stopped=threading.Event();stopped.set()
         with self.assertRaises(updates.UpdateError):updates.stage_package(package,info,folder,stopped)
         self.assertEqual(list(folder.iterdir()),[package])
+
+    def test_deep_windows_package_members_prepare_without_system_setting_changes(self):
+        name='VibeJobRadar/'+ '/'.join('reference_'+str(i)+'_'+'x'*60 for i in range(3))+'/details.json'
+        fixture=ReleaseFixture(entries=[(name,b'long packaged reference')])
+        service=self.service(fixture);service.check({'consent':True});state=self.wait(service)
+        keep=self.workspace.root/'keep.txt';keep.write_bytes(b'original workspace')
+        service.download({'consent':True,'release_id':42,'sha256':state['sha256']});state=self.wait(service)
+        self.assertEqual(state['status'],'ready',state)
+        directory=Path(state['directory']);created=directory.parent
+        identity=(created.stat().st_dev,created.stat().st_ino)
+        try:
+            logical=created.joinpath(*name.split('/'))
+            self.assertGreater(len(str(logical)),260)
+            readable='\\\\?\\'+str(logical.resolve()) if os.name=='nt' else logical
+            with open(readable,'rb') as saved:self.assertEqual(saved.read(),b'long packaged reference')
+            self.assertTrue((created/'READY.json').is_file())
+            self.assertEqual(keep.read_bytes(),b'original workspace')
+        finally:
+            updates.remove_owned_tree(created,identity,self.workspace.root/'updates')
+        self.assertFalse(created.exists())
+
+    def test_failure_after_long_member_removes_only_owned_staging_tree(self):
+        name='VibeJobRadar/'+ '/'.join('reference_'+str(i)+'_'+'x'*60 for i in range(3))+'/details.json'
+        fixture=ReleaseFixture(entries=[(name,b'long packaged reference'),('VibeJobRadar/last.txt',b'last')])
+        service=self.service(fixture);service.check({'consent':True});state=self.wait(service)
+        keep=self.workspace.root/'keep.txt';keep.write_bytes(b'original workspace')
+        original=zipfile.ZipFile.open;completed=[];injected=[]
+        def fail_after_long_file(archive,member,*args,**kwargs):
+            if getattr(member,'filename',None)=='VibeJobRadar/last.txt':
+                self.assertIn(name,completed);injected.append(True)
+                raise OSError('authored disk failure after long member')
+            value=original(archive,member,*args,**kwargs)
+            if getattr(member,'filename',None)==name:completed.append(name)
+            return value
+        with patch.object(zipfile.ZipFile,'open',fail_after_long_file):
+            service.download({'consent':True,'release_id':42,'sha256':state['sha256']});state=self.wait(service)
+        self.assertEqual(state['status'],'failed')
+        self.assertEqual(injected,[True])
+        folder=self.workspace.root/'updates'
+        self.assertEqual([p.name for p in folder.iterdir()],[service._selected['package']['name']])
+        self.assertEqual(keep.read_bytes(),b'original workspace')
+        self.assertEqual(updates.file_digest(folder/service._selected['package']['name']),service._selected['sha256'])
 
     def test_redirect_cannot_leave_fixed_github_hosts(self):
         transport=updates.ReleaseTransport.__new__(updates.ReleaseTransport)
