@@ -1,6 +1,7 @@
 """Explicit stable-release checking and verified, side-by-side Windows staging.
 
-Never launches an executable, replaces the running program, or migrates data.
+Manual preparation never executes programs. Optional consented Windows handoff
+uses the separate installer and preserves prior programs and workspace backups.
 GitHub HTTPS/digests identify repository content, not a publisher signature.
 """
 from __future__ import annotations
@@ -262,14 +263,20 @@ def stage_package(package, info, updates, cancelled):
 
 
 class ReleaseUpdates:
-    def __init__(self, workspace, *, transport_factory=None, current_version=__version__):
-        self.workspace=workspace;self.current_version=current_version
+    def __init__(self, workspace, *, transport_factory=None, current_version=__version__, installer=None):
+        self.workspace=workspace;self.current_version=current_version;self.installer=installer
         self.factory=transport_factory or (lambda:ReleaseTransport(workspace.network_policy()))
         self._lock=threading.Lock();self._thread=None;self._stop=threading.Event();self._selected=None
         self._state={'status':'idle','current_version':current_version,'message':'检查前不会联网；只读取官方仓库稳定版本。'}
 
     def state(self):
-        with self._lock:return copy.deepcopy(self._state)
+        with self._lock:
+            result=copy.deepcopy(self._state)
+        from .release_install import last_install
+        result['last_install']=last_install(self.workspace.root)
+        result['automatic_supported']=self.installer is not None
+        result['install_consent_version']='windows-verified-upgrade-restart-v1'
+        return result
 
     def _save(self,**value):
         with self._lock:self._state.update(value)
@@ -308,7 +315,7 @@ class ReleaseUpdates:
         if not valid:raise InputError('请先检查并确认当前显示的稳定版本；旧页面不能更换下载目标。')
         return self._start(lambda:self._download(selected))
 
-    def _download(self,selected):
+    def _download(self,selected,*,prepare=True):
         self._save(message='正在下载、校验并解压新版；旧程序和工作区保留。')
         updates=self.workspace.root/'updates'
         require(not updates.is_symlink() and updates.resolve().parent==self.workspace.root.resolve())
@@ -329,15 +336,35 @@ class ReleaseUpdates:
             finally:
                 from .team_store import remove_private_file
                 remove_private_file(temp,identity)
+        if not prepare:return package
         directory=stage_package(package,selected,updates,self._stop)
-        self._save(status='ready',version=selected['version'],release_url=selected['release_url'],
+        self._save(status='ready',release_id=selected['release_id'],version=selected['version'],release_url=selected['release_url'],
                    directory=str(directory),archive=str(package),sha256=selected['sha256'],signed=False,
                    message='已校验并解压到独立目录。停止任务和计划、关闭旧程序并备份工作区后，启动新目录的VibeJobRadar.exe，继续选择原工作区。旧程序和数据保留。')
+
+    def install(self,data):
+        from .release_install import CONSENT
+        with self._lock:
+            selected=copy.deepcopy(self._selected)
+            valid=(self._state.get('status') in {'available','ready'} and selected is not None
+                   and type(data) is dict and data=={'consent':True,'consent_version':CONSENT,
+                       'release_id':selected['release_id'],'sha256':selected['sha256']}
+                   and data.get('consent') is True and type(data.get('release_id')) is int)
+        if not valid:raise InputError('请核对当前稳定版，并明确同意关闭其他实例、备份和自动重启。')
+        if self.installer is None:raise InputError('自动切换仅适用于Windows便携包；源码版仍可下载并手动准备。')
+        self.installer.preflight()
+        return self._start(lambda:self._install(selected))
+
+    def _install(self,selected):
+        package=self._download(selected,prepare=False)
+        self._save(message='正在复核新版并准备自动重启；备份完成前不会修改原数据。')
+        result=self.installer.install(package,selected,cancelled=self._stop)
+        self._save(**result,version=selected['version'],release_url=selected['release_url'])
 
     def _run(self,fn):
         try:fn()
         except Exception as error:
-            message=str(error) if isinstance(error,UpdateError) else '版本操作未完成，请检查网络、磁盘和官方发行状态；已有程序和工作区保留。'
+            message=str(error) if isinstance(error,(UpdateError,InputError)) else '版本操作未完成，请检查网络、磁盘和官方发行状态；已有程序和工作区保留。'
             self._save(status='failed',message=message)
 
     def close(self):

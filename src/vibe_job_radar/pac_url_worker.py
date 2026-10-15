@@ -16,7 +16,7 @@ STACK_LIMIT = 512 * 1024
 CPU_LIMIT = 4.0
 _SLOTS = threading.BoundedSemaphore(2)
 ERRORS = frozenset({'pac_url_unavailable', 'pac_invalid_script', 'pac_invalid_result',
-                   'pac_timeout', 'pac_busy', 'pac_revoked', 'pac_failed'})
+                   'pac_timeout', 'pac_busy', 'pac_revoked', 'pac_failed', 'pac_dns_limit', 'pac_dns_failed'})
 
 # String helpers only. No callbacks into Python or host I/O are supplied.
 HELPERS = r"""
@@ -50,14 +50,25 @@ def available():
     except (ImportError, OSError, ValueError):
         return False
 
-def _evaluate(source, url, host):
+def _evaluate(source, url, host, dns_helpers=False):
     if not available():
         raise LocalProxyError('pac_url_unavailable')
     import quickjs
     context = quickjs.Context()
     context.set_memory_limit(MEMORY_LIMIT)
     context.set_max_stack_size(STACK_LIMIT)
-    context.set_time_limit(CPU_LIMIT)
+    helpers = None
+    if dns_helpers:
+        from .pac_dns import DnsHelpers, HELPERS as DNS_HELPERS
+        helpers = DnsHelpers()
+        context.add_callable('__radar_dns_resolve', helpers.resolve)
+        context.add_callable('__radar_my_ip', helpers.my_ip)
+        context.eval(DNS_HELPERS)
+        # QuickJS cannot invoke Python callbacks with an engine time limit.
+        # The parent's existing hard deadline kills this entire subprocess,
+        # including stuck DNS, recursion and script execution.
+    else:
+        context.set_time_limit(CPU_LIMIT)
     try:
         context.eval(HELPERS + '\n' + CALENDAR_HELPERS)
         context.eval(source)
@@ -66,14 +77,16 @@ def _evaluate(source, url, host):
     except (quickjs.JSException, TypeError):
         # Engine errors can contain private script or URL values.
         raise LocalProxyError('pac_invalid_script') from None
+    if helpers is not None and helpers.error:
+        raise LocalProxyError(helpers.error)
     if (not isinstance(raw, str) or not 1 <= len(raw) <= MAX_RESULT
             or any(not 32 <= ord(c) <= 126 for c in raw)):
         raise LocalProxyError('pac_invalid_result')
     return raw
 
-def _worker(sender, source, url, host):
+def _worker(sender, source, url, host, dns_helpers=False):
     try:
-        value = {'raw': _evaluate(source, url, host)}
+        value = {'raw': _evaluate(source, url, host, dns_helpers)}
     except LocalProxyError as exc:
         value = {'error': exc.code if exc.code in ERRORS else 'pac_failed'}
     except Exception:
@@ -83,7 +96,9 @@ def _worker(sender, source, url, host):
     finally:
         sender.close()
 
-def evaluate(source, url, host, permitted):
+def evaluate(source, url, host, permitted, *, dns_helpers=False):
+    if type(dns_helpers) is not bool:
+        raise LocalProxyError('pac_invalid_script')
     if not available():
         raise LocalProxyError('pac_url_unavailable')
     if not _SLOTS.acquire(blocking=False):
@@ -95,7 +110,8 @@ def evaluate(source, url, host, permitted):
             raise LocalProxyError('pac_revoked')
         context = multiprocessing.get_context('spawn')
         receiver, sender = context.Pipe(duplex=False)
-        process = context.Process(target=_worker, args=(sender, source, url, host), daemon=True)
+        args = (sender, source, url, host) + ((True,) if dns_helpers else ())
+        process = context.Process(target=_worker, args=args, daemon=True)
         process.start()
         sender.close()
         sender = None

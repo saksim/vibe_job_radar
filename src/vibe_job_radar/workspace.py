@@ -136,6 +136,10 @@ class Workspace:
         from .network_settings import save_pac
         return save_pac(self, data)
 
+    def network_url_pac_dns_preferences(self, data):
+        from .network_settings import save_pac
+        return save_pac(self, data, full_url=True, dns_helpers=True)
+
     def network_url_pac_preferences(self, data):
         from .network_settings import save_pac
         return save_pac(self, data, full_url=True)
