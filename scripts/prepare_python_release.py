@@ -116,6 +116,8 @@ def prepare(repo,run_id,out,notes,*,publish=False):
     request={'tag_name':tag,'target_commitish':sha,'name':'Python packages '+version,
              'body':body,'draft':True,'prerelease':False}
     write(out/'create-draft-request.json',request)
+    require(api(repo,'git/ref/heads/main').get('object',{}).get('sha')==sha,
+        'main advanced before draft creation; qualify the current main')
     created=json.loads(gh('api','--method','POST',f'repos/{repo}/releases','--input',str(out/'create-draft-request.json')))
     write(out/'created-draft.json',created)
     gh('release','upload',tag,'--repo',repo,*map(str,sorted(payload.iterdir())))
@@ -128,6 +130,8 @@ def prepare(repo,run_id,out,notes,*,publish=False):
         file=expected[asset['name']]
         require(asset.get('state')=='uploaded' and asset.get('size')==file.stat().st_size
             and asset.get('digest')=='sha256:'+file_hash(file),'uploaded package mismatch')
+    require(api(repo,'git/ref/heads/main').get('object',{}).get('sha')==sha,
+        'main advanced before publication; keep the draft unpublished')
     write(out/'publish-request.json',{'draft':False,'prerelease':False,'make_latest':'false'})
     published=json.loads(gh('api','--method','PATCH',f"repos/{repo}/releases/{created['id']}",
         '--input',str(out/'publish-request.json')))
