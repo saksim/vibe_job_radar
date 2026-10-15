@@ -74,8 +74,11 @@ def build(out):
         require(observed==VERSIONS,'Pinned native build components differ')
         import playwright
         from playwright.sync_api import sync_playwright
-        browsers=Path(playwright.__file__).parent/'driver/package/.local-browsers'
-        require(browsers.is_dir() and not browsers.is_symlink(),'Install matching bundled Chromium before building')
+        browsers=Path(os.environ.get('PLAYWRIGHT_BROWSERS_PATH','')).resolve()
+        require(browsers.is_relative_to((ROOT/'.verify').resolve()) and browsers.is_dir()
+                and not browsers.is_symlink(),'Install matching Chromium in the project-local build cache')
+        require(not (Path(playwright.__file__).parent/'driver/package/.local-browsers').exists(),
+                'Keep browser app bundles outside PyInstaller binary rewriting')
         with sync_playwright() as runtime:
             chromium=Path(runtime.chromium.executable_path)
         require(chromium.is_file() and chromium.resolve().is_relative_to(browsers.resolve()),'Bundled Chromium missing')
@@ -93,16 +96,15 @@ def build(out):
                 '--distpath',str(stage/'dist'),'--workpath',str(stage/'build'),'--specpath',str(stage),
                 str(ROOT/'scripts/portable_entry.py')])
             subprocess.run(args,cwd=ROOT,check=True,timeout=600,
-                env={**os.environ,'PLAYWRIGHT_BROWSERS_PATH':'0','PYTHONPATH':str(ROOT/'src')})
+                env={**os.environ,'PYTHONPATH':str(ROOT/'src')})
             bundle=stage/'dist/VibeJobRadar'
             executable=bundle/'VibeJobRadar'
             require(executable.is_file() and os.access(executable,os.X_OK),'Native executable not built')
-            original=bundle/'_internal/playwright/driver/package/.local-browsers'
             relocated=bundle/'browsers'
-            require(not original.is_symlink() and original.is_dir()
-                    and original.resolve().is_relative_to(bundle.resolve()) and not relocated.exists(),
-                    'Invalid bundled browser relocation')
-            shutil.move(str(original),str(relocated))
+            require(not relocated.exists() and not relocated.is_symlink(), 'Browser destination exists')
+            # Preserve the vendor's complete app/framework layout and signatures.
+            # PyInstaller processes Python/driver binaries, never Chromium itself.
+            shutil.copytree(browsers,relocated,symlinks=True)
             require((relocated/chromium_relative).is_file(),'Relocated Chromium missing')
             for item in (ROOT/'src/vibe_job_radar').iterdir():
                 if item.is_file() and item.suffix in {'.html','.js','.json'}:
