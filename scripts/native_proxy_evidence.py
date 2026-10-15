@@ -2,12 +2,13 @@
 from vibe_job_radar.guided.native_errors import native_failure_code
 
 STAGES = {'http-normal', 'http-rejected', 'socks5-normal', 'socks5-rejected',
-          'http-digest-normal', 'http-digest-rejected'}
+          'http-digest-normal', 'http-digest-rejected', 'http-ntlmv2-normal', 'http-ntlmv2-rejected'}
 ACTIONS = {'create', 'search', 'detail', 'rejected_search', 'verify', 'close', 'setup_or_cleanup'}
 CODES = {'paused', 'network_error', 'dns_error', 'robots_unavailable',
          'tls_verification_failed', 'tls_handshake_failed', 'native_proxy_auth_failed',
          'native_administrator_blocked', 'local_proxy_connection_failed',
-         'local_proxy_auth_failed', 'local_proxy_configuration_invalid',
+         'local_proxy_auth_failed', 'local_proxy_ntlm_unavailable', 'local_proxy_ntlm_busy',
+         'local_proxy_ntlm_timeout', 'local_proxy_configuration_invalid',
          'local_proxy_configuration_conflict', 'local_proxy_credentials_invalid',
          'local_proxy_credentials_require_explicit', 'local_socks_configuration_invalid',
          'local_socks_truncated_reply', 'local_socks_protocol_error',

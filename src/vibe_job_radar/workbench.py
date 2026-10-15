@@ -410,6 +410,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--team-credential", type=Path, help="仅配合 --team-install 的设备凭据文件；不要把令牌写入命令行")
     modes.add_argument('--public-worker',action='store_true',help='仅运行已确认的公开查询计划和待办，不启动网页服务器或浏览器')
     modes.add_argument('--native-browser-check',action='store_true',help='检查新临时原生浏览器的空白页、请求拒绝与退出；不连接招聘网站')
+    modes.add_argument('--ntlm-component-check',action='store_true',help='离线检查NTLMv2组件及隔离进程；只用人工凭据，不连接代理或站点')
     parser.add_argument('--native-browser-channel',choices=['bundled','msedge','chrome'],help='仅用于原生组件检查，默认配套Chromium')
     modes.add_argument('--apply-update',type=Path,help=argparse.SUPPRESS)
     parser.add_argument('--upgrade-handoff',type=Path,help=argparse.SUPPRESS)
@@ -419,9 +420,9 @@ def main(argv: list[str] | None = None) -> int:
         from .release_install import apply_update
         try:return apply_update(args.apply_update)
         except (OSError,ValueError,KeyError,TypeError):return 2
-    if args.upgrade_handoff and (args.doctor or args.team_install or args.public_worker or args.native_browser_check):
+    if args.upgrade_handoff and (args.doctor or args.team_install or args.public_worker or args.native_browser_check or args.ntlm_component_check):
         parser.error('升级交接只用于工作台启动')
-    if not (args.ignore_installed_update or args.upgrade_handoff or args.doctor or args.team_install or args.native_browser_check):
+    if not (args.ignore_installed_update or args.upgrade_handoff or args.doctor or args.team_install or args.native_browser_check or args.ntlm_component_check):
         from .release_install import installed_command, spawn
         try:
             command=installed_command(args.workspace,original_argv)
@@ -443,6 +444,10 @@ def main(argv: list[str] | None = None) -> int:
             print("团队连接安装失败；核对管理员文件及工作区，原数据保留。",file=sys.stderr)
             return 2
     if args.team_credential:parser.error("--team-credential 仅配合 --team-install")
+    if args.ntlm_component_check:
+        if args.port or args.native_browser_channel:parser.error('NTLM组件检查不启动网页或浏览器')
+        from .ntlm_check import run_cli
+        return run_cli()
     if args.native_browser_check:
         if args.port:parser.error('原生组件检查不启动服务，请移除--port')
         from .guided.native_check import run_cli
