@@ -113,8 +113,15 @@ class PortableDomainPacTests(unittest.TestCase):
         with patch.object(pac_url_worker,'available',return_value=False):
             with self.assertRaises(InputError):self.save()
             with patch('socket.getaddrinfo') as dns:
-                with self.assertRaisesRegex(FetchError,'pac_domain_unavailable'):
+                with self.assertRaisesRegex(FetchError,'pac_domain_unavailable') as failure:
                     SafeHTTP({'example.com'},interval=0,network_policy=self.workspace.network_policy()).request('https://example.com/private')
+            from vibe_job_radar.guided.diagnostic_trace import DiagnosticTrace
+            trace=DiagnosticTrace('a'*32,'liepin')
+            frame=trace.begin('network_policy','transport');trace.finish(frame,failure.exception)
+            first=trace.snapshot()['first_failure']
+            self.assertEqual(first['code'],'pac_domain_unavailable')
+            self.assertIs(first['local_block'],True)
+            self.assertEqual(first['policy'],'pac_domain_component')
             dns.assert_not_called();self.assertEqual(self.auto()['proxy_mode'],'auto')
 
     def test_dns_preferences_preserve_grant_while_reimport_rollback_and_owner_close_revoke(self):
