@@ -7,11 +7,14 @@ def close_service(service, observation, *, timeout=50):
     # five-second close(), ownership rules and browser deadlines stay intact.
     started = time.monotonic()
     deadline = started + timeout
+    # _worker clears service._thread in its finally block before Thread.run
+    # actually returns. Retain the owned thread through that last interval.
+    with service._lock:
+        worker = service._thread
     service.close()
     first = True
     while True:
         with service._lock:
-            worker = service._thread
             alive = worker is not None and worker.is_alive()
             observation.update(worker_alive=alive,
                 ownership_released=service._ownership.lease is None,

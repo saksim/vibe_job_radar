@@ -236,6 +236,32 @@ class GuidedOwnershipTests(unittest.TestCase):
         finally:
             backend.close();self.first._ownership.release()
 
+    def test_native_fixture_waits_after_service_clears_its_worker_reference(self):
+        retired,release=threading.Event(),threading.Event()
+        original=self.first._worker
+        def held_thread_exit():
+            original()
+            retired.set()
+            if not release.wait(10):raise AssertionError('retired thread not released')
+        self.first._worker=held_thread_exit
+        self.start();self.release.set();self.idle(self.first)
+        worker=self.first._thread;join=worker.join;observation={}
+        def bounded_join(timeout):
+            if timeout==5:
+                self.assertTrue(retired.wait(5))
+                self.assertIsNone(self.first._thread)
+                self.assertTrue(worker.is_alive())
+                return
+            release.set();join(timeout)
+        try:
+            with patch.object(worker,'join',side_effect=bounded_join):
+                close_service(self.first,observation,timeout=10)
+            self.assertTrue(observation['pending_after_close'])
+            self.assertFalse(worker.is_alive())
+            self.assertTrue(observation['ownership_released'])
+        finally:
+            release.set();join(10)
+
     def test_late_close_failure_keeps_original_owner_after_join_returns(self):
         self.close_idle_with_barrier(fail=True)
 
