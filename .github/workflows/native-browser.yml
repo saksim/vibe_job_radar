@@ -75,7 +75,15 @@ jobs:
         if: runner.os == 'Windows'
         timeout-minutes: 3
         run: python scripts/run_native_proxy_auth.py --controlled --channel msedge ${{ matrix.mode == 'headed' && '--headed' || '' }}
-      # Native PAC is Windows-only; its temporary CA is never installed locally.
+      - name: Verify portable domain PAC with and without DNS through native Chromium
+        if: runner.os == 'Linux'
+        timeout-minutes: 3
+        run: ${{ matrix.mode == 'headed' && 'xvfb-run -a' || '' }} python scripts/run_native_pac_browser.py --controlled --portable-domain ${{ matrix.mode == 'headed' && '--headed' || '' }}
+      - name: Verify portable domain PAC with and without DNS through native Edge
+        if: runner.os == 'Windows'
+        timeout-minutes: 3
+        run: python scripts/run_native_pac_browser.py --controlled --portable-domain --channel msedge ${{ matrix.mode == 'headed' && '--headed' || '' }}
+      # The legacy WinHTTP evaluator remains Windows-only.
       - name: Verify native PAC through HTTP and SOCKS5 on Windows
         if: runner.os == 'Windows'
         timeout-minutes: 3
@@ -108,6 +116,7 @@ jobs:
             browser-acceptance/native-read-retry/
             browser-acceptance/native-proxy-auth/
             browser-acceptance/native-pac/
+            browser-acceptance/native-portable-domain-pac/
             browser-acceptance/native-system-pac/
             browser-acceptance/windows-pac/
             browser-acceptance/system-pac/
@@ -128,7 +137,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install developer-only native tools
-        run: python -m pip install "playwright>=1.48,<2" "packaging>=24.2" "cryptography>=43"
+        run: python -m pip install "playwright>=1.48,<2" "packaging>=24.2" "cryptography>=43" "quickjs-ng==0.17.0.1"
       - name: Verify installed native Chrome authentication against artificial local TLS
         timeout-minutes: 3
         run: python scripts/run_native_auth_probe.py --controlled --channel chrome ${{ matrix.mode == 'headed' && '--headed' || '' }}
@@ -141,6 +150,9 @@ jobs:
       - name: Verify native Chrome authenticated proxies
         timeout-minutes: 3
         run: python scripts/run_native_proxy_auth.py --controlled --channel chrome ${{ matrix.mode == 'headed' && '--headed' || '' }}
+      - name: Verify portable domain PAC with and without DNS through native Chrome
+        timeout-minutes: 3
+        run: python scripts/run_native_pac_browser.py --controlled --portable-domain --channel chrome ${{ matrix.mode == 'headed' && '--headed' || '' }}
       - name: Preserve native Chrome evidence including failures
         if: always()
         uses: actions/upload-artifact@v4
@@ -148,6 +160,7 @@ jobs:
           name: native-browser-Chrome-Windows-${{ matrix.mode }}
           retention-days: 7
           path: |
+            browser-acceptance/native-portable-domain-pac/
             browser-acceptance/native/
             browser-acceptance/native-read-retry/
             browser-acceptance/native-proxy-auth/

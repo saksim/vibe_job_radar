@@ -27,7 +27,7 @@
   proxy.innerHTML = `<legend>本工作区的代理</legend>
     <p>自动模式沿用应用或系统配置。固定入口支持本机代理（Windows可加密保存凭据），或已授权给此来宾的匿名宿主机代理；更换后请停止并重开已有采集会话。</p>
     <label for="workspace-proxy-mode">连接方式</label>
-    <select id="workspace-proxy-mode"><option value="auto">自动发现</option><option value="http">固定本机 HTTP</option><option value="socks5">固定本机 SOCKS5</option><option value="http_auth" disabled>本机 HTTP Basic＋保存凭据</option><option value="http_digest_auth" disabled>本机 HTTP Digest＋保存凭据</option><option value="socks5_auth" disabled>本机 SOCKS5＋保存凭据</option><option value="vm_http">宿主机 HTTP</option><option value="vm_socks5">宿主机 SOCKS5</option><option value="pac" disabled>已导入的域名 PAC</option><option value="pac_url" disabled>已导入的完整网址 PAC</option><option value="pac_url_dns" disabled>完整网址 PAC 与 DNS 助手</option><option value="system_pac" disabled>已许可的系统 PAC</option><option value="wpad" disabled>已确认的 WPAD</option></select>
+    <select id="workspace-proxy-mode"><option value="auto">自动发现</option><option value="http">固定本机 HTTP</option><option value="socks5">固定本机 SOCKS5</option><option value="http_auth" disabled>本机 HTTP Basic＋保存凭据</option><option value="http_digest_auth" disabled>本机 HTTP Digest＋保存凭据</option><option value="socks5_auth" disabled>本机 SOCKS5＋保存凭据</option><option value="vm_http">宿主机 HTTP</option><option value="vm_socks5">宿主机 SOCKS5</option><option value="pac" disabled>已导入的 Windows 域名 PAC</option><option value="pac_domain" disabled>已导入的跨平台域名 PAC</option><option value="pac_domain_dns" disabled>跨平台域名 PAC 与 DNS 助手</option><option value="pac_url" disabled>已导入的完整网址 PAC</option><option value="pac_url_dns" disabled>完整网址 PAC 与 DNS 助手</option><option value="system_pac" disabled>已许可的系统 PAC</option><option value="wpad" disabled>已确认的 WPAD</option></select>
     <label for="workspace-proxy-endpoint">已配置的代理地址和端口</label>
     <input id="workspace-proxy-endpoint" type="text" autocomplete="off" spellcheck="false" style="max-width:100%;box-sizing:border-box" placeholder="填写你的本机代理入口，不含账号密码" disabled>
     <p id="workspace-proxy-scope"></p>
@@ -49,7 +49,7 @@
   pac.style.cssText = 'min-width:0;max-width:100%';
   pac.innerHTML = `<legend>导入可信的 PAC 文件</legend>
     <label for="workspace-pac-kind">脚本执行范围</label>
-    <select id="workspace-pac-kind"><option value="domain">Windows 域名 PAC</option><option value="url">完整网址 PAC（HTTP／请求桥）</option><option value="url_dns">完整网址 PAC 与 DNS 助手（独立许可）</option></select>
+    <select id="workspace-pac-kind"><option value="domain">Windows 域名 PAC</option><option value="portable_domain">跨平台域名 PAC</option><option value="portable_domain_dns">跨平台域名 PAC 与 DNS 助手（独立许可）</option><option value="url">完整网址 PAC（HTTP／请求桥）</option><option value="url_dns">完整网址 PAC 与 DNS 助手（独立许可）</option></select>
     <p id="workspace-pac-disclosure"></p>
     <label for="workspace-pac-file">本地 PAC 文件</label>
     <input id="workspace-pac-file" type="file" accept=".pac,.js" style="max-width:100%;box-sizing:border-box">
@@ -129,6 +129,18 @@
   const systemMessage = systemPac.querySelector('#system-pac-status');
   let systemConfigId = '';
   const pacKind = pac.querySelector('#workspace-pac-kind');
+  const pacScopes = {
+    domain: {mode:'pac', available:'pac_available', disclosure:'pac_disclosure', endpoint:'/api/network/pac',
+      consent:'我信任此文件，并同意上述Windows脚本执行和DNS说明'},
+    portable_domain: {mode:'pac_domain', available:'pac_domain_available', disclosure:'pac_domain_disclosure', endpoint:'/api/network/pac-domain',
+      consent:'我信任此文件，同意只向脚本提供HTTPS根地址和域名；不提供DNS助手'},
+    portable_domain_dns: {mode:'pac_domain_dns', available:'pac_domain_available', disclosure:'pac_domain_dns_disclosure', endpoint:'/api/network/pac-domain-dns',
+      consent:'我信任此文件，同意域名选路及上述系统DNS查询和本机IPv4地址范围'},
+    url: {mode:'pac_url', available:'pac_url_available', disclosure:'pac_url_disclosure', endpoint:'/api/network/pac-url',
+      consent:'我信任此文件，同意向脚本提供完整HTTPS路径和查询参数，并知悉此模式不支持原生浏览器'},
+    url_dns: {mode:'pac_url_dns', available:'pac_url_available', disclosure:'pac_url_dns_disclosure', endpoint:'/api/network/pac-url-dns',
+      consent:'我信任此文件，同意完整网址、系统DNS查询和本机IPv4地址的上述范围'}
+  };
   let pacState = {};
   const pacFile = pac.querySelector('#workspace-pac-file');
   const pacConsent = pac.querySelector('#workspace-pac-consent');
@@ -137,17 +149,10 @@
   const pacMessage = pac.querySelector('#workspace-pac-status');
   pacFile.addEventListener('change', () => { pacConsent.checked = false; });
   function renderPacScope() {
-    const dns = pacKind.value === 'url_dns';
-    const full = dns || pacKind.value === 'url';
-    const savedMode = dns ? 'pac_url_dns' : full ? 'pac_url' : 'pac';
-    const available = full ? pacState.pac_url_available === true : pacState.pac_available === true;
-    pac.querySelector('#workspace-pac-disclosure').textContent =
-      (dns ? pacState.pac_url_dns_disclosure : full ? pacState.pac_url_disclosure : pacState.pac_disclosure) || '';
-    pac.querySelector('#workspace-pac-consent-label').textContent = dns
-      ? '我信任此文件，同意完整网址、系统DNS查询和本机IPv4地址的上述范围'
-      : full
-      ? '我信任此文件，同意向脚本提供完整HTTPS路径和查询参数，并知悉此模式不支持原生浏览器'
-      : '我信任此文件，并同意上述脚本执行和DNS说明';
+    const scope = pacScopes[pacKind.value];
+    const savedMode = scope.mode, available = pacState[scope.available] === true;
+    pac.querySelector('#workspace-pac-disclosure').textContent = pacState[scope.disclosure] || '';
+    pac.querySelector('#workspace-pac-consent-label').textContent = scope.consent;
     pacFile.disabled = pacConsent.disabled = pacButton.disabled = !available;
     pacCheck.disabled = !available || pacState.proxy_mode !== savedMode;
     pacConsent.checked = false;
@@ -155,9 +160,9 @@
       ? '已导入 '+pacState.pac_name+'（SHA256 '+pacState.pac_sha256+'）。尚未执行检查。'
         + (pacState.policy?.code === 'pac_file_invalid' ? ' 副本缺失或校验失败，联网已停止；可选择自动模式撤销。' : '')
       : '当前范围尚未启用；选择文件或范围不会执行脚本。';
-    if (!available) pacMessage.textContent += full
-      ? ' 当前程序缺少完整网址PAC组件，请使用包含此组件的版本。'
-      : ' 当前系统不支持此Windows功能。';
+    if (!available) pacMessage.textContent += pacKind.value === 'domain'
+      ? ' 当前系统不支持此Windows功能。'
+      : ' 当前程序缺少跨平台PAC组件，请使用包含此组件的版本。';
   }
   pacKind.addEventListener('change', renderPacScope);
   const mode = proxy.querySelector('#workspace-proxy-mode');
@@ -174,8 +179,8 @@
   function clearSecretInputs() { proxyUsername.value = ''; proxyPassword.value = ''; }
   let revision = null, busy = false;
   function selection() {
-    endpoint.disabled = consent.disabled = ['auto', 'pac', 'pac_url', 'pac_url_dns', 'system_pac', 'wpad'].includes(mode.value);
-    proxyButton.disabled = ['pac', 'pac_url', 'pac_url_dns', 'system_pac', 'wpad'].includes(mode.value);
+    endpoint.disabled = consent.disabled = ['auto', 'pac', 'pac_domain', 'pac_domain_dns', 'pac_url', 'pac_url_dns', 'system_pac', 'wpad'].includes(mode.value);
+    proxyButton.disabled = ['pac', 'pac_domain', 'pac_domain_dns', 'pac_url', 'pac_url_dns', 'system_pac', 'wpad'].includes(mode.value);
     consent.checked = false;
     const vm = mode.value.startsWith('vm_'), auth = isAuth();
     clearSecretInputs();
@@ -224,6 +229,7 @@
       ? '工作区代理与应用专用环境配置冲突，联网已停止。请清除冲突或改用自动模式。'
       : (mode.value === 'auto' ? '采用自动发现；尚未进行网络测试。'
         : mode.value === 'pac' ? '按已导入PAC选择域名路线；尚未进行网络测试。'
+        : ['pac_domain', 'pac_domain_dns'].includes(mode.value) ? '按已导入PAC选择域名路线，适用于HTTP、请求桥和原生浏览器；尚未进行网络测试。'
         : ['pac_url', 'pac_url_dns'].includes(mode.value) ? '按已导入PAC选择完整网址路线，仅支持HTTP和请求桥；尚未进行网络测试。'
         : mode.value === 'system_pac' ? '按已许可系统PAC选择域名路线；尚未进行网络测试。'
         : mode.value === 'wpad' ? '按已确认WPAD来源选择域名路线；尚未进行网络测试。'
@@ -232,7 +238,7 @@
       (value.policy?.code === 'workspace_proxy_environment_conflict' ? proxyMessage.textContent :
         (authSaved ? '代理凭据已加密保存；页面不会回显，尚未联网测试。' : '未保存代理凭据，新连接已停止。'));
     pacState = value;
-    pacKind.value = mode.value === 'pac_url_dns' ? 'url_dns' : mode.value === 'pac_url' ? 'url' : 'domain';
+    pacKind.value = Object.keys(pacScopes).find(key => pacScopes[key].mode === mode.value) || 'domain';
     renderPacScope();
     systemPac.querySelector('#system-pac-disclosure').textContent = value.system_pac_disclosure || '';
     const source = value.system_pac || {};
@@ -285,7 +291,7 @@
       const script = new TextDecoder('utf-8', {fatal:true}).decode(await file.arrayBuffer());
       if (pacFile.files[0] !== file || !pacConsent.checked || selectedRevision !== revision ||
           selectedKind !== pacKind.value || busy) return;
-      await save(selectedKind === 'url_dns' ? '/api/network/pac-url-dns' : selectedKind === 'url' ? '/api/network/pac-url' : '/api/network/pac',
+      await save(pacScopes[selectedKind].endpoint,
         {name:file.name, script, consent:true}, pacMessage);
     } catch (_) { pacMessage.textContent = '无法读取UTF-8文件；原设置保留。'; }
   });
