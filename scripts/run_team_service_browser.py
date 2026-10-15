@@ -133,6 +133,7 @@ def main():
                         page.locator('#team-panel summary').click()
                         expect(page.locator('#team-status')).to_contain_text('状态页未联网')
                         page.locator('#team-check').click();expect(page.locator('#team-result')).to_contain_text('alice-pc')
+                        expect(page.locator('#team-result')).to_contain_text('account：空闲')
                         page.locator('#team-sync').click();expect(page.locator('#team-status')).to_contain_text('同步完成',timeout=20000)
                         expect(page.locator('#team-result')).to_contain_text('已确认')
                         result['checks'].append('workbench checks device permission and commits a complete synchronized version')

@@ -48,6 +48,7 @@ class PublicTasks:
             raise InputError('公开任务记录不能使用符号链接。')
         self._lock=threading.RLock(); self._thread=None; self._closed=False
         self._cancel = threading.Event();self._lease=None;self._foreign=False
+        self._team_lease = None
         self.owner_root=self.root/'owner'
         self._state={'status':'idle','message':'点击获取后才会联网；个人材料和登录态保留本地。'}
         self._refresh()
@@ -178,6 +179,7 @@ class PublicTasks:
         return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 
     def _check_cancelled(self):
+        if self._team_lease is not None:self._team_lease.check()
         check_cancelled(self._cancel)
         if self._stop_requested is not None and self._stop_requested():
             raise PublicTaskCancelled()
@@ -285,46 +287,56 @@ class PublicTasks:
     def _begin_commit(self):
         # Cancellation before this point prevents persistence. Once the local
         # commit starts, finish it and retain/report the result atomically.
+        if self._team_lease is not None:self._team_lease.confirm()
         with self._lock:
             self._check_cancelled()
             self._save(phase='saving', message='正在保存本批公开结果；完成后保留报告，不再启动后续查询。')
 
     def _run(self, kind, value, network_policy=None):
         try:
-            with self._lock:
-                self._check_cancelled()
-                self._save(status='running',message='正在获取公开数据并生成本地报告；不读取个人证据或登录态。')
-            if kind=='example':
-                example = self.factory(self.workspace)
-                example.cancelled, example.before_commit = self._cancel, self._begin_commit
-                result=example.run({'consent':True})
-            else:
-                query=PublicQuery.from_dict(value)
-                self._check_cancelled()
-                # Resumed queries select their current workspace policy lazily;
-                # only the new PAC source needs its owned download tied to stop.
-                if network_policy is None:
-                    candidate = self.workspace.network_policy()
-                    if getattr(candidate.pac, 'bind_cancellation', None) is not None:
-                        network_policy = candidate
-                if network_policy is not None:
-                    network_policy.bind_cancellation(self._cancel)
-                options={} if network_policy is None else {'network_policy':network_policy}
-                if self.mode()=='local_direct' and self._stop_requested is not None:
-                    options['stop_requested']=self._stop_requested
-                response=self.hybrid.search(query,consent=True,**options)
-                self._begin_commit()
-                result=self._import(response,query)
-            # Do not persist the report's full private rendering in task status.
-            allowed={'success','message','code','report_id','source_url','collected_at','checked_at',
-                     'cache_reused','stale','refresh_error','network_requests_this_click','scope','source_scope',
-                     'next_cursor','matching_jobs','returned_jobs','available_jobs','execution_mode','catalog_change','history_warning',
-                     'source_checked_at','not_modified'}
-            view={k:v for k,v in result.items() if k in allowed}
-            if self._cancel.is_set() and result.get('success'):
-                view['message'] = '停止请求到达时本批保存已开始或结果已完成；本批结果保留，没有启动下一页。'
-                view['cancel_requested'] = True
-            self._save(**view,status='completed' if result.get('success') else 'failed')
+            from .team_ownership import task_ownership
+            with task_ownership(self.workspace, enabled=kind=='example' or self.mode()=='local_direct',
+                                network_policy=network_policy) as lease:
+                self._team_lease = lease
+                with self._lock:
+                    self._check_cancelled()
+                    self._save(status='running',message='正在获取公开数据并生成本地报告；不读取个人证据或登录态。')
+                if kind=='example':
+                    example = self.factory(self.workspace)
+                    example.cancelled, example.before_commit = self._cancel, self._begin_commit
+                    result=example.run({'consent':True})
+                else:
+                    query=PublicQuery.from_dict(value)
+                    self._check_cancelled()
+                    # Resumed queries select their current workspace policy lazily;
+                    # only the new PAC source needs its owned download tied to stop.
+                    if network_policy is None:
+                        candidate = self.workspace.network_policy()
+                        if getattr(candidate.pac, 'bind_cancellation', None) is not None:
+                            network_policy = candidate
+                    if network_policy is not None:
+                        network_policy.bind_cancellation(self._cancel)
+                    options={} if network_policy is None else {'network_policy':network_policy}
+                    if self.mode()=='local_direct' and self._stop_requested is not None:
+                        options['stop_requested']=self._stop_requested
+                    if self.mode()=='local_direct' and self._team_lease is not None:
+                        def check_owner():
+                            self._check_cancelled()
+                            return False
+                        options['stop_requested']=check_owner
+                    response=self.hybrid.search(query,consent=True,**options)
+                    self._begin_commit()
+                    result=self._import(response,query)
+                # Do not persist the report's full private rendering in task status.
+                allowed={'success','message','code','report_id','source_url','collected_at','checked_at',
+                         'cache_reused','stale','refresh_error','network_requests_this_click','scope','source_scope',
+                         'next_cursor','matching_jobs','returned_jobs','available_jobs','execution_mode','catalog_change','history_warning',
+                         'source_checked_at','not_modified'}
+                view={k:v for k,v in result.items() if k in allowed}
+                if self._cancel.is_set() and result.get('success'):
+                    view['message'] = '停止请求到达时本批保存已开始或结果已完成；本批结果保留，没有启动下一页。'
+                    view['cancel_requested'] = True
+                self._save(**view,status='completed' if result.get('success') else 'failed')
         except PublicTaskCancelled:
             self._save(status='cancelled',code='public_task_cancelled',report_id='',
                        message='公开任务已停止；未开始新的本地报告，已有缓存和历史数据保留。可确认后继续已保存条件。')
@@ -333,10 +345,15 @@ class PublicTasks:
             from .network import FetchError
             from .network_settings import DNS_MESSAGES
             from .proxy_credentials import ERROR_MESSAGES as PROXY_AUTH_MESSAGES
-            messages = {**DNS_MESSAGES, **PROXY_AUTH_MESSAGES}
-            code = exc.code if isinstance(exc, FetchError) and exc.code in messages else 'public_task_failed'
+            from .team_ownership import TASK_MESSAGES
+            from .guided.contracts import CrawlError
+            messages = {**DNS_MESSAGES, **PROXY_AUTH_MESSAGES, **TASK_MESSAGES}
+            code = (exc.code if isinstance(exc, FetchError) and exc.code in messages
+                    or isinstance(exc, CrawlError) and exc.code in TASK_MESSAGES else 'public_task_failed')
             self._save(status='failed',code=code,error_type=type(exc).__name__,
                        message=messages.get(code,'任务未完成，已有数据仍在本机；请检查来源可用性或稍后重新确认，不会生成模拟数据。'))
+        finally:
+            self._team_lease = None
 
     def _import(self, result, query):
         jobs=result['response']['jobs']
