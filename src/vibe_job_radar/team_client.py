@@ -143,7 +143,7 @@ class TeamConnection:
         except (ValueError,UnicodeError,CrawlError) as error:raise TeamError('team_credential_invalid') from error
 
     def request(self,path,*,payload=None):
-        if path not in {'/v1/team/state','/v1/team/metrics','/v1/team/quota','/v1/sync/read','/v1/sync/ack','/v1/jobs/search'}:
+        if path not in {'/v1/team/state','/v1/team/metrics','/v1/team/quota','/v1/team/task','/v1/sync/read','/v1/sync/ack','/v1/jobs/search'}:
             raise TeamError('team_route_invalid')
         token=self._token()
         delay=0.1-(time.monotonic()-self._last_request)
@@ -151,12 +151,14 @@ class TeamConnection:
         self._last_request=time.monotonic()
         if self.transport is None and self._policy is None:self._policy=self.policy_factory()
         client=self.transport or SafeHTTP({urlsplit(self.origin).hostname},timeout=10,max_bytes=32_000_000,interval=0,network_policy=self._policy)
+        from .team_ownership import TASK_MESSAGES
+        conflict_messages = {**SYNC_CONFLICT_MESSAGES, **TASK_MESSAGES}
         try:
             value=client.json(self.origin+path,method='POST' if payload is not None else 'GET',
-                              headers={'Authorization':'Bearer '+token},payload=payload,error_codes={409:SYNC_CONFLICT_MESSAGES})
+                              headers={'Authorization':'Bearer '+token},payload=payload,error_codes={409:conflict_messages})
         except FetchError as error:
             if error.code=='http_429':raise RateLimit(error.retry_after or 60,'team_rate_wait') from None
-            if error.code in SYNC_CONFLICT_MESSAGES:raise CrawlError(error.code) from None
+            if error.code in conflict_messages:raise CrawlError(error.code) from None
             # No offline quota allowance, automatic retry, redirect, token echo,
             # credential forwarding to publishers or fallback to another origin.
             code='team_unauthorized' if error.code=='http_401' else 'team_forbidden' if error.code=='http_403' else 'team_unavailable'
@@ -171,6 +173,10 @@ class TeamConnection:
     def quota(self,site,operation,**fields):
         resource=self.config['quota_resources'].get(site)
         if not resource:raise CrawlError('team_resource_unconfigured')
+        if operation == 'reserve':
+            from .team_ownership import reservation_proof
+            lease = reservation_proof(self,site)
+            if lease is not None:fields['lease'] = lease
         value=self.request('/v1/team/quota',payload={'resource':resource,'site':site,'operation':operation,**fields})
         if set(value)!={'schema_version','result'} or not isinstance(value['result'],dict):raise CrawlError('team_response_invalid')
         return value['result']

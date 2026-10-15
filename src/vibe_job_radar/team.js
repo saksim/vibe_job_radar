@@ -23,7 +23,7 @@
   }); });
   $("team-check").addEventListener("click", () => perform(async () => {
     const state = await request("/api/team/check", {consent:true});
-    $("team-result").textContent = "成员：" + state.member + " / 设备：" + state.device + " / 角色：" + state.role + "\n获准来源：" + state.sources.join("、") + "\n配额资源：" + state.resources.map(r => r.site + " / " + r.id + "（今日页面 " + r.usage.page.day + "/" + r.limits.pages_day + "，请求 " + r.usage.request.day + "/" + r.limits.requests_day + "）").join("、") + "\n已确认水位：" + state.watermarks.map(w => w.revision).join("、");
+    $("team-result").textContent = "成员：" + state.member + " / 设备：" + state.device + " / 角色：" + state.role + "\n获准来源：" + state.sources.join("、") + "\n配额资源：" + state.resources.map(r => r.site + " / " + r.id + "（今日页面 " + r.usage.page.day + "/" + r.limits.pages_day + "，请求 " + r.usage.request.day + "/" + r.limits.requests_day + "）").join("、") + "\n任务所有权：" + state.resources.map(r => r.id + "：" + (r.task ? (r.task.active ? (r.task.this_device ? "当前设备正在执行" : "另一设备正在执行") : "空闲") : "服务尚不支持任务租约")).join("、") + "\n已确认水位：" + state.watermarks.map(w => w.revision).join("、");
     $("team-result").hidden = false; $("team-status").textContent = "已连接并核对当前设备权限。";
   }));
   $("team-sync").addEventListener("click", () => perform(async () => {

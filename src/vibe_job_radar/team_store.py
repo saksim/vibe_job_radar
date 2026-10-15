@@ -25,7 +25,9 @@ from .public_contract import ID as PUBLIC_SOURCE_ID
 ID = re.compile(r'[a-zA-Z0-9_-]{1,80}')
 TOKEN = re.compile(r'vjr_[a-zA-Z0-9_-]{43}')
 ROLES = {'reader', 'collector', 'admin'}
-TABLES = {'members', 'devices', 'resources', 'grants', 'source_grants', 'audit', 'clock', 'watermarks', 'sync_views'}
+LEGACY_TABLES = {'members', 'devices', 'resources', 'grants', 'source_grants', 'audit', 'clock', 'watermarks', 'sync_views'}
+TABLES = LEGACY_TABLES | {'task_leases'}
+TASK_SCHEMA = "CREATE TABLE task_leases(tenant TEXT, resource TEXT, task TEXT NOT NULL, device TEXT NOT NULL, member TEXT NOT NULL, generation INTEGER NOT NULL, digest TEXT NOT NULL, expires REAL NOT NULL, state TEXT NOT NULL, PRIMARY KEY(tenant,resource))"
 
 
 class TeamError(ValueError):
@@ -142,7 +144,8 @@ class TeamStore:
                                         PRIMARY KEY(device,scope));
                 CREATE TABLE sync_views(device TEXT, scope TEXT, revision INTEGER NOT NULL,
                                         PRIMARY KEY(device,scope));
-                PRAGMA user_version=1;
+                CREATE TABLE task_leases(tenant TEXT, resource TEXT, task TEXT NOT NULL, device TEXT NOT NULL, member TEXT NOT NULL, generation INTEGER NOT NULL, digest TEXT NOT NULL, expires REAL NOT NULL, state TEXT NOT NULL, PRIMARY KEY(tenant,resource));
+                PRAGMA user_version=2;
                 COMMIT;
             ''')
         RateLedger(self.rate_path, clock=self.clock)
@@ -156,8 +159,14 @@ class TeamStore:
                 conn.row_factory = sqlite3.Row
                 conn.execute('BEGIN IMMEDIATE' if write else 'BEGIN')
                 tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-                if conn.execute('PRAGMA user_version').fetchone()[0] != 1 or tables != TABLES:
+                version = conn.execute('PRAGMA user_version').fetchone()[0]
+                if (version, tables) not in ((1, LEGACY_TABLES), (2, TABLES)):
                     raise TeamError('team_storage_invalid', 503)
+                # Extend only the exact known schema, atomically with the first
+                # write. Never reset unknown/corrupt storage or the quota ledger.
+                if version == 1 and write:
+                    conn.execute(TASK_SCHEMA)
+                    conn.execute('PRAGMA user_version=2')
                 if not self.rate_path.is_file():
                     raise TeamError('team_storage_invalid', 503)
                 with closing(sqlite3.connect(self.rate_path.resolve().as_uri()+'?mode=ro',uri=True,timeout=10)) as rates:
@@ -337,7 +346,7 @@ class TeamStore:
         if not isinstance(value,dict) or not required <= set(value):
             raise TeamError()
         operation = value['operation']
-        extras = {'reserve':{'kind','origin'},'publisher':{'origin','delay','requests','seconds'},
+        extras = {'reserve':{'kind','origin','lease'},'publisher':{'origin','delay','requests','seconds'},
                   'cool':{'seconds'},'defer':{'seconds'},'summary':set(),'login_availability':set()}
         if operation not in extras or set(value)-required-extras[operation]:
             raise TeamError()
@@ -355,6 +364,8 @@ class TeamStore:
             if operation == 'reserve':
                 if value.get('kind') not in {'request','page','login'} or value.get('kind')=='request' and origin is None:
                     raise TeamError()
+                from .team_ownership import verify_reservation
+                verify_reservation(conn, who, resource['id'], value.get('lease'), self.now(conn))
                 ledger.reserve(key,value['kind'],origin=origin)
             elif operation == 'publisher':
                 if origin is None:
@@ -384,6 +395,8 @@ class TeamStore:
                 key=hashlib.sha256((who['tenant']+':'+resource['id']).encode()).hexdigest()
                 resource['limits']=limits
                 resource['usage']=ledger.summary(key)
+                from .team_ownership import task_summary
+                resource['task']=task_summary(conn,who,resource['id'],self.now(conn))
             sources = [r[0] for r in conn.execute('SELECT source FROM source_grants WHERE tenant=? AND member=? ORDER BY source',
                        (who['tenant'],who['member']))]
             marks = [dict(row) for row in conn.execute('SELECT scope,revision,updated FROM watermarks WHERE device=?',(who['device'],))]
