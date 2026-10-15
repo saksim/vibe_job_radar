@@ -11,8 +11,11 @@ from .pac import MESSAGES as DOMAIN_MESSAGES, canonical_target, parse_result, va
 from . import pac_url_worker
 
 CONSENT = 'workspace-trusted-full-https-url-pac-v1'
+DNS_CONSENT = 'workspace-trusted-full-https-url-pac-dns-v1'
 MESSAGES = {
     **DOMAIN_MESSAGES,
+    'pac_dns_limit': 'PAC脚本超过16个不同DNS查询，已停止；没有连接目标或改变路线。',
+    'pac_dns_failed': 'PAC所用系统DNS暂不可用，已停止；没有改用其他解析商或路线。',
     'pac_url_unavailable': '完整网址PAC组件未安装或版本不兼容；已停止，未改为直连。',
     'pac_url_invalid_target': '完整网址PAC只接受规范的HTTPS地址（最多8192字符），不能包含账号、密码或片段。',
     'pac_url_required': '此PAC需要完整HTTPS网址；当前入口只有域名，已停止选路。',
@@ -25,6 +28,13 @@ DISCLOSURE = ('只导入你信任的本地PAC文件（UTF-8，最多64KiB）。�
     '每个网址在当前会话中只采用首次结果；时间变化不会自动重新选路。'
     '只适用于HTTP采集和浏览器请求桥；原生浏览器通道不支持此模式。'
     '仅接受DIRECT、匿名本机PROXY和明确SOCKS5；只采用第一项，失败不换路线。')
+
+DNS_DISCLOSURE = (DISCLOSURE.replace('不提供网络、文件、DNS或本机地址接口。',
+    '可使用受限DNS和本机IPv4助手，不提供文件或其他联网接口。') + '此范围还允许可信脚本通过当前系统DNS调用dnsResolve、isResolvable、isInNet和myIpAddress。'
+    'DNS服务可看到脚本请求的域名，本机IPv4地址会提供给脚本；多网卡时使用系统主机名解析的首个IPv4。'
+    '每次求值最多16个不同域名，并受总执行期限限制；不探测网关，不扫描局域网，不连接这些DNS结果。'
+    '仅增加选路助手；实际HTTPS仍须域名许可、公网IP与证书校验。保存和读取状态不会执行或解析。'
+    '脚本检查会进行其请求的DNS查询。旧完整网址PAC许可不包含此范围。')
 
 def canonical_url(url):
     try:
@@ -57,6 +67,10 @@ class UrlPacRoute:
     @property
     def sha256(self):
         return self.snapshot.sha256
+
+    @property
+    def dns_helpers(self):
+        return self.snapshot.dns_helpers
 
     @property
     def binding(self):
@@ -92,6 +106,7 @@ class UrlPacRoute:
 class UrlPacSnapshot:
     source: str = field(repr=False)
     permission: object = field(repr=False, compare=False)
+    dns_helpers: bool = False
     sha256: str = field(init=False)
     _cache: dict = field(default_factory=dict, init=False, repr=False, compare=False)
     _lock: object = field(default_factory=threading.Lock, init=False, repr=False, compare=False)
@@ -102,11 +117,12 @@ class UrlPacSnapshot:
     requires_url = True
 
     def __post_init__(self):
+        if type(self.dns_helpers) is not bool:raise ValueError('invalid DNS helper scope')
         object.__setattr__(self, 'sha256', hashlib.sha256(validate_script(self.source)).hexdigest())
 
     @property
     def binding(self):
-        return 'full-url-v1:' + self.sha256
+        return ('full-url-dns-v1:' if self.dns_helpers else 'full-url-v1:') + self.sha256
 
     def bind_cancellation(self, event):
         with self._event_lock:
@@ -144,7 +160,8 @@ class UrlPacSnapshot:
                 if len(self._cache) >= 128:
                     raise LocalProxyError('pac_url_cache_limit')
                 try:
-                    raw = pac_url_worker.evaluate(self.source, target, host, self.permitted)
+                    options = {'dns_helpers': True} if self.dns_helpers else {}
+                    raw = pac_url_worker.evaluate(self.source, target, host, self.permitted, **options)
                     self._cache[key] = parse_result(raw)
                 except LocalProxyError as exc:
                     self._cache[key] = exc.code if exc.code in MESSAGES else 'pac_failed'

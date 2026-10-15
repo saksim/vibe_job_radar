@@ -1175,6 +1175,10 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
                     raise AssertionError('new frozen process replayed or lost the completed background outcome')
                 result['category_background_restart_verified']=True
             finally:observed.close()
+            result['stage']='automatic_update_handoff'
+            from automatic_update_acceptance import verify as verify_automatic_update
+            result['automatic_update']=verify_automatic_update(bundle,root/'automatic-update',cwd,env)
+            result['automatic_update_verified']=True
         verify_payload_unchanged(bundle,before,result)
         result.update(success=True,stage='complete',files=before)
     except Exception as exc:

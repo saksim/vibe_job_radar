@@ -226,6 +226,8 @@ class NetworkPolicy:
             # Status reads must never execute PAC helpers, including DNS.
             result.update(transport='unavailable' if self.error else 'pac_by_host',
                           code=self.error or 'pac_not_evaluated')
+            if getattr(self.pac, 'dns_helpers', False):
+                result.update(pac_dns_helpers=True, pac_dns_scope='explicit_system_ipv4_max_16_per_evaluation')
             if hasattr(self.pac, 'sha256'):
                 result['pac_sha256'] = self.pac.sha256
                 if getattr(self.pac, 'kind', None) == 'full_url_pac':

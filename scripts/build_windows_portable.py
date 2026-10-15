@@ -146,7 +146,7 @@ def build_candidate(out,evidence_path,*,verify_login_startup=False,verify_system
             '打开本机地址后可检查采集浏览器，也可明确选择已安装的Edge或Chrome。组件更新请更换完整候选包。\n'
             '默认数据仍在用户目录 .vibe-job-radar；程序不会将工作区放进本包。\n'
             '升级/回退前停止任务与计划、关闭所有工作台，并备份整个工作区。\n'
-            '可在首页明确选择登录Windows后启动；默认关闭。移动/升级包前关闭旧登记，再从新包启用。\n'
+            '可在首页明确选择登录Windows后启动；默认关闭。手动移动前重新登记；明确自动升级时原入口跟随已确认新版。\n'
             '三站实站登录/完整JD仍未认证；包的启动成功不代表网站允许采集。\n'
             '不自动安装开机任务、更新软件、发布服务或修改系统证书。\n',encoding='utf-8')
         runtime_source=source_stamp(ROOT)
@@ -155,7 +155,7 @@ def build_candidate(out,evidence_path,*,verify_login_startup=False,verify_system
         runtime_source.update(kind='portable_build_manifest',executable_sha256=file_hash(bundle/'VibeJobRadar.exe'))
         atomic_json(bundle/'PORTABLE.json',{'schema_version':1,'status':'portable_candidate_not_release',
             'runtime_source':runtime_source,
-            'version':version,'platform':'windows-x64','source':expected,'python_version':platform.python_version(),
+            'version':version,'upgrade_protocol':1,'platform':'windows-x64','source':expected,'python_version':platform.python_version(),
             'components':versions,'build_environment_packages':dependencies,'browser_bundled':True,'live_sites_certified':False,
             'bundled_browser_directory':'browsers','recommended_max_bundle_path_units':110,
             'runtime_evidence':'portable-verification.json','dependency_licenses':collected})
@@ -168,9 +168,9 @@ def build_candidate(out,evidence_path,*,verify_login_startup=False,verify_system
         if verify_login_startup:verification.append('--verify-login-startup')
         if verify_system_pac:verification.append('--verify-system-pac')
         if verify_wpad_dns:verification.append('--verify-wpad-dns')
-        subprocess.run(verification,cwd=ROOT,check=True,timeout=240)
+        subprocess.run(verification,cwd=ROOT,check=True,timeout=360)
         report=json.loads(runtime_evidence.read_text(encoding='utf-8'))
-        validate_runtime_evidence(bundle,report,require_login_startup=verify_login_startup,require_system_pac=verify_system_pac,require_wpad_dns=verify_wpad_dns,require_url_pac=True,require_environment=True)
+        validate_runtime_evidence(bundle,report,require_login_startup=verify_login_startup,require_system_pac=verify_system_pac,require_wpad_dns=verify_wpad_dns,require_url_pac=True,require_environment=True,require_automatic_update=True)
         if fingerprint(ROOT)!=expected:raise ValueError('source changed during portable build')
         part=stage/'candidate.zip'
         with zipfile.ZipFile(part,'w',zipfile.ZIP_DEFLATED) as archive:
@@ -198,7 +198,8 @@ def build_candidate(out,evidence_path,*,verify_login_startup=False,verify_system
             'startup_worker_verified':report.get('startup_worker_verified') is True,
             'system_pac_verified':report.get('system_pac_verified') is True,
             'wpad_dns_verified':report.get('wpad_dns_verified') is True,
-            'url_pac_worker_verified':report.get('url_pac_worker_verified') is True})
+            'url_pac_worker_verified':report.get('url_pac_worker_verified') is True,
+            'automatic_update_verified':report.get('automatic_update_verified') is True})
         return dest
 
 
@@ -230,7 +231,8 @@ def native_components_valid(rows):
         and all(native_component_valid(rows[channel],channel) for channel in rows))
 
 
-def validate_runtime_evidence(bundle,report,*,require_login_startup=False,require_system_pac=False,require_wpad_dns=False,require_url_pac=False,require_environment=False):
+def validate_runtime_evidence(bundle,report,*,require_login_startup=False,require_system_pac=False,require_wpad_dns=False,require_url_pac=False,require_environment=False,require_automatic_update=False):
+    from automatic_update_acceptance import valid_evidence as valid_automatic_update
     if require_wpad_dns:
         from wpad_dns_evidence import valid_wpad_dns_evidence
     if require_url_pac:
@@ -241,6 +243,8 @@ def validate_runtime_evidence(bundle,report,*,require_login_startup=False,requir
                                          or report.get('runtime_environment_restart_verified') is not True))
             or (require_login_startup and (report.get('startup_registration_verified') is not True
                                           or report.get('startup_worker_verified') is not True))
+            or (require_automatic_update and (report.get('automatic_update_verified') is not True
+                    or not valid_automatic_update(report.get('automatic_update'))))
             or not native_components_valid(report.get('native_components'))
             or (require_system_pac and report.get('system_pac_verified') is not True)
             or (require_url_pac and (report.get('url_pac_worker_verified') is not True

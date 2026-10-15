@@ -39,13 +39,15 @@ class PortableReleaseTests(unittest.TestCase):
                     'runtime_environment_verified':True,'runtime_environment_restart_verified':True,
                     'files':{'VibeJobRadar.exe':'d'*64}}
         self.required_flags=('startup_registration_verified','startup_worker_verified',
-                             'system_pac_verified','wpad_dns_verified','url_pac_worker_verified')
+                             'system_pac_verified','wpad_dns_verified','url_pac_worker_verified','automatic_update_verified')
         self.proof.update({flag:True for flag in self.required_flags})
         from test_native_component_portable import good_component
         from test_url_pac_evidence import good_url_proof
         from test_wpad_dns_evidence import good_evidence
         self.proof.update(native_components={c:good_component(c) for c in ('bundled','chrome')},
                           url_pac=good_url_proof(),wpad_dns=good_evidence())
+        from automatic_update_acceptance import FIELDS
+        self.proof['automatic_update']=dict(schema_version=1,**{key:True for key in FIELDS})
         self.artifacts={name:{'id':i,'digest':None} for i,name in enumerate(self.mod.ARTIFACTS,200)}
         self.package,self.manifest=self.archive()
 

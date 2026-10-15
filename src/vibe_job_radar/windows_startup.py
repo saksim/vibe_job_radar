@@ -133,6 +133,7 @@ class WindowsStartup:
         receipt = self._receipt()
         actual = self.registry.read(self.name)
         command, path_error = None, ''
+        forwarded = False
         try:
             if (not self.executable.is_absolute() or self.executable.is_symlink()
                     or self.executable.resolve() != self.executable
@@ -143,7 +144,10 @@ class WindowsStartup:
             # executable locations. An old worker receipt without a Run value
             # never silently chooses worker mode for a new registration.
             owned = receipt is not None and actual == (1, receipt['command'])
-            command = command_line(self.executable, self.workspace,
+            if owned and receipt['executable']!=str(self.executable):
+                from .release_install import retained_launcher
+                forwarded=retained_launcher(self.workspace,Path(receipt['executable']),self.executable)
+            command = receipt['command'] if forwarded else command_line(self.executable, self.workspace,
                                    receipt.get('mode', 'workbench') if owned else 'workbench')
         except InputError as exc:
             path_error = str(exc)
@@ -155,10 +159,12 @@ class WindowsStartup:
             state = {**base, 'status': 'conflict', 'message': '同名登录启动项与本机回执不符；未覆盖或删除，请在 Windows 启动应用设置中核对。'}
         else:
             same = command == receipt['command']
+            if forwarded:base['uses_retained_launcher']=True
             state = {**base, 'status': 'registered' if same else 'moved',
                      'registered': True, 'can_disable': True,
                      'mode': receipt.get('mode', 'workbench'),
                      'message': ('已登记登录启动：' + ('只运行已确认公开查询。' if receipt.get('mode') == 'public_worker' else '打开工作台。')
+                                 + ('原入口会转到已确认的新版本。' if forwarded else '')
                                  + 'Windows 可能延迟或禁用启动，请同时核对系统的启动应用设置。'
                                  if same else '已登记的是旧程序位置；请先关闭旧登记，再从当前便携包明确启用。')}
         return state, receipt, actual, command
