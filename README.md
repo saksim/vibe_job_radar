@@ -1,6 +1,6 @@
 # Vibe Job Radar｜招聘要求与个人证据工作台
 
-0.4.0 增加[跨设备公开任务所有权](docs/TEAM_SERVICE.md)与[稳定版检查、校验下载和升级准备](docs/UPDATES.md)。正式发行使用标准版本 Tag 和公开 Release，保持 dev → release → main 晋升；Windows 包仍未签名，现场验收条件如实保留。变化与范围见 [0.4.0 发行说明](docs/RELEASE_0_4_0.md)，实际可下载版本见 [Releases](https://github.com/saksim/vibe_job_radar/releases)。
+0.4.1 修复深层工作区下的 Windows 升级解压与失败清理，保留全部包内文件（[补丁说明](docs/RELEASE_0_4_1.md)）。0.4.0 增加[跨设备公开任务所有权](docs/TEAM_SERVICE.md)与[稳定版检查、校验下载和升级准备](docs/UPDATES.md)。正式发行使用标准版本 Tag 和公开 Release，保持 dev → release → main 晋升；Windows 包仍未签名，现场验收条件如实保留。变化与范围见 [0.4.0 发行说明](docs/RELEASE_0_4_0.md)，实际可下载版本见 [Releases](https://github.com/saksim/vibe_job_radar/releases)。
 
 0.3.0 增加[报告内独立质量复核](docs/QUALITY_REVIEW.md)、[来源更新历史](docs/SOURCE_HISTORY.md)和可选[团队协作服务](docs/TEAM_SERVICE.md)：在原报告上标注 JD、核对重复岗位；查看目录更新与失败；为已登记设备提供共享配额、成员权限和版本同步。原采集、个人材料、报告和CLI继续保留。具体变化、验证与剩余条件见 [0.3.0 发行说明](docs/RELEASE_0_3_0.md)。
 
