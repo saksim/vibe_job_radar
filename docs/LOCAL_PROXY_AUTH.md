@@ -1,5 +1,7 @@
 # 明确配置的本机代理认证（#75 / N5）
 
+0.8.0 另增[明确选择的 HTTP Digest](HTTP_DIGEST_PROXY.md)：VIBE_RADAR_PROXY_AUTH=digest 仅搭配显式 HTTP 入口和完整凭据。初次 407 挑战后只发送一次认证响应，原站请求仍只发送一次；以下 Basic/SOCKS5 原契约保持。
+
 0.6.0 另外提供[工作台内配置与 Windows 加密保存](WORKSPACE_PROXY_CREDENTIALS.md)。以下环境变量方式继续可用；后文“不落盘”描述仅适用于环境变量凭据，不是新方式的存储契约。两种方式不能混用，工作区已有入口不会接收环境中的其他凭据。
 
 本分支为显式指定的 loopback HTTP CONNECT 和 SOCKS5 增加可选用户名/密码认证。已有匿名本机代理和系统静态发现保持原行为；URL 中的 `user:password@` 仍拒绝。此交付不包括 socks5h、代理DNS、PAC、远程/VM代理入口，也不证明 #63 的猎聘空白页由代理导致或已经解决。

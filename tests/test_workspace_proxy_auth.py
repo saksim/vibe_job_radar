@@ -18,8 +18,9 @@ from vibe_job_radar.proxy_credentials import ProxyCredentials
 from vibe_job_radar.workspace import Workspace, InputError
 from vibe_job_radar.workbench import LocalServer
 import test_proxy_auth as wire
+import test_digest_proxy as digest_wire
 
-PRIVATE = tuple(wire.AUTH)
+PRIVATE = (*wire.AUTH, 'VIBE_RADAR_PROXY_AUTH')
 USER, SECRET = wire.USER, wire.PASSWORD
 
 
@@ -103,7 +104,8 @@ class WorkspaceProxyAuthTests(AuthCase):
         other = Workspace(self.workspace.root.parent/'second')
         (other.root/'network-preferences.json').write_bytes(original)
         variants = [(other, saved), (self.workspace, {**saved, 'proxy_endpoint':'http://127.0.0.1:18991'}),
-                    (self.workspace, {**saved, 'proxy_mode':'socks5_auth', 'proxy_endpoint':'socks5://127.0.0.1:18990'})]
+                    (self.workspace, {**saved, 'proxy_mode':'socks5_auth', 'proxy_endpoint':'socks5://127.0.0.1:18990'}),
+                    (self.workspace, {**saved, 'proxy_mode':'http_digest_auth'})]
         for workspace, value in variants:
             (workspace.root/'network-preferences.json').write_text(json.dumps(value), encoding='utf-8')
             with patch('socket.getaddrinfo') as dns, patch('socket.create_connection') as dial:
@@ -209,7 +211,7 @@ class WorkspaceProxyAuthTests(AuthCase):
         finally: server.shutdown(); server.server_close(); thread.join(5)
 
     def test_saved_credentials_drive_real_http_and_socks_tls_without_environment(self):
-        for mode, fixture_type in [('http_auth',wire.HTTPProxyAuthenticationTests),('socks5_auth',wire.SocksProxyAuthenticationTests)]:
+        for mode, fixture_type in [('http_auth',wire.HTTPProxyAuthenticationTests),('socks5_auth',wire.SocksProxyAuthenticationTests),('http_digest_auth',digest_wire.HTTPDigestProxyTests)]:
             fixture = fixture_type(); fixture.setUp()
             try:
                 def request():
@@ -217,15 +219,40 @@ class WorkspaceProxyAuthTests(AuthCase):
                         self.save(mode=mode,endpoint=fixture.setting)
                         return SafeHTTP({wire.HOST},interval=0,network_policy=Workspace(self.workspace.root).network_policy()).json('https://'+wire.HOST+'/jobs')
                 self.assertTrue(fixture.perform(request)['ok'])
-                self.assertEqual(fixture.dials,[fixture.proxy.server_address])
+                self.assertEqual(fixture.dials,[fixture.proxy.server_address]*(2 if mode=='http_digest_auth' else 1))
                 self.assertEqual(fixture.sni,[wire.HOST])
                 self.assertEqual(len(fixture.requests),1)
-                request_headers = fixture.requests[0]['headers'] if mode == 'http_auth' else fixture.requests[0][2]
+                request_headers = fixture.requests[0]['headers'] if mode != 'socks5_auth' else fixture.requests[0][2]
                 self.assertNotIn('proxy-authorization',{k.lower() for k in request_headers})
             finally: fixture.tearDown(); fixture.doCleanups()
 
 
 class ActualPlatformProxyAuthTests(AuthCase):
+    def test_digest_dpapi_restart_restores_method_and_background_identity(self):
+        if os.name != 'nt':
+            with self.assertRaisesRegex(InputError,'Windows'): self.save(mode='http_digest_auth')
+            return
+        self.save(mode='http_digest_auth'); original=self.raw(); policy=self.workspace.network_policy()
+        program='''import sys
+from vibe_job_radar.workspace import Workspace
+from vibe_job_radar.proxy_credentials import ProxyCredentials
+w=Workspace(sys.argv[1]);p=w.network_policy()
+assert p.describe()['proxy_authentication_method']=='digest'
+assert p.background_fingerprint==sys.argv[2] and p.fingerprint!=sys.argv[3]
+assert p._saved_session_network()==sys.argv[4]
+assert p.proxy.credentials==ProxyCredentials('ARTIFICIAL-PROXY-USER','ARTIFICIAL-PROXY-SECRET:ONLY')
+assert 'proxy_auth' not in w.network_state()
+print('restored_digest')
+'''
+        env=dict(os.environ);env['PYTHONPATH']=str(Path(__file__).resolve().parents[1]/'src')
+        child=subprocess.run([sys.executable,'-c',program,str(self.workspace.root),policy.background_fingerprint,
+            policy.fingerprint,policy._saved_session_network()],env=env,capture_output=True,text=True,encoding='utf-8',
+            timeout=20,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+        self.assertEqual(child.returncode,0,child.stderr);self.assertEqual(child.stdout.strip(),'restored_digest')
+        self.assertEqual(self.raw(),original);self.assertNotIn(SECRET.encode(),original)
+        self.workspace.network_proxy_auth_clear(dict(revision=1,consent=True))
+        self.assertEqual(self.workspace.network_policy().error,'workspace_proxy_auth_missing')
+
     def test_current_user_dpapi_survives_process_restart_or_explicitly_unavailable(self):
         if os.name != 'nt':
             with self.assertRaisesRegex(InputError,'Windows'): self.save()

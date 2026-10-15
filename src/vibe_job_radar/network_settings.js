@@ -27,7 +27,7 @@
   proxy.innerHTML = `<legend>本工作区的代理</legend>
     <p>自动模式沿用应用或系统配置。固定入口支持本机代理（Windows可加密保存凭据），或已授权给此来宾的匿名宿主机代理；更换后请停止并重开已有采集会话。</p>
     <label for="workspace-proxy-mode">连接方式</label>
-    <select id="workspace-proxy-mode"><option value="auto">自动发现</option><option value="http">固定本机 HTTP</option><option value="socks5">固定本机 SOCKS5</option><option value="http_auth" disabled>本机 HTTP＋保存凭据</option><option value="socks5_auth" disabled>本机 SOCKS5＋保存凭据</option><option value="vm_http">宿主机 HTTP</option><option value="vm_socks5">宿主机 SOCKS5</option><option value="pac" disabled>已导入的域名 PAC</option><option value="pac_url" disabled>已导入的完整网址 PAC</option><option value="pac_url_dns" disabled>完整网址 PAC 与 DNS 助手</option><option value="system_pac" disabled>已许可的系统 PAC</option><option value="wpad" disabled>已确认的 WPAD</option></select>
+    <select id="workspace-proxy-mode"><option value="auto">自动发现</option><option value="http">固定本机 HTTP</option><option value="socks5">固定本机 SOCKS5</option><option value="http_auth" disabled>本机 HTTP Basic＋保存凭据</option><option value="http_digest_auth" disabled>本机 HTTP Digest＋保存凭据</option><option value="socks5_auth" disabled>本机 SOCKS5＋保存凭据</option><option value="vm_http">宿主机 HTTP</option><option value="vm_socks5">宿主机 SOCKS5</option><option value="pac" disabled>已导入的域名 PAC</option><option value="pac_url" disabled>已导入的完整网址 PAC</option><option value="pac_url_dns" disabled>完整网址 PAC 与 DNS 助手</option><option value="system_pac" disabled>已许可的系统 PAC</option><option value="wpad" disabled>已确认的 WPAD</option></select>
     <label for="workspace-proxy-endpoint">已配置的代理地址和端口</label>
     <input id="workspace-proxy-endpoint" type="text" autocomplete="off" spellcheck="false" style="max-width:100%;box-sizing:border-box" placeholder="填写你的本机代理入口，不含账号密码" disabled>
     <p id="workspace-proxy-scope"></p>
@@ -170,7 +170,7 @@
   const proxyPassword = proxy.querySelector('#workspace-proxy-password');
   const authClear = proxy.querySelector('#clear-workspace-proxy-auth');
   let authAvailable = false, authSaved = false, savedMode = '', savedEndpoint = '';
-  const isAuth = () => ['http_auth', 'socks5_auth'].includes(mode.value);
+  const isAuth = () => ['http_auth', 'http_digest_auth', 'socks5_auth'].includes(mode.value);
   function clearSecretInputs() { proxyUsername.value = ''; proxyPassword.value = ''; }
   let revision = null, busy = false;
   function selection() {
@@ -215,7 +215,7 @@
     authAvailable = value.proxy_auth_available === true;
     authSaved = value.proxy_auth_saved === true;
     savedMode = value.proxy_mode || 'auto'; savedEndpoint = value.proxy_endpoint || '';
-    for (const name of ['http_auth','socks5_auth']) mode.querySelector('option[value='+name+']').disabled = !authAvailable;
+    for (const name of ['http_auth','http_digest_auth','socks5_auth']) mode.querySelector('option[value='+name+']').disabled = !authAvailable;
     proxy.querySelector('#workspace-proxy-auth-disclosure').textContent = value.proxy_auth_disclosure || '';
     mode.value = value.proxy_mode || 'auto';
     endpoint.value = value.proxy_endpoint || '';

@@ -39,7 +39,8 @@ class PortableReleaseTests(unittest.TestCase):
                     'runtime_environment_verified':True,'runtime_environment_restart_verified':True,
                     'files':{'VibeJobRadar.exe':'d'*64}}
         self.required_flags=('startup_registration_verified','startup_worker_verified',
-                             'system_pac_verified','wpad_dns_verified','url_pac_worker_verified','automatic_update_verified')
+                             'system_pac_verified','wpad_dns_verified','url_pac_worker_verified','automatic_update_verified',
+                             'workspace_proxy_credentials_verified','digest_proxy_credentials_verified')
         self.proof.update({flag:True for flag in self.required_flags})
         from test_native_component_portable import good_component
         from test_url_pac_evidence import good_url_proof
