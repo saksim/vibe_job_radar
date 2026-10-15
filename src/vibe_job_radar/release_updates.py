@@ -53,6 +53,10 @@ class UpdateError(ValueError):
     pass
 
 
+class DownloadInterrupted(UpdateError):
+    """A bounded transfer may be resumed only after a new explicit check."""
+
+
 def require(condition):
     if not condition:raise UpdateError('版本或文件核验失败；已有程序和工作区未替换。')
 
@@ -97,6 +101,8 @@ class ReleaseTransport:
 
     def stream(self, asset, destination, cancelled, progress):
         current=asset['browser_download_url'];started=time.monotonic()
+        offset=destination.tell()
+        require(type(offset) is int and 0<=offset<asset['size'])
         for attempt in range(4):
             check_stop(cancelled);safe_url(current)
             policy=self.policy.for_request(current)
@@ -104,24 +110,36 @@ class ReleaseTransport:
                                                      network_policy=policy,resolver=policy.resolver)
             conn=PinnedHTTPSConnection(host,addresses,10,network_policy=policy)
             try:
-                conn.request('GET',target,headers={'User-Agent':USER_AGENT,'Accept-Encoding':'identity'})
+                headers={'User-Agent':USER_AGENT,'Accept-Encoding':'identity'}
+                if offset:headers['Range']=f'bytes={offset}-'
+                conn.request('GET',target,headers=headers)
                 response=conn.getresponse()
                 if response.status in (301,302,303,307,308):
                     current=urljoin(current,response.getheader('Location') or '')
                     continue
-                require(response.status==200 and response.getheader('Content-Encoding','identity').lower()=='identity')
+                require(response.getheader('Content-Encoding','identity').lower()=='identity'
+                        and not response.getheader('Content-Type','').lower().startswith('multipart/'))
+                if response.status==206:
+                    require(offset>0 and response.getheader('Content-Range')==f"bytes {offset}-{asset['size']-1}/{asset['size']}")
+                else:
+                    require(response.status==200 and response.getheader('Content-Range') is None)
                 length=response.getheader('Content-Length')
-                require(length is None or length==str(asset['size']))
-                received=0
+                expected=asset['size']-offset if response.status==206 else asset['size']
+                require(length is None or length==str(expected))
+                if offset and response.status==200:
+                    # Range may be ignored. Consume this same full response from
+                    # zero, never append it or issue an automatic second request.
+                    destination.seek(0);destination.truncate();offset=0
+                received=offset;progress(received)
                 while True:
                     check_stop(cancelled)
-                    if time.monotonic()-started>900:raise UpdateError('下载超过15分钟，未保留未完成的软件包。')
+                    if time.monotonic()-started>900:raise DownloadInterrupted('本次下载已到15分钟期限。')
                     block=response.read(min(262144,asset['size']-received+1))
                     if not block:break
                     received+=len(block)
                     require(received<=asset['size'])
                     destination.write(block);progress(received)
-                require(received==asset['size'])
+                if received!=asset['size']:raise DownloadInterrupted('下载连接在完整接收前结束。')
                 return
             finally:conn.close()
         raise UpdateError('下载重定向次数超限，未继续请求。')
@@ -344,19 +362,8 @@ class ReleaseUpdates:
         package=updates/selected['package']['name']
         if io_path(package).exists():require(file_digest(package)==selected['sha256'])
         else:
-            descriptor,name=tempfile.mkstemp(prefix='.download-',suffix='.partial',dir=io_path(updates))
-            temp=Path(name);st=os.fstat(descriptor);identity=(st.st_dev,st.st_ino)
-            try:
-                with os.fdopen(descriptor,'wb') as out:
-                    self.factory().stream(selected['package'],out,self._stop,
-                                          lambda count:self._save(downloaded_bytes=count,total_bytes=selected['package']['size']))
-                    out.flush();os.fsync(out.fileno())
-                require(temp.stat().st_size==selected['package']['size'] and file_digest(temp)==selected['sha256'])
-                check_stop(self._stop)
-                os.link(temp,io_path(package))  # Exclusive publication: never overwrite an existing download.
-            finally:
-                from .team_store import remove_private_file
-                remove_private_file(temp,identity)
+            from .release_download import download_package
+            download_package(selected,updates,self.factory,self._stop,self._save)
         if not prepare:return package
         directory=stage_package(package,selected,updates,self._stop)
         self._save(status='ready',release_id=selected['release_id'],version=selected['version'],release_url=selected['release_url'],
@@ -389,6 +396,8 @@ class ReleaseUpdates:
             code=error.code if isinstance(error,FetchError) and isinstance(error.code,str) and error.code in UPDATE_NETWORK_MESSAGES else None
             if code is not None:
                 message=UPDATE_NETWORK_MESSAGES[code]+' 本次会话已校验的小文件会保留；原程序和工作区保留。'
+            if self._state.get('retained_bytes'):
+                message+=' 已保留未完成下载；请重新检查稳定版，再确认继续下载。完整校验前不会解压或安装。'
             self._save(status='failed',message=message,error_code=code)
 
     def close(self):

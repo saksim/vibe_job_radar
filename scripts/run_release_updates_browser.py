@@ -70,8 +70,30 @@ def main():
                     page.set_viewport_size({'width':390,'height':844})
                     assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
                     page.locator('#release-panel').screenshot(path=str(out/'updates-available-mobile.png'))
+                    offsets=[]
+                    def interrupted_download(asset,destination,cancelled,progress):
+                        raw=fixture.data[asset['name']];offset=destination.tell();offsets.append(offset)
+                        if not offset:
+                            destination.write(raw[:137]);progress(137)
+                            raise ConnectionResetError('authored interruption')
+                        destination.write(raw[offset:]);progress(len(raw))
+                    fixture.stream=interrupted_download
+                    page.locator('#release-download').click()
+                    expect(page.locator('#release-status')).to_contain_text('已保留',timeout=10000)
+                    expect(page.locator('#release-download')).to_be_disabled()
+                    assert server.releases.state()['retained_bytes']==137
+                    assert keep.read_text(encoding='utf-8')=='original workspace'
+                    page.locator('#release-panel').screenshot(path=str(out/'updates-interrupted-mobile.png'))
+                    server.releases.close()
+                    server.releases=ReleaseUpdates(workspace,transport_factory=lambda:fixture,current_version='0.3.0')
+                    page.reload();page.locator('#release-panel summary').first.click()
+                    expect(page.locator('#release-download')).to_be_disabled()
+                    page.locator('#release-check').click()
+                    expect(page.locator('#release-download')).to_be_enabled(timeout=10000)
                     page.locator('#release-download').click()
                     expect(page.locator('#release-status')).to_contain_text('已校验并解压',timeout=10000)
+                    assert offsets==[0,137]
+                    result['checks'].append('interrupted prefix survives service restart; fresh check and confirmation precede resume; complete digest precedes staging')
                     state=server.releases.state();assert state['status']=='ready'
                     assert Path(state['directory']).joinpath('VibeJobRadar.exe').read_bytes()==b'AUTHORED TEST DATA, NEVER EXECUTE'
                     assert keep.read_text(encoding='utf-8')=='original workspace' and old.read_bytes()==b'original program'
