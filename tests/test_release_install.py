@@ -29,7 +29,7 @@ class Registry:
 class InstallTests(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
-        self.root=Path(self.tmp.name);self.workspace=Workspace(self.root/'data')
+        self.root=Path(self.tmp.name).resolve();self.workspace=Workspace(self.root/'data')
         self.addCleanup(self.workspace.close_network)
         self.updates=self.workspace.root/'updates';self.updates.mkdir()
         self.old=self.root/'old'/'VibeJobRadar.exe';self.old.parent.mkdir();self.old.write_bytes(b'OLD TEST BYTES')

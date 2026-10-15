@@ -12,7 +12,8 @@ from test_native_component_portable import good_component
 def good_url_proof():
     return dict(schema_version=3,engine=ENGINE,frozen_executable=True,scope_confirmed=True,
         path_query_host_matched=True,calendar_helpers_checked=True,calendar_invalid_rejected=True,
-        unsupported_helper_rejected=True,dns_helpers_checked=True,target_requests=0,
+        unsupported_helper_rejected=True,dns_helpers_checked=True,
+        dns_probe_scope='localhost_ipv4_and_helper_exports',target_requests=0,
         target_request_evidence='api-check-response-flags',rolled_back=True)
 
 
