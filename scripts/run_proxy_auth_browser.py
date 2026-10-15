@@ -17,6 +17,7 @@ ROOT=Path(__file__).resolve().parents[1]
 sys.path[:0]=[str(ROOT/'src'),str(ROOT/'tests')]
 from test_proxy_auth import HTTPProxyAuthenticationTests, SocksProxyAuthenticationTests, HOST
 from test_digest_proxy import HTTPDigestProxyTests
+from test_ntlm_proxy import HTTPNtlmProxyTests
 from vibe_job_radar.guided.adapters import builtins
 from vibe_job_radar.guided.browser import PlaywrightBackend
 from vibe_job_radar.guided.contracts import CrawlError
@@ -50,15 +51,15 @@ def restore_in_child(workspace, browser):
 def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--channel',choices=['msedge','chrome'])
-    parser.add_argument('--protocol',choices=['http','socks5','http-digest'])
+    parser.add_argument('--protocol',choices=['http','socks5','http-digest','http-ntlmv2'])
     args=parser.parse_args()
     options={'channel':args.channel} if args.channel else {'executable_path':os.environ.get('RADAR_TEST_CHROMIUM')}
     browser_binding=args.channel or 'bundled'
     out=ROOT/'browser-acceptance'/'proxy-auth';out.mkdir(parents=True,exist_ok=True)
     result={'success':False,'checks':[],'source_requests':0,'browser_channel':browser_binding,
-            'scope':'Real browser, local HTTP Basic/Digest and SOCKS5 authentication and verified fixture TLS; artificial credentials and targets only.'}
+            'scope':'Real browser, local HTTP Basic/Digest/NTLMv2 and SOCKS5 authentication and verified fixture TLS; artificial credentials and targets only.'}
     try:
-        for protocol,cls in (('http',HTTPProxyAuthenticationTests),('socks5',SocksProxyAuthenticationTests),('http-digest',HTTPDigestProxyTests)):
+        for protocol,cls in (('http',HTTPProxyAuthenticationTests),('socks5',SocksProxyAuthenticationTests),('http-digest',HTTPDigestProxyTests),('http-ntlmv2',HTTPNtlmProxyTests)):
             if args.protocol and protocol!=args.protocol:continue
             fixture=cls();fixture.setUp()
             fixture.browser_fixture=True;fixture.content_type='text/html; charset=utf-8'
@@ -115,7 +116,7 @@ def main():
                     attempts=len(fixture.connects) if protocol=='http' else len(fixture.authentication)
                     delivered=len(fixture.requests)
                     if protocol=='http':fixture.expected_proxy_auth='Basic rejected'
-                    elif protocol=='http-digest':fixture.reject_auth=True
+                    elif protocol in ('http-digest','http-ntlmv2'):fixture.reject_auth=True
                     else:fixture.expected_credentials=(b'rejected',b'rejected')
                     try:backend.open('https://'+HOST+'/job/2.shtml')
                     except CrawlError as error:assert error.code=='local_proxy_auth_failed',error.code
@@ -132,6 +133,7 @@ def main():
                 finally:backend.close()
             try:fixture.perform(exercise)
             finally:
+                result['source_requests'] += len(fixture.requests)
                 fixture.tearDown();fixture.doCleanups()
         result['success']=True
     finally:

@@ -14,6 +14,7 @@ dependencies = []
 
 [project.optional-dependencies]
 pac = ["quickjs-ng==0.17.0.1"]
+ntlm = ["pyspnego==0.12.4"]
 service = ["waitress==3.0.2"]
 acceptance = ["tzdata"]
 browser = ["playwright>=1.48,<2", "packaging>=24.2"]

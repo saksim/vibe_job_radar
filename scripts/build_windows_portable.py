@@ -20,7 +20,7 @@ from vibe_job_radar.qualification import check_source,fingerprint,output_directo
 from vibe_job_radar.utils import atomic_json
 from vibe_job_radar.runtime_identity import source_stamp
 
-BUILD_VERSIONS={'pyinstaller':'6.22.3','playwright':'1.63.0','packaging':'26.0','truststore':'0.10.4','quickjs-ng':'0.17.0.1'}
+BUILD_VERSIONS={'pyinstaller':'6.22.3','playwright':'1.63.0','packaging':'26.0','truststore':'0.10.4','quickjs-ng':'0.17.0.1','pyspnego':'0.12.4','cryptography':'50.0.2','sspilib':'0.6.0','cffi':'2.1.1','pycparser':'3.11'}
 
 
 def file_hash(path):
@@ -99,9 +99,10 @@ def build_candidate(out,evidence_path,*,verify_login_startup=False,verify_system
         args=[sys.executable,'-m','PyInstaller','--noconfirm','--clean','--onedir','--console','--noupx',
               '--name','VibeJobRadar','--paths',str(ROOT/'src'),'--collect-data','vibe_job_radar',
               '--collect-submodules','vibe_job_radar']
-        for package in ('playwright','packaging','truststore'):
+        for package in ('playwright','packaging','truststore','cryptography','sspilib','cffi','pycparser'):
             args.extend(['--collect-all',package,'--copy-metadata',package])
-        args.extend(['--collect-all','quickjs','--hidden-import','_quickjs','--copy-metadata','quickjs-ng'])
+        args.extend(['--collect-all','quickjs','--hidden-import','_quickjs','--copy-metadata','quickjs-ng',
+                     '--collect-all','spnego','--copy-metadata','pyspnego','--hidden-import','_cffi_backend'])
         args.extend(['--distpath',str(stage/'程序目录 with spaces'),'--workpath',str(stage/'build'),'--specpath',str(stage),
                      str(ROOT/'scripts'/'portable_entry.py')])
         # Collection hooks run before Analysis applies --paths. Make the source
@@ -127,7 +128,7 @@ def build_candidate(out,evidence_path,*,verify_login_startup=False,verify_system
         shutil.copyfile(python_license,licenses/'Python.txt')
         shutil.copyfile(ROOT/'docs/licenses/QUICKJS_NG_NOTICES.txt',licenses/'QuickJS_NG_Notices.txt')
         collected=['licenses/QuickJS_NG_Notices.txt']
-        for package in ('pyinstaller','playwright','packaging','truststore','greenlet','pyee','typing_extensions','quickjs-ng'):
+        for package in ('pyinstaller','playwright','packaging','truststore','greenlet','pyee','typing_extensions','quickjs-ng','pyspnego','cryptography','sspilib','cffi','pycparser'):
             dist=importlib.metadata.distribution(package)
             found=False
             for item in dist.files or []:
@@ -170,7 +171,7 @@ def build_candidate(out,evidence_path,*,verify_login_startup=False,verify_system
         if verify_wpad_dns:verification.append('--verify-wpad-dns')
         subprocess.run(verification,cwd=ROOT,check=True,timeout=360)
         report=json.loads(runtime_evidence.read_text(encoding='utf-8'))
-        validate_runtime_evidence(bundle,report,require_login_startup=verify_login_startup,require_system_pac=verify_system_pac,require_wpad_dns=verify_wpad_dns,require_url_pac=True,require_domain_pac=True,require_environment=True,require_automatic_update=True)
+        validate_runtime_evidence(bundle,report,require_login_startup=verify_login_startup,require_system_pac=verify_system_pac,require_wpad_dns=verify_wpad_dns,require_url_pac=True,require_domain_pac=True,require_ntlm=True,require_environment=True,require_automatic_update=True)
         if fingerprint(ROOT)!=expected:raise ValueError('source changed during portable build')
         part=stage/'candidate.zip'
         with zipfile.ZipFile(part,'w',zipfile.ZIP_DEFLATED) as archive:
@@ -200,6 +201,7 @@ def build_candidate(out,evidence_path,*,verify_login_startup=False,verify_system
             'wpad_dns_verified':report.get('wpad_dns_verified') is True,
             'url_pac_worker_verified':report.get('url_pac_worker_verified') is True,
             'domain_pac_worker_verified':report.get('domain_pac_worker_verified') is True,
+            'ntlm_proxy_worker_verified':report.get('ntlm_proxy_worker_verified') is True,
             'workspace_proxy_credentials_verified':report.get('workspace_proxy_credentials_verified') is True,
             'digest_proxy_credentials_verified':report.get('digest_proxy_credentials_verified') is True,
             'automatic_update_verified':report.get('automatic_update_verified') is True})
@@ -234,12 +236,14 @@ def native_components_valid(rows):
         and all(native_component_valid(rows[channel],channel) for channel in rows))
 
 
-def validate_runtime_evidence(bundle,report,*,require_login_startup=False,require_system_pac=False,require_wpad_dns=False,require_url_pac=False,require_domain_pac=False,require_environment=False,require_automatic_update=False):
+def validate_runtime_evidence(bundle,report,*,require_login_startup=False,require_system_pac=False,require_wpad_dns=False,require_url_pac=False,require_domain_pac=False,require_ntlm=False,require_environment=False,require_automatic_update=False):
     from automatic_update_acceptance import valid_evidence as valid_automatic_update
     if require_wpad_dns:
         from wpad_dns_evidence import valid_wpad_dns_evidence
     if require_url_pac:
         from url_pac_acceptance import valid_evidence as valid_url_pac
+    if require_ntlm:
+        from ntlm_proxy_acceptance import valid_evidence as valid_ntlm
     if require_domain_pac:
         from domain_pac_acceptance import valid_evidence as valid_domain_pac
     if (not isinstance(report,dict) or report.get('success') is not True
@@ -254,6 +258,8 @@ def validate_runtime_evidence(bundle,report,*,require_login_startup=False,requir
             or (require_system_pac and report.get('system_pac_verified') is not True)
             or (require_url_pac and (report.get('url_pac_worker_verified') is not True
                                     or not valid_url_pac(report.get('url_pac'))))
+            or (require_ntlm and (report.get('ntlm_proxy_worker_verified') is not True
+                                 or not valid_ntlm(report.get('ntlm_proxy'))))
             or (require_domain_pac and (report.get('domain_pac_worker_verified') is not True
                                        or not valid_domain_pac(report.get('domain_pac'))))
             or (require_wpad_dns and (report.get('wpad_dns_verified') is not True

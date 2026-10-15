@@ -18,7 +18,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install only the supported Python SDK
-        run: python -m pip install "playwright>=1.48,<2" "packaging>=24.2"
+        run: python -m pip install "playwright>=1.48,<2" "packaging>=24.2" "pyspnego==0.12.4"
       - name: Check already-installed Edge through the actual collector
         run: python scripts/run_browser_choice_acceptance.py
       - name: Verify workspace DNS policy inside real Edge request callbacks
@@ -45,7 +45,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install supported Python SDK
-        run: python -m pip install "playwright>=1.48,<2" "packaging>=24.2"
+        run: python -m pip install "playwright>=1.48,<2" "packaging>=24.2" "pyspnego==0.12.4"
       - name: Verify Chrome bridge selection and separate native check
         run: python scripts/run_browser_choice_acceptance.py --channel chrome
       - name: Verify Chrome native selection and restart without borrowing bridge readiness
