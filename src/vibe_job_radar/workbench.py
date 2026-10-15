@@ -315,6 +315,8 @@ class Handler(BaseHTTPRequestHandler):
                    "/api/network/proxy-auth": "network_proxy_auth_preferences",
                    "/api/network/proxy-auth/clear": "network_proxy_auth_clear",
                    "/api/network/pac": "network_pac_preferences",
+                   "/api/network/pac-domain": "network_domain_pac_preferences",
+                   "/api/network/pac-domain-dns": "network_domain_pac_dns_preferences",
                    "/api/network/pac-url": "network_url_pac_preferences",
                    "/api/network/pac-url-dns": "network_url_pac_dns_preferences",
                    "/api/network/system-pac": "network_system_pac_preferences",

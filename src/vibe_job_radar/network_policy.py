@@ -84,12 +84,14 @@ class NetworkPolicy:
     public_dns: bool = False
     pac_url_mode: bool = False
     credential_scope_id: str = ''
+    pac_domain_mode: bool = False
 
     def __post_init__(self):
         if (not isinstance(self.credential_scope_id, str) or (self.credential_scope_id and
                 (len(self.credential_scope_id) != 64 or any(c not in '0123456789abcdef' for c in self.credential_scope_id)))):
             raise ValueError('invalid protected credential identity')
-        if type(self.pac_url_mode) is not bool:
+        if (type(self.pac_url_mode) is not bool or type(self.pac_domain_mode) is not bool
+                or (self.pac_url_mode and self.pac_domain_mode)):
             raise ValueError('invalid PAC scope')
         if type(self.public_dns) is not bool or (self.public_dns and self.encrypted_dns is not True):
             raise ValueError('public DNS requires an explicit encrypted DNS policy')
@@ -189,6 +191,8 @@ class NetworkPolicy:
             value.append('explicit_http_digest_v1')
         if self.pac_url_mode:
             value.append('explicit_full_url_pac_v1')
+        if self.pac_domain_mode:
+            value.append('explicit_portable_domain_pac_v1')
         if self.credential_scope_id:
             value.extend(('protected_workspace_proxy_v1', self.credential_scope_id))
         if self.proxy and self.proxy.credentials is not None:
@@ -244,6 +248,8 @@ class NetworkPolicy:
             result['proxy_authentication_method'] = 'digest'
         if self.pac_url_mode:
             result.update(pac_scope='explicit_trusted_full_https_url', native_browser_supported=False)
+        if self.pac_domain_mode or getattr(self.pac, 'kind', None) == 'portable_domain_pac':
+            result.update(pac_scope='explicit_trusted_portable_domain', native_browser_supported=True)
         if self.pac is not None:
             # Status reads must never execute PAC helpers, including DNS.
             result.update(transport='unavailable' if self.error else 'pac_by_host',

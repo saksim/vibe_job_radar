@@ -54,7 +54,7 @@ def main():
                         page.locator('#workspace-pac-file').set_input_files({'name':name,'mimeType':'application/x-ns-proxy-autoconfig','buffer':body})
                     def save():
                         page.locator('#workspace-pac-consent').check()
-                        with page.expect_response(lambda r:r.url.endswith(('/api/network/pac','/api/network/pac-url','/api/network/pac-url-dns'))) as response:
+                        with page.expect_response(lambda r:r.url.endswith(('/api/network/pac','/api/network/pac-url','/api/network/pac-url-dns','/api/network/pac-domain','/api/network/pac-domain-dns'))) as response:
                             page.locator('#save-workspace-pac').click()
                         assert response.value.status==200
                         expect(page.locator('#save-workspace-pac')).to_be_enabled()
@@ -149,6 +149,41 @@ def main():
                     assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
                     page.locator('#network-preferences').screenshot(path=str(out/'pac-dns-mobile.png'))
                     result['full_url_checks'].append('separate DNS-helper consent persists across all pages; actual localhost DNS helper passes without a target request')
+                    result['portable_domain_checks']=[]
+                    for kind,mode,schema in (('portable_domain','pac_domain',9),('portable_domain_dns','pac_domain_dns',10)):
+                        page.locator('#workspace-pac-consent').check()
+                        page.locator('#workspace-pac-kind').select_option(kind)
+                        expect(page.locator('#workspace-pac-consent')).not_to_be_checked()
+                        expect(page.locator('#workspace-pac-disclosure')).to_contain_text('不提供路径')
+                        condition='url==="https://pac-check.invalid/" && host==="pac-check.invalid"'
+                        condition+=(' && isInNet(dnsResolve("localhost"),"127.0.0.0","255.0.0.0")' if schema==10 else ' && typeof dnsResolve==="undefined"')
+                        body=('function FindProxyForURL(url,host){return ('+condition+')?"SOCKS5 127.0.0.1:19081":"INVALID path-leaked";}').encode()
+                        with patch.object(pac_url_worker,'evaluate',wraps=real_url_evaluate) as domain_calls:
+                            file(body,'domain.pac');save()
+                            previous=workspace.network_policy()
+                            for path in ('/guided','/advanced','/'):
+                                page.goto(server.origin+path);expand()
+                                expect(page.locator('#workspace-pac-kind')).to_have_value(kind)
+                                expect(page.locator('#workspace-proxy-mode')).to_have_value(mode)
+                            domain_calls.assert_not_called()
+                            assert workspace.network_state()['schema_version']==schema
+                            assert previous.describe()['native_browser_supported'] is True
+                            assert check(True)['transport']=='loopback_socks5_proxy'
+                            assert domain_calls.call_args.args[1:3]==('https://pac-check.invalid/','pac-check.invalid')
+                            assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
+                            page.locator('#network-preferences').screenshot(path=str(out/(mode+'-mobile.png')))
+                        page.locator('#workspace-proxy-mode').select_option('auto')
+                        with page.expect_response(lambda r:r.url.endswith('/api/network/proxy')):
+                            page.locator('#save-workspace-proxy').click()
+                        expect(page.locator('#workspace-proxy-mode')).to_have_value('auto')
+                        from vibe_job_radar.loopback_proxy import LocalProxyError
+                        try:previous.for_host('pac-check.invalid')
+                        except LocalProxyError as exc:assert exc.code=='pac_revoked'
+                        else:raise AssertionError('domain grant survived rollback')
+                        result['portable_domain_checks'].append(dict(mode=mode,schema=schema,three_pages=True,
+                            import_readonly=True,canonical_root_only=True,rollback_revoked=True))
+                    assert not result['external_requests'] and not result['page_errors']
+                    result['portable_domain_success']=True
                     result.update(success=True,full_url_success=True,url_engine_version=pac_url_worker.ENGINE_VERSION,browser_version=browser.version)
                 finally:browser.close()
         finally:
