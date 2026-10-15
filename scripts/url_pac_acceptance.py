@@ -6,14 +6,15 @@ def valid_evidence(value, *, require_frozen=True):
     if not isinstance(value, dict) or set(value) != {
             'schema_version','engine','frozen_executable','scope_confirmed',
             'path_query_host_matched','calendar_helpers_checked','calendar_invalid_rejected',
-            'unsupported_helper_rejected','target_requests','target_request_evidence','rolled_back'}:
+            'unsupported_helper_rejected','dns_helpers_checked','dns_probe_scope','target_requests','target_request_evidence','rolled_back'}:
         return False
-    return (type(value['schema_version']) is int and value['schema_version']==2
+    return (type(value['schema_version']) is int and value['schema_version']==3
+        and value['dns_probe_scope']=='localhost_ipv4_and_helper_exports'
         and value['engine']==ENGINE and type(value['frozen_executable']) is bool
         and (not require_frozen or value['frozen_executable'] is True)
         and all(value[key] is True for key in ('scope_confirmed','path_query_host_matched',
                                                'calendar_helpers_checked','calendar_invalid_rejected',
-                                               'unsupported_helper_rejected','rolled_back'))
+                                               'unsupported_helper_rejected','dns_helpers_checked','rolled_back'))
         and type(value['target_requests']) is int and value['target_requests']==0
         and value['target_request_evidence']=='api-check-response-flags')
 
@@ -31,10 +32,11 @@ def verify_app(app, *, frozen_executable=False):
         '||!dateRange(29,"FEB",29,"FEB","GMT")||dateRange("MAR","GMT")'
         '||!timeRange(23,1,"GMT")||timeRange(1,2,"GMT"))return "UNKNOWN wrong-input:9; DIRECT";'
         'return "SOCKS5 127.0.0.1:19081; DIRECT";}')
-    proof=dict(schema_version=2,engine=ENGINE,frozen_executable=frozen_executable,
+    proof=dict(schema_version=3,engine=ENGINE,frozen_executable=frozen_executable,
                scope_confirmed=False,path_query_host_matched=False,
                calendar_helpers_checked=False,calendar_invalid_rejected=False,
-               unsupported_helper_rejected=False,target_requests=0,
+               unsupported_helper_rejected=False,dns_helpers_checked=False,
+               dns_probe_scope='localhost_ipv4_and_helper_exports',target_requests=0,
                target_request_evidence='api-check-response-flags',rolled_back=False)
     try:
         imported=app.json('/api/network/pac-url',dict(name='authored-url.pac',script=scripted,
@@ -61,6 +63,16 @@ def verify_app(app, *, frozen_executable=False):
         assert checked['passed'] is False and checked['code']=='pac_invalid_script'
         assert checked['target_requested'] is False
         proof['unsupported_helper_rejected']=True
+        # Do not depend on the CI host's hostname having a working DNS record.
+        # myIpAddress semantics have a separate real-engine resolver test.
+        imported=app.json('/api/network/pac-url-dns',dict(name='authored-dns-helpers.pac',
+            script='function FindProxyForURL(){return isResolvable("127.0.0.1") && isInNet(dnsResolve("localhost"),"127.0.0.0","255.0.0.0") && typeof myIpAddress==="function" ? "DIRECT" : "INVALID";}',
+            revision=imported['revision'],consent=True))
+        assert imported['schema_version']==7 and imported['proxy_mode']=='pac_url_dns'
+        assert imported['network_tested'] is False
+        checked=app.json('/api/network/pac/check',{'revision':imported['revision']})
+        assert checked['passed'] is True and checked['target_requested'] is False, checked.get('code')
+        proof['dns_helpers_checked']=True
     finally:
         latest=app.json('/api/network/state')
         rollback=app.json('/api/network/proxy',dict(mode='auto',endpoint='',consent=False,

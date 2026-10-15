@@ -17,6 +17,7 @@ import zipfile
 from release_summary import validate_summary
 from build_windows_portable import native_components_valid
 from url_pac_acceptance import valid_evidence as valid_url_pac
+from automatic_update_acceptance import valid_evidence as valid_automatic_update
 from wpad_dns_evidence import valid_wpad_dns_evidence
 
 WORKFLOWS = {
@@ -28,7 +29,7 @@ WORKFLOWS = {
 ARTIFACTS = ('windows-x64-portable-candidate', 'windows-portable-evidence')
 REQUIRED_PORTABLE_FLAGS = (
     'startup_registration_verified', 'startup_worker_verified',
-    'system_pac_verified', 'wpad_dns_verified', 'url_pac_worker_verified',
+    'system_pac_verified', 'wpad_dns_verified', 'url_pac_worker_verified', 'automatic_update_verified',
 )
 HEX = re.compile(r'[0-9a-f]{64}')
 REPO = re.compile(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+')
@@ -171,6 +172,7 @@ def validate_candidate(candidate, manifest, source_evidence, sha):
     # Use the same structured acceptance gates as the current producer.
     require(native_components_valid(proof.get('native_components'))
             and valid_url_pac(proof.get('url_pac'))
+            and valid_automatic_update(proof.get('automatic_update'))
             and valid_wpad_dns_evidence(proof.get('wpad_dns')),
             'Executable acceptance details are missing or invalid')
     require(runtime.get('executable_sha256') == proof.get('files', {}).get('VibeJobRadar.exe')
@@ -233,7 +235,7 @@ def assemble(candidate, manifest, source_evidence, selected, qualified, artifact
         f"[工作区兼容与回退](https://github.com/{repo}/blob/{selected['head_sha']}/docs/WORKSPACE_COMPATIBILITY.md)"
         f" · [完整便携说明](https://github.com/{repo}/blob/{selected['head_sha']}/docs/WINDOWS_PORTABLE.md)\n\n"
         "保留原源码启动、便携启动、手工导入、采集、分析和报告功能。"
-        "本候选不自动更新或清空工作区。真实账号/滑块短信、三站完整 JD、干净个人设备与新手验收、"
+        "自动升级需单独确认并先备份，保留原程序；不自动清空或回写工作区。真实账号/滑块短信、三站完整 JD、干净个人设备与新手验收、"
         "连续24小时及真实Windows重新登录仍分别待验收。CI runner自带Python；"
         "移除子进程Python PATH的验证不等于未安装Python的个人电脑已验收。"
         "本机配套Chromium曾有未定位崩溃，明确选择Edge的历史通过也不替代本包现场验收。\n"

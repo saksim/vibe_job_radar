@@ -40,6 +40,9 @@ _DEFAULT_PUBLIC_CLIENT = object()
 class LocalServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = False
+    # A cold page opens several connections before the accept thread can run.
+    # Keep a bounded pending queue so a brief scheduling pause does not drop JS.
+    request_queue_size = 64
 
     def __init__(self, workspace: Workspace, port: int = 0, *, public_client=_DEFAULT_PUBLIC_CLIENT):
         self.workspace = workspace
@@ -87,6 +90,31 @@ class LocalServer(ThreadingHTTPServer):
         self.guided.close()
         self.public_tasks.close()
         super().server_close()
+
+    def upgrade_preflight(self):
+        with self.guided._lock:
+            if (self.guided._busy or self.guided._backends or self.guided._closing_backends
+                    or self.guided._closure_uncertain or self.guided._ownership.foreign()):
+                raise InputError('请先停止采集并关闭采集浏览器；自动升级不会中断该会话。')
+        if self.public_tasks.busy() or (self.collection_runner._thread and self.collection_runner._thread.is_alive()):
+            raise InputError('请先等待或停止当前公开/后台采集任务，再自动升级。')
+        if self.team._thread and self.team._thread.is_alive():
+            raise InputError('团队同步正在执行，请完成后再自动升级。')
+
+    def upgrade_quiesce(self):
+        if not self.mutation_lock.acquire(blocking=False):
+            raise InputError('另一个操作正在执行，请完成后再自动升级。')
+        try:
+            self.upgrade_preflight()
+            self.public_queue.close();self.public_schedule.close()
+            self.upgrade_preflight()
+            if self.public_queue.is_running() or self.public_schedule.is_running():
+                raise InputError('后台调度尚未退出，未切换版本。请等待任务完成后重启当前工作台；原计划和待办保留。')
+        except BaseException:
+            self.mutation_lock.release()
+            self.public_schedule.start();self.public_queue.start()
+            raise
+        # Keep mutations closed until this process exits and releases OS owners.
 
     @property
     def entry_url(self) -> str:
@@ -286,6 +314,7 @@ class Handler(BaseHTTPRequestHandler):
                    "/api/network/proxy": "network_proxy_preferences",
                    "/api/network/pac": "network_pac_preferences",
                    "/api/network/pac-url": "network_url_pac_preferences",
+                   "/api/network/pac-url-dns": "network_url_pac_dns_preferences",
                    "/api/network/system-pac": "network_system_pac_preferences",
                    "/api/network/wpad/discover": "network_wpad_discover",
                    "/api/network/wpad/cancel": "network_wpad_cancel",
@@ -297,7 +326,7 @@ class Handler(BaseHTTPRequestHandler):
             methods = {"/api/windows/startup/" + name: name for name in ("enable", "disable")}
         elif route.startswith("/api/releases/"):
             target = self.server.releases
-            methods = {"/api/releases/" + name: name for name in ("check", "download")}
+            methods = {"/api/releases/" + name: name for name in ("check", "download", "install")}
         elif route.startswith("/api/team/"):
             target = self.server.team
             methods = {"/api/team/" + name: name for name in ("check", "sync")}
@@ -366,6 +395,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main(argv: list[str] | None = None) -> int:
+    original_argv = list(sys.argv[1:] if argv is None else argv)
     parser = argparse.ArgumentParser(description="Vibe Job Radar 本地浏览器工作台（可选受控浏览器与人工登录协助）")
     parser.add_argument("--workspace", type=Path, default=Path.home() / ".vibe-job-radar")
     parser.add_argument("--port", type=int, default=0, help="默认由系统选择空闲端口，仅绑定 127.0.0.1")
@@ -377,7 +407,26 @@ def main(argv: list[str] | None = None) -> int:
     modes.add_argument('--public-worker',action='store_true',help='仅运行已确认的公开查询计划和待办，不启动网页服务器或浏览器')
     modes.add_argument('--native-browser-check',action='store_true',help='检查新临时原生浏览器的空白页、请求拒绝与退出；不连接招聘网站')
     parser.add_argument('--native-browser-channel',choices=['bundled','msedge','chrome'],help='仅用于原生组件检查，默认配套Chromium')
-    args = parser.parse_args(argv)
+    modes.add_argument('--apply-update',type=Path,help=argparse.SUPPRESS)
+    parser.add_argument('--upgrade-handoff',type=Path,help=argparse.SUPPRESS)
+    parser.add_argument('--ignore-installed-update',action='store_true',help='故障恢复时启动此便携版本，不转到已安装的新版本')
+    args = parser.parse_args(original_argv)
+    if args.apply_update:
+        from .release_install import apply_update
+        try:return apply_update(args.apply_update)
+        except (OSError,ValueError,KeyError,TypeError):return 2
+    if args.upgrade_handoff and (args.doctor or args.team_install or args.public_worker or args.native_browser_check):
+        parser.error('升级交接只用于工作台启动')
+    if not (args.ignore_installed_update or args.upgrade_handoff or args.doctor or args.team_install or args.native_browser_check):
+        from .release_install import installed_command, spawn
+        try:
+            command=installed_command(args.workspace,original_argv)
+            if command:
+                spawn(command)
+                return 0
+        except (OSError,ValueError,KeyError,TypeError):
+            print('已安装版本入口校验失败；保留数据。可使用 --ignore-installed-update 启动此程序进行恢复。',file=sys.stderr)
+            return 2
     if not 0 <= args.port <= 65535:
         parser.error("port 必须为 0～65535")
     if args.team_install:
@@ -406,6 +455,14 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(diagnostic, ensure_ascii=False, indent=2))
             return 0
         with LocalServer(workspace, args.port) as server:
+            from .runtime import is_portable
+            if is_portable() and sys.platform=='win32':
+                from .release_install import AutomaticInstaller
+                server.releases.installer=AutomaticInstaller(workspace,shutdown=server.shutdown,
+                    quiesce=server.upgrade_quiesce,preflight=server.upgrade_preflight,no_browser=args.no_browser)
+            if args.upgrade_handoff:
+                from .release_install import acknowledge_ready
+                acknowledge_ready(args.upgrade_handoff,workspace,server.server_address[1])
             print(f"本地工作台：{server.entry_url}", flush=True)
             print(f"数据目录：{workspace.root}\n仅本机访问；不要分享带令牌的地址。关闭终端或按 Ctrl+C 停止。", flush=True)
             if not args.no_browser:
