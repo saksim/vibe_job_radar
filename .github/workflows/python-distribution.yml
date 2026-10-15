@@ -1,0 +1,68 @@
+name: python-distribution
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: python-distribution-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install "setuptools==81.0.0" "wheel==0.46.3"
+      - run: python scripts/build_python_distribution.py --out .verify/python-distribution
+      - run: python scripts/verify_python_sdist.py --candidate .verify/python-distribution --out .verify/python-sdist-proof
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-distribution-candidate
+          retention-days: 30
+          include-hidden-files: true
+          path: .verify/python-distribution/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: python-sdist-proof
+          retention-days: 30
+          include-hidden-files: true
+          path: .verify/python-sdist-proof/
+  installed:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: python-distribution-candidate
+          path: .verify/python-distribution
+      - run: python scripts/verify_python_distribution.py --candidate .verify/python-distribution --out .verify/python-installed
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: python-installed-${{ matrix.os }}
+          retention-days: 30
+          include-hidden-files: true
+          path: .verify/python-installed/result.json
+          if-no-files-found: error
