@@ -17,11 +17,12 @@ import tempfile
 import threading
 import time
 import zipfile
+from collections import OrderedDict
 from pathlib import Path, PurePosixPath
 from urllib.parse import urljoin, urlsplit
 
 from ._version import __version__
-from .network import SafeHTTP, PinnedHTTPSConnection, validate_public_url, USER_AGENT
+from .network import SafeHTTP, PinnedHTTPSConnection, validate_public_url, USER_AGENT, FetchError
 from .workspace import InputError
 
 REPOSITORY = 'saksim/vibe_job_radar'
@@ -36,6 +37,14 @@ WORKFLOWS = {'.github/workflows/'+name for name in ('tests.yml','browser.yml','b
              'browser-health.yml','native-browser.yml','vm-proxy.yml','windows-native-tls.yml','windows-portable.yml')}
 MAX_ZIP = 1024**3
 MAX_EXPANDED = 3*1024**3
+UPDATE_NETWORK_MESSAGES = {
+    'encrypted_dns_unavailable': '加密DNS服务连接失败，请核对当前网络后重新检查。',
+    'encrypted_dns_expired_answer': '加密DNS解析结果已过期，请稍后重新检查。',
+    'pac_failed': 'PAC脚本进程执行或清理失败，请检查网络设置后重试。',
+    'pac_timeout': 'PAC脚本选路超时，请检查脚本和当前网络后重试。',
+    'pac_dns_failed': 'PAC所用系统DNS暂不可用，请核对当前网络后重试。',
+    'pac_dns_limit': 'PAC脚本超过单次DNS名称上限，请检查脚本后重试。',
+}
 
 
 class UpdateError(ValueError):
@@ -116,7 +125,7 @@ class ReleaseTransport:
         raise UpdateError('下载重定向次数超限，未继续请求。')
 
 
-def inspect_release(release, transport, cancelled):
+def inspect_release(release, transport, cancelled, *, metadata_cache=None):
     require(isinstance(release,dict) and release.get('draft') is False and release.get('prerelease') is False
             and type(release.get('id')) is int and release['id']>0)
     tag=release.get('tag_name','')
@@ -143,8 +152,17 @@ def inspect_release(release, transport, cancelled):
     for name in sorted(SMALL_ASSETS):
         check_stop(cancelled)
         asset=by_name[name];require(asset['size']<=1_000_000)
-        raw=transport.small(asset,cancelled)
+        # Latest is always fetched first. Cache only immutable public bytes whose
+        # digest and length still match this fresh official inventory. A partial
+        # failure must not turn cached metadata into a qualified release.
+        key=(asset['digest'],asset['size'])
+        raw=metadata_cache.pop(key,None) if metadata_cache is not None else None
+        if not (isinstance(raw,bytes) and len(raw)==asset['size'] and 'sha256:'+digest(raw)==asset['digest']):
+            raw=transport.small(asset,cancelled)
         require(isinstance(raw,bytes) and len(raw)==asset['size'] and 'sha256:'+digest(raw)==asset['digest'])
+        if metadata_cache is not None:
+            metadata_cache[key]=raw
+            while len(metadata_cache)>len(SMALL_ASSETS):metadata_cache.popitem(last=False)
         data[name]=raw
     sums={}
     for line in data['SHA256SUMS.txt'].decode('utf-8').splitlines():
@@ -267,6 +285,7 @@ class ReleaseUpdates:
         self.workspace=workspace;self.current_version=current_version;self.installer=installer
         self.factory=transport_factory or (lambda:ReleaseTransport(workspace.network_policy()))
         self._lock=threading.Lock();self._thread=None;self._stop=threading.Event();self._selected=None
+        self._metadata_cache=OrderedDict()  # At most seven <=1MB blobs; no disk or cross-instance sharing.
         self._state={'status':'idle','current_version':current_version,'message':'检查前不会联网；只读取官方仓库稳定版本。'}
 
     def state(self):
@@ -298,7 +317,7 @@ class ReleaseUpdates:
     def _check(self):
         self._selected=None
         transport=self.factory()
-        selected=inspect_release(transport.latest(),transport,self._stop)
+        selected=inspect_release(transport.latest(),transport,self._stop,metadata_cache=self._metadata_cache)
         self._selected=selected
         newer=version(selected['version'])>version(self.current_version)
         self._save(status='available' if newer else 'current',version=selected['version'],
@@ -365,7 +384,10 @@ class ReleaseUpdates:
         try:fn()
         except Exception as error:
             message=str(error) if isinstance(error,(UpdateError,InputError)) else '版本操作未完成，请检查网络、磁盘和官方发行状态；已有程序和工作区保留。'
-            self._save(status='failed',message=message)
+            code=error.code if isinstance(error,FetchError) and isinstance(error.code,str) and error.code in UPDATE_NETWORK_MESSAGES else None
+            if code is not None:
+                message=UPDATE_NETWORK_MESSAGES[code]+' 本次会话已校验的小文件会保留；原程序和工作区保留。'
+            self._save(status='failed',message=message,error_code=code)
 
     def close(self):
         self._stop.set()
