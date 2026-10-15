@@ -177,7 +177,18 @@ def inspect_release(release, transport, cancelled):
             'source_sha256':provenance['source_sha256'],'notes':notes[:30000],'signed':False}
 
 
+def io_path(path):
+    """Use native Windows long paths for I/O; validate logical paths first."""
+    if os.name != 'nt':return path
+    # abspath normalizes dot components without following a final symlink.
+    name=os.path.abspath(path)
+    if name.startswith('\\\\?\\'):return Path(name)
+    if name.startswith('\\\\'):return Path('\\\\?\\UNC\\'+name[2:])
+    return Path('\\\\?\\'+name)
+
+
 def file_digest(path):
+    path=io_path(path)
     require(path.is_file() and not path.is_symlink() and path.stat().st_size<=MAX_ZIP)
     result=hashlib.sha256()
     with path.open('rb') as stream:
@@ -190,14 +201,14 @@ def remove_owned_tree(path, identity, parent):
     if path.is_symlink() or path.resolve().parent!=parent.resolve():return
     try:
         current=path.stat()
-        if (current.st_dev,current.st_ino)==identity:shutil.rmtree(path)
+        if (current.st_dev,current.st_ino)==identity:shutil.rmtree(io_path(path))
     except FileNotFoundError:pass
 
 
 def stage_package(package, info, updates, cancelled):
     require(package.parent.resolve()==updates.resolve() and not package.is_symlink())
     created=None
-    with package.open('rb') as stream:
+    with io_path(package).open('rb') as stream:
         # Hash and extract the same open file, not a path that could be replaced.
         hasher=hashlib.sha256()
         for block in iter(lambda:stream.read(1024*1024),b''):
@@ -223,13 +234,15 @@ def stage_package(package, info, updates, cancelled):
             require(meta.get('version')==info['version'] and meta.get('platform')=='windows-x64'
                     and meta.get('runtime_source',{}).get('revision')==info['revision']
                     and meta.get('source',{}).get('sha256')==info['source_sha256'])
-            created=Path(tempfile.mkdtemp(prefix='v'+info['version']+'-',dir=updates))
-            st=created.stat();identity=(st.st_dev,st.st_ino)
+            staged=Path(tempfile.mkdtemp(prefix='v'+info['version']+'-',dir=io_path(updates)))
+            created=updates/staged.name
+            st=staged.stat();identity=(st.st_dev,st.st_ino)
             try:
                 for member in members:
                     check_stop(cancelled)
                     destination=created.joinpath(*PurePosixPath(member.filename).parts)
                     require(destination.resolve().is_relative_to(created.resolve()))
+                    destination=io_path(destination)
                     if member.is_dir():destination.mkdir(parents=True,exist_ok=True,mode=0o700);continue
                     destination.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
                     with archive.open(member) as source, destination.open('xb') as out:
@@ -240,7 +253,7 @@ def stage_package(package, info, updates, cancelled):
                             remaining-=len(block);require(remaining>=0);out.write(block)
                         require(remaining==0)
                         out.flush();os.fsync(out.fileno())
-                (created/'READY.json').write_text(json.dumps({'version':info['version'],'sha256':info['sha256'],
+                (io_path(created)/'READY.json').write_text(json.dumps({'version':info['version'],'sha256':info['sha256'],
                     'revision':info['revision'],'signed':False,'workspace_migrated':False}),encoding='utf-8')
                 return created/'VibeJobRadar'
             except BaseException:
@@ -299,11 +312,11 @@ class ReleaseUpdates:
         self._save(message='正在下载、校验并解压新版；旧程序和工作区保留。')
         updates=self.workspace.root/'updates'
         require(not updates.is_symlink() and updates.resolve().parent==self.workspace.root.resolve())
-        updates.mkdir(exist_ok=True,mode=0o700)
+        io_path(updates).mkdir(exist_ok=True,mode=0o700)
         package=updates/selected['package']['name']
-        if package.exists():require(file_digest(package)==selected['sha256'])
+        if io_path(package).exists():require(file_digest(package)==selected['sha256'])
         else:
-            descriptor,name=tempfile.mkstemp(prefix='.download-',suffix='.partial',dir=updates)
+            descriptor,name=tempfile.mkstemp(prefix='.download-',suffix='.partial',dir=io_path(updates))
             temp=Path(name);st=os.fstat(descriptor);identity=(st.st_dev,st.st_ino)
             try:
                 with os.fdopen(descriptor,'wb') as out:
@@ -312,7 +325,7 @@ class ReleaseUpdates:
                     out.flush();os.fsync(out.fileno())
                 require(temp.stat().st_size==selected['package']['size'] and file_digest(temp)==selected['sha256'])
                 check_stop(self._stop)
-                os.link(temp,package)  # Exclusive publication: never overwrite an existing download.
+                os.link(temp,io_path(package))  # Exclusive publication: never overwrite an existing download.
             finally:
                 from .team_store import remove_private_file
                 remove_private_file(temp,identity)
