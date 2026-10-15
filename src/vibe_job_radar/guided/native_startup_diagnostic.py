@@ -3,7 +3,7 @@ import re
 
 STAGES = frozenset({'not_checked', 'environment', 'version', 'import', 'driver',
                     'executable', 'launch', 'context', 'ready'})
-ERROR_TYPES = frozenset({'CrawlError', 'Error', 'TargetClosedError', 'TimeoutError',
+ERROR_TYPES = frozenset({'CrawlError', 'CDPCommandTimeout', 'Error', 'TargetClosedError', 'TimeoutError',
                          'TimeoutExpired', 'PermissionError', 'FileNotFoundError',
                          'ModuleNotFoundError', 'ImportError', 'OSError',
                          'RuntimeError', 'ValueError', 'KeyError', 'TypeError'})
