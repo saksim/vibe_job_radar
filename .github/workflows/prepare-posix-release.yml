@@ -1,0 +1,64 @@
+name: prepare-posix-release
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_run_id:
+        description: Successful exact-main posix-portable-candidate run
+        required: true
+        type: string
+      publish:
+        description: Publish verified native companion without changing Windows Latest
+        type: boolean
+        default: false
+      change_notes:
+        description: 'Markdown sections: 解决了什么, 提高了什么, 验证结果, 剩余问题; include Issue/PR links'
+        required: true
+        type: string
+concurrency:
+  # All publishers share the Windows release body and must serialize mutations.
+  group: stable-release-publication
+  cancel-in-progress: false
+permissions:
+  contents: read
+jobs:
+  qualified-native-release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Prepare and optionally publish immutable native packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          CHANGE_NOTES: ${{ inputs.change_notes }}
+          PUBLISH_RELEASE: ${{ inputs.publish }}
+        run: |
+          mkdir -p .verify/posix-release-input
+          python -c "import os,pathlib; pathlib.Path('.verify/posix-release-input/changes.md').write_text(os.environ['CHANGE_NOTES'],encoding='utf-8')"
+          publish_args=()
+          if [ "$PUBLISH_RELEASE" = "true" ]; then publish_args+=(--publish); fi
+          python scripts/prepare_posix_release.py --repository "$GITHUB_REPOSITORY" --run-id "$CANDIDATE_RUN_ID" --out .verify/posix-release --change-notes .verify/posix-release-input/changes.md "${publish_args[@]}"
+      - name: Preserve results including an incomplete publication
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: posix-release-preparation
+          retention-days: 30
+          include-hidden-files: true
+          path: |
+            .verify/posix-release/prepared.json
+            .verify/posix-release/selected-artifacts.json
+            .verify/posix-release/*request.json
+            .verify/posix-release/created-draft.json
+            .verify/posix-release/published-release.json
+            .verify/posix-release/assets/CI_EVIDENCE.json
+            .verify/posix-release/assets/SHA256SUMS.txt

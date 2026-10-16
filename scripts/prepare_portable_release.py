@@ -28,7 +28,15 @@ WORKFLOWS = {
     '.github/workflows/browser-choice.yml', '.github/workflows/browser-health.yml',
     '.github/workflows/native-browser.yml', '.github/workflows/vm-proxy.yml',
     '.github/workflows/windows-native-tls.yml', '.github/workflows/windows-portable.yml',
+    '.github/workflows/python-distribution.yml', '.github/workflows/live-public-example.yml',
+    '.github/workflows/posix-portable.yml',
 }
+
+# Schema-1 Windows clients require exactly these eight keys in provenance.ci.
+# New release gates stay mandatory, but their evidence uses a separate field.
+UPDATE_PROVENANCE_WORKFLOWS = {'.github/workflows/'+name for name in (
+    'tests.yml','browser.yml','browser-choice.yml','browser-health.yml',
+    'native-browser.yml','vm-proxy.yml','windows-native-tls.yml','windows-portable.yml')}
 ARTIFACTS = ('windows-x64-portable-candidate', 'windows-portable-evidence')
 REQUIRED_PORTABLE_FLAGS = (
     'startup_registration_verified', 'startup_worker_verified',
@@ -218,7 +226,9 @@ def assemble(candidate, manifest, source_evidence, selected, qualified, artifact
                   'repository': repo, 'tag': tag, 'source_revision': selected['head_sha'],
                   'source_sha256': result['source_sha256'], 'candidate_sha256': result['zip_sha256'],
                   'candidate_run': {'id': selected['id'], 'attempt': selected['run_attempt']},
-                  'ci': qualified, 'artifacts': artifacts, 'rebuilt_for_release': False,
+                  'ci': {key:value for key,value in qualified.items() if key in UPDATE_PROVENANCE_WORKFLOWS},
+                  'additional_ci': {key:value for key,value in qualified.items() if key not in UPDATE_PROVENANCE_WORKFLOWS},
+                  'artifacts': artifacts, 'rebuilt_for_release': False,
                   'signed': False, 'live_sites_certified': False,
                   'clean_machine_certified': False}
     if change_notes is not None:

@@ -99,6 +99,31 @@ class PortableReleaseTests(unittest.TestCase):
         self.assertEqual(result['change_notes_sha256'],digest)
         self.assertIn(digest+'  CHANGES.md',(output/'SHA256SUMS.txt').read_text(encoding='utf8'))
 
+
+    def test_stable_assembled_assets_are_accepted_by_unchanged_updater(self):
+        import threading
+        from types import SimpleNamespace
+        from vibe_job_radar import release_updates as updates
+        qualified=self.mod.validate_runs(self.repo,self.run,self.runs)
+        selected={**self.run,'head_repository':{'full_name':updates.REPOSITORY}}
+        output=self.root/'legacy-updater-contract'
+        result=self.mod.assemble(self.package,self.manifest,self.evidence,
+                                selected,qualified,self.artifacts,output,NOTES,channel='stable')
+        files=sorted(output.iterdir())
+        assets=[dict(id=i+1,name=f.name,state='uploaded',size=f.stat().st_size,
+                     digest='sha256:'+self.mod.file_hash(f),
+                     browser_download_url=updates.WEB+'/releases/download/v0.2.0/'+f.name)
+                for i,f in enumerate(files)]
+        release=dict(id=42,tag_name='v0.2.0',html_url=updates.WEB+'/releases/tag/v0.2.0',
+                     draft=False,prerelease=False,assets=assets)
+        transport=SimpleNamespace(small=lambda asset,stop:(output/asset['name']).read_bytes())
+        actual=updates.inspect_release(release,transport,threading.Event())
+        self.assertEqual(actual['revision'],self.sha)
+        self.assertEqual(actual['sha256'],self.manifest['sha256'])
+        self.assertEqual(set(result['ci']),updates.WORKFLOWS)
+        self.assertEqual(set(result['additional_ci']),self.mod.WORKFLOWS-updates.WORKFLOWS)
+        self.assertEqual(len(assets),8)
+
     def test_missing_draft_outcomes_fail_before_network_or_output(self):
         output=self.root/'no-notes'
         with patch.object(self.mod,'api',side_effect=AssertionError('no remote work')), self.assertRaises(ValueError):

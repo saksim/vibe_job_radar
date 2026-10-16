@@ -1,0 +1,8 @@
+pyinstaller==6.22.3
+playwright==1.63.0
+packaging==26.0
+quickjs-ng==0.17.0.1
+pyspnego==0.12.4
+cryptography==50.0.2
+cffi==2.1.1
+pycparser==3.11
