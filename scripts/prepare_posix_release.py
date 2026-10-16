@@ -16,6 +16,7 @@ from build_windows_portable import native_component_valid
 from url_pac_acceptance import valid_evidence as valid_url_pac
 from domain_pac_acceptance import valid_evidence as valid_domain_pac
 from ntlm_proxy_acceptance import valid_component as valid_ntlm
+from os_credentials_acceptance import valid_evidence as valid_credentials
 
 ROOT = Path(__file__).resolve().parents[1]
 PLATFORMS = ('linux-x64', 'macos-arm64')
@@ -23,6 +24,7 @@ CHECKS = (
     'isolated_path_unicode_workspace_and_doctor',
     'frozen_chromium_blank_guard_and_cleanup',
     'frozen_ntlmv2_protocol_worker_and_cleanup',
+    'native_os_credentials_source_and_frozen',
     'resources_and_frozen_source_identity',
     'frozen_url_and_domain_pac_workers',
     'authored_full_jd_and_original_report',
@@ -83,11 +85,15 @@ def validate_candidate(archive, manifest, proof_path, sha, platform):
                 and all(value.get(key) is False for key in
                         ('signed', 'notarized', 'live_sites_certified', 'clean_machine_certified')),
                 'Unsupported native certification')
-    require(manifest.get('automatic_update') is False and manifest.get('os_credential_store') is False,
+    require(manifest.get('automatic_update') is False and manifest.get('os_credential_store') is True,
             'Unsupported platform-specific capability')
     require(native_component_valid(proof.get('native_component'), 'bundled')
             and valid_url_pac(proof.get('url_pac')) and valid_domain_pac(proof.get('domain_pac'))
-            and valid_ntlm(proof.get('ntlm_component')), 'Incomplete frozen component evidence')
+            and valid_ntlm(proof.get('ntlm_component'))
+            and valid_credentials(proof.get('system_credentials'))
+            and valid_credentials(proof.get('source_system_credentials'),frozen=False)
+            and proof['system_credentials']['provider'] == ('secret-service' if platform == 'linux-x64' else 'macos-keychain')
+            and proof['source_system_credentials']['provider'] == proof['system_credentials']['provider'], 'Incomplete frozen component evidence')
     rows = archive_inventory(archive)
     require(rows == manifest.get('files'), 'Native archive contents differ')
     metadata_name = TOP + '/PORTABLE.json'
@@ -107,9 +113,10 @@ def validate_candidate(archive, manifest, proof_path, sha, platform):
             'Embedded executable/source identity mismatch')
     require(metadata.get('python_required') is False and metadata.get('browser_bundled') is True
             and metadata.get('bundled_browser_directory') == 'browsers'
+            and metadata.get('os_credential_store') is True
             and all(metadata.get(key) is False for key in
                     ('signed', 'notarized', 'live_sites_certified', 'clean_machine_certified',
-                     'automatic_update', 'os_credential_store')), 'Embedded capability mismatch')
+                     'automatic_update')), 'Embedded capability mismatch')
     return proof
 
 

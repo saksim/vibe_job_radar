@@ -45,6 +45,7 @@ class AuthCase(unittest.TestCase):
 class WorkspaceProxyAuthTests(AuthCase):
     def setUp(self):
         super().setUp()
+        kind = patch.object(auth, 'storage_kind', return_value='dpapi-current-user'); kind.start(); self.addCleanup(kind.stop)
         self.protected = {}
         available = patch.object(auth, 'available', return_value=True); available.start(); self.addCleanup(available.stop)
         codec = patch.object(auth, '_protect', side_effect=self.codec); codec.start(); self.addCleanup(codec.stop)
@@ -230,7 +231,7 @@ class WorkspaceProxyAuthTests(AuthCase):
 class ActualPlatformProxyAuthTests(AuthCase):
     def test_digest_dpapi_restart_restores_method_and_background_identity(self):
         if os.name != 'nt':
-            with self.assertRaisesRegex(InputError,'Windows'): self.save(mode='http_digest_auth')
+            with patch.object(auth, 'available', return_value=False), self.assertRaisesRegex(InputError,'Windows'): self.save(mode='http_digest_auth')
             return
         self.save(mode='http_digest_auth'); original=self.raw(); policy=self.workspace.network_policy()
         program='''import sys
@@ -255,7 +256,7 @@ print('restored_digest')
 
     def test_current_user_dpapi_survives_process_restart_or_explicitly_unavailable(self):
         if os.name != 'nt':
-            with self.assertRaisesRegex(InputError,'Windows'): self.save()
+            with patch.object(auth, 'available', return_value=False), self.assertRaisesRegex(InputError,'Windows'): self.save()
             self.assertFalse((self.workspace.root/'network-preferences.json').exists())
             return
         self.save(); original = self.raw()
@@ -282,7 +283,7 @@ print("restored")
 
     def test_real_restarted_schedule_and_queue_dispatch_with_unchanged_saved_credentials(self):
         if os.name != 'nt':
-            with self.assertRaisesRegex(InputError, 'Windows'): self.save()
+            with patch.object(auth, 'available', return_value=False), self.assertRaisesRegex(InputError, 'Windows'): self.save()
             return
         import time
         from unittest.mock import Mock

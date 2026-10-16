@@ -1,7 +1,7 @@
 "use strict";
 (() => {
   const $ = id => document.getElementById(id);
-  let busy = false, configured = false;
+  let busy = false, configured = false, migration = false, revision = "";
   async function request(path, body) {
     const response = await fetch(path, {method:body ? "POST" : "GET", cache:"no-store",
       headers:{"X-Radar-Token":sessionStorage.getItem("radar-session") || "", ...(body ? {"Content-Type":"application/json"} : {})},
@@ -12,15 +12,20 @@
   }
   async function perform(action) {
     if (busy) return;
-    busy = true; $("team-check").disabled = true; $("team-sync").disabled = true; $("team-reset").disabled = true;
+    busy = true; $("team-protect").disabled = true; $("team-check").disabled = true; $("team-sync").disabled = true; $("team-reset").disabled = true;
     try { await action(); }
     catch (error) { $("team-status").textContent = error.message; }
-    finally { busy = false; $("team-check").disabled = !configured; $("team-sync").disabled = !configured; $("team-reset").disabled = false; }
+    finally { busy = false; $("team-protect").disabled = !migration; $("team-check").disabled = !configured; $("team-sync").disabled = !configured; $("team-reset").disabled = false; }
   }
   $("team-panel").addEventListener("toggle", () => { if ($("team-panel").open) perform(async () => {
     const state = await request("/api/team/state"); configured = state.configured && !state.error;
+    migration = state.credential_migration_available === true; revision = state.credential_revision || "";
     $("team-status").textContent = state.message + (state.origin ? " 服务：" + state.origin : "");
   }); });
+  $("team-protect").addEventListener("click", () => perform(async () => {
+    const result = await request("/api/team/protect", {consent:true,revision});
+    migration = false; $("team-status").textContent = result.message;
+  }));
   $("team-check").addEventListener("click", () => perform(async () => {
     const state = await request("/api/team/check", {consent:true});
     $("team-result").textContent = "成员：" + state.member + " / 设备：" + state.device + " / 角色：" + state.role + "\n获准来源：" + state.sources.join("、") + "\n配额资源：" + state.resources.map(r => r.site + " / " + r.id + "（今日页面 " + r.usage.page.day + "/" + r.limits.pages_day + "，请求 " + r.usage.request.day + "/" + r.limits.requests_day + "）").join("、") + "\n任务所有权：" + state.resources.map(r => r.id + "：" + (r.task ? (r.task.active ? (r.task.this_device ? "当前设备正在执行" : "另一设备正在执行") : "空闲") : "服务尚不支持任务租约")).join("、") + "\n已确认水位：" + state.watermarks.map(w => w.revision).join("、");

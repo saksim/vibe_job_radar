@@ -13,7 +13,7 @@ from vibe_job_radar.workspace import InputError
 class NtlmWorkspaceTests(AuthCase):
     def test_actual_protected_restart_identity_clear_and_rollback(self):
         if os.name != 'nt':
-            with self.assertRaisesRegex(InputError, 'Windows'):
+            with patch('vibe_job_radar.workspace_proxy_auth.available', return_value=False), self.assertRaisesRegex(InputError, 'Windows'):
                 self.save(mode='http_ntlm_auth')
             return
         self.save(mode='http_ntlm_auth')
@@ -52,7 +52,7 @@ print('restored_ntlm')
 
     def test_schema_and_missing_component_do_not_borrow_old_auth_consent(self):
         if os.name != 'nt':
-            with self.assertRaisesRegex(InputError, 'Windows'):
+            with patch('vibe_job_radar.workspace_proxy_auth.available', return_value=False), self.assertRaisesRegex(InputError, 'Windows'):
                 self.save(mode='http_ntlm_auth')
             return
         with patch.object(ntlm_worker, 'available', return_value=False):

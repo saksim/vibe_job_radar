@@ -1,6 +1,8 @@
 # 网络兼容：已合并范围与仍待验收的缺口
 
-0.8.0 补齐 #385 的[显式 HTTP Digest 本机认证](HTTP_DIGEST_PROXY.md)：共享连接、三个工作台、CLI 和 Windows 加密保存/重启已接入，实际资格以对应提交记录为准。NTLM/Negotiate、代理端 DNS、其他系统集成和真实企业/VPN 仍需继续；不是 N5 全部完成。
+0.12.0 补齐 [Linux/macOS 系统凭据保存及团队显式迁移](SYSTEM_CREDENTIALS.md)；0.10.0 已加入[显式 NTLMv2](NTLMV2_PROXY.md)。其他认证、代理端 DNS、第三方密钥库和真实企业/VPN 仍需明确兼容契约与环境。以下旧版记录保留为沿革，正式交付以对应 Tag/Release 为准。
+
+0.8.0 补齐 #385 的[显式 HTTP Digest 本机认证](HTTP_DIGEST_PROXY.md)：共享连接、三个工作台、CLI 和 Windows 加密保存/重启已接入，实际资格以对应提交记录为准。Negotiate、代理端 DNS、剩余系统集成和真实企业/VPN 仍需继续；不是 N5 全部完成。
 
 0.6.0 增加[工作区代理凭据](WORKSPACE_PROXY_CREDENTIALS.md)：三个网页入口可选择本机HTTP/SOCKS5认证，Windows当前用户加密保存、重启恢复和明确清除；更新检查也会明确提示缺失/不可解密的凭据。现有环境方式、匿名代理、PAC、目标地址/TLS与额度保持；代理DNS、其他认证和真实企业网络继续开放。
 
