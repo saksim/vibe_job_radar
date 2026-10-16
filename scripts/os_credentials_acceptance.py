@@ -48,6 +48,7 @@ def verify(command, cwd, env, *, frozen):
         network=workspace/'network-preferences.json'; device=workspace/'.team/credential.json'
         require(json.loads(device.read_text())['scheme']=='owner-file','Legacy install changed')
         for mode in ('http_auth','http_digest_auth','http_ntlm_auth','socks5_auth'):
+            print(json.dumps({'credential_stage':'proxy_save_reopen','mode':mode,'frozen':frozen}),flush=True)
             app=RunningApp(command,workspace,cwd,env)
             try:
                 state=app.json('/api/network/state')
@@ -86,6 +87,7 @@ def verify(command, cwd, env, *, frozen):
         require(cli(['--workspace',str(other),'--team-protect-credential'])['restart_required'] is False,'New device restore failed')
         proof['team_encrypted_install']=True
         before_network=network.read_bytes();before_device=device.read_bytes()
+        print(json.dumps({'credential_stage':'lock_restore','frozen':frozen}),flush=True)
         control('lock')
         try:
             app=RunningApp(command,workspace,cwd,env)
@@ -101,10 +103,12 @@ def verify(command, cwd, env, *, frozen):
             require(result['error']=='credential_store_locked' and device.read_bytes()==before_device,'Locked team restore changed file')
             proof.update(locked_read_stopped=True,locked_write_preserved=True)
         finally:control('unlock')
+        print(json.dumps({'credential_stage':'unlocked_move_check','frozen':frozen}),flush=True)
         copied=root/'moved workspace';shutil.copytree(workspace,copied)
         app=RunningApp(command,copied,cwd,env)
         try:
-            require(app.json('/api/network/state')['policy']['code']=='credential_store_missing','Moved workspace reused key')
+            observed=app.json('/api/network/state')['policy'].get('code')
+            require(observed=='credential_store_missing','Moved workspace returned '+str(observed))
         finally:app.close()
         require(cli(['--workspace',str(copied),'--team-protect-credential'],success=False)['error']=='credential_store_missing',
                 'Moved team workspace recreated key')

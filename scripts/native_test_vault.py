@@ -1,5 +1,5 @@
-"""Ephemeral CI-only vault; never initialize or unlock a developer's personal vault."""
-from contextlib import contextmanager
+"""Ephemeral vault fixture; local maintainers must explicitly opt in."""
+from contextlib import contextmanager, ExitStack
 import json
 import os
 from pathlib import Path
@@ -31,7 +31,14 @@ def control(action):
         _run(['/usr/bin/security',action+'-keychain']+(['-p',PASSWORD] if action=='unlock' else [])+[str(keychain)])
     elif sys.platform=='linux':
         if action=='unlock':
-            _run(['/usr/bin/gnome-keyring-daemon','--unlock','--components=secrets'],input=PASSWORD.encode())
+            _run(['/usr/bin/gnome-keyring-daemon','--unlock','--components=secrets',
+                  '--control-directory='+str(root/'control')],input=PASSWORD.encode())
+            import secretstorage
+            from secretstorage.collection import Collection
+            connection=secretstorage.dbus_init()
+            try:
+                if Collection(connection).is_locked():raise ValueError('Artificial default collection did not unlock')
+            finally:connection.close()
         else:
             import secretstorage
             from secretstorage.collection import Collection
@@ -42,17 +49,36 @@ def control(action):
 
 
 @contextmanager
+def _linux_bus():
+    """Own a separate bus even if a local maintainer has a desktop bus already."""
+    import select
+    process=subprocess.Popen(['/usr/bin/dbus-daemon','--session','--nofork','--print-address=1'],
+        stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,start_new_session=True)
+    try:
+        if not select.select([process.stdout],[],[],5)[0]:raise ValueError('Fixture D-Bus startup timeout')
+        address=process.stdout.readline(4096).decode('ascii').strip()
+        if not address.startswith('unix:') or len(address)>2048:raise ValueError('Invalid fixture D-Bus address')
+        yield address
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            try:process.wait(3)
+            except subprocess.TimeoutExpired:process.kill();process.wait(3)
+        process.stdout.close()
+
+
+@contextmanager
 def native_vault(*, allow_local=False):
     old_env=dict(os.environ)
     if allow_local:os.environ['RADAR_TEST_LOCAL_VAULT_ALLOWED']='explicit-isolated-fixture'
     _ci()
-    with tempfile.TemporaryDirectory(prefix='radar-vault-test-') as temporary:
+    with tempfile.TemporaryDirectory(prefix='radar-vault-test-') as temporary, ExitStack() as services:
         root=Path(temporary).resolve()
         os.environ['RADAR_TEST_VAULT_ROOT']=str(root)
         original_default=None; original_list=None; created=False
         try:
             if sys.platform=='linux':
-                if not os.environ.get('DBUS_SESSION_BUS_ADDRESS'):raise ValueError('Use dbus-run-session')
+                os.environ['DBUS_SESSION_BUS_ADDRESS']=services.enter_context(_linux_bus())
                 for name in ('data','config','runtime','control'):(root/name).mkdir(mode=0o700)
                 os.environ.update(XDG_DATA_HOME=str(root/'data'),XDG_CONFIG_HOME=str(root/'config'),
                                   XDG_RUNTIME_DIR=str(root/'runtime'),GNOME_KEYRING_CONTROL=str(root/'control'))

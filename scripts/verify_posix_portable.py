@@ -32,16 +32,21 @@ class RunningApp:
             cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT, start_new_session=True)
         self.entries = queue.Queue(maxsize=1)
+        self.diagnostics = []
         def read():
             for raw in bounded_lines(self.process.stdout):
                 if raw is None:
                     continue
                 match = re.search(rb'http://127\.0\.0\.1:\d+/#token=([A-Za-z0-9_-]+)', raw)
+                safe = re.sub(rb'#token=[A-Za-z0-9_-]+',b'#token=<redacted>',raw[:2000]).decode('utf-8','replace').strip()
+                self.diagnostics = (self.diagnostics + [safe])[-12:]
                 if match:
                     try:
                         self.entries.put_nowait(match.group().decode('ascii'))
                     except queue.Full:
                         pass
+            try:self.entries.put_nowait(None)
+            except queue.Full:pass
         self.reader = threading.Thread(target=read, daemon=True)
         self.reader.start()
         try:
@@ -50,7 +55,7 @@ class RunningApp:
             self.origin = 'http://127.0.0.1:' + str(self.port)
         except Exception:
             self.close()
-            raise RuntimeError('Packaged local server did not become ready') from None
+            raise RuntimeError('Packaged local server did not become ready; exit='+str(self.process.returncode)+'; output='+' | '.join(self.diagnostics)) from None
 
     def call(self, path, data=None, *, expected_status=200):
         connection = http.client.HTTPConnection('127.0.0.1', self.port, timeout=30)
@@ -63,7 +68,7 @@ class RunningApp:
             connection.request('POST' if data is not None else 'GET', path, body, headers)
             response = connection.getresponse()
             raw = response.read(8_000_001)
-            require(response.status == expected_status and len(raw) <= 8_000_000, 'Packaged API failed: ' + path)
+            require(response.status == expected_status and len(raw) <= 8_000_000, 'Packaged API failed: ' + path + '; status=' + str(response.status) + '; body=' + raw[:2048].decode('utf-8','replace'))
             return json.loads(raw) if path.startswith('/api/') else raw
         finally:
             connection.close()

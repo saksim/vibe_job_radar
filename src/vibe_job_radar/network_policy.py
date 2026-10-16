@@ -84,8 +84,8 @@ class NetworkPolicy:
     public_dns: bool = False
     pac_url_mode: bool = False
     credential_scope_id: str = ''
-    credential_protection: str = ''
     pac_domain_mode: bool = False
+    credential_protection: str = ''
 
     def __post_init__(self):
         if self.credential_protection not in ('','system-keyring-aesgcm-v1'):
