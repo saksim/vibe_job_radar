@@ -1,6 +1,6 @@
 # Linux / macOS 完整程序包
 
-从 [desktop-vVERSION](https://github.com/saksim/vibe_job_radar/releases/tag/desktop-vVERSION) 选择与系统一致的 tar.gz。Linux x64 在 Ubuntu 22.04 x64 构建，macOS arm64 在 macOS 14 arm64 构建；其他发行版、系统版本、架构和个人干净设备尚未认证。需保留完整目录、符号链接和可执行权限。
+从 [desktop-vVERSION](https://github.com/saksim/vibe_job_radar/releases/tag/desktop-vVERSION) 选择与系统一致的 tar.gz。Linux x64 在 Ubuntu 22.04 x64 构建，macOS arm64 在 macOS 15 arm64 构建；其他发行版、系统版本、架构和个人干净设备尚未认证。需保留完整目录、符号链接和可执行权限。
 
 程序内含 Python、Playwright、Chromium、PAC 和 NTLMv2 组件，不需要另装 Python。Linux 仍依赖系统浏览器库；缺少库时按诊断处理，或选择系统上已安装的兼容浏览器。macOS 包没有发布者签名或公证；遇到系统阻止时保留诊断，不能把 CI 成功当成 Gatekeeper 已验收，不建议绕过系统安全设置。
 
@@ -23,3 +23,5 @@
 Linux/macOS 配套正式 Tag 为 desktop-vVERSION；Windows 仍使用 vVERSION 并保持 Latest，Python 包使用 python-vVERSION。生产服务主机/域名、企业代理、签名/公证、个人干净设备和人工材料继续单列。
 
 [Issue #399](https://github.com/saksim/vibe_job_radar/issues/399) · [总控 #57](https://github.com/saksim/vibe_job_radar/issues/57)
+
+维护者发布顺序为 Windows → Python → Linux/macOS。三个发行工作流共用串行发布组，保留既有下载链接；如果前置发行尚未完成，后续流程会停止并保留结果。
