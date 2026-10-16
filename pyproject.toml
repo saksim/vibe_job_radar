@@ -13,6 +13,7 @@ authors = [{name = "WEIYU AI Studio"}]
 dependencies = []
 
 [project.optional-dependencies]
+secure-store = ["cryptography==50.0.2", "SecretStorage==3.5.0; sys_platform == 'linux'", "jeepney==0.9.0; sys_platform == 'linux'"]
 pac = ["quickjs-ng==0.17.0.1"]
 ntlm = ["pyspnego==0.12.4"]
 service = ["waitress==3.0.2"]

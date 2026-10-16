@@ -44,7 +44,7 @@ body{overflow-wrap:anywhere}
 <button id="public-cancel" type="button" hidden>停止当前公开任务</button>
 <button id="public-resume" type="button" hidden>确认继续已保存的公开查询</button>
 <p id="public-saved-query" class="muted"></p>
-<details id="team-panel"><summary>团队服务与跨设备同步（可选）</summary><p>由管理员安装设备连接后，同一账号资源可跨设备共享额度，公开查询可使用已批准分发的来源。设备令牌保存在本机；招聘密码、Cookie、私人报告和本人材料不上传。</p><p id="team-status" role="status">展开后仅查看本机连接设置。</p><button id="team-check" class="secondary" type="button" disabled>连接并核对我的权限</button><button id="team-sync" class="secondary" type="button" disabled>同步公开目录与版本</button><label class="check"><input type="checkbox" id="team-reset">重新取得完整公开快照（保留旧报告）</label><pre id="team-result" hidden></pre></details>
+<details id="team-panel"><summary>团队服务与跨设备同步（可选）</summary><p>由管理员安装设备连接后，同一账号资源可跨设备共享额度，公开查询可使用已批准分发的来源。设备令牌保存在本机；招聘密码、Cookie、私人报告和本人材料不上传。</p><p id="team-status" role="status">展开后仅查看本机连接设置。</p><button id="team-check" class="secondary" type="button" disabled>连接并核对我的权限</button><button id="team-sync" class="secondary" type="button" disabled>同步公开目录与版本</button><label class="check"><input type="checkbox" id="team-reset">重新取得完整公开快照（保留旧报告）</label><p id="team-credential-disclosure">加密迁移仅修改当前工作区设备凭据；不连接服务，不移除管理员原文件和旧备份。需先解锁系统默认密钥库；完成后停止任务并重启工作台。</p><button id="team-protect" class="secondary" type="button" disabled>同意说明，迁移为系统加密</button><pre id="team-result" hidden></pre></details>
 <details id="public-queue"><summary>保存多组查询，依次获取一次</summary>
 <p>最多5条待办，每条只取所选来源的前20条，不自动翻页。加入后按顺序执行，相邻条目至少间隔30秒；工作台或独立进程需保持运行，退出后保留尚未运行的条目。排队许可24小时有效。</p>
 <p>暂停会停止队列当前查询及后续条目。失败、过期缓存或结果不确定时暂停；已经尝试的条目不会自动再跑，原任务和报告保留。</p>
