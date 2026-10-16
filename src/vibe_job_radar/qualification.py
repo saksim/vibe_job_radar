@@ -51,7 +51,7 @@ def source_files(root: Path) -> dict[str, Path]:
                     try:value=json.loads(path.read_text(encoding='utf-8-sig'))
                     except (ValueError,UnicodeError):value=None
                     if isinstance(value,dict) and ('device_token' in value or
-                            value.get('scheme') in ('owner-file','windows-dpapi') and 'value' in value):
+                            value.get('scheme') in ('owner-file','windows-dpapi','system-keyring-aesgcm-v1') and 'value' in value):
                         raise ValueError('private team credential inside source payload')
                 if (path.name == '.env' or path.name.startswith('.env.') and path.name != '.env.example'
                         or path.suffix.lower() in {'.sqlite','.sqlite3','.db','.key','.p12','.pfx'}

@@ -25,7 +25,7 @@
   const proxy = document.createElement('fieldset');
   proxy.style.cssText = 'min-width:0;max-width:100%';
   proxy.innerHTML = `<legend>本工作区的代理</legend>
-    <p>自动模式沿用应用或系统配置。固定入口支持本机代理（Windows可加密保存凭据），或已授权给此来宾的匿名宿主机代理；更换后请停止并重开已有采集会话。</p>
+    <p>自动模式沿用应用或系统配置。固定入口支持本机代理（可通过系统密钥库加密保存凭据），或已授权给此来宾的匿名宿主机代理；更换后请停止并重开已有采集会话。</p>
     <label for="workspace-proxy-mode">连接方式</label>
     <select id="workspace-proxy-mode"><option value="auto">自动发现</option><option value="http">固定本机 HTTP</option><option value="socks5">固定本机 SOCKS5</option><option value="http_auth" disabled>本机 HTTP Basic＋保存凭据</option><option value="http_digest_auth" disabled>本机 HTTP Digest＋保存凭据</option><option value="http_ntlm_auth" disabled>本机 HTTP NTLMv2＋保存凭据</option><option value="socks5_auth" disabled>本机 SOCKS5＋保存凭据</option><option value="vm_http">宿主机 HTTP</option><option value="vm_socks5">宿主机 SOCKS5</option><option value="pac" disabled>已导入的 Windows 域名 PAC</option><option value="pac_domain" disabled>已导入的跨平台域名 PAC</option><option value="pac_domain_dns" disabled>跨平台域名 PAC 与 DNS 助手</option><option value="pac_url" disabled>已导入的完整网址 PAC</option><option value="pac_url_dns" disabled>完整网址 PAC 与 DNS 助手</option><option value="system_pac" disabled>已许可的系统 PAC</option><option value="wpad" disabled>已确认的 WPAD</option></select>
     <label for="workspace-proxy-endpoint">已配置的代理地址和端口</label>
@@ -193,7 +193,7 @@
     endpoint.placeholder = vm ? '填写宿主机已授权监听的 RFC1918 IPv4 和端口' : '填写你的本机代理入口，不含账号密码';
     proxy.querySelector('#workspace-proxy-consent-label').textContent = vm
       ? '确认该地址是宿主机授权给此来宾的匿名代理入口，仅在此工作区使用'
-      : auth ? '同意按上述说明将代理凭据加密保存在当前Windows账号和此工作区，仅交付上述本机入口'
+      : auth ? '同意按上述说明将代理凭据加密保存在当前系统账号和此工作区，仅交付上述本机入口'
       : '确认仅在此工作区使用上述匿名本机代理';
     proxy.querySelector('#workspace-proxy-scope').textContent = vm
       ? '来宾的127.0.0.1不是宿主机。请填写已知的HTTP或SOCKS5完整地址，不自动猜网关或开启监听；代理可看到目标IP和流量时间。具体虚拟机环境尚需实测。'

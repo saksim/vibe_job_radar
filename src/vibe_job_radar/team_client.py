@@ -21,6 +21,7 @@ from .public_data import PublicDataClient
 from .team_store import TeamError, strict_json, ident, TOKEN, safe_path, service_host
 from .utils import atomic_json
 from .workspace import InputError
+from . import system_credentials as store
 
 
 SYNC_CONFLICT_MESSAGES={
@@ -30,6 +31,10 @@ SYNC_CONFLICT_MESSAGES={
     'team_watermark_not_read':'服务尚未确认本次读取，请重新同步。',
     'team_watermark_invalid':'同步水位无效，请选择完整重置后重新同步。',
 }
+
+
+def _windows_credentials():
+    return os.name == 'nt'
 
 
 def origin(value):
@@ -64,7 +69,7 @@ def configuration(value):
     return value,checked_registry(registry)
 
 
-def install_connection(workspace_root,config_path,credential_path):
+def install_connection(workspace_root,config_path,credential_path,*,encrypted=False):
     root=Path(workspace_root)/'.team'
     if root.exists():raise TeamError('team_connection_exists',409)
     config,registry=configuration(strict_json(Path(config_path).read_bytes()))
@@ -73,7 +78,7 @@ def install_connection(workspace_root,config_path,credential_path):
         raise TeamError('team_credential_invalid')
     encoded=credential['device_token'].encode()
     scheme='owner-file'
-    if os.name=='nt':
+    if _windows_credentials():
         from .guided.saved_session import _dpapi
         encoded=_dpapi(encoded,config['origin'].encode());scheme='windows-dpapi'
     from .team_store import private_json
@@ -81,6 +86,12 @@ def install_connection(workspace_root,config_path,credential_path):
     root.parent.mkdir(parents=True,exist_ok=True,mode=0o700);safe_path(root)
     with writer_lock(root.parent):
         if root.exists():raise TeamError('team_connection_exists',409)
+        if encrypted and not _windows_credentials():
+            try:
+                encoded = base64.b64decode(store.seal(root.parent, 'team-device', config['origin'], encoded), validate=True)
+                scheme = store.SCHEME
+            except store.CredentialStoreError as error:
+                raise TeamError(error.code,503) from None
         # An interrupted installation can only leave a private staging sibling;
         # it cannot activate an incomplete connection or prevent a fresh retry.
         with tempfile.TemporaryDirectory(prefix='.team-install-',dir=root.parent) as staging:
@@ -95,6 +106,31 @@ def install_connection(workspace_root,config_path,credential_path):
                 finally:os.close(parent)
 
     return {'configured':True,'restart_required':True,'credential_storage':scheme}
+
+
+def protect_connection(workspace_root, *, expected_revision=None):
+    """Explicit local migration; no team server requests or rewrite on failure."""
+    from .collection import writer_lock
+    with writer_lock(Path(workspace_root)):
+        connection = TeamConnection(workspace_root)
+        if expected_revision is not None and connection._binding != expected_revision:
+            raise TeamError('team_connection_changed',409)
+        value = strict_json(connection._credential)
+        token = connection._token()
+        if value.get('scheme') in (store.SCHEME, 'windows-dpapi'):
+            return {'configured':True,'restart_required':False,'credential_storage':value['scheme'],
+                    'message':'当前设备凭据已使用系统加密，原配置保留；未联网。'}
+        if value.get('scheme') != 'owner-file' or _windows_credentials():
+            raise TeamError('team_credential_invalid')
+        try:
+            payload = store.seal(connection.root.parent, 'team-device', connection.origin, token.encode('ascii'))
+        except store.CredentialStoreError as error:
+            raise TeamError(error.code,503) from None
+        connection._read()  # Recheck the original binding after OS access.
+        safe_path(connection.root/'credential.json')
+        atomic_json(connection.root/'credential.json', {'scheme':store.SCHEME,'value':payload})
+        return {'configured':True,'restart_required':True,'credential_storage':store.SCHEME,
+                'message':'已加密迁移本机设备凭据，未连接团队服务。请停止任务并重启工作台；管理员原凭据文件与旧备份仍需按原流程保管。'}
 
 
 class TeamConnection:
@@ -133,13 +169,16 @@ class TeamConnection:
         if not isinstance(value,dict) or set(value)!={'scheme','value'}:raise TeamError('team_credential_invalid')
         try:
             raw=base64.b64decode(value['value'],validate=True)
-            if value['scheme']=='windows-dpapi' and os.name=='nt':
+            if value['scheme']=='windows-dpapi' and _windows_credentials():
                 from .guided.saved_session import _dpapi
                 raw=_dpapi(raw,self.origin.encode(),decrypt=True)
-            elif value['scheme']!='owner-file' or os.name=='nt':raise TeamError('team_credential_invalid')
+            elif value['scheme'] == store.SCHEME:
+                raw = store.restore(self.root.parent, 'team-device', self.origin, value['value'])
+            elif value['scheme']!='owner-file' or _windows_credentials():raise TeamError('team_credential_invalid')
             token=raw.decode('ascii')
             if not TOKEN.fullmatch(token):raise TeamError('team_credential_invalid')
             return token
+        except store.CredentialStoreError as error:raise TeamError(error.code,503) from None
         except (ValueError,UnicodeError,CrawlError) as error:raise TeamError('team_credential_invalid') from error
 
     def request(self,path,*,payload=None):
@@ -255,9 +294,17 @@ def local_state(workspace_root):
     if not configured(workspace_root):return {'configured':False,'message':'未启用团队连接，当前按原本机模式工作。'}
     try:
         connection=TeamConnection(workspace_root)
+        credential = strict_json(connection._credential)
+        if not isinstance(credential,dict) or set(credential) != {'scheme','value'}:raise TeamError('team_credential_invalid')
+        scheme = credential.get('scheme')
+        if scheme not in {'owner-file','windows-dpapi',store.SCHEME}:raise TeamError('team_credential_invalid')
         return {'configured':True,'origin':connection.origin,'public_service':connection.config['use_public_service'],
                 'coordinated_sites':sorted(connection.config['quota_resources']),
-                'message':'已安装团队连接；状态页未联网。更换配置后需重启工作台。'}
+                'credential_storage':scheme,'credential_revision':connection._binding,
+                'credential_migration_available':scheme == 'owner-file' and store.available(),
+                'message':('已安装团队连接；状态页未联网、未解锁密钥库。更换配置后需重启工作台。'
+                    + ('当前设备凭据仅受文件权限保护，可明确迁移到系统加密。' if scheme == 'owner-file'
+                       else '当前设备凭据使用系统加密；锁定或授权失效时新请求停止。'))}
     except (TeamError,ContractError):return {'configured':True,'error':'team_connection_invalid','message':'团队连接损坏，联网任务会停止；已保存的报告仍可读取。'}
 
 
@@ -267,10 +314,19 @@ class TeamUI:
         self._state={'status':'idle'}
     def state(self):
         with self._lock:return {**local_state(self.workspace.root),'sync':dict(self._state)}
+    def protect(self,data):
+        if (not isinstance(data,dict) or set(data) != {'consent','revision'} or data['consent'] is not True
+                or not isinstance(data['revision'],str) or not re.fullmatch('[0-9a-f]{64}',data['revision'])):
+            raise InputError('请明确同意加密迁移当前设备凭据；不接受令牌或额外参数。')
+        with self._lock:
+            if self._thread is not None and self._thread.is_alive():raise InputError('请等待团队同步完成后再迁移。')
+            try:return protect_connection(self.workspace.root,expected_revision=data['revision'])
+            except TeamError as error:
+                raise InputError(store.MESSAGES.get(error.code,'团队配置已变化或不可读取，请刷新并核对原连接。')) from None
     def check(self,data):
         if data!={'consent':True}:raise InputError('请明确同意连接已配置的团队服务。')
         try:return TeamConnection(self.workspace.root,policy_factory=self.workspace.network_policy).request('/v1/team/state')
-        except TeamError as error:raise InputError('团队连接不可用：'+error.code) from None
+        except TeamError as error:raise InputError(store.MESSAGES.get(error.code,'团队连接不可用：'+error.code)) from None
     def sync(self,data):
         if set(data)-{'consent','reset'} or data.get('consent') is not True or type(data.get('reset',False)) is not bool:
             raise InputError('请明确确认同步已配置的公开来源。')
@@ -287,7 +343,7 @@ class TeamUI:
             result={'status':'completed',**TeamSync(self.workspace.root,connection=connection).run(reset=reset,cancelled=self._stop)}
         except (TeamError,RuntimeError,ContractError,OSError,ValueError) as error:
             code=getattr(error,'code','team_sync_failed')
-            result={'status':'failed','code':code,'message':SYNC_CONFLICT_MESSAGES.get(code,'同步未完成，已保存岗位和报告保留。')}
+            result={'status':'failed','code':code,'message':{**SYNC_CONFLICT_MESSAGES,**store.MESSAGES}.get(code,'同步未完成，已保存岗位和报告保留。')}
         with self._lock:self._state=result
     def close(self):
         self._stop.set()
@@ -300,11 +356,14 @@ def main(argv=None):
     parser.add_argument('--workspace',type=Path,required=True)
     sub=parser.add_subparsers(dest='command',required=True)
     install=sub.add_parser('install');install.add_argument('--config',type=Path,required=True);install.add_argument('--credential',type=Path,required=True)
+    install.add_argument('--encrypted',action='store_true',help='明确使用系统密钥库加密；不可用时停止安装')
+    sub.add_parser('protect-credential',help='将原 owner-file 设备凭据明确迁移到系统加密；未联网')
     sub.add_parser('check')
     sync=sub.add_parser('sync');sync.add_argument('--reset',action='store_true')
     args=parser.parse_args(argv)
     try:
-        if args.command=='install':result=install_connection(args.workspace,args.config,args.credential)
+        if args.command=='install':result=install_connection(args.workspace,args.config,args.credential,encrypted=args.encrypted)
+        elif args.command=='protect-credential':result=protect_connection(args.workspace)
         else:
             from .workspace import Workspace
             workspace=Workspace(args.workspace)
@@ -317,7 +376,8 @@ def main(argv=None):
             finally:workspace.close_network()
         print(json.dumps(result,ensure_ascii=False));return 0
     except (TeamError,CrawlError,ContractError,OSError,ValueError) as error:
-        print(json.dumps({'ok':False,'error':getattr(error,'code','team_connection_failed')}));return 2
+        print(json.dumps({'ok':False,'error':getattr(error,'code','team_connection_failed'),
+                          'message':store.MESSAGES.get(getattr(error,'code',''),'团队操作未完成，原配置保留。')},ensure_ascii=False));return 2
 
 
 if __name__=='__main__':raise SystemExit(main())

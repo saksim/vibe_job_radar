@@ -333,7 +333,7 @@ class Handler(BaseHTTPRequestHandler):
             methods = {"/api/releases/" + name: name for name in ("check", "download", "install")}
         elif route.startswith("/api/team/"):
             target = self.server.team
-            methods = {"/api/team/" + name: name for name in ("check", "sync")}
+            methods = {"/api/team/" + name: name for name in ("check", "sync", "protect")}
         elif route.startswith("/api/public/schedule/"):
             target = self.server.public_schedule
             methods = {"/api/public/schedule/" + name: name for name in ("configure", "disable")}
@@ -407,6 +407,8 @@ def main(argv: list[str] | None = None) -> int:
     modes=parser.add_mutually_exclusive_group()
     modes.add_argument("--doctor", action="store_true", help="离线检查 Python、SQLite 和目录写入能力")
     modes.add_argument("--team-install", type=Path, help="从管理员配置文件安装本机团队连接，然后退出")
+    modes.add_argument("--team-protect-credential", action="store_true", help="明确将原团队设备凭据迁移到系统加密，然后退出；不联网")
+    parser.add_argument("--team-encrypted", action="store_true", help="仅配合 --team-install，明确要求系统加密")
     parser.add_argument("--team-credential", type=Path, help="仅配合 --team-install 的设备凭据文件；不要把令牌写入命令行")
     modes.add_argument('--public-worker',action='store_true',help='仅运行已确认的公开查询计划和待办，不启动网页服务器或浏览器')
     modes.add_argument('--native-browser-check',action='store_true',help='检查新临时原生浏览器的空白页、请求拒绝与退出；不连接招聘网站')
@@ -420,9 +422,9 @@ def main(argv: list[str] | None = None) -> int:
         from .release_install import apply_update
         try:return apply_update(args.apply_update)
         except (OSError,ValueError,KeyError,TypeError):return 2
-    if args.upgrade_handoff and (args.doctor or args.team_install or args.public_worker or args.native_browser_check or args.ntlm_component_check):
+    if args.upgrade_handoff and (args.doctor or args.team_install or args.team_protect_credential or args.public_worker or args.native_browser_check or args.ntlm_component_check):
         parser.error('升级交接只用于工作台启动')
-    if not (args.ignore_installed_update or args.upgrade_handoff or args.doctor or args.team_install or args.native_browser_check or args.ntlm_component_check):
+    if not (args.ignore_installed_update or args.upgrade_handoff or args.doctor or args.team_install or args.team_protect_credential or args.native_browser_check or args.ntlm_component_check):
         from .release_install import installed_command, spawn
         try:
             command=installed_command(args.workspace,original_argv)
@@ -434,14 +436,25 @@ def main(argv: list[str] | None = None) -> int:
             return 2
     if not 0 <= args.port <= 65535:
         parser.error("port 必须为 0～65535")
+    if args.team_encrypted and not args.team_install:parser.error("--team-encrypted 仅配合 --team-install")
+    if args.team_protect_credential:
+        if args.port or args.team_credential:parser.error("凭据迁移不启动服务，不接受新令牌文件")
+        from .team_client import protect_connection
+        from .system_credentials import MESSAGES
+        try:
+            print(json.dumps(protect_connection(args.workspace),ensure_ascii=False));return 0
+        except (OSError,ValueError,CrawlError) as error:
+            print(json.dumps({"ok":False,"error":getattr(error,"code","team_credential_invalid"),
+                "message":MESSAGES.get(getattr(error,"code",""),"迁移未完成，原配置保留。")},ensure_ascii=False));return 2
     if args.team_install:
         if not args.team_credential or args.port:parser.error("团队安装需要 --team-credential，且不启动服务端口")
         from .team_client import install_connection
         try:
-            print(json.dumps(install_connection(args.workspace,args.team_install,args.team_credential),ensure_ascii=False))
+            print(json.dumps(install_connection(args.workspace,args.team_install,args.team_credential,encrypted=args.team_encrypted),ensure_ascii=False))
             return 0
-        except (OSError,ValueError,CrawlError):
-            print("团队连接安装失败；核对管理员文件及工作区，原数据保留。",file=sys.stderr)
+        except (OSError,ValueError,CrawlError) as error:
+            from .system_credentials import MESSAGES
+            print(MESSAGES.get(getattr(error,"code",""),"团队连接安装失败；核对管理员文件及工作区，原数据保留。"),file=sys.stderr)
             return 2
     if args.team_credential:parser.error("--team-credential 仅配合 --team-install")
     if args.ntlm_component_check:

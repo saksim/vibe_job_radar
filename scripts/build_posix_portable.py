@@ -23,6 +23,7 @@ from posix_artifacts import pack,extract_verified,require
 VERSIONS={'pyinstaller':'6.22.3','playwright':'1.63.0','packaging':'26.0',
           'quickjs-ng':'0.17.0.1','pyspnego':'0.12.4','cryptography':'50.0.2',
           'cffi':'2.1.1','pycparser':'3.11'}
+if sys.platform == 'linux':VERSIONS.update(SecretStorage='3.5.0',jeepney='0.9.0')
 
 
 def file_hash(path):
@@ -72,6 +73,10 @@ def build(out):
         source=fingerprint(ROOT)
         observed={name:importlib.metadata.version(name) for name in VERSIONS}
         require(observed==VERSIONS,'Pinned native build components differ')
+        from os_credentials_acceptance import verify as verify_credentials
+        source_env={**os.environ,'PYTHONPATH':str(ROOT/'src')}
+        source_proof=verify_credentials([sys.executable,'-m','vibe_job_radar.workbench'],ROOT,source_env,frozen=False)
+        atomic_json(out/'source-system-credentials.json',source_proof)
         import playwright
         from playwright.sync_api import sync_playwright
         browsers=Path(os.environ.get('PLAYWRIGHT_BROWSERS_PATH','')).resolve()
@@ -91,6 +96,9 @@ def build(out):
                 '--collect-submodules','vibe_job_radar']
             for name in ('playwright','packaging','cryptography','cffi','pycparser'):
                 args.extend(['--collect-all',name,'--copy-metadata',name])
+            if sys.platform == 'linux':
+                for name in ('secretstorage','jeepney'):
+                    args.extend(['--collect-all',name,'--copy-metadata',name])
             args.extend(['--collect-all','quickjs','--hidden-import','_quickjs','--copy-metadata','quickjs-ng',
                 '--collect-all','spnego','--copy-metadata','pyspnego','--hidden-import','_cffi_backend',
                 '--distpath',str(stage/'dist'),'--workpath',str(stage/'build'),'--specpath',str(stage),
@@ -120,6 +128,7 @@ def build(out):
                 'Linux 需要兼容的系统浏览器库；macOS 包没有发布者签名或公证。\n'
                 '首次操作与干净个人设备仍须实际验收，不用 CI 代替。\n'
                 '升级/回退先停止任务和所有程序，备份整个工作区；把完整新包放到另一个目录。\n'
+                '系统密钥库可保存代理凭据，团队设备可明确迁移加密；需默认密钥库已解锁或授权。\n'
                 '本平台不支持 Windows 自动替换、DPAPI 或 Windows 登录启动。\n'
                 '原 Windows 发行和 Python 安装包继续保留，详见随发行提供的说明。\n',encoding='utf-8')
             stamp=source_stamp(ROOT)
@@ -129,7 +138,7 @@ def build(out):
                 source=source,runtime_source=stamp,python_version=platform.python_version(),components=observed,
                 python_required=False,browser_bundled=True,bundled_browser_directory='browsers',
                 signed=False,notarized=False,live_sites_certified=False,clean_machine_certified=False,
-                automatic_update=False,os_credential_store=False)
+                automatic_update=False,os_credential_store=True)
             atomic_json(bundle/'PORTABLE.json',metadata)
             archive=stage/'candidate.tar.gz'
             expected=pack(bundle,archive)
@@ -139,7 +148,7 @@ def build(out):
                             '--bundle',str(extracted),'--out',str(proof)],cwd=ROOT,check=True,timeout=240)
             verification=json.loads(proof.read_text(encoding='utf-8'))
             require(verification['success'] and verification['source_revision']==stamp['revision']
-                    and verification['source_sha256']==source['sha256'] and len(verification['checks'])==8,
+                    and verification['source_sha256']==source['sha256'] and len(verification['checks'])==9,
                     'Native runtime evidence incomplete')
             require(fingerprint(ROOT)==source,'Source changed during native build')
             sha=file_hash(archive)
@@ -150,9 +159,9 @@ def build(out):
             result=dict(success=True,status='posix_portable_candidate',version=version,platform=target,
                 source_revision=stamp['revision'],source_sha256=source['sha256'],
                 file=name,sha256=sha,size_bytes=(out/name).stat().st_size,
-                runtime_evidence_sha256=file_hash(proof),runtime_checks=8,python_required=False,
+                runtime_evidence_sha256=file_hash(proof),runtime_checks=9,python_required=False,
                 browser_bundled=True,signed=False,notarized=False,live_sites_certified=False,
-                clean_machine_certified=False,automatic_update=False,os_credential_store=False,
+                clean_machine_certified=False,automatic_update=False,os_credential_store=True,
                 files=expected,build_os=platform.platform())
     except Exception as error:
         result['error_type']=type(error).__name__
@@ -165,6 +174,8 @@ def build(out):
 if __name__=='__main__':
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--out',type=Path,required=True)
+    parser.add_argument('--isolated-vault',action='store_true',help='Explicit local acceptance: create a temporary vault; macOS temporarily changes the default keychain and restores it')
     args=parser.parse_args()
-    result=build(args.out)
+    from native_test_vault import native_vault
+    with native_vault(allow_local=args.isolated_vault):result=build(args.out)
     print(json.dumps({key:result[key] for key in ('success','platform','file','sha256','runtime_checks')}))

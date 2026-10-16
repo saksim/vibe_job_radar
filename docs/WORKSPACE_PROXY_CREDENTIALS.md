@@ -1,5 +1,7 @@
 # 工作区内的本机代理凭据
 
+0.12.0 补齐 Linux/macOS 系统密钥库保存，覆盖已有四种认证方式。默认密钥库、错误恢复和 schema 12 回退规则见[系统凭据说明](SYSTEM_CREDENTIALS.md)。
+
 0.8.0 增加“本机 HTTP Digest＋保存凭据”，原 HTTP 模式明确标为 Basic；[Digest 协议与回退范围](HTTP_DIGEST_PROXY.md)单独说明。其认证方式参与密文、运行中会话和后台恢复身份，旧版 0.6/0.7 会拒绝新的模式名。
 
 0.6.0 在基础页、高级采集页和采集向导的“网络自动适配”中增加本机 HTTP / SOCKS5 认证代理。用户可直接输入代理地址、用户名和密码，明确同意后加密保存，不再需要为这个工作区设置进程环境变量。对应网络总项 #23/N5 和总控 #57。
@@ -16,7 +18,7 @@ HTTP Basic / SOCKS5 用户名密码仍采用原有1–255个可打印 ASCII 字�
 
 ## 保存与迁移
 
-只有 Windows 提供此保存方式。使用现有当前用户 DPAPI，额外上下文绑定工作区规范路径、协议和代理入口，不保存密钥；凭据和版本8网络偏好一次原子更新，失败保留旧值。状态 API 排除加密载荷。DPAPI 的账号范围、完整性与漫游例外见 [Microsoft CryptProtectData 文档](https://learn.microsoft.com/en-us/windows/win32/api/dpapi/nf-dpapi-cryptprotectdata)。这不隔离同 Windows 账号下的其他程序，不承诺清除进程内存、浏览器内存或操作系统备份中的所有副本。
+Windows 保存方式继续使用现有当前用户 DPAPI，额外上下文绑定工作区规范路径、协议和代理入口，不保存密钥；凭据和版本8网络偏好一次原子更新，失败保留旧值。状态 API 排除加密载荷。DPAPI 的账号范围、完整性与漫游例外见 [Microsoft CryptProtectData 文档](https://learn.microsoft.com/en-us/windows/win32/api/dpapi/nf-dpapi-cryptprotectdata)。这不隔离同 Windows 账号下的其他程序，不承诺清除进程内存、浏览器内存或操作系统备份中的所有副本。
 
 重启程序可恢复；已确认的每日计划和队列使用绑定加密副本的持久身份，不会仅因进程重启而暂停。运行中的浏览器继续使用进程内凭据绑定，修改凭据或入口仍会失效并要求重新确认。移动工作区、更换 Windows 账号或代理入口后需重新输入。不能解密时停止所选路线，不改用其他网络。其他系统明确显示不可用，仍可使用原匿名代理或应用环境配置；不会把密文解释为明文。
 

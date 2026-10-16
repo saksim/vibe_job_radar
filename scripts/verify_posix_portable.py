@@ -27,7 +27,8 @@ from domain_pac_acceptance import verify_app as verify_domain_pac
 
 class RunningApp:
     def __init__(self, executable, workspace, cwd, env):
-        self.process = subprocess.Popen([str(executable), '--workspace', str(workspace), '--no-browser'],
+        command = executable if isinstance(executable,list) else [str(executable)]
+        self.process = subprocess.Popen(command + ['--workspace', str(workspace), '--no-browser'],
             cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT, start_new_session=True)
         self.entries = queue.Queue(maxsize=1)
@@ -51,7 +52,7 @@ class RunningApp:
             self.close()
             raise RuntimeError('Packaged local server did not become ready') from None
 
-    def call(self, path, data=None):
+    def call(self, path, data=None, *, expected_status=200):
         connection = http.client.HTTPConnection('127.0.0.1', self.port, timeout=30)
         headers = {'Origin': self.origin, 'X-Radar-Token': self.token}
         body = None
@@ -62,7 +63,7 @@ class RunningApp:
             connection.request('POST' if data is not None else 'GET', path, body, headers)
             response = connection.getresponse()
             raw = response.read(8_000_001)
-            require(response.status == 200 and len(raw) <= 8_000_000, 'Packaged API failed: ' + path)
+            require(response.status == expected_status and len(raw) <= 8_000_000, 'Packaged API failed: ' + path)
             return json.loads(raw) if path.startswith('/api/') else raw
         finally:
             connection.close()
@@ -117,6 +118,10 @@ def verify(bundle, output):
             result['checks'].append('frozen_chromium_blank_guard_and_cleanup')
             result['ntlm_component'] = verify_ntlm(executable,cwd,env)
             result['checks'].append('frozen_ntlmv2_protocol_worker_and_cleanup')
+            from os_credentials_acceptance import verify as verify_credentials
+            result['system_credentials'] = verify_credentials([str(executable)],cwd,env,frozen=True)
+            result['source_system_credentials'] = json.loads((Path(output).parent/'source-system-credentials.json').read_text(encoding='utf-8'))
+            result['checks'].append('native_os_credentials_source_and_frozen')
             app = RunningApp(executable,workspace,cwd,env)
             try:
                 for route in ('/','/advanced','/guided','/quality','/app.js','/advanced.js','/guided.js',

@@ -1,5 +1,7 @@
 # Vibe Job Radar｜招聘要求与个人证据工作台
 
+0.12.0 增加 [Linux/macOS 系统密钥库与团队凭据迁移](docs/SYSTEM_CREDENTIALS.md)：加密保存已有代理认证，支持独立进程恢复和明确迁移，保留 Windows DPAPI、自动升级与全部原功能。正式 Tag/Release 状态以 [Releases](https://github.com/saksim/vibe_job_radar/releases) 为准。
+
 0.11.0 增加 [Linux x64 / macOS arm64 完整程序包](docs/POSIX_DISTRIBUTION.md)：自带 Python 和 Chromium，贯通原工作台、PAC/NTLM 组件与原报告；按准确主干产物发布独立 desktop Tag，Windows 自动升级和 Python 包继续保留。正式发布状态以对应 Release 和 Tag 为准。
 
 0.10.0 增加[明确选择的 NTLMv2 本机代理认证](docs/NTLMV2_PROXY.md)：覆盖工作台、CLI、HTTP、请求桥及原生浏览器，保留 Basic/Digest/SOCKS/PAC 和自动升级。正式发布状态以对应 Release 和 Tag 为准。
