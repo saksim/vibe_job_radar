@@ -1,5 +1,7 @@
 # Python 安装包与独立发行
 
+0.12.0 在 Linux/macOS 可另安装 secure-store 可选依赖并使用系统默认密钥库；普通无依赖离线安装继续保留。用已核验的本地 wheel 路径加 [secure-store] 安装，详见[系统凭据](SYSTEM_CREDENTIALS.md)，不从不存在的 PyPI 发行下载安装。
+
 关联 #372 / #30 H6 / #57。Python包供已有Python3.10+的Windows、Linux和macOS环境使用。它包含产品Python模块及网页资源；不包含Python解释器、Chromium或可选SDK，不是免安装桌面程序。现有Windows便携包、自带浏览器与自动升级照常使用。
 
 ## 安装与启动

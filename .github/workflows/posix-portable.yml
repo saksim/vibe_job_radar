@@ -36,8 +36,17 @@ jobs:
         run: python -m pip install -r scripts/requirements-posix-build.txt
       - name: Install the matching bundled Chromium
         run: python -m playwright install --with-deps chromium
+      - name: Install the isolated Linux vault fixture
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y gnome-keyring dbus-x11
       - name: Build and verify the actual extracted application
-        run: python scripts/build_posix_portable.py --out .verify/posix-candidate
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            dbus-run-session -- python scripts/build_posix_portable.py --out .verify/posix-candidate
+          else
+            python scripts/build_posix_portable.py --out .verify/posix-candidate
+          fi
       - name: Preserve candidate archive
         if: success()
         uses: actions/upload-artifact@v4
@@ -57,4 +66,5 @@ jobs:
           path: |
             .verify/posix-candidate/manifest.json
             .verify/posix-candidate/runtime-verification.json
+            .verify/posix-candidate/source-system-credentials.json
           if-no-files-found: error

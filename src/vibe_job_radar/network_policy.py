@@ -85,8 +85,11 @@ class NetworkPolicy:
     pac_url_mode: bool = False
     credential_scope_id: str = ''
     pac_domain_mode: bool = False
+    credential_protection: str = ''
 
     def __post_init__(self):
+        if self.credential_protection not in ('','system-keyring-aesgcm-v1'):
+            raise ValueError('invalid credential protection')
         if (not isinstance(self.credential_scope_id, str) or (self.credential_scope_id and
                 (len(self.credential_scope_id) != 64 or any(c not in '0123456789abcdef' for c in self.credential_scope_id)))):
             raise ValueError('invalid protected credential identity')
@@ -239,7 +242,8 @@ class NetworkPolicy:
                   'fake_ip_scope': 'target_system_dns_not_used' if self.public_dns else 'opt_in_198.18.0.0/15_only',
                   'encrypted_dns_provider': 'Cloudflare' if self.encrypted_dns else None,
                   'proxy_credentials_supported': True,
-                  'proxy_credentials_scope': ('explicit_workspace_windows_dpapi_loopback'
+                  'proxy_credentials_scope': ('explicit_workspace_system_keyring_loopback'
+                      if self.credential_protection == 'system-keyring-aesgcm-v1' else 'explicit_workspace_windows_dpapi_loopback'
                       if self.source == 'explicit_workspace' and self.proxy and self.proxy.credentials is not None
                       else 'explicit_application_loopback_only'),
                   'vm_host_proxy_supported': True,
