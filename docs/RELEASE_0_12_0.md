@@ -4,6 +4,8 @@
 
 Linux/macOS 工作台现在支持通过系统密钥库加密保存本机代理凭据，覆盖已有 Basic、Digest、NTLMv2、SOCKS5。团队设备凭据支持明确的加密安装与旧格式迁移；旧 owner-file、Windows DPAPI 和既有工作区继续兼容。详见[系统密钥库说明](SYSTEM_CREDENTIALS.md)与 [#403](https://github.com/saksim/vibe_job_radar/issues/403)。
 
+工作台监听固定的 127.0.0.1 时不再请求反向 DNS，避免离线或 VPN 环境的系统解析拖住本机界面启动。该问题由 macOS 原生 CI 的实际阻塞栈确认。
+
 ## 提高了什么
 
 代理配置可跨进程恢复，团队迁移可从首页或独立命令完成。密钥库缺失、锁定、密文被修改或工作区搬移时给出明确错误，新请求停止，原数据保留。Linux/macOS 实际程序包带所需组件，发行门禁验证源码与冻结程序的原生密钥库行为。原采集、完整 JD、报告、团队配额/权限、Windows 自动升级与 Python 包保留。

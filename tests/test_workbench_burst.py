@@ -4,6 +4,7 @@ import socket
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 from vibe_job_radar.workbench import LocalServer
 from vibe_job_radar.workspace import Workspace
 
@@ -11,7 +12,12 @@ from vibe_job_radar.workspace import Workspace
 class WorkbenchBurstTests(unittest.TestCase):
     def test_queued_cold_page_connections_deliver_all_resources(self):
         with tempfile.TemporaryDirectory() as temporary:
-            server=LocalServer(Workspace(temporary),public_client=None)
+            # Fail deterministically if startup or resource serving asks the
+            # system resolver for a reverse name; keep the real TCP requests.
+            with patch('socket.getfqdn', side_effect=AssertionError('Unexpected reverse DNS')):
+                server=LocalServer(Workspace(temporary),public_client=None)
+            self.assertEqual(server.server_name, '127.0.0.1')
+            self.assertEqual(server.server_port, server.server_address[1])
             connections=[];worker=None
             try:
                 # Model a busy accept loop without sleeping or changing the

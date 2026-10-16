@@ -46,7 +46,7 @@ def verify(command, cwd, env, *, frozen):
             return json.loads(result.stdout)
         cli(['--workspace',str(workspace),'--team-install',str(config),'--team-credential',str(credential)])
         network=workspace/'network-preferences.json'; device=workspace/'.team/credential.json'
-        require(json.loads(device.read_text())['scheme']=='owner-file','Legacy install changed')
+        require(json.loads(device.read_text(encoding='utf-8'))['scheme']=='owner-file','Legacy install changed')
         for mode in ('http_auth','http_digest_auth','http_ntlm_auth','socks5_auth'):
             print(json.dumps({'credential_stage':'proxy_save_reopen','mode':mode,'frozen':frozen}),flush=True)
             app=RunningApp(command,workspace,cwd,env)

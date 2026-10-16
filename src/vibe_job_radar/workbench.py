@@ -5,6 +5,7 @@ import argparse
 import hmac
 import json
 import secrets
+from socketserver import TCPServer
 import sys
 import threading
 import time
@@ -69,6 +70,12 @@ class LocalServer(ThreadingHTTPServer):
         super().__init__(("127.0.0.1", port), Handler)
         self.authority = f"127.0.0.1:{self.server_address[1]}"
         self.origin = f"http://{self.authority}"
+
+    def server_bind(self):
+        # This listener has a fixed numeric loopback address. Reverse DNS is
+        # unnecessary and can stall offline/VPN startup inside HTTPServer.
+        TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
 
     def serve_forever(self, poll_interval=0.5):
         try:
