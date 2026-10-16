@@ -476,7 +476,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"数据目录：{workspace.root}\n仅本机访问；不要分享带令牌的地址。关闭终端或按 Ctrl+C 停止。", flush=True)
             if not args.no_browser:
                 try:
-                    if not webbrowser.open(server.entry_url):
+                    from .runtime import open_workbench_browser
+                    if not open_workbench_browser(server.entry_url):
                         print("未能自动打开浏览器，请复制上述完整地址。", flush=True)
                 except webbrowser.Error:
                     print("请手工在本机浏览器打开上述完整地址。", flush=True)
