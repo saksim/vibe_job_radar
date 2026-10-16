@@ -20,7 +20,8 @@ on:
         required: true
         type: string
 concurrency:
-  group: prepare-portable-release-${{ inputs.candidate_run_id }}
+  # All publishers share the Windows release body and must serialize mutations.
+  group: stable-release-publication
   cancel-in-progress: false
 permissions:
   contents: read

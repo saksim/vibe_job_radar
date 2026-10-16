@@ -1,0 +1,60 @@
+name: posix-portable-candidate
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: posix-portable-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  native-package:
+    name: ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            platform: linux-x64
+          - os: macos-15
+            platform: macos-arm64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      PYTHONUTF8: '1'
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.verify/native-browser-cache
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install pinned native build components
+        run: python -m pip install -r scripts/requirements-posix-build.txt
+      - name: Install the matching bundled Chromium
+        run: python -m playwright install --with-deps chromium
+      - name: Build and verify the actual extracted application
+        run: python scripts/build_posix_portable.py --out .verify/posix-candidate
+      - name: Preserve candidate archive
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: posix-candidate-${{ matrix.platform }}
+          retention-days: 30
+          compression-level: 0
+          path: .verify/posix-candidate/*.tar.gz
+          if-no-files-found: error
+      - name: Preserve actual proof including first failures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: posix-evidence-${{ matrix.platform }}
+          retention-days: 30
+          include-hidden-files: true
+          path: |
+            .verify/posix-candidate/manifest.json
+            .verify/posix-candidate/runtime-verification.json
+          if-no-files-found: error
