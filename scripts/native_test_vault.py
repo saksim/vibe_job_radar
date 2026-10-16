@@ -31,7 +31,7 @@ def control(action):
         _run(['/usr/bin/security',action+'-keychain']+(['-p',PASSWORD] if action=='unlock' else [])+[str(keychain)])
     elif sys.platform=='linux':
         if action=='unlock':
-            _run(['/usr/bin/gnome-keyring-daemon','--unlock','--components=secrets',
+            _run(['/usr/bin/gnome-keyring-daemon','--replace','--unlock','--components=secrets',
                   '--control-directory='+str(root/'control')],input=PASSWORD.encode())
             import secretstorage
             from secretstorage.collection import Collection

@@ -38,8 +38,8 @@ class RunningApp:
                 if raw is None:
                     continue
                 match = re.search(rb'http://127\.0\.0\.1:\d+/#token=([A-Za-z0-9_-]+)', raw)
-                safe = re.sub(rb'#token=[A-Za-z0-9_-]+',b'#token=<redacted>',raw[:2000]).decode('utf-8','replace').strip()
-                self.diagnostics = (self.diagnostics + [safe])[-12:]
+                safe = re.sub(rb'#token=[A-Za-z0-9_-]+',b'#token=<redacted>',raw[:1000]).decode('utf-8','replace').strip()
+                self.diagnostics = (self.diagnostics + [safe])[-40:]
                 if match:
                     try:
                         self.entries.put_nowait(match.group().decode('ascii'))

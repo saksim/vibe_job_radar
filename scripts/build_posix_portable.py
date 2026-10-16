@@ -75,7 +75,8 @@ def build(out):
         require(observed==VERSIONS,'Pinned native build components differ')
         from os_credentials_acceptance import verify as verify_credentials
         source_env={**os.environ,'PYTHONPATH':str(ROOT/'src')}
-        source_proof=verify_credentials([sys.executable,'-m','vibe_job_radar.workbench'],ROOT,source_env,frozen=False)
+        diagnostic_entry="import faulthandler,runpy;faulthandler.dump_traceback_later(20);runpy.run_module('vibe_job_radar.workbench',run_name='__main__',alter_sys=True)"
+        source_proof=verify_credentials([sys.executable,'-c',diagnostic_entry],ROOT,source_env,frozen=False)
         atomic_json(out/'source-system-credentials.json',source_proof)
         import playwright
         from playwright.sync_api import sync_playwright
