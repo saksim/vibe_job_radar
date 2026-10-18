@@ -64,6 +64,7 @@ def main():
                     page.locator('#release-check').click()
                     expect(page.locator('#release-download')).to_be_enabled(timeout=10000)
                     expect(page.locator('#release-current')).to_contain_text('0.4.0')
+                    expect(page.locator('#release-status')).to_contain_text('此发行未签名（unsigned）')
                     expect(page.locator('#release-link')).to_have_attribute('href','https://github.com/saksim/vibe_job_radar/releases/tag/v0.4.0')
                     assert len(fixture.calls)==8  # One inventory and seven verified small assets.
                     result['checks'].append('explicit check presents verified version, release notes and download confirmation')
@@ -133,6 +134,23 @@ def main():
                         expect(page.locator('#release-download')).to_be_disabled()
                     assert keep.read_text(encoding='utf-8')=='original workspace'
                     result['checks'].append('failed recheck gives bounded retry guidance without exposing details or enabling a stale download')
+                    from test_publisher_signing import SignedReleaseFixture
+                    from vibe_job_radar import publisher_signing
+                    server.releases.close();signed=SignedReleaseFixture()
+                    server.releases=ReleaseUpdates(workspace,transport_factory=lambda:signed,
+                        current_version='0.3.0',target_platform='windows-x64')
+                    page.reload();page.locator('#release-panel summary').first.click()
+                    page.locator('#release-check').click()
+                    expect(page.locator('#release-download')).to_be_enabled(timeout=10000)
+                    expect(page.locator('#release-status')).to_contain_text('ARTIFICIAL PUBLISHER')
+                    expect(page.locator('#release-status')).to_contain_text('下载后在本机复核')
+                    expect(page.locator('#release-status')).not_to_contain_text('核验通过')
+                    with patch.object(publisher_signing,'inspect',return_value=signed.signing):
+                        page.locator('#release-download').click()
+                        expect(page.locator('#release-status')).to_contain_text('本机签名核验通过',timeout=10000)
+                    assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
+                    page.locator('#release-panel').screenshot(path=str(out/'signature-state-mobile.png'))
+                    result['checks'].append('signed metadata is displayed as pending until actual staging verifier returns; synthetic signature adapter, no payload execution')
                     from test_release_posix import NativeReleaseFixture
                     for platform in ('linux-x64','macos-arm64'):
                         server.releases.close();native=NativeReleaseFixture();handoff=MagicMock()
