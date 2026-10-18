@@ -33,8 +33,10 @@ class FetchError(RuntimeError):
         super().__init__(f"{code}: {message}" if message else code)
 
 
-def retry_after_seconds(value: str, *, now=None) -> float:
-    """Keep publisher cooldown metadata without retaining response headers."""
+def retry_after_seconds(value: str, *, now=None, minimum=300) -> float:
+    """Keep publisher cooldown by default; owned services may opt into a floor."""
+    if type(minimum) not in (int, float) or not math.isfinite(minimum) or minimum < 1:
+        raise ValueError("invalid Retry-After minimum")
     try:
         seconds=float(value)
     except (ValueError,TypeError):
@@ -42,7 +44,7 @@ def retry_after_seconds(value: str, *, now=None) -> float:
             seconds=parsedate_to_datetime(value).timestamp()-(time.time() if now is None else now)
         except (ValueError,TypeError,OverflowError):
             seconds=300
-    return max(300,seconds) if math.isfinite(seconds) else 86400
+    return max(minimum,seconds) if math.isfinite(seconds) else max(minimum,86400)
 
 
 @dataclass
@@ -253,9 +255,12 @@ def validate_public_url(url: str, allowed_domains: set[str], *, all_addresses: b
 
 class SafeHTTP:
     def __init__(self, allowed_domains: set[str], *, timeout: float = 20.0, max_bytes: int = 5_000_000,
-                 interval: float = 1.0, network_policy: NetworkPolicy | None = None):
+                 interval: float = 1.0, network_policy: NetworkPolicy | None = None,
+                 retry_after_floor: float = 300):
         if timeout <= 0 or max_bytes <= 0 or interval < 0:
             raise ValueError("invalid transport limits")
+        retry_after_seconds("0", minimum=retry_after_floor)  # Validate before any network access.
+        self.retry_after_floor = retry_after_floor
         self.network_policy = network_policy or current_policy()
         from .encrypted_dns import PublicResolver
         self.resolver = self.network_policy.resolver or PublicResolver()
@@ -301,7 +306,7 @@ class SafeHTTP:
             if resp.status in (401, 403, 429):
                 self.blocked_hosts.add(host)
                 raise FetchError(f"http_{resp.status}", "stopped; no bypass or retry",
-                                 retry_after=retry_after_seconds(response_headers.get("retry-after", ""))
+                                 retry_after=retry_after_seconds(response_headers.get("retry-after", ""), minimum=self.retry_after_floor)
                                  if resp.status == 429 else None)
             if 300 <= resp.status < 400:
                 if resp.status==304 and if_none_match is not None:
