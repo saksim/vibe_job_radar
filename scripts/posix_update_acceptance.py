@@ -15,13 +15,14 @@ import time
 from vibe_job_radar.release_posix import HANDOFF_FIELDS, valid_handoff
 
 
-def verify(bundle, archive, root, cwd, env):
+def verify(bundle, archive, root, cwd, env, proof=None):
     import psutil  # Qualification only, never a product dependency.
     from verify_posix_portable import RunningApp
     from vibe_job_radar.release_install import write_json, read_json, wait_record
     from vibe_job_radar.release_updates import stage_package, file_digest
     from vibe_job_radar.posix_artifacts import inventory
-    root.mkdir(); workspace=root/'工作区 with spaces'; workspace.mkdir()
+    root.mkdir(); root=root.resolve()
+    workspace=root/'工作区 with spaces'; workspace.mkdir()
     updates=workspace/'updates'; updates.mkdir()
     sentinel=workspace/'authored.txt'; sentinel.write_bytes(b'KEEP ARTIFICIAL ORIGINAL')
     database=workspace/'authored.sqlite'
@@ -34,7 +35,8 @@ def verify(bundle, archive, root, cwd, env):
     selected=dict(version=meta['version'],sha256=file_digest(package),platform=meta['platform'],
         automatic_update=True,revision=meta['runtime_source']['revision'],source_sha256=meta['source']['sha256'])
     directory=stage_package(package,selected,updates,threading.Event())
-    proof=dict(schema_version=1,**{key:False for key in HANDOFF_FIELDS})
+    if proof is None:proof={}
+    proof.update(schema_version=1,**{key:False for key in HANDOFF_FIELDS})
     original_rows=inventory(bundle); prepared_rows=inventory(directory)
     assert original_rows==prepared_rows
     proof['internal_links_preserved']=all(prepared_rows[n]==r for n,r in original_rows.items() if r['kind']=='symlink')
@@ -87,6 +89,13 @@ def verify(bundle, archive, root, cwd, env):
         proof['backup_verified']=True
         assert all((workspace/name).read_bytes()==data for name,data in original.items())
         proof['original_data_preserved']=True
+    except Exception as error:
+        proof['failure']={'error_type':type(error).__name__,
+            'helper_exit':helper.poll() if helper is not None else None}
+        if (journal/'status.json').is_file():
+            saved=read_json(journal/'status.json')
+            proof['failure'].update(status=saved.get('status'),helper_error_type=saved.get('error_type'))
+        raise
     finally:
         if writer is not None:os.close(writer)
         if reader is not None:os.close(reader)

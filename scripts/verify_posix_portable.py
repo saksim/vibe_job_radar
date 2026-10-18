@@ -168,7 +168,8 @@ def verify(bundle, output, archive):
             finally:
                 reopened.close()
             from posix_update_acceptance import verify as verify_update
-            result['automatic_update']=verify_update(bundle,archive,root/'native upgrade',cwd,env)
+            result['automatic_update']={}
+            verify_update(bundle,archive,root/'native upgrade',cwd,env,result['automatic_update'])
             result['checks'].append('native_automatic_update_handoff')
             require(inventory(bundle)==before,'Program bundle changed while running')
             result['checks'].append('immutable_extracted_payload')
