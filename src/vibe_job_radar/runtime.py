@@ -13,7 +13,8 @@ PORTABLE_GUIDANCE = ('此便携包自带 Python、Playwright、配套 Chromium �
 POSIX_GUIDANCE = ('此程序包自带 Python、Playwright、Chromium、PAC 和 NTLMv2 组件。'
     '请完整解压并保留目录、符号链接和可执行权限；Linux 仍需要兼容的浏览器系统库。'
     '组件更新时先停止任务并关闭程序，备份工作区，把已核验的新包解压到另一个目录。'
-    '本平台使用手动更换完整包；Windows 自动替换、加密凭据和登录启动不适用于此包。')
+    '可在“版本与升级”中按平台核验下载，明确选择备份和自动重启；也可手动准备完整包。'
+    '系统密钥库可保存已有代理和团队凭据；Windows DPAPI 和 Windows 登录启动不适用于此包。')
 
 def portable_guidance():
     return PORTABLE_GUIDANCE if sys.platform=='win32' else POSIX_GUIDANCE

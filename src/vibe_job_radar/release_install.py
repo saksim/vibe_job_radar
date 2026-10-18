@@ -25,10 +25,16 @@ from .collection import writer_lock
 from .release_updates import (UpdateError, require, version, io_path, file_digest,
                               stage_package, remove_owned_tree, check_stop)
 from .runtime import is_portable
+from .release_platform import current_platform, executable_name, POSIX_PLATFORMS
 from .utils import atomic_json
 from .workspace import InputError
 
 CONSENT = 'windows-verified-upgrade-restart-v1'
+POSIX_CONSENT = 'native-verified-upgrade-restart-v1'
+
+
+def consent_for(platform):
+    return POSIX_CONSENT if platform in POSIX_PLATFORMS else CONSENT
 MAX_BACKUP = 5 * 1024**3
 MAX_FILES = 50000
 OWNER_DIRS = ('', 'collections', 'collections/owner', 'guided/owner',
@@ -36,7 +42,7 @@ OWNER_DIRS = ('', 'collections', 'collections/owner', 'guided/owner',
 
 
 def supported():
-    return os.name == 'nt' and is_portable()
+    return is_portable() and current_platform() in {'windows-x64',*POSIX_PLATFORMS}
 
 
 def plain(path, *, directory=False):
@@ -147,6 +153,9 @@ def backup_workspace(workspace, updates):
 
 def verify_directory(directory, package, selected):
     """Recheck all executable/dependency bytes immediately before a handoff."""
+    if selected.get("platform") in POSIX_PLATFORMS:
+        from .release_posix import verify_directory as verify_native
+        return verify_native(directory,package,selected,threading.Event())
     require(file_digest(package) == selected['sha256'])
     actual = inventory(directory)
     with io_path(package).open('rb') as stream, zipfile.ZipFile(stream) as archive:
@@ -173,10 +182,15 @@ def launch_environment():
         env.pop('PLAYWRIGHT_BROWSERS_PATH',None)
     # Never select a previous PyInstaller payload in a newly launched program.
     env['PYINSTALLER_RESET_ENVIRONMENT'] = '1'
+    if sys.platform=='linux':
+        original=env.pop('LD_LIBRARY_PATH_ORIG',None)
+        if original is None:env.pop('LD_LIBRARY_PATH',None)
+        else:env['LD_LIBRARY_PATH']=original
     return env
 
 
 def spawn(args, **kwargs):
+    if os.name!='nt':kwargs.setdefault('start_new_session',True)
     return subprocess.Popen([str(arg) for arg in args],stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,env=launch_environment(),
         creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0),**kwargs)
@@ -216,6 +230,26 @@ class WindowsProcess:
         if self.handle:self.api.CloseHandle(self.handle);self.handle=None
 
 
+class ExitPipe:
+    """The old app alone retains the writer; EOF cannot be faked by PID reuse."""
+    def __init__(self, fd, identity):
+        require(type(fd) is int and fd>=3)
+        info=os.fstat(fd)
+        require(stat.S_ISFIFO(info.st_mode) and info.st_ino==identity)
+        os.set_inheritable(fd,False)
+        self.fd=fd;self.created=identity
+
+    def exited(self, milliseconds=0):
+        import select
+        ready,_,_=select.select([self.fd],[],[],milliseconds/1000)
+        if not ready:return False
+        require(os.read(self.fd,1)==b'')
+        return True
+
+    def close(self):
+        if self.fd is not None:os.close(self.fd);self.fd=None
+
+
 def request_path(workspace, path):
     workspace=workspace.resolve(); updates=safe_child(workspace,'updates')
     path=Path(path)
@@ -229,14 +263,18 @@ def load_request(path):
     value=read_json(path)
     fields={'schema_version','workspace','directory','package','selected','parent_pid','parent_created',
             'old_executable','old_version','nonce','no_browser'}
-    require(isinstance(value,dict) and set(value)==fields and value['schema_version']==1
+    native=isinstance(value,dict) and value.get('schema_version')==2
+    require(isinstance(value,dict) and set(value)==fields and type(value['schema_version']) is int
+            and value['schema_version'] in (1,2)
             and type(value['parent_pid']) is int and value['parent_pid']>0
-            and type(value['parent_created']) is int and value['parent_created']>0
+            and type(value['parent_created']) is int and value['parent_created']>=(0 if native else 1)
             and type(value['no_browser']) is bool and isinstance(value['nonce'],str) and len(value['nonce'])==64)
     root=Path(value['workspace']); require(root.is_absolute() and root.resolve()==root)
     request_path(root,path)
     selected=value['selected']; version(selected['version']); version(value['old_version'])
-    require(isinstance(selected,dict) and set(selected)=={'version','sha256','revision','source_sha256'})
+    require(isinstance(selected,dict) and set(selected)==({'version','sha256','revision','source_sha256'}
+            | ({'platform','automatic_update'} if native else set())))
+    if native:require(selected.get('platform') in POSIX_PLATFORMS and selected.get('automatic_update') is True)
     import re
     require(all(re.fullmatch('[0-9a-f]{64}',selected[key]) for key in ('sha256','source_sha256'))
             and re.fullmatch('[0-9a-f]{40}',selected['revision']))
@@ -244,7 +282,7 @@ def load_request(path):
     require(directory.is_absolute() and directory.parent.parent==root/'updates' and directory.name=='VibeJobRadar'
             and package.is_absolute() and package.parent==root/'updates')
     safe_child(root,directory.relative_to(root));safe_child(root,package.relative_to(root),directory=False)
-    old=Path(value['old_executable']);require(old.is_absolute() and old.name.lower()=='vibejobradar.exe')
+    old=Path(value['old_executable']);require(old.is_absolute() and (old.name==executable_name(selected) if native else old.name.lower()=='vibejobradar.exe'))
     return value
 
 
@@ -269,7 +307,9 @@ class AutomaticInstaller:
 
     def install(self,package,selected,*,cancelled=None):
         cancelled=cancelled or threading.Event();check_stop(cancelled)
-        if not supported():raise InputError('自动切换仅适用于Windows便携包。')
+        if not supported():raise InputError('自动切换需要受支持的完整程序包。')
+        native=selected.get('platform') in POSIX_PLATFORMS
+        if native:require(selected['platform']==current_platform() and selected.get('automatic_update') is True)
         self.preflight()
         old=Path(sys.executable).resolve();plain(old)
         updates=safe_child(self.workspace.root,'updates')
@@ -277,49 +317,70 @@ class AutomaticInstaller:
         directory=stage_package(package,selected,updates,cancelled)
         verify_directory(directory,package,selected)
         check_stop(cancelled)
-        process=spawn([directory/'VibeJobRadar.exe','--doctor','--workspace',updates/('probe-'+secrets.token_hex(12))])
+        process=spawn([directory/executable_name(selected),'--doctor','--workspace',updates/('probe-'+secrets.token_hex(12))])
         try:
             if process.wait(timeout=30)!=0:raise UpdateError('新版离线启动检查失败；当前工作台继续运行。')
         except subprocess.TimeoutExpired:
             process.kill();process.wait(5);raise UpdateError('新版离线启动检查超时；当前工作台继续运行。') from None
         journal=safe_child(updates,'install-'+secrets.token_hex(12));io_path(journal).mkdir(mode=0o700)
-        parent=WindowsProcess(os.getpid())
+        reader=writer=None
+        if native:
+            reader,writer=os.pipe()
+            created=os.fstat(reader).st_ino
+        else:
+            parent=WindowsProcess(os.getpid())
+            try:created=parent.created
+            finally:parent.close()
+        request=dict(schema_version=2 if native else 1,workspace=str(self.workspace.root),directory=str(directory),package=str(package),
+            selected={key:selected[key] for key in ('version','sha256','revision','source_sha256')},
+            parent_pid=os.getpid(),parent_created=created,old_executable=str(old),old_version=__version__,
+            nonce=secrets.token_hex(32),no_browser=self.no_browser)
+        if native:request['selected'].update(platform=selected['platform'],automatic_update=True)
+        helper=None
         try:
-            request=dict(schema_version=1,workspace=str(self.workspace.root),directory=str(directory),package=str(package),
-                selected={key:selected[key] for key in ('version','sha256','revision','source_sha256')},
-                parent_pid=os.getpid(),parent_created=parent.created,old_executable=str(old),old_version=__version__,
-                nonce=secrets.token_hex(32),no_browser=self.no_browser)
-        finally:parent.close()
-        write_json(journal/'request.json',request)
-        check_stop(cancelled)
-        latest=updates/'latest-install.json'
-        if latest.exists():
-            prior=read_json(latest);require(set(prior)=={'request'})
-            load_request(request_path(self.workspace.root,prior['request']))
-        write_json(latest,dict(request=str(journal/'request.json')))
-        helper=spawn([old,'--apply-update',journal/'request.json'])
-        try:
+            write_json(journal/'request.json',request)
+            check_stop(cancelled)
+            latest=updates/'latest-install.json'
+            if latest.exists():
+                prior=read_json(latest);require(set(prior)=={'request'})
+                load_request(request_path(self.workspace.root,prior['request']))
+            write_json(latest,dict(request=str(journal/'request.json')))
+            args=[old,'--apply-update',journal/'request.json']
+            if native:
+                args+=['--update-parent-fd',str(reader)]
+                helper=spawn(args,pass_fds=(reader,))
+            else:helper=spawn(args)
             wait_record(journal/'status.json',request['nonce'],'armed',process=helper,timeout=15)
             # Blocks new UI mutations and stops only this instance's idle dispatchers.
             check_stop(cancelled)
             self.quiesce()
         except BaseException:
-            if helper.poll() is None:helper.terminate();helper.wait(5)
+            if helper is not None and helper.poll() is None:helper.terminate();helper.wait(5)
+            if writer is not None:os.close(writer)
             raise
+        finally:
+            if reader is not None:os.close(reader)
+        # An integer fd stays open until process exit, after server/workers close.
+        # It is non-inheritable and is never passed to the update helper.
+        self._exit_writer=writer
         threading.Timer(.5,self.shutdown).start()
         return dict(status='restarting',directory=str(directory),install_record=str(journal),
                     message='正在退出当前工作台。升级助手将备份工作区、核对新版就绪并自动打开；原程序保留。')
 
 
-def apply_update(path):
+def apply_update(path, *, parent_fd=None):
     """Old verified runtime, explicitly invoked by its own UI after consent."""
     path=Path(path); request=load_request(path); journal=path.parent
     require(supported() and Path(sys.executable).resolve()==Path(request['old_executable'])
             and __version__==request['old_version'])
+    native=request['schema_version']==2
+    require((native and request['selected']['platform']==current_platform() and parent_fd is not None)
+            or (not native and parent_fd is None))
     nonce=request['nonce']; status=journal/'status.json'; process=None; parent=None
     committed=False;current=None;previous_current=None;backup=None
     try:
-        parent=WindowsProcess(request['parent_pid']);require(parent.created==request['parent_created'])
+        parent=ExitPipe(parent_fd,request['parent_created']) if native else WindowsProcess(request['parent_pid'])
+        require(parent.created==request['parent_created'])
         write_json(status,dict(status='armed',nonce=nonce))
         if not parent.exited(120000):raise UpdateError('原工作台未完全退出，未切换程序。')
         parent.close();parent=None
@@ -335,7 +396,7 @@ def apply_update(path):
             backup=backup_workspace(root,updates)
             verify_directory(directory,Path(request['package']),request['selected'])
             write_json(status,dict(status='starting',nonce=nonce,backup=str(backup)))
-            args=[directory/'VibeJobRadar.exe','--workspace',root,'--upgrade-handoff',path]
+            args=[directory/executable_name(request['selected']),'--workspace',root,'--upgrade-handoff',path]
             if request['no_browser']:args.append('--no-browser')
             process=spawn(args)
             ready=wait_record(journal/'ready.json',nonce,'ready',process=process,timeout=45)
@@ -343,7 +404,7 @@ def apply_update(path):
             # Keep the existing OS registration. Its original portable entry
             # follows current.json only after the handoff is committed.
             current=dict(schema_version=1,request=str(path),version=request['selected']['version'],
-                executable=str(directory/'VibeJobRadar.exe'),executable_sha256=file_digest(directory/'VibeJobRadar.exe'),
+                executable=str(directory/executable_name(request['selected'])),executable_sha256=file_digest(directory/executable_name(request['selected'])),
                 old_executable=request['old_executable'],backup=str(backup),nonce=nonce)
             write_json(updates/'current.json',current)
         write_json(status,dict(status='committed',nonce=nonce,backup=str(backup),startup='existing_registration_preserved'))
@@ -372,7 +433,7 @@ def apply_update(path):
 def acknowledge_ready(path, workspace, port):
     request=load_request(path)
     require(Path(request['workspace'])==workspace.root and is_portable()
-            and Path(sys.executable).resolve()==Path(request['directory'])/'VibeJobRadar.exe'
+            and Path(sys.executable).resolve()==Path(request['directory'])/executable_name(request['selected'])
             and __version__==request['selected']['version'])
     write_json(Path(path).parent/'ready.json',dict(status='ready',nonce=request['nonce'],
                version=__version__,pid=os.getpid(),port=port))
@@ -391,7 +452,7 @@ def installed_command(workspace, argv):
     status=read_json(Path(record['request']).parent/'status.json')
     if status.get('status')!='committed':return None
     require(status.get('nonce')==record.get('nonce')==request['nonce']
-            and target==Path(request['directory'])/'VibeJobRadar.exe'
+            and target==Path(request['directory'])/executable_name(request['selected'])
             and file_digest(target)==record['executable_sha256'])
     return [str(target),*argv]
 
@@ -405,7 +466,7 @@ def retained_launcher(workspace, previous, current):
         request=load_request(Path(record['request']))
         state=read_json(Path(record['request']).parent/'status.json')
         return (state.get('status')=='committed' and state.get('nonce')==record.get('nonce')==request['nonce']
-                and Path(record['executable'])==current==Path(request['directory'])/'VibeJobRadar.exe'
+                and Path(record['executable'])==current==Path(request['directory'])/executable_name(request['selected'])
                 and read_json(previous.parent/'PORTABLE.json').get('upgrade_protocol')==1
                 and file_digest(current)==record['executable_sha256'])
     except (OSError,ValueError,KeyError,TypeError):
@@ -438,7 +499,7 @@ def validate_current(workspace,record):
         and record['schema_version']==1)
     request=load_request(request_path(Path(workspace),record['request']))
     require(record['version']==request['selected']['version'] and record['nonce']==request['nonce']
-        and record['executable']==str(Path(request['directory'])/'VibeJobRadar.exe')
+        and record['executable']==str(Path(request['directory'])/executable_name(request['selected']))
         and record['old_executable']==request['old_executable'])
     import re
     require(isinstance(record['executable_sha256'],str) and re.fullmatch('[0-9a-f]{64}',record['executable_sha256']))

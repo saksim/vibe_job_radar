@@ -14,8 +14,8 @@ SCRIPT=Path(__file__).resolve().parents[1]/'scripts/posix_artifacts.py'
 
 class PosixArchiveTests(unittest.TestCase):
     def setUp(self):
-        spec=importlib.util.spec_from_file_location('posix_archive_fixture',SCRIPT)
-        self.mod=importlib.util.module_from_spec(spec);spec.loader.exec_module(self.mod)
+        from vibe_job_radar import posix_artifacts
+        self.mod=posix_artifacts
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
         self.root=Path(self.temp.name)
 

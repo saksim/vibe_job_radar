@@ -89,6 +89,10 @@ class ReleaseTransport:
 
     def latest(self):return self.client.json(API)
 
+    def release(self, tag):
+        require(re.fullmatch(r"desktop-v[0-9]+[.][0-9]+[.][0-9]+",tag))
+        return self.client.json(API.rsplit("/",1)[0]+"/tags/"+tag)
+
     def small(self, asset, cancelled):
         current=asset['browser_download_url']
         for attempt in range(4):
@@ -247,6 +251,9 @@ def remove_owned_tree(path, identity, parent):
 
 
 def stage_package(package, info, updates, cancelled):
+    if info.get("platform") in {"linux-x64","macos-arm64"}:
+        from .release_posix import stage_package as stage_native
+        return stage_native(package,info,updates,cancelled)
     require(package.parent.resolve()==updates.resolve() and not package.is_symlink())
     created=None
     with io_path(package).open('rb') as stream:
@@ -303,7 +310,9 @@ def stage_package(package, info, updates, cancelled):
 
 
 class ReleaseUpdates:
-    def __init__(self, workspace, *, transport_factory=None, current_version=__version__, installer=None):
+    def __init__(self, workspace, *, transport_factory=None, current_version=__version__, installer=None, target_platform=None):
+        from .release_platform import current_platform
+        self.platform=target_platform or current_platform()
         self.workspace=workspace;self.current_version=current_version;self.installer=installer
         self.factory=transport_factory or (lambda:ReleaseTransport(workspace.network_policy()))
         self._lock=threading.Lock();self._thread=None;self._stop=threading.Event();self._selected=None
@@ -316,7 +325,9 @@ class ReleaseUpdates:
         from .release_install import last_install
         result['last_install']=last_install(self.workspace.root)
         result['automatic_supported']=self.installer is not None
-        result['install_consent_version']='windows-verified-upgrade-restart-v1'
+        from .release_install import consent_for
+        result['install_consent_version']=consent_for(self.platform)
+        result['platform']=self.platform
         return result
 
     def _save(self,**value):
@@ -339,7 +350,13 @@ class ReleaseUpdates:
     def _check(self):
         self._selected=None
         transport=self.factory()
-        selected=inspect_release(transport.latest(),transport,self._stop,metadata_cache=self._metadata_cache)
+        if self.platform not in {"windows-x64","linux-x64","macos-arm64"}:
+            raise InputError("当前系统或架构尚无已验证的完整程序包，请查看发行说明；未下载其他平台文件。")
+        if self.platform=="windows-x64":
+            selected=inspect_release(transport.latest(),transport,self._stop,metadata_cache=self._metadata_cache)
+        else:
+            from .release_posix import inspect_release as inspect_native
+            selected=inspect_native(transport.latest(),transport,self._stop,self.platform,metadata_cache=self._metadata_cache)
         self._selected=selected
         newer=version(selected['version'])>version(self.current_version)
         self._save(status='available' if newer else 'current',version=selected['version'],
@@ -368,12 +385,15 @@ class ReleaseUpdates:
             download_package(selected,updates,self.factory,self._stop,self._save)
         if not prepare:return package
         directory=stage_package(package,selected,updates,self._stop)
+        from .release_platform import executable_name
+        name=executable_name(selected)
         self._save(status='ready',release_id=selected['release_id'],version=selected['version'],release_url=selected['release_url'],
                    directory=str(directory),archive=str(package),sha256=selected['sha256'],signed=False,
-                   message='已校验并解压到独立目录。停止任务和计划、关闭旧程序并备份工作区后，启动新目录的VibeJobRadar.exe，继续选择原工作区。旧程序和数据保留。')
+                   message=f'已校验并解压到独立目录。停止任务和计划、关闭旧程序并备份工作区后，启动新目录的{name}，继续选择原工作区。旧程序和数据保留。')
 
     def install(self,data):
-        from .release_install import CONSENT
+        from .release_install import consent_for
+        CONSENT=consent_for(self.platform)
         with self._lock:
             selected=copy.deepcopy(self._selected)
             valid=(self._state.get('status') in {'available','ready'} and selected is not None
@@ -381,7 +401,9 @@ class ReleaseUpdates:
                        'release_id':selected['release_id'],'sha256':selected['sha256']}
                    and data.get('consent') is True and type(data.get('release_id')) is int)
         if not valid:raise InputError('请核对当前稳定版，并明确同意关闭其他实例、备份和自动重启。')
-        if self.installer is None:raise InputError('自动切换仅适用于Windows便携包；源码版仍可下载并手动准备。')
+        if self.installer is None:raise InputError('自动切换适用于受支持的完整程序包；源码版可下载并手动准备。')
+        if self.platform!='windows-x64' and selected.get('automatic_update') is not True:
+            raise InputError('此原生发行没有自动交接证明，请使用手动准备。')
         self.installer.preflight()
         return self._start(lambda:self._install(selected))
 

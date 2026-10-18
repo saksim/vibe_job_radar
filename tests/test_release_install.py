@@ -165,7 +165,7 @@ class InstallTests(unittest.TestCase):
     def test_release_api_needs_separate_consent_and_can_use_already_prepared_zip(self):
         fixture=ReleaseFixture();installer=MagicMock()
         installer.install.return_value={'status':'restarting','message':'test handoff'}
-        service=updates.ReleaseUpdates(self.workspace,transport_factory=lambda:fixture,current_version='0.3.0',installer=installer)
+        service=updates.ReleaseUpdates(self.workspace,transport_factory=lambda:fixture,current_version='0.3.0',target_platform='windows-x64',installer=installer)
         self.addCleanup(service.close)
         service.check({'consent':True});service._thread.join(10)
         request=dict(consent=True,release_id=42,sha256=service.state()['sha256'])
