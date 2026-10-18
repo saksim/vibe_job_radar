@@ -1,6 +1,6 @@
 # Linux / macOS 完整程序包
 
-0.12.0 程序包含[系统密钥库组件](SYSTEM_CREDENTIALS.md)，可加密保存已有本机代理凭据，并明确迁移团队设备凭据。Linux 仍需现有 Secret Service 默认密钥库，macOS 需默认钥匙串授权；缺失或锁定时停止新请求，不自动创建库或退回明文。
+0.13.0 程序包含[系统密钥库组件](SYSTEM_CREDENTIALS.md)，可加密保存已有本机代理凭据，并明确迁移团队设备凭据。Linux 仍需现有 Secret Service 默认密钥库，macOS 需默认钥匙串授权；缺失或锁定时停止新请求，不自动创建库或退回明文。
 
 从 [desktop-vVERSION](https://github.com/saksim/vibe_job_radar/releases/tag/desktop-vVERSION) 选择与系统一致的 tar.gz。Linux x64 在 Ubuntu 22.04 x64 构建，macOS arm64 在 macOS 15 arm64 构建；其他发行版、系统版本、架构和个人干净设备尚未认证。需保留完整目录、符号链接和可执行权限。
 
@@ -16,15 +16,17 @@
 
 停止任务、计划与程序，备份整个工作区，再把完整新包解压到另一目录，用同一个 --workspace 路径重新打开。保留旧包与备份；降级前遵循工作区版本的明确回退规则，不直接让旧程序改写新格式。新包复用实际通过测试的归档，不在发版时重新打包。
 
-此包使用完整包手动更换。Windows 的自动替换、DPAPI 凭据保存和 Windows 登录启动仍由原 Windows 正式版提供，未声称移植到 Linux/macOS。当前平台凭据操作以实际支持提示为准，不以明文存储替代系统加密。既有 Python wheel/sdist 继续用于已有 Python 的环境。
+从 0.13.0 开始，“版本与升级”按当前系统和架构检查同版本的 desktop 正式发行，并复用断点续传、完整校验和独立目录准备。明确同意后可预检新程序、等待旧进程退出、备份工作区，再以新版就绪记录提交切换；失败保留原程序和备份，不自动覆盖用户数据。再次运行支持此协议的旧入口会转到已完成的新版；故障恢复可使用 --ignore-installed-update。
+
+0.12.0 及更早原生包需要先手动更换一次才能获得此入口。源码环境只提供下载和手动准备，不自动替换 Python 安装。首次升级前应关闭其他实例和独立 worker，停止活动采集。新版仍未签名/公证，遇系统阻止或钥匙串需要重新授权时保留诊断并由本人按系统提示处理，不清除隔离属性或绕过系统安全设置。Windows DPAPI 和 Windows 登录启动继续属于 Windows 发行。当前平台凭据操作以实际支持提示为准，不以明文存储替代系统加密。既有 Python wheel/sdist 继续用于已有 Python 的环境。
 
 ## 发行证据与边界
 
-每个平台的实际解压程序在没有 Python 的 PATH、不同当前目录和带中文/空格工作区中验证：诊断、捆绑 Chromium、原生请求守卫与清理、冻结 NTLMv2、URL/域名 PAC 工作者、源码与冻结程序的系统凭据保存/迁移/锁定拒绝、人工完整 JD 导入与原报告、独立进程重开、运行前后包内容一致。人工夹具不属于真实招聘数据，不代表真实站点或企业 VPN 验收。完整主干 CI、产物大小、SHA-256、来源提交、嵌入身份和实际运行证明均通过后才发布。
+每个平台的实际解压程序在没有 Python 的 PATH、不同当前目录和带中文/空格工作区中验证：诊断、捆绑 Chromium、原生请求守卫与清理、冻结 NTLMv2、URL/域名 PAC 工作者、源码与冻结程序的系统凭据保存/迁移/锁定拒绝、人工完整 JD 导入与原报告、独立进程重开、真实冻结助手和新程序的退出/备份/就绪交接、运行前后包内容一致。人工夹具不属于真实招聘数据，不代表真实站点或企业 VPN 验收。完整主干 CI、产物大小、SHA-256、来源提交、嵌入身份和实际运行证明均通过后才发布。
 
 Linux/macOS 配套正式 Tag 为 desktop-vVERSION；Windows 仍使用 vVERSION 并保持 Latest，Python 包使用 python-vVERSION。生产服务主机/域名、企业代理、签名/公证、个人干净设备和人工材料继续单列。
 
-[Issue #399](https://github.com/saksim/vibe_job_radar/issues/399) · [总控 #57](https://github.com/saksim/vibe_job_radar/issues/57)
+[升级 Issue #407](https://github.com/saksim/vibe_job_radar/issues/407) · [发行 Issue #399](https://github.com/saksim/vibe_job_radar/issues/399) · [总控 #57](https://github.com/saksim/vibe_job_radar/issues/57)
 
 维护者发布顺序为 Windows → Python → Linux/macOS。三个发行工作流共用串行发布组，保留既有下载链接；如果前置发行尚未完成，后续流程会停止并保留结果。
 

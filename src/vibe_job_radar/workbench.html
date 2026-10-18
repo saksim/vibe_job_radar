@@ -139,11 +139,11 @@ body{overflow-wrap:anywhere}
 <details><summary>本次审计信息与警告</summary><pre id="manifest"></pre></details></div>
 <h3>历史报告（最近 30 次）</h3><div id="runs"></div></section>
 <section><details id="release-panel"><summary>版本与升级</summary>
-<p id="release-current"></p><p>点击检查后连接官方GitHub仓库；不会上传岗位、报告或个人材料。当前Windows包未签名，下载后会核对完整性并解压到独立目录。</p>
+<p id="release-current"></p><p>点击检查后连接官方GitHub仓库；不会上传岗位、报告或个人材料。当前完整程序包未签名，下载后会核对完整性并解压到独立目录。</p>
 <button id="release-check" type="button" class="secondary">检查稳定版</button><button id="release-download" type="button" disabled>下载并准备新版</button>
-<div id="release-auto-controls" hidden><label class="check"><input id="release-install-consent" type="checkbox">已关闭其他工作台和独立进程，同意备份工作区、退出当前工作台并自动启动新版；已登记的本程序启动项随版本切换。</label><button id="release-install" type="button" disabled>校验、升级并重启</button></div>
+<div id="release-auto-controls" hidden><label class="check"><input id="release-install-consent" type="checkbox">已关闭其他工作台和独立进程，同意备份工作区、退出当前工作台并自动启动新版；原程序入口可继续转到已完成升级的版本。</label><button id="release-install" type="button" disabled>校验、升级并重启</button></div>
 <a id="release-link" target="_blank" rel="noreferrer" hidden>查看发行说明</a><pre id="release-status" role="status" aria-live="polite">展开只读取本机状态。</pre>
-<p class="muted">可继续手动准备新版；Windows便携包也可明确选择自动升级。自动升级会备份工作区（不重复备份下载包），保留旧程序；活动采集或浏览器会话需先停止。失败时保留备份供恢复，不自动覆盖用户数据。</p>
+<p class="muted">可继续手动准备新版；Windows x64、Linux x64 和 macOS arm64 完整包可明确选择自动升级。自动升级会备份工作区（不重复备份下载包），保留旧程序；活动采集或浏览器会话需先停止。失败时保留备份供恢复，不自动覆盖用户数据。</p>
 <details id="release-notes-panel" hidden><summary>本次版本变化</summary><pre id="release-notes"></pre></details>
 </details></section>
 <section id="network-preferences"><details><summary>网络自动适配（不必关闭 VPN/TUN）</summary>

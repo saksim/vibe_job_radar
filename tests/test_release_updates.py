@@ -60,7 +60,7 @@ class ReleaseUpdateTests(unittest.TestCase):
         self.fixture=ReleaseFixture()
 
     def service(self,fixture=None,version='0.3.0'):
-        service=updates.ReleaseUpdates(self.workspace,transport_factory=lambda:fixture or self.fixture,current_version=version)
+        service=updates.ReleaseUpdates(self.workspace,transport_factory=lambda:fixture or self.fixture,current_version=version,target_platform='windows-x64')
         self.addCleanup(service.close);return service
 
     def wait(self,service):
