@@ -9,6 +9,8 @@ import re
 import time
 import threading
 import tempfile
+import weakref
+from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -133,6 +135,40 @@ def protect_connection(workspace_root, *, expected_revision=None):
                 'message':'已加密迁移本机设备凭据，未连接团队服务。请停止任务并重启工作台；管理员原凭据文件与旧备份仍需按原流程保管。'}
 
 
+class _RequestGate:
+    """Serialize local peers through the response, then space their next send."""
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.completed = 0.0
+
+    @contextmanager
+    def slot(self):
+        with self.lock:
+            delay = 0.1 - (time.monotonic() - self.completed)
+            if delay > 0:
+                time.sleep(delay)
+            try:
+                yield
+            finally:
+                # Include slow/failed responses: queued calls must not burst
+                # together when the network unblocks. No request is retried.
+                self.completed = time.monotonic()
+
+
+_request_gates = weakref.WeakValueDictionary()
+_request_gates_lock = threading.Lock()
+
+
+def _request_gate(root):
+    key = os.path.normcase(str(root.resolve()))
+    with _request_gates_lock:
+        gate = _request_gates.get(key)
+        if gate is None:
+            gate = _RequestGate()
+            _request_gates[key] = gate
+        return gate
+
+
 class TeamConnection:
     def __init__(self,workspace_root,*,transport=None,policy_factory=None):
         self.root=Path(workspace_root)/'.team'
@@ -140,7 +176,7 @@ class TeamConnection:
         self.policy_factory=policy_factory or current_policy;self._policy=None
         self.path=self.root/'connection.json'
         self._binding=None
-        self._last_request=0.0
+        self._gate = _request_gate(self.root)
         self.config,self.registry=self._read()
         self.origin=self.config['origin']
 
@@ -184,12 +220,13 @@ class TeamConnection:
     def request(self,path,*,payload=None):
         if path not in {'/v1/team/state','/v1/team/metrics','/v1/team/quota','/v1/team/task','/v1/sync/read','/v1/sync/ack','/v1/jobs/search'}:
             raise TeamError('team_route_invalid')
+        with self._gate.slot():
+            return self._request(path, payload=payload)
+
+    def _request(self,path,*,payload):
         token=self._token()
-        delay=0.1-(time.monotonic()-self._last_request)
-        if delay>0:time.sleep(delay)
-        self._last_request=time.monotonic()
         if self.transport is None and self._policy is None:self._policy=self.policy_factory()
-        client=self.transport or SafeHTTP({urlsplit(self.origin).hostname},timeout=10,max_bytes=32_000_000,interval=0,network_policy=self._policy)
+        client=self.transport or SafeHTTP({urlsplit(self.origin).hostname},timeout=10,max_bytes=32_000_000,interval=0,network_policy=self._policy,retry_after_floor=1)
         from .team_ownership import TASK_MESSAGES
         conflict_messages = {**SYNC_CONFLICT_MESSAGES, **TASK_MESSAGES}
         try:
