@@ -137,7 +137,8 @@ def protect_connection(workspace_root, *, expected_revision=None):
 
 class _RequestGate:
     """Serialize local peers through the response, then space their next send."""
-    def __init__(self):
+    def __init__(self, key):
+        self.key = key
         self.lock = threading.Lock()
         self.completed = 0.0
 
@@ -153,18 +154,31 @@ class _RequestGate:
                 # Include slow/failed responses: queued calls must not burst
                 # together when the network unblocks. No request is retried.
                 self.completed = time.monotonic()
+                with _request_gates_lock:
+                    _expire_request_gates(self.completed)
+                    _recent_request_gates[self.key] = self
 
 
 _request_gates = weakref.WeakValueDictionary()
 _request_gates_lock = threading.Lock()
+_recent_request_gates = {}
+
+
+def _expire_request_gates(now):
+    # Keep short-lived UI connections alive through their cooldown, without
+    # retaining idle workspaces forever or starting one timer per request.
+    for key, gate in list(_recent_request_gates.items()):
+        if now - gate.completed >= 0.1:
+            del _recent_request_gates[key]
 
 
 def _request_gate(root):
     key = os.path.normcase(str(root.resolve()))
     with _request_gates_lock:
+        _expire_request_gates(time.monotonic())
         gate = _request_gates.get(key)
         if gate is None:
-            gate = _RequestGate()
+            gate = _RequestGate(key)
             _request_gates[key] = gate
         return gate
 

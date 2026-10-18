@@ -101,6 +101,30 @@ class RequestPacingTests(unittest.TestCase):
             peer.request('/v1/team/state')
         self.assertEqual(len(self.http.calls), before)
 
+    def test_temporary_connections_keep_cooldown_until_it_expires(self):
+        import weakref
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        tick = [10000.0]; starts = []
+        clock = SimpleNamespace(monotonic=lambda:tick[0], sleep=lambda delay:tick.__setitem__(0,tick[0]+delay))
+        transport = Mock()
+        transport.json.side_effect = lambda *a,**kw:(starts.append(tick[0]) or {'schema_version':1})
+        with patch('vibe_job_radar.team_client.time', clock):
+            first = self.connection('alice');first.transport = transport
+            first.request('/v1/team/state')
+            retained = weakref.ref(first._gate)
+            del first
+            tick[0] += .02
+            TeamConnection(self.root/'alice', transport=transport).request('/v1/team/state')
+            self.assertAlmostEqual(starts[1]-starts[0], .1, places=6)
+            self.assertIsNotNone(retained())
+            tick[0] += .2
+            # Another lookup expires completed gates without a timer/thread,
+            # while still-live connections keep sharing their original gate.
+            self.connection('bob')
+            self.assertIsNone(retained())
+        self.assertEqual(transport.json.call_count, 2)
+
     def test_team_429_uses_service_wait_and_still_stops_after_one_request(self):
         client = self.connection('alice')
         client.transport = None
