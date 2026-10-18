@@ -24,6 +24,7 @@ from urllib.parse import urljoin, urlsplit
 from ._version import __version__
 from .network import SafeHTTP, PinnedHTTPSConnection, validate_public_url, USER_AGENT, FetchError
 from .workspace import InputError
+from .publisher_signing import evidence as signing_evidence, is_signed, verify_bundle, SignatureError
 from .workspace_proxy_auth import MESSAGES as WORKSPACE_PROXY_AUTH_MESSAGES
 
 REPOSITORY = 'saksim/vibe_job_radar'
@@ -202,7 +203,7 @@ def inspect_release(release, transport, cancelled, *, metadata_cache=None):
     require(manifest.get('file')==package['name'] and manifest.get('sha256')==sums[package['name']]
             and manifest.get('size_bytes')==package['size'] and manifest.get('runtime_verified') is True
             and provenance.get('repository')==REPOSITORY and provenance.get('tag')==tag
-            and provenance.get('release_channel')=='stable' and provenance.get('signed') is False
+            and provenance.get('release_channel')=='stable' and type(provenance.get('signed')) is bool
             and provenance.get('rebuilt_for_release') is False
             and provenance.get('candidate_sha256')==manifest['sha256']
             and provenance.get('change_notes_sha256')==sums['CHANGES.md']
@@ -215,11 +216,17 @@ def inspect_release(release, transport, cancelled, *, metadata_cache=None):
             and portable.get('success') is True and source.get('source',{}).get('sha256')==manifest.get('source_sha256')
             and manifest.get('source_sha256')==provenance.get('source_sha256'))
     require(package['name']==f"vibe-job-radar-{selected}-{manifest['sha256'][:16]}-windows-x64.zip")
+    signing=signing_evidence(provenance.get('signing'))
+    require(provenance['signed']==is_signed(signing)
+            and signing_evidence(manifest.get('signing'))==signing
+            and signing_evidence(portable.get('signing'))==signing)
+    if is_signed(signing):
+        require(signing['executable_sha256']==portable.get('files',{}).get('VibeJobRadar.exe'))
     notes=data['CHANGES.md'].decode('utf-8')
     for heading in ('解决了什么','提高了什么','验证结果','剩余问题'):require('## '+heading in notes)
     return {'release_id':release['id'],'version':selected,'tag':tag,'release_url':release['html_url'],
             'package':package,'sha256':manifest['sha256'],'revision':provenance['source_revision'],
-            'source_sha256':provenance['source_sha256'],'notes':notes[:30000],'signed':False}
+            'source_sha256':provenance['source_sha256'],'notes':notes[:30000],'signed':is_signed(signing),'signing':signing}
 
 
 def io_path(path):
@@ -301,8 +308,9 @@ def stage_package(package, info, updates, cancelled):
                             remaining-=len(block);require(remaining>=0);out.write(block)
                         require(remaining==0)
                         out.flush();os.fsync(out.fileno())
+                verify_bundle(io_path(created/'VibeJobRadar'),info)
                 (io_path(created)/'READY.json').write_text(json.dumps({'version':info['version'],'sha256':info['sha256'],
-                    'revision':info['revision'],'signed':False,'workspace_migrated':False}),encoding='utf-8')
+                    'revision':info['revision'],'signed':info.get('signed',False),'workspace_migrated':False}),encoding='utf-8')
                 return created/'VibeJobRadar'
             except BaseException:
                 remove_owned_tree(created,identity,updates)
@@ -361,7 +369,8 @@ class ReleaseUpdates:
         newer=version(selected['version'])>version(self.current_version)
         self._save(status='available' if newer else 'current',version=selected['version'],
                    release_id=selected['release_id'],release_url=selected['release_url'],notes=selected['notes'],sha256=selected['sha256'],
-                   size_bytes=selected['package']['size'],signed=False,
+                   size_bytes=selected['package']['size'],signed=selected.get('signed',False),
+                   signing=selected.get('signing'),signature_verified=False,
                    message='发现较新的稳定版本，可下载并准备到独立目录。' if newer else '当前版本不低于最新稳定版。')
 
     def download(self,data):
@@ -388,7 +397,8 @@ class ReleaseUpdates:
         from .release_platform import executable_name
         name=executable_name(selected)
         self._save(status='ready',release_id=selected['release_id'],version=selected['version'],release_url=selected['release_url'],
-                   directory=str(directory),archive=str(package),sha256=selected['sha256'],signed=False,
+                   directory=str(directory),archive=str(package),sha256=selected['sha256'],signed=selected.get('signed',False),
+                   signing=selected.get('signing'),signature_verified=selected.get('signed',False),
                    message=f'已校验并解压到独立目录。停止任务和计划、关闭旧程序并备份工作区后，启动新目录的{name}，继续选择原工作区。旧程序和数据保留。')
 
     def install(self,data):
@@ -416,7 +426,7 @@ class ReleaseUpdates:
     def _run(self,fn):
         try:fn()
         except Exception as error:
-            message=str(error) if isinstance(error,(UpdateError,InputError)) else '版本操作未完成，请检查网络、磁盘和官方发行状态；已有程序和工作区保留。'
+            message=str(error) if isinstance(error,(UpdateError,InputError,SignatureError)) else '版本操作未完成，请检查网络、磁盘和官方发行状态；已有程序和工作区保留。'
             code=error.code if isinstance(error,FetchError) and isinstance(error.code,str) and error.code in UPDATE_NETWORK_MESSAGES else None
             if code is not None:
                 message=UPDATE_NETWORK_MESSAGES[code]+' 本次会话已校验的小文件会保留；原程序和工作区保留。'

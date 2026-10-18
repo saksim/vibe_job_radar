@@ -1,5 +1,7 @@
 # Vibe Job Radar｜招聘要求与个人证据工作台
 
+0.14.0 增加 [Windows发行者签名接入与签名版升级核验](docs/PUBLISHER_SIGNING.md)，按实际证据显示签名状态；缺少凭据时保留 unsigned。0.13.0 的 Linux/macOS 自动升级与原有功能继续保留。本轮 [24项Issue逐项核查](docs/OPEN_ISSUES_2026_10_18.md) 列明外部环境和材料条件；正式Tag/实际验证见 [Releases](https://github.com/saksim/vibe_job_radar/releases) 和 [0.14.0说明](docs/RELEASE_0_14_0.md)。
+
 0.12.0 增加 [Linux/macOS 系统密钥库与团队凭据迁移](docs/SYSTEM_CREDENTIALS.md)：加密保存已有代理认证，支持独立进程恢复和明确迁移，保留 Windows DPAPI、自动升级与全部原功能。正式 Tag/Release 状态以 [Releases](https://github.com/saksim/vibe_job_radar/releases) 为准。
 
 0.11.0 增加 [Linux x64 / macOS arm64 完整程序包](docs/POSIX_DISTRIBUTION.md)：自带 Python 和 Chromium，贯通原工作台、PAC/NTLM 组件与原报告；按准确主干产物发布独立 desktop Tag，Windows 自动升级和 Python 包继续保留。正式发布状态以对应 Release 和 Tag 为准。

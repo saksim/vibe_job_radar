@@ -26,7 +26,7 @@ concurrency:
 permissions:
   contents: read
 jobs:
-  unsigned-release:
+  verified-release:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -45,7 +45,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Reuse qualified candidate and prepare selected unsigned release
+      - name: Reuse qualified candidate and prepare selected release with verified signing status
         env:
           GH_TOKEN: ${{ github.token }}
           CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}

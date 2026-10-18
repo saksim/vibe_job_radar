@@ -19,6 +19,8 @@ sys.path.insert(0,str(ROOT/'src'))
 from vibe_job_radar.qualification import check_source,fingerprint,output_directory,require_local_evidence
 from vibe_job_radar.utils import atomic_json
 from vibe_job_radar.runtime_identity import source_stamp
+from windows_signing import sign_candidate
+from vibe_job_radar.publisher_signing import is_signed
 
 BUILD_VERSIONS={'pyinstaller':'6.22.3','playwright':'1.63.0','packaging':'26.0','truststore':'0.10.4','quickjs-ng':'0.17.0.1','pyspnego':'0.12.4','cryptography':'50.0.2','sspilib':'0.6.0','cffi':'2.1.1','pycparser':'3.11'}
 
@@ -139,8 +141,9 @@ def build_candidate(out,evidence_path,*,verify_login_startup=False,verify_system
                     target.parent.mkdir(exist_ok=True);shutil.copyfile(source,target);collected.append(target.relative_to(bundle).as_posix())
                     found=True
             if not found:raise ValueError(f'dependency license missing: {package}')
+        signing = sign_candidate(bundle/'VibeJobRadar.exe')
         (bundle/'START_HERE.txt').write_text(
-            'Vibe Job Radar Windows x64 便携候选包（尚非正式签名发行）\n\n'
+            ('Vibe Job Radar Windows x64 便携候选包（' + ('发行者签名已核验' if is_signed(signing) else '未签名') + '）\n\n') +
             '完整解压整个目录后双击 VibeJobRadar.exe。不要只复制exe或从zip内部运行。\n'
             '建议VibeJobRadar程序文件夹完整路径不超过110字符，避免Windows深层目录限制。无需修改系统长路径设置。\n'
             '自带Python、Playwright和配套Chromium；无需改动原Anaconda环境。\n'
@@ -155,7 +158,7 @@ def build_candidate(out,evidence_path,*,verify_login_startup=False,verify_system
             raise ValueError('source changed before portable metadata')
         runtime_source.update(kind='portable_build_manifest',executable_sha256=file_hash(bundle/'VibeJobRadar.exe'))
         atomic_json(bundle/'PORTABLE.json',{'schema_version':1,'status':'portable_candidate_not_release',
-            'runtime_source':runtime_source,
+            'runtime_source':runtime_source,'signing':signing,
             'version':version,'upgrade_protocol':1,'platform':'windows-x64','source':expected,'python_version':platform.python_version(),
             'components':versions,'build_environment_packages':dependencies,'browser_bundled':True,'live_sites_certified':False,
             'bundled_browser_directory':'browsers','recommended_max_bundle_path_units':110,
@@ -171,6 +174,8 @@ def build_candidate(out,evidence_path,*,verify_login_startup=False,verify_system
         if verify_wpad_dns:verification.append('--verify-wpad-dns')
         subprocess.run(verification,cwd=ROOT,check=True,timeout=360)
         report=json.loads(runtime_evidence.read_text(encoding='utf-8'))
+        if report.get('signing') != signing:
+            raise ValueError('publisher signature changed during executable qualification')
         validate_runtime_evidence(bundle,report,require_login_startup=verify_login_startup,require_system_pac=verify_system_pac,require_wpad_dns=verify_wpad_dns,require_url_pac=True,require_domain_pac=True,require_ntlm=True,require_environment=True,require_automatic_update=True)
         if fingerprint(ROOT)!=expected:raise ValueError('source changed during portable build')
         part=stage/'candidate.zip'
@@ -194,6 +199,7 @@ def build_candidate(out,evidence_path,*,verify_login_startup=False,verify_system
             raise
         atomic_json(out/'manifest.json',{'file':dest.name,'sha256':digest,'source_sha256':expected['sha256'],
             'status':'portable_candidate_not_release','runtime_verified':True,'live_sites_certified':False,
+            'signing':signing,
             'components':versions,'platform':'windows-x64','size_bytes':dest.stat().st_size,
             'startup_registration_verified':report.get('startup_registration_verified') is True,
             'startup_worker_verified':report.get('startup_worker_verified') is True,
