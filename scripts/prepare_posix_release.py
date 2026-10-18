@@ -20,17 +20,8 @@ from os_credentials_acceptance import valid_evidence as valid_credentials
 
 ROOT = Path(__file__).resolve().parents[1]
 PLATFORMS = ('linux-x64', 'macos-arm64')
-CHECKS = (
-    'isolated_path_unicode_workspace_and_doctor',
-    'frozen_chromium_blank_guard_and_cleanup',
-    'frozen_ntlmv2_protocol_worker_and_cleanup',
-    'native_os_credentials_source_and_frozen',
-    'resources_and_frozen_source_identity',
-    'frozen_url_and_domain_pac_workers',
-    'authored_full_jd_and_original_report',
-    'independent_process_report_and_runtime_reopen',
-    'immutable_extracted_payload',
-)
+from vibe_job_radar.release_posix import NATIVE_CHECKS as CHECKS, valid_handoff
+
 
 
 def select_platform_artifacts(selected, listing, job_listing):
@@ -85,8 +76,9 @@ def validate_candidate(archive, manifest, proof_path, sha, platform):
                 and all(value.get(key) is False for key in
                         ('signed', 'notarized', 'live_sites_certified', 'clean_machine_certified')),
                 'Unsupported native certification')
-    require(manifest.get('automatic_update') is False and manifest.get('os_credential_store') is True,
+    require(manifest.get('automatic_update') is True and manifest.get('os_credential_store') is True,
             'Unsupported platform-specific capability')
+    require(valid_handoff(proof.get('automatic_update')), 'Missing actual native update handoff')
     require(native_component_valid(proof.get('native_component'), 'bundled')
             and valid_url_pac(proof.get('url_pac')) and valid_domain_pac(proof.get('domain_pac'))
             and valid_ntlm(proof.get('ntlm_component'))
@@ -114,9 +106,9 @@ def validate_candidate(archive, manifest, proof_path, sha, platform):
     require(metadata.get('python_required') is False and metadata.get('browser_bundled') is True
             and metadata.get('bundled_browser_directory') == 'browsers'
             and metadata.get('os_credential_store') is True
+            and metadata.get('automatic_update') is True and metadata.get('upgrade_protocol')==2
             and all(metadata.get(key) is False for key in
-                    ('signed', 'notarized', 'live_sites_certified', 'clean_machine_certified',
-                     'automatic_update')), 'Embedded capability mismatch')
+                    ('signed', 'notarized', 'live_sites_certified', 'clean_machine_certified')), 'Embedded capability mismatch')
     return proof
 
 
@@ -235,7 +227,7 @@ def prepare(repo, run_id, out, notes, *, publish=False):
             'Windows release changed before companion link')
     write_json(out/'windows-link-request.json', dict(body=current.get('body','')+
         '\n\n<!-- posix-companion -->\n[Linux/macOS 完整程序包]('+published['html_url']+
-        ')：独立正式 Tag，内含 Python 和 Chromium，完整包手动更换。\n<!-- /posix-companion -->\n'))
+        ')：独立正式 Tag，内含 Python 和 Chromium，支持按平台核验下载和明确确认后的备份重启。\n<!-- /posix-companion -->\n'))
     linked = json.loads(gh('api', '--method', 'PATCH', f"repos/{repo}/releases/{stable['id']}",
                           '--input', str(out/'windows-link-request.json')))
     require(linked.get('id') == stable['id'] and published['html_url'] in linked.get('body',''),

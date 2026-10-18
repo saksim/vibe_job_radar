@@ -34,7 +34,7 @@ def main():
             keep=workspace.root/'private-original.txt';keep.write_text('original workspace',encoding='utf-8')
             old=root/'old-program.exe';old.write_bytes(b'original program')
             server=LocalServer(workspace);server.releases.close()
-            server.releases=ReleaseUpdates(workspace,transport_factory=lambda:fixture,current_version='0.3.0')
+            server.releases=ReleaseUpdates(workspace,transport_factory=lambda:fixture,current_version='0.3.0',target_platform='windows-x64')
             worker=threading.Thread(target=server.serve_forever,kwargs={'poll_interval':.01},daemon=True);worker.start()
             connection=http.client.HTTPConnection('127.0.0.1',server.server_address[1],timeout=10)
             for path in ('/api/releases/state','/api/releases/check'):
@@ -85,7 +85,7 @@ def main():
                     assert keep.read_text(encoding='utf-8')=='original workspace'
                     page.locator('#release-panel').screenshot(path=str(out/'updates-interrupted-mobile.png'))
                     server.releases.close()
-                    server.releases=ReleaseUpdates(workspace,transport_factory=lambda:fixture,current_version='0.3.0')
+                    server.releases=ReleaseUpdates(workspace,transport_factory=lambda:fixture,current_version='0.3.0',target_platform='windows-x64')
                     page.reload();page.locator('#release-panel summary').first.click()
                     expect(page.locator('#release-download')).to_be_disabled()
                     page.locator('#release-check').click()
@@ -133,6 +133,28 @@ def main():
                         expect(page.locator('#release-download')).to_be_disabled()
                     assert keep.read_text(encoding='utf-8')=='original workspace'
                     result['checks'].append('failed recheck gives bounded retry guidance without exposing details or enabling a stale download')
+                    from test_release_posix import NativeReleaseFixture
+                    for platform in ('linux-x64','macos-arm64'):
+                        server.releases.close();native=NativeReleaseFixture();handoff=MagicMock()
+                        handoff.preflight=server.upgrade_preflight
+                        handoff.install.return_value={'status':'restarting','message':'原生界面已确认；不执行人工程序'}
+                        server.releases=ReleaseUpdates(workspace,transport_factory=lambda:native,
+                            current_version='0.12.0',target_platform=platform,installer=handoff)
+                        page.reload();page.locator('#release-panel summary').first.click()
+                        assert not native.calls
+                        page.locator('#release-check').click()
+                        expect(page.locator('#release-download')).to_be_enabled(timeout=10000)
+                        expect(page.locator('#release-link')).to_have_attribute('href',
+                            'https://github.com/saksim/vibe_job_radar/releases/tag/desktop-v0.13.0')
+                        expect(page.locator('#release-install')).to_be_disabled()
+                        page.locator('#release-install-consent').check()
+                        page.locator('#release-install').click()
+                        expect(page.locator('#release-status')).to_contain_text('不执行人工程序',timeout=10000)
+                        handoff.install.assert_called_once()
+                        assert handoff.install.call_args.args[1]['platform']==platform
+                        assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
+                        page.locator('#release-panel').screenshot(path=str(out/(platform+'-update-mobile.png')))
+                        result['checks'].append(platform+' actual UI and HTTP selects native package and distinct consent; inert installer adapter only')
                 finally:browser.close()
             server.shutdown();server.server_close();worker.join(10);server=None
             assert not result['page_errors'] and not result['external_requests']

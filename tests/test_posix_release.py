@@ -43,6 +43,7 @@ class PosixReleaseTests(unittest.TestCase):
         from test_domain_pac_evidence import good_domain_proof
         from test_ntlm_evidence import good_ntlm_proof
         from os_credentials_acceptance import FIELDS
+        from vibe_job_radar.release_posix import HANDOFF_FIELDS
         credential_proof=dict(schema_version=1,provider='secret-service',frozen_executable=True,
                               artificial_vault=True,success=True,**{name:True for name in FIELDS})
         bundle=self.root/'VibeJobRadar';bundle.mkdir()
@@ -55,7 +56,7 @@ class PosixReleaseTests(unittest.TestCase):
                           live_sites_certified=False,clean_machine_certified=False)
         metadata=dict(status='posix_portable_candidate',version='0.11.0',platform='linux-x64',
                       source=dict(sha256='c'*64),runtime_source=stamp,
-                      bundled_browser_directory='browsers',automatic_update=False,os_credential_store=True,
+                      bundled_browser_directory='browsers',automatic_update=True,upgrade_protocol=2,os_credential_store=True,
                       **capabilities)
         (bundle/'PORTABLE.json').write_text(json.dumps(metadata),encoding='utf-8')
         archive=self.root/'fixture.tar.gz';pack(bundle,archive)
@@ -73,7 +74,7 @@ class PosixReleaseTests(unittest.TestCase):
         name=f'vibe-job-radar-0.11.0-{digest[:16]}-linux-x64.tar.gz'
         archive=archive.rename(self.root/name)
         proof=dict(success=True,source_revision=self.sha,source_sha256='c'*64,version='0.11.0',
-                   platform='linux-x64',checks=list(self.mod.CHECKS),runtime_environment=dict(source=stamp),
+                   platform='linux-x64',checks=list(self.mod.CHECKS),automatic_update=dict(schema_version=1,**{k:True for k in HANDOFF_FIELDS}),runtime_environment=dict(source=stamp),
                    native_component=good_component('bundled'),url_pac=good_url_proof(),
                    domain_pac=good_domain_proof(),ntlm_component=good_ntlm_proof()['component'],
                    system_credentials=credential_proof,source_system_credentials={**credential_proof,'frozen_executable':False},**capabilities)
@@ -81,7 +82,7 @@ class PosixReleaseTests(unittest.TestCase):
         manifest=dict(success=True,status='posix_portable_candidate',version='0.11.0',platform='linux-x64',
                       source_revision=self.sha,source_sha256='c'*64,file=name,sha256=digest,
                       size_bytes=archive.stat().st_size,runtime_evidence_sha256=self.mod.file_hash(proof_path),
-                      runtime_checks=9,automatic_update=False,os_credential_store=True,
+                      runtime_checks=10,automatic_update=True,os_credential_store=True,
                       files=self.mod.archive_inventory(archive),**capabilities)
         return archive,manifest,proof_path
 
@@ -109,7 +110,7 @@ class PosixReleaseTests(unittest.TestCase):
     def test_archive_bytes_platform_and_claimed_capabilities_cannot_drift(self):
         archive,manifest,proof=self.bundle()
         cases=[('platform','macos-arm64'),('sha256','f'*64),('source_revision','f'*40),
-               ('automatic_update',True),('signed',True),('os_credential_store',False),('runtime_checks',8)]
+               ('automatic_update',False),('signed',True),('os_credential_store',False),('runtime_checks',8)]
         for key,value in cases:
             with self.subTest(key=key),self.assertRaises(ValueError):
                 self.mod.validate_candidate(archive,{**manifest,key:value},proof,self.sha,'linux-x64')

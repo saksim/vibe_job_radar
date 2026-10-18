@@ -26,11 +26,11 @@ from domain_pac_acceptance import verify_app as verify_domain_pac
 
 
 class RunningApp:
-    def __init__(self, executable, workspace, cwd, env):
+    def __init__(self, executable, workspace, cwd, env, *, pass_fds=()):
         command = executable if isinstance(executable,list) else [str(executable)]
         self.process = subprocess.Popen(command + ['--workspace', str(workspace), '--no-browser'],
             cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT, start_new_session=True)
+            stderr=subprocess.STDOUT, start_new_session=True, pass_fds=pass_fds)
         self.entries = queue.Queue(maxsize=1)
         self.diagnostics = []
         def read():
@@ -89,7 +89,7 @@ class RunningApp:
         require(not self.reader.is_alive(), 'Packaged output reader did not close')
 
 
-def verify(bundle, output):
+def verify(bundle, output, archive):
     bundle = Path(bundle).resolve()
     executable = bundle/'VibeJobRadar'
     require(executable.is_file() and os.access(executable, os.X_OK), 'Executable missing or not executable')
@@ -167,6 +167,9 @@ def verify(bundle, output):
                 result['checks'].append('independent_process_report_and_runtime_reopen')
             finally:
                 reopened.close()
+            from posix_update_acceptance import verify as verify_update
+            result['automatic_update']=verify_update(bundle,archive,root/'native upgrade',cwd,env)
+            result['checks'].append('native_automatic_update_handoff')
             require(inventory(bundle)==before,'Program bundle changed while running')
             result['checks'].append('immutable_extracted_payload')
             result['success'] = True
@@ -182,5 +185,6 @@ if __name__=='__main__':
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--bundle',type=Path,required=True)
     parser.add_argument('--out',type=Path,required=True)
+    parser.add_argument('--archive',type=Path,required=True)
     args=parser.parse_args()
-    print(json.dumps(verify(args.bundle,args.out),ensure_ascii=True))
+    print(json.dumps(verify(args.bundle,args.out,args.archive),ensure_ascii=True))

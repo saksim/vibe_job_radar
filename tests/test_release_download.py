@@ -71,7 +71,7 @@ class ResumeDownloadTests(unittest.TestCase):
         self.server.shutdown();self.server.server_close();self.worker.join(3)
 
     def service(self):
-        service=updates.ReleaseUpdates(self.workspace,transport_factory=lambda:self.fixture,current_version='0.3.0')
+        service=updates.ReleaseUpdates(self.workspace,transport_factory=lambda:self.fixture,current_version='0.3.0',target_platform='windows-x64')
         self.addCleanup(service.close);return service
 
     def wait(self,service):
@@ -108,7 +108,7 @@ class Transport(u.ReleaseTransport):
 def resolve(url,*a,**kw):
     p=urlsplit(url);return p.hostname,['93.184.216.34'],p.path+('?' + p.query if p.query else '')
 def connection(*a,**kw):return http.client.HTTPConnection('127.0.0.1',int(sys.argv[3]),timeout=3)
-s=u.ReleaseUpdates(Workspace(sys.argv[2]),transport_factory=Transport,current_version='0.3.0')
+s=u.ReleaseUpdates(Workspace(sys.argv[2]),transport_factory=Transport,current_version='0.3.0',target_platform='windows-x64')
 assert s.state()['status']=='idle'
 try:
     with patch.object(u,'validate_public_url',side_effect=resolve),patch.object(u,'PinnedHTTPSConnection',side_effect=connection):
