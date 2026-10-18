@@ -24,6 +24,11 @@
     $("release-install-consent").disabled = busy || !installSelected;
     $("release-current").textContent = "当前版本：" + state.current_version + (state.version ? " / 最新稳定版：" + state.version : "");
     let text = state.message || "";
+    if (typeof state.signed === "boolean") {
+      text += state.signed
+        ? "\n发行者：" + state.signing.subject + (state.signature_verified ? "；本机签名核验通过。" : "；发行记录含签名，下载后在本机复核。")
+        : "\n此发行未签名（unsigned）；文件摘要核验不能替代发行者身份签名。";
+    }
     if (state.total_bytes) text += " " + Math.floor(100 * state.downloaded_bytes / state.total_bytes) + "%";
     if (state.retained_bytes) text += "\n已保留 " + (state.retained_bytes / 1048576).toFixed(1) + " MB，重新检查后可继续下载。";
     if (state.directory) text += "\n新版目录：" + state.directory;

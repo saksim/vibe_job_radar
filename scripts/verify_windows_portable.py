@@ -764,6 +764,13 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
     env['PYTHONUTF8']='1'
     blank_trace=None
     try:
+        from vibe_job_radar.publisher_signing import inspect, evidence
+        result['stage']='publisher_signature'
+        signing=inspect(exe)
+        if signing != evidence(json.loads((bundle/'PORTABLE.json').read_bytes()).get('signing')):
+            raise ValueError('publisher signature does not match embedded evidence')
+        result['signing']=signing
+        result['stage']='doctor'
         with tempfile.TemporaryDirectory(prefix='portable-runtime-') as temp:
             root=Path(temp).resolve()
             if root.parent!=Path(tempfile.gettempdir()).resolve():raise ValueError('invalid verification temporary directory')

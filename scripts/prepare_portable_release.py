@@ -1,4 +1,4 @@
-"""Promote an existing verified main candidate to an unsigned release.
+"""Promote an existing verified main candidate to a release with verified signing status.
 
 No build, executable invocation, live-site traffic, workspace migration or
 signing occurs here. Only the explicitly selected run's two artifacts are used.
@@ -143,6 +143,7 @@ def zip_json(archive, name):
 
 
 def validate_candidate(candidate, manifest, source_evidence, sha):
+    from vibe_job_radar.publisher_signing import evidence, is_signed
     candidate = Path(candidate)
     require(candidate.is_file() and not candidate.is_symlink(), 'Missing candidate')
     require(re.fullmatch(r'vibe-job-radar-[0-9A-Za-z.+-]+-windows-x64\.zip', candidate.name),
@@ -192,13 +193,24 @@ def validate_candidate(candidate, manifest, source_evidence, sha):
     require(runtime.get('executable_sha256') == proof.get('files', {}).get('VibeJobRadar.exe')
             and isinstance(runtime.get('executable_sha256'), str)
             and HEX.fullmatch(runtime['executable_sha256']), 'Executable evidence mismatch')
+    signing = evidence(manifest.get('signing'))
+    require(evidence(meta.get('signing')) == signing and evidence(proof.get('signing')) == signing,
+            'Publisher signature evidence mismatch')
+    if is_signed(signing):
+        require(signing['executable_sha256'] == runtime['executable_sha256'], 'Signed executable mismatch')
+        with zipfile.ZipFile(candidate) as archive:
+            require(archive.getinfo('VibeJobRadar/VibeJobRadar.exe').file_size <= 1024**3, 'Oversized executable')
+            actual = hashlib.sha256()
+            with archive.open('VibeJobRadar/VibeJobRadar.exe') as stream:
+                for block in iter(lambda:stream.read(1024*1024),b''):actual.update(block)
+            require(actual.hexdigest() == signing['executable_sha256'], 'Signed archive bytes mismatch')
     version = meta.get('version')
     require(isinstance(version, str) and re.fullmatch(r'[0-9]+(?:\.[0-9]+)+(?:[A-Za-z0-9.+-]*)', version),
             'Invalid release version')
     require(candidate.name == f'vibe-job-radar-{version}-{digest[:16]}-windows-x64.zip',
             'Candidate version/hash filename mismatch')
     return {'version': version, 'zip_sha256': digest, 'source_sha256': source['sha256'],
-            'portable_evidence': proof}
+            'portable_evidence': proof, 'signing': signing, 'signed': is_signed(signing)}
 
 
 def assemble(candidate, manifest, source_evidence, selected, qualified, artifacts, output, change_notes=None, *, channel="prerelease"):
@@ -221,7 +233,7 @@ def assemble(candidate, manifest, source_evidence, selected, qualified, artifact
     write_json(output/'manifest.json', manifest)
     write_json(output/'source-verification.json', source_evidence)
     write_json(output/'portable-verification.json', result['portable_evidence'])
-    provenance = {'schema_version': 1, 'status': 'unsigned_prerelease_draft' if channel == 'prerelease' else 'unsigned_stable_release_payload',
+    provenance = {'schema_version': 1, 'status': ('signed_' if result['signed'] else 'unsigned_') + ('prerelease_draft' if channel == 'prerelease' else 'stable_release_payload'),
                   'release_channel': channel,
                   'repository': repo, 'tag': tag, 'source_revision': selected['head_sha'],
                   'source_sha256': result['source_sha256'], 'candidate_sha256': result['zip_sha256'],
@@ -229,15 +241,16 @@ def assemble(candidate, manifest, source_evidence, selected, qualified, artifact
                   'ci': {key:value for key,value in qualified.items() if key in UPDATE_PROVENANCE_WORKFLOWS},
                   'additional_ci': {key:value for key,value in qualified.items() if key not in UPDATE_PROVENANCE_WORKFLOWS},
                   'artifacts': artifacts, 'rebuilt_for_release': False,
-                  'signed': False, 'live_sites_certified': False,
+                  'signed': result['signed'], 'signing': result['signing'], 'live_sites_certified': False,
                   'clean_machine_certified': False}
     if change_notes is not None:
         (output/'CHANGES.md').write_text(change_notes, encoding='utf-8')
         provenance['change_notes_sha256'] = file_hash(output/'CHANGES.md')
     write_json(output/'provenance.json', provenance)
+    signature_text = ('发行者签名已核验：' + result['signing']['subject'] if result['signed'] else '未签名')
     notes = (
         f"# Windows x64 便携候选 {result['version']}\n\n"
-        f"发行渠道：{'稳定版' if channel == 'stable' else '预发行'}；未签名；源码提交 {selected['head_sha']}。\n"
+        f"发行渠道：{'稳定版' if channel == 'stable' else '预发行'}；{signature_text}；源码提交 {selected['head_sha']}。\n"
         f"复用[已通过的原候选构建](https://github.com/{repo}/actions/runs/{selected['id']})，"
         "发布准备没有重新构建或重复执行测试。\n\n"
         "下载 ZIP 和 SHA256SUMS.txt 后，使用 PowerShell Get-FileHash -Algorithm SHA256 核对文件。"
@@ -306,7 +319,7 @@ def prepare(repo, run_id, out, create_draft=False, change_notes=None, *, channel
                 'Qualifying CI changed during preparation')
         body = (payload/'UPGRADE_AND_LIMITATIONS.md').read_text(encoding='utf-8')
         request = {'tag_name': result['tag'], 'target_commitish': selected['head_sha'],
-                   'name': f"Windows portable {result['tag']} (unsigned)",
+                   'name': f"Windows portable {result['tag']} ({'signed' if result['signed'] else 'unsigned'})",
                    'body': body, 'draft': True, 'prerelease': channel == 'prerelease'}
         write_json(out/'create-draft-request.json', request)
         response = json.loads(gh('api', '--method', 'POST', f'repos/{repo}/releases',
