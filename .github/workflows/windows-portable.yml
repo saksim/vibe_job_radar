@@ -15,9 +15,17 @@ jobs:
     # 1200s unit + 3x180s auxiliary checks + the original 11m allowance for
     # installation, freezing, executable validation, and evidence upload.
     timeout-minutes: 40
+    permissions:
+      contents: read
+      id-token: write  # Azure federation must allow only this repository's main ref.
     env:
       PYTHONUTF8: '1'
       PLAYWRIGHT_BROWSERS_PATH: '0'
+      VJR_WINDOWS_SIGNING_MODE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.WINDOWS_SIGNING_MODE || 'unsigned' }}
+      VJR_SIGNING_SUBJECT: ${{ vars.WINDOWS_SIGNING_SUBJECT }}
+      VJR_AZURE_SIGN_ENDPOINT: ${{ vars.AZURE_SIGN_ENDPOINT }}
+      VJR_AZURE_SIGN_ACCOUNT: ${{ vars.AZURE_SIGN_ACCOUNT }}
+      VJR_AZURE_SIGN_PROFILE: ${{ vars.AZURE_SIGN_PROFILE }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -30,7 +38,18 @@ jobs:
         run: python -m playwright install chromium
       - name: Qualify exact source with every required check
         run: python scripts/verify_candidate.py
-      - name: Freeze, launch, exercise and archive actual executable
+      - name: Authenticate configured main signing identity
+        if: env.VJR_WINDOWS_SIGNING_MODE == 'azure'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_SIGN_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_SIGN_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SIGN_SUBSCRIPTION_ID }}
+      - name: Install configured signing adapter
+        if: env.VJR_WINDOWS_SIGNING_MODE == 'azure'
+        shell: pwsh
+        run: Install-Module ArtifactSigning -RequiredVersion 0.1.20 -Scope CurrentUser -Force -Repository PSGallery
+      - name: Freeze, optionally sign, launch, exercise and archive actual executable
         run: python scripts/build_windows_portable.py --verify-login-startup --verify-system-pac --verify-wpad-dns
       - name: Preserve source and executable evidence including failures
         if: always()

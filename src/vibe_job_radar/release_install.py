@@ -25,6 +25,7 @@ from .collection import writer_lock
 from .release_updates import (UpdateError, require, version, io_path, file_digest,
                               stage_package, remove_owned_tree, check_stop)
 from .runtime import is_portable
+from .publisher_signing import verify_bundle, evidence as signing_evidence, is_signed
 from .release_platform import current_platform, executable_name, POSIX_PLATFORMS
 from .utils import atomic_json
 from .workspace import InputError
@@ -170,6 +171,7 @@ def verify_directory(directory, package, selected):
                 for data in iter(lambda:src.read(1024*1024),b''):left.update(data)
                 for data in iter(lambda:dest.read(1024*1024),b''):right.update(data)
             require(left.digest() == right.digest())
+    verify_bundle(io_path(directory),selected)
     meta = read_json(directory/'PORTABLE.json')
     require(meta.get('version') == selected['version'] and meta.get('upgrade_protocol') == 1
             and meta.get('runtime_source',{}).get('revision') == selected['revision'])
@@ -273,7 +275,9 @@ def load_request(path):
     request_path(root,path)
     selected=value['selected']; version(selected['version']); version(value['old_version'])
     require(isinstance(selected,dict) and set(selected)==({'version','sha256','revision','source_sha256'}
-            | ({'platform','automatic_update'} if native else set())))
+            | ({'platform','automatic_update'} if native else ({'signed','signing'} if 'signing' in selected else set()))))
+    if not native and 'signing' in selected:
+        require(type(selected['signed']) is bool and selected['signed']==is_signed(signing_evidence(selected['signing'])))
     if native:require(selected.get('platform') in POSIX_PLATFORMS and selected.get('automatic_update') is True)
     import re
     require(all(re.fullmatch('[0-9a-f]{64}',selected[key]) for key in ('sha256','source_sha256'))
@@ -336,6 +340,7 @@ class AutomaticInstaller:
             parent_pid=os.getpid(),parent_created=created,old_executable=str(old),old_version=__version__,
             nonce=secrets.token_hex(32),no_browser=self.no_browser)
         if native:request['selected'].update(platform=selected['platform'],automatic_update=True)
+        else:request['selected'].update(signed=selected.get('signed',False),signing=signing_evidence(selected.get('signing')))
         helper=None
         try:
             write_json(journal/'request.json',request)
