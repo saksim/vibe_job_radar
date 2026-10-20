@@ -8,10 +8,10 @@ CAPTURE = """() => {
     if (!root) return null;
     // Count before serialization, cloning, arrays, innerText or style/layout
     // reads. A byte limit alone admits hundreds of thousands of tiny nodes.
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
-    let elements = 1;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_ALL);
+    let nodes = 1;
     while (walker.nextNode()) {
-        if (++elements > 20000) return {observation_limit: "elements"};
+        if (++nodes > 20000) return {observation_limit: "nodes"};
     }
     const source = root.outerHTML;
     if (source.length > 5000000) return null;
@@ -45,7 +45,7 @@ CAPTURE = """() => {
 
 def capture(page, expected_url):
     value = page.evaluate(CAPTURE)
-    if isinstance(value, dict) and value.get('observation_limit') == 'elements':
+    if isinstance(value, dict) and value.get('observation_limit') == 'nodes':
         raise CrawlError('response_too_large')
     if not isinstance(value, dict) or any(
             not isinstance(value.get(k), str) or len(value[k]) > 5_000_000

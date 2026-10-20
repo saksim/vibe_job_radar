@@ -13,9 +13,9 @@ class RenderedObservationBoundsTests(unittest.TestCase):
         context.eval("""
             let visits = 0;
             const root = { get outerHTML() { throw Error("serialized too early"); } };
-            const NodeFilter = { SHOW_ELEMENT: 1 };
+            const NodeFilter = { SHOW_ALL: 4294967295, SHOW_ELEMENT: 1 };
             const document = { documentElement: root,
-                createTreeWalker() { return { nextNode() { visits++; return {}; } }; },
+                createTreeWalker(node, mask) { return { nextNode() { visits++; return mask === 4294967295 ? {} : null; } }; },
                 get implementation() { throw Error("cloned too early"); } };
         """)
         class Page:
@@ -37,7 +37,7 @@ class RenderedObservationBoundsTests(unittest.TestCase):
             const copy = {tagName:"HTML", style, removeAttribute(){},
                           querySelectorAll(){return []}, outerHTML:rendered};
             const root = {tagName:"HTML", outerHTML:source, querySelectorAll(){return []}};
-            const NodeFilter = {SHOW_ELEMENT:1};
+            const NodeFilter = {SHOW_ALL:4294967295, SHOW_ELEMENT:1};
             const document = {documentElement:root, doctype:null, body:{innerText:"original"},
                 createTreeWalker(){return {nextNode(){return null;}}},
                 implementation:{createHTMLDocument(){return {importNode(){return copy;}}}}};
