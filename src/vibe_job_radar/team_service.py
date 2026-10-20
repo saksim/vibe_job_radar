@@ -28,7 +28,9 @@ from .team_catalog import TeamCatalog, read_snapshot
 def initialize_service(root):
     from .collection import writer_lock
     from .team_store import remove_private_file
-    root=Path(root);root.mkdir(parents=True,exist_ok=True,mode=0o700)
+    from .team_store import ensure_recovery_complete
+    root=Path(root);ensure_recovery_complete(root)
+    root.mkdir(parents=True,exist_ok=True,mode=0o700)
     names=('control.sqlite','rates.sqlite','catalog.sqlite')
     with writer_lock(root):
         for name in names:
@@ -256,7 +258,7 @@ def serve(root,config):
 
 def main(argv=None):
     parser=argparse.ArgumentParser(description='公开团队服务与跨设备配额管理；不读取私人工作区。')
-    parser.add_argument('--data',type=Path,required=True)
+    parser.add_argument('--data',type=Path)
     subs=parser.add_subparsers(dest='command',required=True)
     subs.add_parser('init')
     run=subs.add_parser('serve');run.add_argument('--config',type=Path,required=True)
@@ -272,11 +274,26 @@ def main(argv=None):
     withdraw=subs.add_parser('withdraw');withdraw.add_argument('--source',required=True)
     refresh=subs.add_parser('refresh');refresh.add_argument('--approval',type=Path,required=True);refresh.add_argument('--source',required=True)
     backup=subs.add_parser('backup');backup.add_argument('--output',type=Path,required=True)
+    verify=subs.add_parser('verify-backup',help='离线核对整组备份摘要与数据库；不修改原备份')
+    verify.add_argument('--backup',type=Path,required=True)
+    restore=subs.add_parser('restore',help='将停止写入后的完整备份恢复到不存在的新数据目录')
+    restore.add_argument('--backup',type=Path,required=True)
+    restore.add_argument('--confirm-quiescent',action='store_true',
+        help='确认旧服务、刷新和管理员写入在备份前已停止，之后未恢复；旧节点不会同时启动')
     erase=subs.add_parser('erase-member');erase.add_argument('--tenant',required=True);erase.add_argument('--member',required=True)
-    args=parser.parse_args(argv);store=TeamStore(args.data);catalog=TeamCatalog(args.data)
+    args=parser.parse_args(argv)
+    if args.command!='verify-backup' and args.data is None:
+        parser.error('--data is required for this operation')
+    store=TeamStore(args.data or args.backup);catalog=TeamCatalog(args.data or args.backup)
     try:
         result={'ok':True,'operation':args.command}
         if args.command=='init':initialize_service(args.data)
+        elif args.command=='verify-backup':
+            from .team_recovery import verify_backup
+            result={k:v for k,v in verify_backup(args.backup).items() if k!='files'}
+        elif args.command=='restore':
+            from .team_recovery import restore_backup
+            result=restore_backup(args.backup,args.data,confirm_quiescent=args.confirm_quiescent)
         elif args.command=='serve':serve(args.data,args.config)
         elif args.command=='member':store.member(args.tenant,args.member,args.role,active=not args.disable)
         elif args.command=='device':
@@ -311,6 +328,8 @@ def main(argv=None):
                     for name in ('control.sqlite','rates.sqlite','catalog.sqlite'):
                         backup_database(args.data/name,staged/name)
                     backup_refresh_state(args.data,staged)
+                    from .team_recovery import write_manifest
+                    write_manifest(staged)
                     if os.name!='nt':
                         paths=list(staged.rglob('*'))
                         for path in paths:
