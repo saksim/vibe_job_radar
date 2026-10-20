@@ -22,7 +22,7 @@ from .source_history import SourceHistory
 from .collection import writer_lock
 from .guided.rate import Limits, RateLedger, RateLimit
 from .html_parser import plain_text
-from .public_cache_guard import CacheFailureGuard
+from .public_cache_guard import CacheFailureGuard, TRANSIENT_FETCH_ERRORS
 from .public_lifecycle import PublicTaskCancelled
 from .network import FetchError, SafeHTTP, JSONRepresentation, valid_etag
 from .public_revalidation import CatalogValidation
@@ -334,15 +334,11 @@ class LocalPublicDataClient:
                 if exc.code == 'http_429':
                     self._rate_blocked.add(host)
                     self.ledger.cool(SCOPE, max(300, exc.retry_after or 0))
-                recoverable = {'dns_error', 'network_error', 'http_429', 'http_500', 'http_502',
-                               'http_503', 'http_504', 'local_proxy_connection_failed',
-                               'encrypted_dns_unavailable', 'encrypted_dns_timeout',
-                               'encrypted_dns_cooldown', 'encrypted_dns_budget'}
-                if exc.code not in recoverable:
+                if exc.code not in TRANSIENT_FETCH_ERRORS:
                     guard.record(exc.code, now)
                 elif hard_failure:
                     raise FetchError(hard_failure) from None
-                if cached and exc.code in recoverable:
+                if cached and exc.code in TRANSIENT_FETCH_ERRORS:
                     return self._select(query, cached, now, cached=True, requests=1, error=exc.code)
                 raise
             try:
