@@ -46,6 +46,48 @@ class DOMSourceTextTests(unittest.TestCase):
             self.assertEqual(node.attrs["id"], "first")
             self.assertFalse(node.hidden())
 
+    def test_css_identifier_escapes_preserve_hidden_and_visible_cascade(self):
+        hidden = (r"display:n\6f ne", r"d\69 splay:none", r"displa\79:none",
+                  r"display:\00006e one", r"display:\6e\6f\6e\65",
+                  r"visibility:h\69 dden", r"display:none !\69mportant;display:block",
+                  "display:n\\6f\r\nne")
+        for style in hidden:
+            with self.subTest(style=style):
+                self.assertEqual(parse_job_html(
+                    f'<section style="{style}">{markup("旧岗位" * 30)}</section>' + markup())["text"], BODY)
+                self.assertEqual(parse_job_html(
+                    markup() + f'<div style="{style}">登录后查看</div>')["text"], BODY)
+        for style in (r"display:none;d\69 splay:block",
+                      r"visibility:hidden;visibility:\76isible",
+                      r"display:none;display:block !\69mportant"):
+            with self.subTest(visible=style):
+                self.assertEqual(parse_job_html(f'<section style="{style}">{markup()}</section>')["text"], BODY)
+                with self.assertRaises(ParseError):
+                    parse_job_html(markup() + f'<div style="{style}">登录后查看</div>')
+
+    def test_escaped_punctuation_and_invalid_newlines_do_not_become_css_syntax(self):
+        for invalid in (r"block\20 flex", "block\\", "bl\\\nock", r"\0 block",
+                        r"\110000block", r"block\21 important", r"\000020block",
+                        r"block\;visibility:visible"):
+            with self.subTest(invalid=invalid):
+                style = "display:none;display:" + invalid
+                self.assertEqual(parse_job_html(
+                    f'<section style="{style}">{markup("旧岗位" * 30)}</section>' + markup())["text"], BODY)
+
+    def test_explicit_display_overrides_ordinary_hidden_attribute(self):
+        for style in ("display:block", "display:initial", "display:inherit",
+                      "display:contents", "all:initial"):
+            with self.subTest(style=style):
+                self.assertEqual(parse_job_html(
+                    f'<section hidden style="{style}">{markup()}</section>')["text"], BODY)
+                with self.assertRaises(ParseError):
+                    parse_job_html(markup() + f'<div hidden style="{style}">登录后查看</div>')
+        for attrs in ('hidden style="display:revert"', 'hidden style="display:bogus"',
+                      'hidden="until-found" style="display:block"'):
+            with self.subTest(attrs=attrs):
+                self.assertEqual(parse_job_html(
+                    f'<section {attrs}>{markup("旧岗位" * 30)}</section>' + markup())["text"], BODY)
+
     def test_decoded_dom_text_is_not_parsed_as_html_again(self):
         self.assertEqual(parse_job_html(markup())["text"], BODY)
 

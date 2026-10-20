@@ -83,19 +83,65 @@ def _valid_display(value: str) -> bool:
             and len(tokens & _DISPLAY_OUTSIDE) <= 1 and len(tokens & inside) <= 1)
 
 
+def _css_keywords(text: str) -> list[str]:
+    """Tokenize the supported literal keywords, without reinterpreting escapes."""
+    words, word, index = [], [], 0
+    whitespace = " \t\r\n\f"
+    letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-"
+    while index < len(text):
+        char = text[index]
+        if char in whitespace or char == "!":
+            if word:
+                words.append("".join(word).lower())
+                word.clear()
+            if char == "!":
+                words.append("!")
+            index += 1
+            continue
+        if char == "\\":
+            index += 1
+            # Outside strings a backslash followed by a newline is invalid.
+            if index == len(text) or text[index] in "\r\n\f":
+                return []
+            start = index
+            while index < len(text) and index - start < 6 and text[index] in "0123456789abcdefABCDEF":
+                index += 1
+            if index > start:
+                codepoint = int(text[start:index], 16)
+                char = chr(codepoint) if codepoint <= 0x10ffff else ""
+                if index < len(text) and text[index] in whitespace:
+                    if text[index:index + 2] == "\r\n":
+                        index += 1
+                    index += 1
+            else:
+                char = text[index]
+                index += 1
+        else:
+            index += 1
+        # All supported keywords use ASCII letters/hyphens. An escaped space,
+        # bang or punctuation is part of an identifier, never a token boundary.
+        if char not in letters or not char:
+            return []
+        word.append(char)
+    if word:
+        words.append("".join(word).lower())
+    return words
+
+
 def _inline_values(style: str) -> dict[str, str]:
     # Bounded literal inline cascade only; external stylesheets and custom
     # property substitutions require a rendered observation.
     values = {}
     for declaration in _style_declarations(style):
         name, separator, value = declaration.partition(":")
-        name, value = name.strip().lower(), value.strip().lower()
-        if not separator or name not in {"display", "visibility", "position", "float", "all"} or not value:
+        names, tokens = _css_keywords(name), _css_keywords(value)
+        if not separator or len(names) != 1 or not tokens:
             continue
-        annotation = re.search(r"!\s*important\s*$", value)
-        important = annotation is not None
-        if annotation:
-            value = value[:annotation.start()].strip()
+        name = names[0]
+        if name not in {"display", "visibility", "position", "float", "all"}:
+            continue
+        important = tokens[-2:] == ["!", "important"]
+        value = " ".join(tokens[:-2] if important else tokens)
         valid = (_valid_display(value) if name == "display" else
                  value in _CSS_WIDE | _INLINE_KEYWORDS.get(name, set()))
         if not valid:
@@ -156,10 +202,15 @@ class Node:
         # descendant visibility cannot undo that. Ordinary hidden/collapse
         # content remains inherited and overrideable. External layout is unknown.
         collapsed_box = self._visibility == "collapse" and (row or flex_item)
+        # Ordinary hidden is a UA display rule and can be overridden by an
+        # explicit author display. until-found uses content-visibility instead.
+        hidden_attribute = ("hidden" in self.attrs and (
+            values.get("display") in {None, "revert", "revert-layer"}
+            or (self.attrs.get("hidden") or "").lower() == "until-found"))
         self._subtree_hidden = bool(
             (parent is not None and parent.blocks_subtree())
             or self.tag in {"script", "style", "template", "noscript", "head"}
-            or "hidden" in self.attrs or self._display == "none" or collapsed_box)
+            or hidden_attribute or self._display == "none" or collapsed_box)
 
     def blocks_subtree(self) -> bool:
         return self._subtree_hidden

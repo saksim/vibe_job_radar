@@ -39,9 +39,13 @@
 
 进一步处理[可省略标签](https://html.spec.whatwg.org/multipage/syntax.html#optional-tags)的结构边界：创建子节点并继承可见性前，关闭适用的段落、列表项及表格元素，补入省略的表格分组；不越过嵌套容器或惰性模板。3项负对照实际14个子场景错误，修复后138项相关回归通过（7.623秒），原身份、全文、猎聘隐藏锚点和原报告断言保留。该候选源测试3406项。这是常见合法省略语法的支持，不是完整HTML5布局/纠错器。
 
-重复HTML属性按浏览器保留第一个值，覆盖普通与自闭合标签，避免后续同名style误改可见性。另记录Linux首失败#435：原生实际程序验证在解锁恢复时，fixture用--replace替换服务导致默认集合不可访问；具体底层时序没有追踪，不反推旧历史问题。改为在隔离fixture原进程的本地control socket解锁，严格校验socket/所有者、帧长度、拒绝/截断响应及解锁后状态，保持20秒上限，无重试。4项负对照9失败/3错误（其中1个是新增测试漏传构造参数）；相关47项首轮44项通过，3个测试合计6个错误（DOM测试漏传构造参数，以及Linux模拟缺少Windows上的AF_UNIX常量），补齐模拟常量后仅重验受影响3项，全部通过（0.035秒）。DOM构造参数修正后该1项通过（0.005秒），原失败日志保留。源测试总数3410。
+重复HTML属性按浏览器保留第一个值，覆盖普通与自闭合标签，避免后续同名style误改可见性。另记录Linux首失败#435：原生实际程序验证在解锁恢复时，fixture用--replace替换服务导致默认集合不可访问；具体底层时序没有追踪，不反推旧历史问题。改为在隔离fixture原进程的本地control socket解锁，严格校验socket/所有者、帧长度、拒绝/截断响应及解锁后状态，保持20秒上限，无重试。4项负对照9失败/3错误（其中1个是新增测试漏传构造参数）；相关47项首轮44项通过，3个测试合计6个错误（DOM测试漏传构造参数，以及Linux模拟缺少Windows上的AF_UNIX常量），补齐模拟常量后仅重验受影响3项，全部通过（0.035秒）。DOM构造参数修正后该1项通过（0.005秒），原失败日志保留。该候选源测试总数3410。
 
 GNOME fixture协议依据：[控制客户端](https://github.com/GNOME/gnome-keyring/blob/gnome-46/daemon/control/gkd-control-client.c)。首失败作业[118566419824](https://github.com/saksim/vibe_job_radar/actions/runs/39404319946/job/118566419824)保留，没有重跑。
+
+补齐CSS标识符转义：名称、关键字和!important支持合法转义，保留标识符边界；被转义的空格/标点不会变成语法，字符串外反斜杠换行仍是非法声明，十六进制转义终止换行按规范处理。2项负对照11个错误，修复后33项通过（1.247秒）。同机制检查另复现普通hidden属性被明确display覆盖时的误拒绝，1项负对照5个错误；修复后最终相关34项通过（1.041秒），until-found仍保留独立隐藏语义。当前源测试3413项。
+
+依据：[CSS转义](https://www.w3.org/TR/css-syntax-3/#consume-escaped-code-point)、[HTML hidden](https://html.spec.whatwg.org/multipage/interaction.html#the-hidden-attribute)。
 
 ## 剩余问题
 
