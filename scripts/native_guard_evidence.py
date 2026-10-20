@@ -20,7 +20,8 @@ def unavailable(interval=None):
 
 
 class GuardEvidence:
-    def __init__(self):
+    def __init__(self, trace=None):
+        self._trace = trace
         self._lock = threading.Lock()
         self._incomplete = False
         self._overflow = False
@@ -46,6 +47,9 @@ class GuardEvidence:
     def _safe_note(self, operation, outcome, reply):
         try:
             self._note(operation, outcome, reply)
+            if self._trace is not None:
+                name = "guard." + operation + ("." + reply if reply is not None else "") + "." + outcome
+                self._trace.record(name)
         except Exception:
             self._incomplete = True
 
@@ -77,11 +81,11 @@ class GuardEvidence:
             self._lock.release()
 
 
-def install_guard_observer(guard):
+def install_guard_observer(guard, trace=None):
     """Wrap only this guard and its server; never patch a production class."""
     changed = []
     try:
-        probe = GuardEvidence()
+        probe = GuardEvidence(trace)
         bindings = [(guard.server, 'get_request', 'accept'),
                     (guard.server, 'process_request', 'dispatch'),
                     (guard, '_handle', 'handle'),
