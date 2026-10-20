@@ -260,6 +260,25 @@ _VOID_TAGS = {"br", "hr", "meta", "link", "img", "input", "area", "base", "col",
               "embed", "source", "track", "wbr", "param"}
 
 
+
+# HTML's generic end-tag algorithm stops on special elements before finding a
+# matching ordinary element. Explicit block/table/formatting algorithms keep
+# their own scope rules instead of inheriting this generic barrier set.
+_SPECIAL_TAGS = set("""
+address applet area article aside base basefont bgsound blockquote body br button
+caption center col colgroup dd details dir div dl dt embed fieldset figcaption
+figure footer form frame frameset h1 h2 h3 h4 h5 h6 head header hgroup hr html
+iframe img input keygen li link listing main marquee menu meta nav noembed noframes
+noscript object ol p param plaintext pre script search section select source style
+summary table tbody td template textarea tfoot th thead title tr track ul wbr xmp
+""".split())
+_SPECIFIC_END_TAGS = ((_P_END_BLOCKS - {"dialog", "hr"}) | _TABLE_PARTS | {"summary"} | {
+    "applet", "body", "button", "center", "dd", "dir", "dt", "form", "html", "li",
+    "listing", "marquee", "object", "select", "option", "optgroup", "td", "th",
+    "template", "noscript", "a", "b", "big", "code", "em", "font", "i", "nobr",
+    "s", "small", "strike", "strong", "tt", "u", "br"})
+
+
 def _first_attributes(attrs):
     """HTML tokenization discards later attributes with the same name."""
     result = {}
@@ -465,6 +484,8 @@ class Document(HTMLParser):
             barriers |= {"button"}
         elif tag == "li":
             barriers |= {"ol", "ul"}
+        elif tag not in _SPECIFIC_END_TAGS:
+            barriers |= _SPECIAL_TAGS
         for i in range(len(self.stack) - 1, 0, -1):
             current = self.stack[i].tag
             if current == tag:

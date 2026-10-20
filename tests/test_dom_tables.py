@@ -98,3 +98,15 @@ class TableVisibilityTests(unittest.TestCase):
         for tag in ("body", "html"):
             with self.assertRaises(ParseError):
                 parse_job_html(f'<{tag} hidden></{tag}>' + posting())
+
+
+    def test_generic_end_tag_cannot_cross_special_elements(self):
+        for tag in ("div", "section", "article", "main", "blockquote", "fieldset",
+                    "details", "address", "pre", "dl", "figure", "form"):
+            with self.subTest(tag=tag):
+                html = f'<span hidden><{tag}></span></{tag}>' + posting() + '</span>'
+                with self.assertRaises(ParseError):
+                    parse_job_html(html)
+        # Block end tags use their own scope rules, not the generic algorithm.
+        html = '<div hidden><section></div>' + posting()
+        self.assertEqual(parse_job_html(html)["title"], "Engineer")
