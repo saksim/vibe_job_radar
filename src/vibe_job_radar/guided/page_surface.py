@@ -12,9 +12,11 @@ from .contracts import CrawlError, PageSnapshot
 
 
 def _text(node: Node) -> str:
-    if node.hidden():
+    if node.blocks_subtree():
         return ''
-    text = ''.join(_text(child) if isinstance(child, Node) else child for child in node.children)
+    own_visible = not node.hidden()
+    text = ''.join(_text(child) if isinstance(child, Node) else
+                   (child if own_visible else '') for child in node.children)
     return text + ('\n' if node.tag in {'p', 'div', 'li', 'br', 'section', 'h1', 'h2', 'h3'} else '')
 
 

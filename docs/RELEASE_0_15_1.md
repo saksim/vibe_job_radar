@@ -28,6 +28,11 @@
 
 内联声明遵循[CSS优先级与声明顺序](https://www.w3.org/TR/css-cascade-5/#cascade-order)，不将字符串、注释、函数内容当作声明；HTML支持[可省略的head结束标签](https://html.spec.whatwg.org/multipage/syntax.html#optional-tags)。保留正常head内JSON-LD和原岗位身份冲突防护。
 
+
+最终回读又复现两处可见性边界：无效 CSS 值错误覆盖先前有效声明，以及 `visibility:hidden` 祖先下重新可见的子元素被整体丢弃。新增5项用例在修复前出现2个失败、18个子场景错误；修复后132项定向回归全部通过（5.535秒）。源测试总数3400。无效字面值按[CSS Display语法](https://www.w3.org/TR/css-display-3/#the-display-properties)忽略；[visibility允许后代恢复可见](https://www.w3.org/TR/CSS22/visufx.html#visibility)，而明确隐藏/惰性或display:none祖先仍阻断子树。正常正文、重新可见的登录门和展开控件共用这一规则。
+
+这仍是有界的 HTML/内联字面样式处理，不是外部样式表或 CSS 自定义属性求值器；相应现场可见性不能以离线快照替代。
+
 ## 剩余问题
 
 原 17 项重审及最小条件见 [剩余 Issue 表](ISSUE_SCOPE_0_15_1.md)。#23/#30 的已交付本期边界沿用 [0.15.0 范围](ISSUE_SCOPE_0_15_0.md)；未准备的主机、未知代理产品和签名凭据不能被算作产品已验收。

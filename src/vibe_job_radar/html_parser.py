@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import InitVar, dataclass, field
 from html import unescape
 from html.parser import HTMLParser
 from urllib.parse import parse_qsl, urljoin, urlsplit
@@ -50,11 +50,35 @@ def _style_declarations(style: str):
     yield "".join(field)
 
 
-def _inline_hidden(style: str) -> bool:
-    # Only literal final values establish hiding. This does not compute
-    # stylesheets, inherited values or custom-property substitutions.
-    if not style:
+_CSS_WIDE = {"initial", "inherit", "unset", "revert", "revert-layer"}
+_DISPLAY_OUTSIDE = {"block", "inline", "run-in"}
+_DISPLAY_INSIDE = {"flow", "flow-root", "table", "flex", "grid", "ruby"}
+_DISPLAY_SINGLE = {
+    "none", "contents", "inline-block", "inline-table", "inline-flex", "inline-grid",
+    "table-row-group", "table-header-group", "table-footer-group", "table-row",
+    "table-cell", "table-column-group", "table-column", "table-caption",
+    "ruby-base", "ruby-text", "ruby-base-container", "ruby-text-container",
+}
+
+
+def _valid_display(value: str) -> bool:
+    # CSS Display 3 literal grammar: invalid declarations must not replace a
+    # previous valid one. Multi-keyword display values are order-independent.
+    if value in _CSS_WIDE or value in _DISPLAY_SINGLE:
+        return True
+    words = value.split()
+    tokens = set(words)
+    if len(words) != len(tokens):
         return False
+    inside = {"flow", "flow-root"} if "list-item" in tokens else _DISPLAY_INSIDE
+    allowed = _DISPLAY_OUTSIDE | inside | {"list-item"}
+    return (bool(tokens) and tokens <= allowed
+            and len(tokens & _DISPLAY_OUTSIDE) <= 1 and len(tokens & inside) <= 1)
+
+
+def _inline_values(style: str) -> dict[str, str]:
+    # Bounded literal inline cascade only; external stylesheets and custom
+    # property substitutions require a rendered observation.
     values = {}
     for declaration in _style_declarations(style):
         name, separator, value = declaration.partition(":")
@@ -65,14 +89,15 @@ def _inline_hidden(style: str) -> bool:
         important = annotation is not None
         if annotation:
             value = value[:annotation.start()].strip()
-        if not value or (name == "all" and value not in {
-                "initial", "inherit", "unset", "revert", "revert-layer"}):
+        valid = (_valid_display(value) if name == "display" else
+                 value in _CSS_WIDE | ({"visible", "hidden", "collapse"}
+                                      if name == "visibility" else set()))
+        if not valid:
             continue
         for key in (("display", "visibility") if name == "all" else (name,)):
             if key not in values or important >= values[key][1]:
                 values[key] = value, important
-    return (values.get("display", ("",))[0] == "none"
-            or values.get("visibility", ("",))[0] in {"hidden", "collapse"})
+    return {key: value for key, (value, _) in values.items()}
 
 
 @dataclass
@@ -80,29 +105,54 @@ class Node:
     tag: str
     attrs: dict[str, str] = field(default_factory=dict)
     children: list = field(default_factory=list)
+    parent: InitVar[Node | None] = None
+    _subtree_hidden: bool = field(init=False, repr=False, compare=False)
+    _visibility_hidden: bool = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self, parent):
+        # Document builds immutable snapshots, parent before child. Compute
+        # inheritance once without retaining parent cycles or reparsing styles
+        # on every traversal. A child's declaration overrides inherited values
+        # even when the parent's declaration was !important.
+        values = _inline_values(self.attrs.get("style") or "")
+        self._subtree_hidden = bool(
+            (parent is not None and parent.blocks_subtree())
+            or self.tag in {"script", "style", "template", "noscript", "head"}
+            or "hidden" in self.attrs or values.get("display") == "none")
+        visibility = values.get("visibility")
+        if visibility in {"visible", "initial"}:
+            self._visibility_hidden = False
+        elif visibility in {"hidden", "collapse"}:
+            self._visibility_hidden = True
+        else:
+            self._visibility_hidden = bool(parent is not None and parent._visibility_hidden)
+
+    def blocks_subtree(self) -> bool:
+        return self._subtree_hidden
 
     def hidden(self) -> bool:
-        """Only explicit HTML/inline hiding; aria-hidden is not visual hiding."""
-        if self.tag in {"script", "style", "template", "noscript", "head"} or "hidden" in self.attrs:
-            return True
-        return _inline_hidden(self.attrs.get("style") or "")
+        """Own visibility, including ancestors; aria-hidden is not visual hiding."""
+        return self._subtree_hidden or self._visibility_hidden
 
     def walk(self, *, visible_only: bool = False, exclude_tags: tuple[str, ...] = ()):
-        if self.tag in exclude_tags or (visible_only and self.hidden()):
+        if self.tag in exclude_tags or (visible_only and self.blocks_subtree()):
             return
-        yield self
+        # A semantic container can have hidden own text and visible children.
+        if not visible_only or not self.hidden() or self.text(visible_only=True).strip():
+            yield self
         for child in self.children:
             if isinstance(child, Node):
                 yield from child.walk(visible_only=visible_only, exclude_tags=exclude_tags)
 
     def text(self, include_script: bool = False, *, visible_only: bool = False) -> str:
-        if visible_only and self.hidden():
+        if visible_only and self.blocks_subtree():
             return ""
         if not include_script and self.tag in {"script", "style", "nav", "footer", "noscript"}:
             return ""
+        own_visible = not visible_only or not self.hidden()
         s = "".join(c.text(include_script, visible_only=visible_only)
-                    if isinstance(c, Node) else c for c in self.children)
-        return s + ("\n" if self.tag in {"p", "div", "li", "br", "h1", "h2", "h3", "section"} else "")
+                    if isinstance(c, Node) else (c if own_visible else "") for c in self.children)
+        return s + ("\n" if (s or own_visible) and self.tag in {"p", "div", "li", "br", "h1", "h2", "h3", "section"} else "")
 
 
 class Document(HTMLParser):
@@ -123,7 +173,7 @@ class Document(HTMLParser):
 
     def handle_starttag(self, tag, attrs):
         self._close_optional_head(tag)
-        node = Node(tag, dict(attrs))
+        node = Node(tag, dict(attrs), parent=self.stack[-1])
         self.stack[-1].children.append(node)
         if tag not in {"br", "hr", "meta", "link", "img", "input", "area", "base", "embed", "source", "wbr", "param"}:
             if len(self.stack) > 200:
@@ -132,7 +182,7 @@ class Document(HTMLParser):
 
     def handle_startendtag(self, tag, attrs):
         self._close_optional_head(tag)
-        self.stack[-1].children.append(Node(tag, dict(attrs)))
+        self.stack[-1].children.append(Node(tag, dict(attrs), parent=self.stack[-1]))
 
     def handle_endtag(self, tag):
         for i in range(len(self.stack) - 1, 0, -1):

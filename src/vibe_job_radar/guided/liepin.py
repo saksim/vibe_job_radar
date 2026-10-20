@@ -182,24 +182,27 @@ def _english_duties_and_qualifications(body: str) -> bool:
             and sum(bool(_ENGLISH_QUALIFICATION.search(item)) for item in qualifications) >= 2)
 
 
-def _hidden(node: Node) -> bool:
-    return (node.tag in _OMIT or node.hidden()
+def _blocked(node: Node) -> bool:
+    return (node.tag in _OMIT or node.blocks_subtree()
             or (node.attrs.get('aria-hidden') or '').lower() == 'true')
 
 
 def _walk(node: Node, parent: Node | None = None):
-    if _hidden(node):
+    if _blocked(node):
         return
-    yield node, parent
+    if not node.hidden() or _text(node).strip():
+        yield node, parent
     for child in node.children:
         if isinstance(child, Node):
             yield from _walk(child, node)
 
 
 def _text(node: Node) -> str:
-    if _hidden(node):
+    if _blocked(node):
         return ''
-    result = ''.join(_text(c) if isinstance(c, Node) else c for c in node.children)
+    own_visible = not node.hidden()
+    result = ''.join(_text(c) if isinstance(c, Node) else
+                     (c if own_visible else '') for c in node.children)
     return result + ('\n' if node.tag in {'p','div','li','br','h1','h2','h3','h4','section','dd'} else '')
 
 
@@ -244,7 +247,7 @@ def semantic_detail(markup: str) -> dict:
                 if child.strip():
                     raise CrawlError('structure_changed')
                 continue
-            if _hidden(child):
+            if _blocked(child) or not _text(child).strip():
                 continue
             if child.tag in _HEADINGS:
                 break

@@ -196,5 +196,78 @@ class DOMSourceTextTests(unittest.TestCase):
                 self.assertEqual(result["text"], BODY)
 
 
+    def test_invalid_inline_values_do_not_override_valid_hiding(self):
+        for style in (
+            "display:none;display:bogus",
+            "display:none;display:bogus !important",
+            "display:none;display:inline block",
+            "display:none;display:block flex grid",
+            "display:none;display:list-item flex",
+            "visibility:hidden;visibility:bogus",
+            "visibility:hidden;visibility:bogus !important",
+            "visibility:hidden;visibility:visible hidden",
+        ):
+            with self.subTest(style=style):
+                hidden = f'<div style="{style}">登录后查看{markup()}</div>'
+                self.assertEqual(parse_job_html(hidden + markup())["text"], BODY)
+        for value in ("inline flex", "flow-root block", "inline flow-root list-item",
+                      "table-cell", "contents", "initial"):
+            with self.subTest(valid_display=value):
+                html = f'<section style="display:none;display:{value}">{markup()}</section>'
+                self.assertEqual(parse_job_html(html)["text"], BODY)
+
+    def test_visible_descendants_override_inherited_visibility(self):
+        for ancestor in ("visibility:hidden", "visibility:collapse", "visibility:hidden!important"):
+            for restored in ("visibility:visible", "visibility:initial", "all:initial"):
+                with self.subTest(ancestor=ancestor, restored=restored):
+                    # Hidden text stays hidden, even in a node selected directly
+                    # as a title/body; the child restores only its own subtree.
+                    html = (f'<section style="{ancestor}">登录后查看'
+                            '<span style="visibility:inherit">安全验证</span>'
+                            '<span style="visibility:unset">安全验证</span>'
+                            f'<article style="{restored}">{markup()}</article></section>')
+                    self.assertEqual(parse_job_html(html)["text"], BODY)
+                    inner = (f'<span style="{ancestor}">隐藏正文'
+                             f'<span style="{restored}">{ENCODED}</span></span>')
+                    self.assertEqual(parse_job_html(markup(inner))["text"], BODY)
+                    container = (f'<h1>{TITLE}</h1>'
+                                 f'<div class="job-description" style="{ancestor}">隐藏正文'
+                                 f'<span style="{restored}">{ENCODED}</span></div>')
+                    self.assertEqual(parse_job_html(container)["text"], BODY)
+
+    def test_visibility_cannot_restore_display_none_hidden_or_inert_subtrees(self):
+        for start, end in (('<div style="display:none">', '</div>'),
+                           ('<div hidden>', '</div>'), ('<template>', '</template>')):
+            html = start + '<section style="visibility:visible;display:block">' + markup() + '</section>' + end
+            with self.subTest(start=start):
+                with self.assertRaises(ParseError):
+                    parse_job_html(html)
+                self.assertEqual(parse_job_html(html + markup())["text"], BODY)
+
+    def test_restored_controls_still_block_and_inherited_hidden_controls_do_not(self):
+        for site, url, container in SITES:
+            adapter = builtins().get(site)
+            with self.subTest(site=site):
+                gate = ('<section style="visibility:hidden">'
+                        '<div style="visibility:visible">登录后查看</div></section>')
+                with self.assertRaisesRegex(CrawlError, "manual_required"):
+                    adapter.detail(PageSnapshot(url, markup(container=container) + gate))
+                restored = ('<section style="visibility:hidden">'
+                            '<button style="visibility:visible">展开全部</button></section>')
+                with self.assertRaisesRegex(CrawlError, "jd_incomplete"):
+                    adapter.detail(PageSnapshot(url, markup(ENCODED + restored, container)))
+                hidden = '<section style="visibility:hidden"><button>展开全部</button></section>'
+                self.assertEqual(adapter.detail(PageSnapshot(
+                    url, markup(ENCODED + hidden, container)))["text"], BODY)
+
+    def test_liepin_restored_descendants_retain_semantic_body(self):
+        adapter = builtins().get("liepin")
+        html = (f'<h1>{TITLE}</h1><dl><dt>职位介绍</dt>'
+                '<dd style="visibility:hidden">隐藏正文'
+                f'<span style="visibility:visible">{ENCODED}</span></dd></dl>')
+        self.assertEqual(adapter.detail(PageSnapshot(
+            "https://www.liepin.com/job/123456.shtml", html))["text"], BODY)
+
+
 if __name__ == "__main__":
     unittest.main()
