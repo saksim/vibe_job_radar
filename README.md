@@ -1,5 +1,7 @@
 # Vibe Job Radar｜招聘要求与个人证据工作台
 
+0.15.0 增加[团队整组备份校验与恢复](docs/RELEASE_0_15_0.md)，修复 BOSS/51job 现有 DOM 路径的未展开正文与岗位身份防护。原24项按[本期范围](docs/ISSUE_SCOPE_0_15_0.md)收口，[待环境和材料](docs/PENDING_ACCEPTANCE_0_15_0.md)单列；既有功能保留，正式发布状态以 [Releases](https://github.com/saksim/vibe_job_radar/releases) 为准。
+
 0.14.2 修复[公共缓存临时断连与团队 PAC 搜索](docs/RELEASE_0_14_2.md)：临时代理/DNS/团队故障可使用明确标记的有效旧缓存，团队公开搜索恢复原报告链路，并减少无约束规则的无效数据库写入。既有硬失败、配额、取消、升级和签名接入功能保留。正式发布结果以 [Releases](https://github.com/saksim/vibe_job_radar/releases) 为准。
 
 0.14.0 增加 [Windows发行者签名接入与签名版升级核验](docs/PUBLISHER_SIGNING.md)，按实际证据显示签名状态；缺少凭据时保留 unsigned。0.13.0 的 Linux/macOS 自动升级与原有功能继续保留。本轮 [24项Issue逐项核查](docs/OPEN_ISSUES_2026_10_18.md) 列明外部环境和材料条件；正式Tag/实际验证见 [Releases](https://github.com/saksim/vibe_job_radar/releases) 和 [0.14.0说明](docs/RELEASE_0_14_0.md)。

@@ -12,7 +12,7 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 from ..html_parser import Document, ParseError, parse_job_html
 from ..url_safety import credential_query_key
-from ..utils import domain_matches
+from ..utils import domain_matches, canonical_url
 from .contracts import Card, CrawlError, PageSnapshot, SiteAdapter
 from .selectors import select_nodes
 from .page_surface import surface_text
@@ -106,6 +106,32 @@ class DOMAdapter:
                     or re.search(r'/(?:captcha(?:page)?|intercept|challenge)(?:[/_]|$)',
                                  urlsplit(url).path, re.I))
 
+    def validate_detail_identity(self, expected_url: str, page: PageSnapshot) -> None:
+        # These two existing DOM paths had no guard against navigation to a
+        # different job. Keep their observed URLs; never synthesize endpoints.
+        if self.key not in {'boss', '51job'}:
+            return
+        expected = canonical_url(self.accept_url(expected_url, detail=True))
+        if canonical_url(self.accept_url(page.url, detail=True)) != expected:
+            raise CrawlError('job_identity_mismatch')
+        if not isinstance(page.html, str) or len(page.html) > 5_000_000:
+            raise CrawlError('response_too_large')
+        try:
+            root = Document(page.html).root
+        except (ValueError, RecursionError) as error:
+            raise CrawlError('structure_changed') from error
+        for node in root.walk():
+            if node.tag == 'link' and 'canonical' in node.attrs.get('rel', '').lower().split():
+                href = node.attrs.get('href')
+                if not href:
+                    raise CrawlError('job_identity_mismatch')
+                try:
+                    declared = self.accept_url(urljoin(page.url, href), detail=True)
+                except (CrawlError, ValueError):
+                    raise CrawlError('job_identity_mismatch') from None
+                if canonical_url(declared) != expected:
+                    raise CrawlError('job_identity_mismatch')
+
     def detail(self, page: PageSnapshot) -> dict:
         self.accept_url(page.url, detail=True)
         if self.challenged(surface_text(page), page.url):
@@ -114,7 +140,12 @@ class DOMAdapter:
             markup = re.sub(r'<script\b[^>]*>.*?</script\s*>',
                 lambda m: m.group(0) if 'application/ld+json' in m.group(0).split('>', 1)[0].lower() else '',
                 page.html, flags=re.I | re.S)
-            return parse_job_html(markup, source_url=page.url)
+            parsed = parse_job_html(markup, source_url=page.url)
+            if self.key in {'boss', '51job'}:
+                self.validate_detail_identity(page.url, page)
+                from .detail_completeness import require_expanded
+                require_expanded(markup, parsed, visible_text=page.visible_text)
+            return parsed
         except (ParseError, ValueError) as exc:
             raise CrawlError('structure_changed') from exc
 

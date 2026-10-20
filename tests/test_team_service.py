@@ -196,7 +196,7 @@ class TeamTests(unittest.TestCase):
                 return original_rename(path,destination)
             def fail_parent(path):
                 if path==output.parent:
-                    self.assertEqual(sorted(p.name for p in output.iterdir()),['catalog.sqlite','control.sqlite','rates.sqlite'])
+                    self.assertEqual(sorted(p.name for p in output.iterdir()),['catalog.sqlite','control.sqlite','rates.sqlite','team-backup.json'])
                     if replacement=='before':replace_output()
                     raise OSError('fixture parent sync failure')
                 return sync_directory(path)
@@ -210,11 +210,11 @@ class TeamTests(unittest.TestCase):
                     self.assertIn('team_backup_recovery_required',errors.getvalue())
                     self.assertEqual(len(recovery),1)
                     self.assertEqual((recovery[0]/'snapshot'/'operator-note.txt').read_text(encoding='utf-8'),'keep')
-                    self.assertEqual(sorted(p.name for p in displaced.iterdir()),['catalog.sqlite','control.sqlite','rates.sqlite'])
+                    self.assertEqual(sorted(p.name for p in displaced.iterdir()),['catalog.sqlite','control.sqlite','rates.sqlite','team-backup.json'])
                 else:
                     self.assertEqual(list(parent.glob('.team-backup-*')),[])
                     self.assertEqual(service_main(args),0)
-                    self.assertEqual(sorted(p.name for p in output.iterdir()),['catalog.sqlite','control.sqlite','rates.sqlite'])
+                    self.assertEqual(sorted(p.name for p in output.iterdir()),['catalog.sqlite','control.sqlite','rates.sqlite','team-backup.json'])
 
     def test_backup_failure_never_publishes_partial_output_and_same_path_can_retry(self):
         original_connect=sqlite3.connect;original_chmod=Path.chmod
@@ -236,7 +236,7 @@ class TeamTests(unittest.TestCase):
                 self.assertEqual(observed,[True]);self.assertFalse(output.exists())
                 self.assertEqual(list(output.parent.glob('.team-backup-*')),[])
                 self.assertEqual(service_main(args),0)
-                self.assertEqual(sorted(p.name for p in output.iterdir()),['catalog.sqlite','control.sqlite','rates.sqlite'])
+                self.assertEqual(sorted(p.name for p in output.iterdir()),['catalog.sqlite','control.sqlite','rates.sqlite','team-backup.json'])
                 before={p.name:p.read_bytes() for p in output.iterdir()}
                 self.assertEqual(service_main(args),2)
                 self.assertEqual({p.name:p.read_bytes() for p in output.iterdir()},before)
