@@ -65,6 +65,7 @@ _DISPLAY_SINGLE = {
     "table-row-group", "table-header-group", "table-footer-group", "table-row",
     "table-cell", "table-column-group", "table-column", "table-caption",
     "ruby-base", "ruby-text", "ruby-base-container", "ruby-text-container",
+    "-webkit-box", "-webkit-inline-box", "-webkit-flex", "-webkit-inline-flex",
 }
 
 
@@ -180,6 +181,10 @@ class Node:
             return default if value in {None, "revert", "revert-layer"} else value
 
         self._display = noninherited("display", "inline", _HTML_ROW_DISPLAY.get(self.tag, "inline"))
+        # Modern prefixed flex aliases share item semantics. Legacy box is
+        # a distinct Chromium layout mode; do not pretend it is modern flex.
+        self._display = {"-webkit-flex": "flex", "-webkit-inline-flex": "inline-flex"}.get(
+            self._display, self._display)
         self._position = noninherited("position", "static", "static")
         self._float = noninherited("float", "none", "none")
         visibility = values.get("visibility")

@@ -90,6 +90,7 @@ def main():
                                     Limits(page_interval=0,request_interval=0)),threading.Event(),lambda *_:None,
                                     headless=not args.headed,channel=args.channel or ('msedge' if os.name=='nt' else None))
                         def exercise():
+                            result['active_case']={'protocol':keyword,'dns_helpers':dns_scope}
                             with patch.dict(os.environ,browser_env,clear=True),patch('socket.getaddrinfo',side_effect=dns):
                                 checkpoint(keyword+'-normal');backend=browser('normal')
                                 try:
@@ -100,15 +101,32 @@ def main():
                                     version=backend.browser.version
                                 finally:backend.close()
                                 delivered=len(source.requests);before=len(fixture.dials)
+                                before_connects=len(fixture.connects)
+
                                 if keyword=='PROXY':fixture.proxy_status=503
                                 else:fixture.reply=5
                                 checkpoint(keyword+'-refusal');backend=browser('refusal')
+                                refusal_code=''
                                 try:
                                     try:backend.open(adapter().search_url('人工'))
                                     except CrawlError as exc:
+                                        refusal_code=exc.code
                                         assert exc.code in {'local_proxy_connection_failed','local_socks_request_rejected'},exc.code
                                     else:raise AssertionError('refused PAC route was bypassed')
-                                finally:backend.close()
+                                finally:
+                                    # Keep bounded counts/fixed codes before close. No raw
+                                    # browser messages, URLs, credentials or response bodies.
+                                    result['refusal_observation']={
+                                        'protocol':keyword,'dns_helpers':dns_scope,
+                                        'code':refusal_code,'controller_code':backend.error,
+                                        'tunnel_code':backend.tunnel.last_error,
+                                        'authenticated_challenges':len(backend._auth_attempts),
+                                        'tunnel_connections':backend.tunnel.connections,
+                                        'proxy_dials':len(fixture.dials)-before,
+                                        'proxy_connects':len(fixture.connects)-before_connects,
+                                        'target_requests':len(source.requests)-delivered}
+                                    checkpoint(keyword+'-refusal-observed')
+                                    backend.close()
                                 assert len(source.requests)==delivered
                                 assert len(fixture.dials)>before
                                 assert all(address==fixture.proxy.server_address for address in fixture.dials)

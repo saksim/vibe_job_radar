@@ -88,6 +88,29 @@ class DOMSourceTextTests(unittest.TestCase):
                 self.assertEqual(parse_job_html(
                     f'<section {attrs}>{markup("旧岗位" * 30)}</section>' + markup())["text"], BODY)
 
+    def test_webkit_display_fallback_preserves_posting_and_active_gates(self):
+        for display in ("-webkit-box", "-webkit-inline-box", "-webkit-flex", "-webkit-inline-flex"):
+            for style in (f"display:none;display:{display}",
+                          f"display:none!important;display:{display}!important"):
+                with self.subTest(display=display, style=style):
+                    self.assertEqual(parse_job_html(
+                        f'<section style="{style}">{markup()}</section>')["text"], BODY)
+                    with self.assertRaises(ParseError):
+                        parse_job_html(markup() + f'<div style="{style}">登录后查看</div>')
+            with self.subTest(hidden=display):
+                self.assertEqual(parse_job_html(markup() +
+                    f'<div style="display:none!important;display:{display}">登录后查看</div>')["text"], BODY)
+        for invalid in ("-webkit-bogus", "-webkit-box block"):
+            with self.subTest(invalid=invalid):
+                self.assertEqual(parse_job_html(markup() +
+                    f'<div style="display:none;display:{invalid}">登录后查看</div>')["text"], BODY)
+        # Modern prefixed flex aliases retain the existing collapsed-item rule.
+        for display in ("-webkit-flex", "-webkit-inline-flex"):
+            with self.subTest(collapsed=display):
+                self.assertEqual(parse_job_html(markup() +
+                    f'<div style="display:{display}"><section style="visibility:collapse">'
+                    '<div style="visibility:visible">登录后查看</div></section></div>')["text"], BODY)
+
     def test_decoded_dom_text_is_not_parsed_as_html_again(self):
         self.assertEqual(parse_job_html(markup())["text"], BODY)
 

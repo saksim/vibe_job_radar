@@ -43,9 +43,15 @@
 
 GNOME fixture协议依据：[控制客户端](https://github.com/GNOME/gnome-keyring/blob/gnome-46/daemon/control/gkd-control-client.c)。首失败作业[118566419824](https://github.com/saksim/vibe_job_radar/actions/runs/39404319946/job/118566419824)保留，没有重跑。
 
-补齐CSS标识符转义：名称、关键字和!important支持合法转义，保留标识符边界；被转义的空格/标点不会变成语法，字符串外反斜杠换行仍是非法声明，十六进制转义终止换行按规范处理。2项负对照11个错误，修复后33项通过（1.247秒）。同机制检查另复现普通hidden属性被明确display覆盖时的误拒绝，1项负对照5个错误；修复后最终相关34项通过（1.041秒），until-found仍保留独立隐藏语义。当前源测试3413项。
+补齐CSS标识符转义：名称、关键字和!important支持合法转义，保留标识符边界；被转义的空格/标点不会变成语法，字符串外反斜杠换行仍是非法声明，十六进制转义终止换行按规范处理。2项负对照11个错误，修复后33项通过（1.247秒）。同机制检查另复现普通hidden属性被明确display覆盖时的误拒绝，1项负对照5个错误；修复后最终相关34项通过（1.041秒），until-found仍保留独立隐藏语义。该候选源测试3413项。
 
 依据：[CSS转义](https://www.w3.org/TR/css-syntax-3/#consume-escaped-code-point)、[HTML hidden](https://html.spec.whatwg.org/multipage/interaction.html#the-hidden-attribute)。
+
+Chromium兼容显示值另补1项端到端负对照，10个子场景错误；支持-webkit-box/-webkit-inline-box及现代flex别名后，32项DOM回归通过（1.507秒）。旧box保留独立布局身份，现代flex别名沿用已有折叠项判断。源测试总数3414。
+
+依据：[兼容显示关键字](https://compat.spec.whatwg.org/#css-keyword-mappings)；旧box与现代flex不能等同。相关测试保留原登录/全文/身份防护。
+
+#436另记af2030候选Windows Edge headless的PAC拒绝首失败：目标请求未增加，但SOCKS5+DNS拒绝阶段没有新增代理拨号，现有证据不足以定位物理原因。保留原失败、所有断言和时限；仅补固定错误码与连接阶段计数，未重跑旧提交。新候选因独立显示兼容修复而运行必需CI，后续通过也不关闭#436。 [首失败](https://github.com/saksim/vibe_job_radar/actions/runs/39432644425/job/118661378005)。
 
 ## 剩余问题
 
