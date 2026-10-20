@@ -26,7 +26,7 @@ def _visible_nodes(node):
             yield from _visible_nodes(child)
 
 
-def require_expanded(markup, parsed):
+def require_expanded(markup, parsed, *, visible_text=None):
     # A paragraph about designing an "expand" button is ordinary job content.
     # Only a standalone instruction or an actual control in the selected body
     # qualifies; unrelated recommendations/login dialogs are outside this scope.
@@ -34,13 +34,23 @@ def require_expanded(markup, parsed):
         if any(_PROMPT.fullmatch(line.strip()) for line in parsed['text'].splitlines()):
             raise CrawlError('jd_incomplete')
         return
+    # Live browser innerText reflects stylesheet/computed visibility. A DOM
+    # template absent from that observation is not an active expand control.
+    # Offline snapshots keep the conservative HTML-only fallback.
+    rendered = None if visible_text is None else ' '.join(visible_text.split()).casefold()
+    if rendered == '':
+        raise CrawlError('jd_incomplete')
+    def active_prompt(value):
+        value = value.strip()
+        return (_PROMPT.fullmatch(value) and
+                (rendered is None or ' '.join(value.split()).casefold() in rendered))
     selector = parsed['parser'].removeprefix('dom:')
     for container in _visible_nodes(Document(markup).root):
         if selector not in container.attrs.get('class', '').split():
             continue
-        if any(_PROMPT.fullmatch(line.strip()) for line in _text(container).splitlines()):
+        if any(active_prompt(line) for line in _text(container).splitlines()):
             raise CrawlError('jd_incomplete')
         for node in _visible_nodes(container):
             if ((node.tag in {'button', 'a'} or node.attrs.get('role') == 'button')
-                    and _PROMPT.fullmatch(node.text().strip())):
+                    and active_prompt(node.text())):
                 raise CrawlError('jd_incomplete')

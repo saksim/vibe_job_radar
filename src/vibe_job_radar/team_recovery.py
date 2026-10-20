@@ -218,6 +218,9 @@ def restore_backup(source, target, *, confirm_quiescent=False):
     target.mkdir(mode=0o700)
     _create_restore_marker(target)
     try:
+        # Persist the new directory entry in its parent while recovery remains
+        # blocked. Syncing target alone cannot make its own name durable.
+        sync_directory(target.parent)
         with tempfile.TemporaryDirectory(prefix='.restore-', dir=target) as directory:
             staged = Path(directory)
             for name in [*verified['files'], MANIFEST]:

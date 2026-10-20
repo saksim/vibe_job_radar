@@ -68,3 +68,16 @@ class DOMDetailSafeguards(unittest.TestCase):
                 with self.subTest(site=site, label=label):
                     with self.assertRaisesRegex(CrawlError, 'jd_incomplete'):
                         builtins().get(site).detail(page(url, container, f'<button>{label}</button>'))
+
+    def test_rendered_observation_excludes_class_hidden_expand_templates(self):
+        for site, url, container in SITES:
+            markup = page(url, container,
+                '<button class="collapsed-template">展开全部</button>',
+                tail='<style>.collapsed-template { display:none }</style>').html
+            with self.subTest(site=site):
+                parsed = builtins().get(site).detail(PageSnapshot(url, markup, visible_text=TEXT))
+                self.assertIn(TEXT, parsed['text'])
+                for rendered in (TEXT+'\n展开全部', None, ''):
+                    with self.subTest(rendered=rendered):
+                        with self.assertRaisesRegex(CrawlError, 'jd_incomplete'):
+                            builtins().get(site).detail(PageSnapshot(url, markup, visible_text=rendered))

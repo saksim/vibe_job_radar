@@ -308,3 +308,28 @@ class TeamRecoveryTests(unittest.TestCase):
         self.assertEqual(restored.state(self.token)['role'], 'collector')
         with self.assertRaises(RateLimit):
             RateLedger(target/'rates.sqlite').reserve('fixture', 'request')
+
+    def test_target_parent_is_synced_while_marked_and_failure_blocks_recovery(self):
+        self.create_backup()
+        original = self.fingerprint(self.backup)
+        from vibe_job_radar.team_service import sync_directory
+        for fail in (False, True):
+            target = self.root/('target-failed' if fail else 'target-ok')
+            observed = []
+            def sync(path):
+                if Path(path) == target.parent:
+                    observed.append((target/'.restore-in-progress').exists())
+                    if fail:
+                        raise OSError('parent sync failed')
+                return sync_directory(path)
+            with self.subTest(fail=fail), patch('vibe_job_radar.team_service.sync_directory', sync):
+                if fail:
+                    with self.assertRaisesRegex(OSError, 'parent sync failed'):
+                        restore_backup(self.backup, target, confirm_quiescent=True)
+                    with self.assertRaisesRegex(TeamError, 'team_restore_incomplete'):
+                        TeamApplication(target, host='recovery.fixture.test')
+                else:
+                    restore_backup(self.backup, target, confirm_quiescent=True)
+                    self.assertFalse((target/'.restore-in-progress').exists())
+            self.assertEqual(observed, [True])
+            self.assertEqual(original, self.fingerprint(self.backup))

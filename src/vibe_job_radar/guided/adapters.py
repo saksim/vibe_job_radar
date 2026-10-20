@@ -144,7 +144,7 @@ class DOMAdapter:
             if self.key in {'boss', '51job'}:
                 self.validate_detail_identity(page.url, page)
                 from .detail_completeness import require_expanded
-                require_expanded(markup, parsed)
+                require_expanded(markup, parsed, visible_text=page.visible_text)
             return parsed
         except (ParseError, ValueError) as exc:
             raise CrawlError('structure_changed') from exc
