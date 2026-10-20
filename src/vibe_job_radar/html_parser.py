@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import heapq
 import re
 from dataclasses import InitVar, dataclass, field
 from html import unescape
@@ -192,7 +193,10 @@ class Node:
                 return initial
             return default if value in {None, "revert", "revert-layer"} else value
 
-        self._display = noninherited("display", "inline", _HTML_TABLE_DISPLAY.get(self.tag, "inline"))
+        default_display = _HTML_TABLE_DISPLAY.get(self.tag, "inline")
+        if self.tag == "dialog" and "open" not in self.attrs:
+            default_display = "none"
+        self._display = noninherited("display", "inline", default_display)
         # Modern prefixed flex aliases share item semantics. Legacy box is
         # a distinct Chromium layout mode; do not pretend it is modern flex.
         self._display = {"-webkit-flex": "flex", "-webkit-inline-flex": "inline-flex"}.get(
@@ -240,26 +244,65 @@ class Node:
         return self._subtree_hidden or self._visibility in {"hidden", "collapse"}
 
     def walk(self, *, visible_only: bool = False, exclude_tags: tuple[str, ...] = ()):
-        if self.tag in exclude_tags or (visible_only and self.blocks_subtree()):
-            return
-        # A semantic container can have hidden own text and visible children.
-        if not visible_only or not self.hidden() or self.text(visible_only=True).strip():
-            yield self
-        for child in self.children:
-            if isinstance(child, Node):
-                yield from child.walk(visible_only=visible_only, exclude_tags=exclude_tags)
+        # One postorder summary per traversal. Do not repeatedly concatenate
+        # large descendant text for every visibility:hidden ancestor. Keeping
+        # this local also permits callers to feed additional parser chunks.
+        contains_text = {}
+        def summarize(node):
+            content = False
+            own_visible = not node.hidden() and not (
+                node.tag == "details" and "open" not in node.attrs)
+            for child in node.children:
+                if isinstance(child, Node):
+                    child_content = summarize(child)
+                    content = content or child_content
+                elif own_visible and child and not child.isspace():
+                    content = True
+            if node.blocks_subtree() or node.tag in {"script", "style", "nav", "footer", "noscript"}:
+                content = False
+            contains_text[id(node)] = content
+            return content
+
+        if visible_only:
+            summarize(self)
+        def visit(node):
+            if node.tag in exclude_tags or (visible_only and node.blocks_subtree()):
+                return
+            if not visible_only or not node.hidden() or contains_text[id(node)]:
+                yield node
+            for child in node.children:
+                if isinstance(child, Node):
+                    yield from visit(child)
+        yield from visit(self)
 
     def text(self, include_script: bool = False, *, visible_only: bool = False) -> str:
-        if visible_only and self.blocks_subtree():
-            return ""
-        if not include_script and self.tag in {"script", "style", "nav", "footer", "noscript"}:
-            return ""
-        own_visible = not visible_only or (not self.hidden()
-                       and not (self.tag == "details" and "open" not in self.attrs))
-        s = "".join(c.text(include_script, visible_only=visible_only)
-                    if isinstance(c, Node) else (c if own_visible else "") for c in self.children)
-        return s + ("\n" if (s or own_visible) and self.tag in {"p", "div", "li", "br", "h1", "h2", "h3", "section"} else "")
+        # Append leaf text and separators once, preserving the original
+        # whitespace behavior without copying a full subtree at each depth.
+        pieces = []
+        def collect(node):
+            if visible_only and node.blocks_subtree():
+                return False
+            if not include_script and node.tag in {"script", "style", "nav", "footer", "noscript"}:
+                return False
+            own_visible = not visible_only or (not node.hidden()
+                           and not (node.tag == "details" and "open" not in node.attrs))
+            content = False
+            for child in node.children:
+                if isinstance(child, Node):
+                    child_content = collect(child)
+                    content = content or child_content
+                elif own_visible and child:
+                    pieces.append(child)
+                    content = True
+            if (content or own_visible) and node.tag in {"p", "div", "li", "br", "h1", "h2", "h3", "section"}:
+                pieces.append("\n")
+                content = True
+            return content
+        collect(self)
+        return "".join(pieces)
 
+
+_TABLE_LAYOUT_WORK_LIMIT = 500_000
 
 _HEADINGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
 
@@ -307,6 +350,7 @@ class Document(HTMLParser):
         self.root = Node("root")
         self.stack = [self.root]
         self._table_locations = {}
+        self._form_element = None
         self.feed(markup)
         self.close()
         open_nodes = {id(node) for node in self.stack}
@@ -325,6 +369,12 @@ class Document(HTMLParser):
     def _collapse_columns(self):
         # Column tracks are siblings of rows, not ancestors of their cells.
         # Keep spans as intervals so large attributes do not expand into arrays.
+        work = 0
+        def consume(amount=1):
+            nonlocal work
+            work += amount
+            if work > _TABLE_LAYOUT_WORK_LIMIT:
+                raise ParseError("HTML table layout too complex")
         for table in self.root.walk():
             if table._display not in {"table", "inline-table", "inline table", "block table"}:
                 continue
@@ -367,25 +417,39 @@ class Document(HTMLParser):
             for _, rows in groups:
                 occupied = []
                 for index, row in enumerate(rows):
+                    consume(len(occupied))
                     occupied = [slot for slot in occupied if slot[2] > index]
-                    cursor = 0
+                    cursor, next_slot, added = 0, 0, []
                     for cell in row.children:
                         if not isinstance(cell, Node) or cell._display != "table-cell":
                             continue
-                        while True:
-                            stops = [end for start, end, until in occupied if start <= cursor < end]
-                            if not stops:
-                                break
-                            cursor = max(stops)
+                        consume()
+                        # Occupancy is sorted; each interval is visited at most
+                        # once per row, rather than once per cursor advance.
+                        while next_slot < len(occupied) and occupied[next_slot][0] <= cursor:
+                            consume()
+                            cursor = max(cursor, occupied[next_slot][1])
+                            next_slot += 1
                         end = cursor + self._span(cell, "colspan")
+                        consume(len(columns))
                         if any(start <= cursor and end <= stop for start, stop in columns):
                             for descendant in cell.walk():
+                                consume()
                                 descendant._subtree_hidden = True
                         height = self._span(cell, "rowspan", 65534)
                         until = len(rows) if height == 0 else min(len(rows), index + height)
                         if until > index + 1:
-                            occupied.append((cursor, end, until))
+                            added.append((cursor, end, until))
                         cursor = end
+                    consume(len(occupied) + len(added))
+                    merged = []
+                    for start, end, until in heapq.merge(occupied, added):
+                        if merged and start <= merged[-1][1] and until == merged[-1][2]:
+                            first, stop, _ = merged[-1]
+                            merged[-1] = first, max(stop, end), until
+                        else:
+                            merged.append((start, end, until))
+                    occupied = merged
 
     def _insert(self, parent, item, position):
         if position is None:
@@ -445,6 +509,8 @@ class Document(HTMLParser):
 
     def _close_optional_elements(self, tag):
         self._close_optional_head(tag)
+        if tag == "table":
+            self._close_open({"table"}, {"td", "th", "caption"})
         if tag == "a" and not self._foreign_namespace(tag):
             self._close_open({"a"}, {"table", "td", "th", "caption",
                                     "applet", "marquee", "object", "select"})
@@ -490,6 +556,13 @@ class Document(HTMLParser):
         namespace = self._foreign_namespace(tag)
         if tag == "image" and not namespace:
             tag = "img"
+        html_form = tag == "form" and not namespace
+        in_template = any(n.tag == "template" for n in self.stack)
+        if html_form and self._form_element is not None and not in_template:
+            return
+        if html_form and in_template and self.stack[-1].tag in {
+                "table", "tbody", "thead", "tfoot", "tr", "colgroup"}:
+            return
         self._close_optional_elements(tag)
         table_form = tag == "form" and self.stack[-1].tag in {
             "table", "tbody", "thead", "tfoot", "tr"}
@@ -503,6 +576,8 @@ class Document(HTMLParser):
             node._display = "none"
             node._subtree_hidden = True
         self._insert(parent, node, position)
+        if html_form and not in_template:
+            self._form_element = node
         if tag not in _VOID_TAGS and not table_form:
             if len(self.stack) > 200:
                 raise ParseError("HTML nesting too deep")
@@ -554,6 +629,17 @@ class Document(HTMLParser):
             return
         barriers = {"template", "noscript", "html", "table", "td", "th", "caption",
                     "applet", "marquee", "object", "select"}
+        if tag == "form" and not any(n.tag == "template" for n in self.stack):
+            form, self._form_element = self._form_element, None
+            for index in range(len(self.stack) - 1, 0, -1):
+                if self.stack[index] is form:
+                    # Descendants stay open; removing the form from the stack
+                    # does not reparent its existing hidden children.
+                    del self.stack[index]
+                    break
+                if self.stack[index].tag in barriers:
+                    break
+            return
         if tag in {"template", "noscript"}:
             barriers = {"template", "noscript", "html"}
         elif tag in _TABLE_PARTS | {"td", "th", "table"}:

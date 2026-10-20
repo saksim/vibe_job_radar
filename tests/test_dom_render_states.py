@@ -72,3 +72,48 @@ class RenderStateTests(unittest.TestCase):
         html = ('<section style="content-visibility:hidden"><div style="content-visibility:visible">'
                 + posting("Stale") + "</div></section>" + posting())
         self.assertEqual(parse_job_html(html)["title"], "Engineer")
+
+
+    def test_unopened_dialog_uses_the_display_cascade(self):
+        for attrs in ("", 'style="display:revert"', 'style="display:garbage"'):
+            for content in ("登录后查看", posting("Stale")):
+                with self.subTest(attrs=attrs, content=content):
+                    html = f"<dialog {attrs}>" + content + "</dialog>"
+                    self.assertEqual(parse_job_html(html + posting())["title"], "Engineer")
+                    with self.assertRaises(ParseError):
+                        parse_job_html(html)
+        for attrs in ("open", 'open="false"', 'style="display:block"',
+                      'style="all:initial"', 'style="display:none;display:block!important"'):
+            with self.subTest(attrs=attrs):
+                self.assertEqual(parse_job_html(f"<dialog {attrs}>" + posting()
+                                 + "</dialog>")["title"], "Engineer")
+                with self.assertRaises(ParseError):
+                    parse_job_html(posting() + f"<dialog {attrs}>登录后查看</dialog>")
+
+    def test_visible_walk_does_not_rebuild_descendant_text(self):
+        from unittest.mock import patch
+        from vibe_job_radar.html_parser import Node
+        class CountedChildren(list):
+            visits = 0
+            def __iter__(self):
+                for item in super().__iter__():
+                    CountedChildren.visits += 1
+                    yield item
+        depth = 150
+        doc = Document('<section style="visibility:hidden">' * depth
+                       + '<div class="job-description"><span style="visibility:visible">'
+                       + BODY + '</span></div>' + '</section>' * depth)
+        nodes = list(doc.root.walk())
+        for node in nodes:
+            node.children = CountedChildren(node.children)
+        with patch.object(Node, "text", side_effect=AssertionError("walk rebuilt text")):
+            visible = list(doc.root.walk(visible_only=True))
+        self.assertEqual([n.tag for n in visible].count("section"), depth)
+        self.assertIn("job-description", [n.attrs.get("class") for n in visible])
+        self.assertLessEqual(CountedChildren.visits, len(nodes) * 3)
+        self.assertEqual(doc.root.text(visible_only=True), BODY + "\n" * (depth + 1))
+        empty = Document('<section style="visibility:hidden"><span style="visibility:visible"> '
+                         '</span><nav style="visibility:visible">ignored</nav></section>')
+        self.assertNotIn("section", [n.tag for n in empty.root.walk(visible_only=True)])
+        empty.feed('<section style="visibility:hidden"><span style="visibility:visible">new</span></section>')
+        self.assertEqual([n.tag for n in empty.root.walk(visible_only=True)].count("section"), 1)

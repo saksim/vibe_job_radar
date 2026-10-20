@@ -208,3 +208,58 @@ class TableVisibilityTests(unittest.TestCase):
         chunked.close()
         self.assertEqual([n.tag if not isinstance(n, str) else "#text"
                           for n in chunked.root.children], ["#text", "br", "table"])
+
+
+    def test_nested_table_closes_only_the_table_mode_scope(self):
+        for group in ("", "<tbody>", "<tbody><tr>", "<colgroup>"):
+            with self.subTest(group=group):
+                html = "<table hidden>" + group + "<table>" + posting() + "</table>"
+                self.assertEqual(parse_job_html(html)["title"], "Engineer")
+        with self.assertRaises(ParseError):
+            parse_job_html("<table hidden><tr><td><table>" + posting() + "</table></td></tr></table>")
+
+    def test_form_pointer_ignores_nested_starts_and_removes_only_the_form(self):
+        for before in ("<form hidden><form></form>",
+                       "<table><form hidden></table><form hidden></form>",
+                       "<form hidden><template><form></form></template></form>"):
+            with self.subTest(before=before):
+                self.assertEqual(parse_job_html(before + posting())["title"], "Engineer")
+        with self.assertRaises(ParseError):
+            parse_job_html("<form hidden><div></form>" + posting() + "</div>")
+        with self.assertRaises(ParseError):
+            parse_job_html("<table><form></form></table><form hidden>" + posting())
+
+    def test_long_rowspans_have_bounded_cursor_work(self):
+        from unittest.mock import patch
+        import vibe_job_radar.html_parser as parser
+        class Position(int):
+            comparisons = 0
+            def __add__(self, other):
+                return Position(int(self) + int(other))
+            __radd__ = __add__
+            def __lt__(self, other):
+                Position.comparisons += 1
+                return int(self) < int(other)
+            def __le__(self, other):
+                Position.comparisons += 1
+                return int(self) <= int(other)
+            def __gt__(self, other):
+                Position.comparisons += 1
+                return int(self) > int(other)
+            def __ge__(self, other):
+                Position.comparisons += 1
+                return int(self) >= int(other)
+        original = Document._span
+        def span(node, name, maximum=1000):
+            return Position(original(node, name, maximum))
+        html = ('<table><col style="visibility:collapse"><tbody>'
+                + "".join(f'<tr><td rowspan="0">cell-{i}|</td></tr>' for i in range(100))
+                + "</tbody></table>")
+        with patch.object(Document, "_span", staticmethod(span)):
+            doc = Document(html)
+        self.assertNotIn("cell-0|", doc.root.text(visible_only=True))
+        self.assertIn("cell-99|", doc.root.text(visible_only=True))
+        self.assertLess(Position.comparisons, 10000)
+        with patch.object(parser, "_TABLE_LAYOUT_WORK_LIMIT", 50, create=True):
+            with self.assertRaisesRegex(ParseError, "table layout too complex"):
+                Document(html)
