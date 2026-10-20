@@ -84,6 +84,12 @@ def safe_path(path):
     return path
 
 
+def ensure_recovery_complete(root):
+    marker = Path(root) / '.restore-in-progress'
+    if marker.exists() or marker.is_symlink():
+        raise TeamError('team_restore_incomplete', 503)
+
+
 def remove_private_file(path, identity):
     path=Path(path)
     try:
@@ -111,6 +117,29 @@ def private_json(path,value):
         raise
 
 
+SCHEMA_SQL = '''
+BEGIN IMMEDIATE;
+CREATE TABLE members(tenant TEXT, member TEXT, role TEXT NOT NULL, active INTEGER NOT NULL,
+                     PRIMARY KEY(tenant,member));
+CREATE TABLE devices(id TEXT PRIMARY KEY, tenant TEXT NOT NULL, member TEXT NOT NULL,
+                     digest TEXT UNIQUE NOT NULL, expires REAL NOT NULL, revoked INTEGER NOT NULL);
+CREATE TABLE resources(tenant TEXT, id TEXT, site TEXT NOT NULL, origins TEXT NOT NULL,
+                       limits TEXT NOT NULL, PRIMARY KEY(tenant,id));
+CREATE TABLE grants(tenant TEXT, member TEXT, resource TEXT, PRIMARY KEY(tenant,member,resource));
+CREATE TABLE source_grants(tenant TEXT, member TEXT, source TEXT, PRIMARY KEY(tenant,member,source));
+CREATE TABLE audit(seq INTEGER PRIMARY KEY, ts REAL NOT NULL, tenant TEXT NOT NULL,
+                   actor TEXT NOT NULL, action TEXT NOT NULL, target TEXT NOT NULL);
+CREATE TABLE clock(id INTEGER PRIMARY KEY CHECK(id=1), ts REAL NOT NULL);
+CREATE TABLE watermarks(device TEXT, scope TEXT, revision INTEGER NOT NULL, updated REAL NOT NULL,
+                        PRIMARY KEY(device,scope));
+CREATE TABLE sync_views(device TEXT, scope TEXT, revision INTEGER NOT NULL,
+                        PRIMARY KEY(device,scope));
+CREATE TABLE task_leases(tenant TEXT, resource TEXT, task TEXT NOT NULL, device TEXT NOT NULL, member TEXT NOT NULL, generation INTEGER NOT NULL, digest TEXT NOT NULL, expires REAL NOT NULL, state TEXT NOT NULL, PRIMARY KEY(tenant,resource));
+PRAGMA user_version=2;
+COMMIT;
+'''
+
+
 class TeamStore:
     def __init__(self, root, *, clock=time.time):
         self.root, self.clock = Path(root), clock
@@ -127,32 +156,13 @@ class TeamStore:
             pass
         self.path.chmod(0o600)
         with closing(sqlite3.connect(self.path)) as conn:
-            conn.executescript('''
-                BEGIN IMMEDIATE;
-                CREATE TABLE members(tenant TEXT, member TEXT, role TEXT NOT NULL, active INTEGER NOT NULL,
-                                     PRIMARY KEY(tenant,member));
-                CREATE TABLE devices(id TEXT PRIMARY KEY, tenant TEXT NOT NULL, member TEXT NOT NULL,
-                                     digest TEXT UNIQUE NOT NULL, expires REAL NOT NULL, revoked INTEGER NOT NULL);
-                CREATE TABLE resources(tenant TEXT, id TEXT, site TEXT NOT NULL, origins TEXT NOT NULL,
-                                       limits TEXT NOT NULL, PRIMARY KEY(tenant,id));
-                CREATE TABLE grants(tenant TEXT, member TEXT, resource TEXT, PRIMARY KEY(tenant,member,resource));
-                CREATE TABLE source_grants(tenant TEXT, member TEXT, source TEXT, PRIMARY KEY(tenant,member,source));
-                CREATE TABLE audit(seq INTEGER PRIMARY KEY, ts REAL NOT NULL, tenant TEXT NOT NULL,
-                                   actor TEXT NOT NULL, action TEXT NOT NULL, target TEXT NOT NULL);
-                CREATE TABLE clock(id INTEGER PRIMARY KEY CHECK(id=1), ts REAL NOT NULL);
-                CREATE TABLE watermarks(device TEXT, scope TEXT, revision INTEGER NOT NULL, updated REAL NOT NULL,
-                                        PRIMARY KEY(device,scope));
-                CREATE TABLE sync_views(device TEXT, scope TEXT, revision INTEGER NOT NULL,
-                                        PRIMARY KEY(device,scope));
-                CREATE TABLE task_leases(tenant TEXT, resource TEXT, task TEXT NOT NULL, device TEXT NOT NULL, member TEXT NOT NULL, generation INTEGER NOT NULL, digest TEXT NOT NULL, expires REAL NOT NULL, state TEXT NOT NULL, PRIMARY KEY(tenant,resource));
-                PRAGMA user_version=2;
-                COMMIT;
-            ''')
+            conn.executescript(SCHEMA_SQL)
         RateLedger(self.rate_path, clock=self.clock)
         self.rate_path.chmod(0o600)
 
     @contextmanager
     def connection(self, *, write=False):
+        ensure_recovery_complete(self.root)
         safe_path(self.path); safe_path(self.rate_path)
         try:
             with closing(sqlite3.connect(self.path.resolve().as_uri()+'?mode=rw', uri=True, timeout=10)) as conn:

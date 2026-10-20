@@ -23,6 +23,8 @@ def refresh_operation(root):
 
 
 def refresh_approved(root,approval,source,*,client_factory=LocalPublicDataClient):
+    from .team_store import ensure_recovery_complete
+    ensure_recovery_complete(root)
     registry,seed,_observations=read_snapshot(approval)
     if seed or source not in registry or source not in BOARDS:
         raise TeamError('team_refresh_approval_invalid')
