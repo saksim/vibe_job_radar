@@ -54,3 +54,8 @@ f84452候选完整矩阵另有Windows 3.10/3.11/3.12及macOS 3.12各8个错误�
 
 
 19aca83的真实原生验收中，Chrome及Linux四个作业通过，Edge两种模式在登录返回搜索时触发新增PageSnapshotChanged：先前的分次HTML/文本读取与计算样式读取之间允许页面正常更新，逐字比较错误拒绝了此场景。修复为一次同步浏览器观察同时返回原始HTML、文本和计算样式副本，不拼接旧读取结果；URL变化或新出现的可见验证码仍拒绝。计算样式副本移除all重置，PAC认证诊断字段明确命名为retained_auth_attempts（当前保留集合，并非累计次数）。两份首失败日志保留，不增时限、不改原浏览器验收断言。修复后页面观察与原登录返回相关54项通过14.738秒，源测试总数3418。
+
+
+第十三、十四条审查补齐表格语义：折叠col/colgroup通过列区间作用于单元格，处理span、colspan、rowspan（含0）、行组和嵌套表格；部分跨越仍可见的单元格保留。原始HTML中非表格内容按foster parenting插入表格前，使用实际父容器的可见性，正常单元格、模板和隐藏父容器仍保持边界。依据CSS Tables列折叠和HTML插入位置规则，不改变浏览器页面。4项负对照4个失败/12个子场景错误；第一次57项回归中3个子场景因新跨度正则转义笔误失败，修正后57项全部通过（1.578秒）。保留两轮失败日志，最终源测试3422项。
+
+规范：https://www.w3.org/TR/CSS22/tables.html#dynamic-effects 与 https://html.spec.whatwg.org/multipage/parsing.html#foster-parent。

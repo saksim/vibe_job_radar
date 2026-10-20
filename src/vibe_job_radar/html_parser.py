@@ -53,6 +53,9 @@ def _style_declarations(style: str):
 _CSS_WIDE = {"initial", "inherit", "unset", "revert", "revert-layer"}
 _HTML_ROW_DISPLAY = {"tr": "table-row", "tbody": "table-row-group",
                      "thead": "table-header-group", "tfoot": "table-footer-group"}
+_HTML_TABLE_DISPLAY = {**_HTML_ROW_DISPLAY, "table": "table", "col": "table-column",
+                       "colgroup": "table-column-group", "td": "table-cell",
+                       "th": "table-cell", "caption": "table-caption"}
 _INLINE_KEYWORDS = {
     "visibility": {"visible", "hidden", "collapse"},
     "position": {"static", "relative", "absolute", "fixed", "sticky"},
@@ -180,7 +183,7 @@ class Node:
                 return initial
             return default if value in {None, "revert", "revert-layer"} else value
 
-        self._display = noninherited("display", "inline", _HTML_ROW_DISPLAY.get(self.tag, "inline"))
+        self._display = noninherited("display", "inline", _HTML_TABLE_DISPLAY.get(self.tag, "inline"))
         # Modern prefixed flex aliases share item semantics. Legacy box is
         # a distinct Chromium layout mode; do not pretend it is modern flex.
         self._display = {"-webkit-flex": "flex", "-webkit-inline-flex": "inline-flex"}.get(
@@ -200,7 +203,8 @@ class Node:
                      and bool({"flex", "inline-flex"} & set(self._box_parent_display.split())))
         # Known row roles are blockified out of flow or as flex items. Store
         # that result so an explicit display:inherit child gets the same role.
-        if self._display in _HTML_ROW_DISPLAY.values() and (not in_flow or self._float != "none" or flex_item):
+        if self._display in set(_HTML_TABLE_DISPLAY.values()) - {"table"} and (
+                not in_flow or self._float != "none" or flex_item):
             self._display = "block"
         row = self._display in _HTML_ROW_DISPLAY.values()
         # Collapsed rows/groups and known inline flex items remove their boxes:
@@ -271,6 +275,103 @@ class Document(HTMLParser):
         self.stack = [self.root]
         self.feed(markup)
         self.close()
+        self._collapse_columns()
+
+    @staticmethod
+    def _span(node, name, maximum=1000):
+        match = re.match(r"[ \t\r\n\f]*\+?([0-9]+)", node.attrs.get(name) or "")
+        # Saturate before int conversion, including arbitrarily long attributes.
+        digits = match[1].lstrip("0") if match else ""
+        value = maximum if len(digits) > 5 else int(digits or "0")
+        return min(value, maximum) if name == "rowspan" and match else max(1, min(value, maximum))
+
+    def _collapse_columns(self):
+        # Column tracks are siblings of rows, not ancestors of their cells.
+        # Keep spans as intervals so large attributes do not expand into arrays.
+        for table in self.root.walk():
+            if table._display not in {"table", "inline-table", "inline table", "block table"}:
+                continue
+            columns, cursor = [], 0
+            for group in table.children:
+                if not isinstance(group, Node):
+                    continue
+                if group._display == "table-column":
+                    parts = [group]
+                    collapsed_group = False
+                elif group._display == "table-column-group" and not group.blocks_subtree():
+                    parts = [c for c in group.children if isinstance(c, Node)
+                             and c._display == "table-column"]
+                    parts = parts or [group]
+                    collapsed_group = group._visibility == "collapse"
+                else:
+                    continue
+                for column in parts:
+                    width = self._span(column, "span")
+                    if collapsed_group or column._visibility == "collapse":
+                        if columns and columns[-1][1] == cursor:
+                            columns[-1] = (columns[-1][0], cursor + width)
+                        else:
+                            columns.append((cursor, cursor + width))
+                    cursor += width
+            if not columns:
+                continue
+            groups = []
+            for group in table.children:
+                if not isinstance(group, Node):
+                    continue
+                if group._display == "table-row":
+                    if groups and groups[-1][0] is table:
+                        groups[-1][1].append(group)
+                    else:
+                        groups.append((table, [group]))
+                elif group._display in set(_HTML_ROW_DISPLAY.values()) - {"table-row"}:
+                    groups.append((group, [c for c in group.children if isinstance(c, Node)
+                                           and c._display == "table-row"]))
+            for _, rows in groups:
+                occupied = []
+                for index, row in enumerate(rows):
+                    occupied = [slot for slot in occupied if slot[2] > index]
+                    cursor = 0
+                    for cell in row.children:
+                        if not isinstance(cell, Node) or cell._display != "table-cell":
+                            continue
+                        while True:
+                            stops = [end for start, end, until in occupied if start <= cursor < end]
+                            if not stops:
+                                break
+                            cursor = max(stops)
+                        end = cursor + self._span(cell, "colspan")
+                        if any(start <= cursor and end <= stop for start, stop in columns):
+                            for descendant in cell.walk():
+                                descendant._subtree_hidden = True
+                        height = self._span(cell, "rowspan", 65534)
+                        until = len(rows) if height == 0 else min(len(rows), index + height)
+                        if until > index + 1:
+                            occupied.append((cursor, end, until))
+                        cursor = end
+
+    def _insertion_location(self, tag="", *, whitespace=False):
+        current = self.stack[-1]
+        if current.tag == "colgroup" and not whitespace and tag not in {"col", "template", "script"}:
+            self.stack.pop()
+            current = self.stack[-1]
+        structural = _TABLE_PARTS | {"table", "td", "th", "col", "script", "style", "template"}
+        if (current.tag not in {"table", "tbody", "thead", "tfoot", "tr"}
+                or whitespace or tag in structural):
+            return current, None
+        # In-table non-table tokens are inserted before the last table. They
+        # stay on the open-element stack, so their own children nest normally.
+        for index in range(len(self.stack) - 1, 0, -1):
+            table = self.stack[index]
+            if table.tag in {"template", "noscript"}:
+                return current, None
+            if table.tag == "table":
+                for parent in reversed(self.stack[:index]):
+                    for position, child in enumerate(parent.children):
+                        if child is table:
+                            return parent, position
+                return self.stack[index - 1], None
+        return current, None
 
     def _close_optional_head(self, tag):
         # HTMLParser tokenizes markup but does not apply the browser's implied
@@ -323,8 +424,12 @@ class Document(HTMLParser):
 
     def handle_starttag(self, tag, attrs):
         self._close_optional_elements(tag)
-        node = Node(tag, _first_attributes(attrs), parent=self.stack[-1])
-        self.stack[-1].children.append(node)
+        parent, position = self._insertion_location(tag)
+        node = Node(tag, _first_attributes(attrs), parent=parent)
+        if position is None:
+            parent.children.append(node)
+        else:
+            parent.children.insert(position, node)
         if tag not in _VOID_TAGS:
             if len(self.stack) > 200:
                 raise ParseError("HTML nesting too deep")
@@ -332,7 +437,12 @@ class Document(HTMLParser):
 
     def handle_startendtag(self, tag, attrs):
         self._close_optional_elements(tag)
-        self.stack[-1].children.append(Node(tag, _first_attributes(attrs), parent=self.stack[-1]))
+        parent, position = self._insertion_location(tag)
+        node = Node(tag, _first_attributes(attrs), parent=parent)
+        if position is None:
+            parent.children.append(node)
+        else:
+            parent.children.insert(position, node)
 
     def handle_endtag(self, tag):
         for i in range(len(self.stack) - 1, 0, -1):
@@ -343,7 +453,11 @@ class Document(HTMLParser):
     def handle_data(self, data):
         if self.stack[-1].tag == "head" and data.strip():
             self.stack.pop()
-        self.stack[-1].children.append(data)
+        parent, position = self._insertion_location(whitespace=not data.strip())
+        if position is None:
+            parent.children.append(data)
+        else:
+            parent.children.insert(position, data)
 
 
 def _normalize_text(text: str) -> str:
