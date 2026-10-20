@@ -14,6 +14,67 @@ class ParseError(ValueError):
     pass
 
 
+def _style_declarations(style: str):
+    """Split declarations without treating strings/functions/comments as CSS."""
+    field, quote, depth, index = [], "", 0, 0
+    while index < len(style):
+        char = style[index]
+        if char == "\\" and index + 1 < len(style):
+            field.extend(style[index:index + 2])
+            index += 2
+            continue
+        if quote:
+            field.append(char)
+            if char == quote:
+                quote = ""
+        elif style.startswith("/*", index):
+            end = style.find("*/", index + 2)
+            field.append(" ")
+            index = len(style) if end < 0 else end + 2
+            continue
+        elif char in "\"'":
+            quote = char
+            field.append(char)
+        elif char in "([{":
+            depth += 1
+            field.append(char)
+        elif char in ")]}":
+            depth = max(0, depth - 1)
+            field.append(char)
+        elif char == ";" and not depth:
+            yield "".join(field)
+            field.clear()
+        else:
+            field.append(char)
+        index += 1
+    yield "".join(field)
+
+
+def _inline_hidden(style: str) -> bool:
+    # Only literal final values establish hiding. This does not compute
+    # stylesheets, inherited values or custom-property substitutions.
+    if not style:
+        return False
+    values = {}
+    for declaration in _style_declarations(style):
+        name, separator, value = declaration.partition(":")
+        name, value = name.strip().lower(), value.strip().lower()
+        if not separator or name not in {"display", "visibility", "all"} or not value:
+            continue
+        annotation = re.search(r"!\s*important\s*$", value)
+        important = annotation is not None
+        if annotation:
+            value = value[:annotation.start()].strip()
+        if not value or (name == "all" and value not in {
+                "initial", "inherit", "unset", "revert", "revert-layer"}):
+            continue
+        for key in (("display", "visibility") if name == "all" else (name,)):
+            if key not in values or important >= values[key][1]:
+                values[key] = value, important
+    return (values.get("display", ("",))[0] == "none"
+            or values.get("visibility", ("",))[0] in {"hidden", "collapse"})
+
+
 @dataclass
 class Node:
     tag: str
@@ -24,17 +85,15 @@ class Node:
         """Only explicit HTML/inline hiding; aria-hidden is not visual hiding."""
         if self.tag in {"script", "style", "template", "noscript", "head"} or "hidden" in self.attrs:
             return True
-        style = re.sub(r"\s+", "", self.attrs.get("style") or "").lower()
-        return bool(re.search(
-            r"(?:^|;)(?:display:none|visibility:(?:hidden|collapse))(?:!important)?(?:;|$)", style))
+        return _inline_hidden(self.attrs.get("style") or "")
 
-    def walk(self, *, visible_only: bool = False):
-        if visible_only and self.hidden():
+    def walk(self, *, visible_only: bool = False, exclude_tags: tuple[str, ...] = ()):
+        if self.tag in exclude_tags or (visible_only and self.hidden()):
             return
         yield self
         for child in self.children:
             if isinstance(child, Node):
-                yield from child.walk(visible_only=visible_only)
+                yield from child.walk(visible_only=visible_only, exclude_tags=exclude_tags)
 
     def text(self, include_script: bool = False, *, visible_only: bool = False) -> str:
         if visible_only and self.hidden():
@@ -54,7 +113,16 @@ class Document(HTMLParser):
         self.feed(markup)
         self.close()
 
+    def _close_optional_head(self, tag):
+        # HTMLParser tokenizes markup but does not apply the browser's implied
+        # head end tag. Body content must not remain under inert metadata.
+        head_content = {"base", "basefont", "bgsound", "link", "meta", "noframes",
+                        "script", "style", "template", "title", "noscript"}
+        if self.stack[-1].tag == "head" and tag not in head_content:
+            self.stack.pop()
+
     def handle_starttag(self, tag, attrs):
+        self._close_optional_head(tag)
         node = Node(tag, dict(attrs))
         self.stack[-1].children.append(node)
         if tag not in {"br", "hr", "meta", "link", "img", "input", "area", "base", "embed", "source", "wbr", "param"}:
@@ -63,6 +131,7 @@ class Document(HTMLParser):
             self.stack.append(node)
 
     def handle_startendtag(self, tag, attrs):
+        self._close_optional_head(tag)
         self.stack[-1].children.append(Node(tag, dict(attrs)))
 
     def handle_endtag(self, tag):
@@ -72,6 +141,8 @@ class Document(HTMLParser):
                 break
 
     def handle_data(self, data):
+        if self.stack[-1].tag == "head" and data.strip():
+            self.stack.pop()
         self.stack[-1].children.append(data)
 
 
@@ -226,7 +297,7 @@ def parse_job_html(markup: str, *, source_url: str = "", visible_text: str | Non
     observed = visible_text if visible_text is not None else doc.root.text(visible_only=True)
     if _CHALLENGE.search(observed):
         raise ParseError("login/challenge page")
-    nodes = list(doc.root.walk())
+    nodes = list(doc.root.walk(exclude_tags=("template", "noscript")))
     structured = []
     for node in nodes:
         if node.tag == "script" and (node.attrs.get("type") or "").lower() == "application/ld+json":

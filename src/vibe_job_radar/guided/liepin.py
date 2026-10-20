@@ -183,11 +183,8 @@ def _english_duties_and_qualifications(body: str) -> bool:
 
 
 def _hidden(node: Node) -> bool:
-    style = re.sub(r'\s+', '', node.attrs.get('style', '')).lower()
-    return (node.tag in _OMIT or 'hidden' in node.attrs
-            or node.attrs.get('aria-hidden', '').lower() == 'true'
-            or bool(re.search(r'(?:^|;)display:none(?:!important)?(?:;|$)', style))
-            or bool(re.search(r'(?:^|;)visibility:hidden(?:!important)?(?:;|$)', style)))
+    return (node.tag in _OMIT or node.hidden()
+            or (node.attrs.get('aria-hidden') or '').lower() == 'true')
 
 
 def _walk(node: Node, parent: Node | None = None):
@@ -213,7 +210,7 @@ def _clean(value: str) -> str:
 def _has_structured_job(root: Node) -> bool:
     # An explicit structured identity conflict must not disappear through DOM
     # fallback. The established JSON-LD parser remains authoritative in that case.
-    for node in root.walk():
+    for node in root.walk(exclude_tags=("template", "noscript")):
         if node.tag == 'script' and node.attrs.get('type', '').lower() == 'application/ld+json':
             try:
                 if any(jobpostings(json.loads(node.text(include_script=True)))):
@@ -344,7 +341,8 @@ def structured_intro_detail(markup: str, url: str,
         anchors = [n for n in nodes if n.attrs.get('data-selector') == 'job-intro-content']
         visible_ids = {id(n) for n, _ in _walk(root)}
         postings, repaired_job = [], False
-        scripts = [n for n in nodes if n.tag == 'script'
+        scripts = [n for n in root.walk(exclude_tags=("template", "noscript"))
+                   if n.tag == 'script'
                    and n.attrs.get('type', '').strip().lower() == 'application/ld+json']
         if len(scripts) > 64:
             raise CrawlError('response_too_large')

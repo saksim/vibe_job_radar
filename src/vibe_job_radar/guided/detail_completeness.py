@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import re
 
-from ..html_parser import Document, Node
+from ..html_parser import Document
 from .contracts import CrawlError
 from .page_surface import _text
 
@@ -15,15 +15,7 @@ _PROMPT = re.compile(
 
 
 def _visible_nodes(node):
-    if node.tag in {'script', 'style', 'template', 'noscript', 'head'} or 'hidden' in node.attrs:
-        return
-    style = re.sub(r'\s+', '', node.attrs.get('style', '')).lower()
-    if re.search(r'(?:^|;)(?:display:none|visibility:(?:hidden|collapse))(?:!important)?(?:;|$)', style):
-        return
-    yield node
-    for child in node.children:
-        if isinstance(child, Node):
-            yield from _visible_nodes(child)
+    yield from node.walk(visible_only=True)
 
 
 def require_expanded(markup, parsed, *, visible_text=None):

@@ -90,7 +90,6 @@ class DOMSourceTextTests(unittest.TestCase):
         for hidden in (
             '<section hidden>{}</section>', '<template>{}</template>',
             '<div style="visibility: hidden">{}</div>', '<noscript>{}</noscript>',
-            '<head>{}</head>',
         ):
             with self.subTest(hidden=hidden):
                 result = parse_job_html(hidden.format(markup("另一份不应进入本岗位的隐藏文本" * 3)) + markup())
@@ -131,6 +130,70 @@ class DOMSourceTextTests(unittest.TestCase):
         self.assertEqual(result["text"], BODY)
         with self.assertRaises(ParseError):
             parse_job_html(html, source_url="https://example.com/job/another")
+
+    def test_inline_cascade_preserves_visible_dom_and_active_gates(self):
+        visible = (
+            "display:none; display:block",
+            "display:none !important; display:block !important",
+            "display:block !important; display:none",
+            "visibility:hidden; visibility:visible",
+            "visibility:visible !important; visibility:collapse",
+            "display:none; all:initial",
+        )
+        for style in visible:
+            with self.subTest(style=style):
+                self.assertEqual(parse_job_html(f'<section style="{style}">{markup()}</section>')["text"], BODY)
+                with self.assertRaises(ParseError):
+                    parse_job_html(markup() + f'<div style="{style}">登录后查看</div>')
+        for style in ("display:block;display:none", "display:none !important;display:block",
+                      "visibility:visible;visibility:collapse", "all:initial;display:none"):
+            with self.subTest(style=style), self.assertRaises(ParseError):
+                parse_job_html(f'<section style="{style}">{markup()}</section>')
+
+    def test_css_strings_comments_and_functions_are_not_declarations(self):
+        for style in ("--example: ';display:none;'; color:blue",
+                      "/*;display:none;*/color:blue",
+                      "--example:fn(;display:none;); color:blue"):
+            with self.subTest(style=style):
+                self.assertEqual(parse_job_html(f'<section style="{style}">{markup()}</section>')["text"], BODY)
+
+    def test_optional_head_end_tag_does_not_hide_body_content(self):
+        head = '<html><head><title>Job board</title><meta charset="utf-8">'
+        for start, end in (("<body>", "</body>"), ("", ""), ("职位页面", "")):
+            with self.subTest(start=start):
+                self.assertEqual(parse_job_html(head + start + markup() + end + "</html>")["text"], BODY)
+
+    def test_inert_template_structured_postings_are_not_candidates(self):
+        stale = {"@type": "JobPosting", "title": "隐藏旧岗位", "description": "另一份隐藏旧岗位要求" * 8}
+        correct = {"@type": "JobPosting", "title": TITLE, "description": ENCODED}
+        script = lambda value: '<script type="application/ld+json">' + json.dumps(value) + '</script>'
+        for tag in ("template", "noscript"):
+            hidden = f'<{tag}><div>登录后查看</div>{script(stale)}</{tag}>'
+            for active in (markup(), "<head>" + script(correct) + "</head>"):
+                with self.subTest(tag=tag, structured=active.startswith("<head>")):
+                    result = parse_job_html(active + hidden)
+                    self.assertEqual((result["title"], result["text"]), (TITLE, BODY))
+            with self.subTest(tag=tag, hidden_only=True), self.assertRaises(ParseError):
+                parse_job_html(hidden)
+
+    def test_effective_visibility_keeps_existing_expansion_checks(self):
+        for site, url, container in SITES:
+            with self.subTest(site=site):
+                html = markup(ENCODED + '<button style="display:none;display:block">展开全部</button>', container)
+                with self.assertRaisesRegex(CrawlError, "jd_incomplete"):
+                    builtins().get(site).detail(PageSnapshot(url, html))
+                html = markup(ENCODED + '<button style="display:block;display:none">展开全部</button>', container)
+                self.assertEqual(builtins().get(site).detail(PageSnapshot(url, html))["text"], BODY)
+
+    def test_liepin_uses_the_same_inline_and_inert_template_rules(self):
+        html = f'<h1>{TITLE}</h1><dl><dt>职位介绍</dt><dd style="display:none;display:block">{ENCODED}</dd></dl>'
+        stale = {"@type": "JobPosting", "title": "隐藏旧岗位", "description": "另一份隐藏旧岗位要求" * 8}
+        hidden = '<template><script type="application/ld+json">' + json.dumps(stale) + '</script></template>'
+        adapter = builtins().get("liepin")
+        for tail in ("", hidden):
+            with self.subTest(template=bool(tail)):
+                result = adapter.detail(PageSnapshot("https://www.liepin.com/job/123456.shtml", html + tail))
+                self.assertEqual(result["text"], BODY)
 
 
 if __name__ == "__main__":
