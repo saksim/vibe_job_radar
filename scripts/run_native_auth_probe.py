@@ -18,6 +18,7 @@ import run_native_browser_acceptance as acceptance
 from vibe_job_radar.guided.native_tunnel import NativeTunnel
 from native_failure_evidence import loading_failure, fatal_failure
 from native_guard_evidence import install_guard_observer, guard_transport_facts
+from native_handshake_evidence import HandshakeTrace, handshake_facts, record_handshake
 
 COMMANDS = frozenset({
     'Network.enable', 'Network.setUserAgentOverride', 'Network.setCacheDisabled',
@@ -37,6 +38,7 @@ class ObservedBackend(acceptance.NativeBackend):
     def __init__(self, *args, **kwargs):
         self.probe = {'sent': Counter(), 'acknowledged': Counter(), 'events': Counter(),
                       'attachments': Counter(), 'auth': Counter(), 'snapshots': []}
+        self._handshake_trace = HandshakeTrace()
         PROBES.append(self.probe)
         try:
             super().__init__(*args, **kwargs)
@@ -47,7 +49,7 @@ class ObservedBackend(acceptance.NativeBackend):
             if isinstance(report, dict):
                 self.probe['startup_diagnostic'] = report
             raise
-        self._guard_evidence = install_guard_observer(self.tunnel)
+        self._guard_evidence = install_guard_observer(self.tunnel, self._handshake_trace)
 
     def _launch_browser(self, options):
         # Observe the owned Chrome control startup without changing its
@@ -86,6 +88,7 @@ class ObservedBackend(acceptance.NativeBackend):
             # Save a copy; an observer failure must preserve the original close.
             try:
                 self.probe['guard_transport'] = guard_transport_facts(self)
+                self.probe['handshake_trace'] = handshake_facts(self)
             except Exception:
                 pass
 
@@ -121,8 +124,10 @@ class ObservedBackend(acceptance.NativeBackend):
     def _send(self, session, method, params=None, callback=None):
         key = method if method in COMMANDS else 'other'
         self.probe['sent'][key] += 1
+        record_handshake(self, key + '.sent')
         def acknowledged(result):
             self.probe['acknowledged'][key] += 1
+            record_handshake(self, key + '.acknowledged')
             if callback:
                 callback(result)
         return super()._send(session, method, params, acknowledged)
@@ -131,6 +136,8 @@ class ObservedBackend(acceptance.NativeBackend):
         try:
             message = json.loads(event['message'])
             method = message.get('method')
+            if method in EVENTS:
+                record_handshake(self, method + '.event')
             loading_failure(self, event, message)
             if method in EVENTS:
                 self.probe['events'][method] += 1

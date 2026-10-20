@@ -61,14 +61,23 @@ class SystemCredentialsTests(unittest.TestCase):
         self.assertNotEqual(a,b)
         self.assertNotIn(TOKEN.encode(),base64.b64decode(a))
         self.assertEqual(store.restore(self.root,'team-device','https://team.fixture.test',a),TOKEN.encode())
+        tampered = bytearray(base64.b64decode(a))
+        tampered[0] ^= 1
+        self.assertNotEqual(bytes(tampered), base64.b64decode(a))
         for root, purpose, context, payload in (
             (self.root.parent/'other','team-device','https://team.fixture.test',a),
             (self.root,'proxy','https://team.fixture.test',a),
             (self.root,'team-device','https://other.fixture.test',a),
-            (self.root,'team-device','https://team.fixture.test',base64.b64encode(b'x'+base64.b64decode(a)[1:]).decode())):
+            (self.root,'team-device','https://team.fixture.test',base64.b64encode(tampered).decode())):
             with self.assertRaisesRegex(store.CredentialStoreError,'credential_store_invalid'):
                 store.restore(root,purpose,context,payload)
         self.key.assert_called_with(self.root,create=False)
+
+    def test_tamper_check_also_changes_a_nonce_starting_with_x(self):
+        # Both nonces are distinct, but the first starts with the old fixed
+        # replacement byte. This deterministically covers the 1/256 collision.
+        with patch.object(store.os, "urandom", side_effect=[b"x" * 12, b"y" * 12]):
+            self.test_authenticated_ciphertext_is_random_and_bound_to_workspace_purpose_origin()
 
     def test_proxy_all_modes_preserve_dns_reopen_and_clear_without_plaintext(self):
         with patch('vibe_job_radar.ntlm_worker.available',return_value=True):

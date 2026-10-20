@@ -7,21 +7,16 @@ conservative fallback which only omits explicitly hidden markup.
 """
 from __future__ import annotations
 
-import re
-
 from ..html_parser import Document, Node
 from .contracts import CrawlError, PageSnapshot
 
-_INERT = {'script', 'style', 'template', 'noscript', 'head'}
-
 
 def _text(node: Node) -> str:
-    if node.tag in _INERT or 'hidden' in node.attrs:
+    if node.blocks_subtree():
         return ''
-    style = re.sub(r'\s+', '', node.attrs.get('style', '')).lower()
-    if re.search(r'(?:^|;)(?:display:none|visibility:(?:hidden|collapse))(?:!important)?(?:;|$)', style):
-        return ''
-    text = ''.join(_text(child) if isinstance(child, Node) else child for child in node.children)
+    own_visible = not node.hidden()
+    text = ''.join(_text(child) if isinstance(child, Node) else
+                   (child if own_visible else '') for child in node.children)
     return text + ('\n' if node.tag in {'p', 'div', 'li', 'br', 'section', 'h1', 'h2', 'h3'} else '')
 
 
@@ -36,3 +31,14 @@ def surface_text(page: PageSnapshot) -> str:
         return _text(Document(page.html).root)
     except (ValueError, RecursionError) as exc:
         raise CrawlError('structure_changed') from exc
+
+
+def parsing_html(page: PageSnapshot) -> str:
+    """Use an observed style copy for parsing, retaining original HTML evidence."""
+    rendered = getattr(page, 'rendered_html', None)
+    if rendered is None:
+        return page.html
+    if (not isinstance(rendered, str) or len(rendered) > 5_000_000
+            or not isinstance(page.visible_text, str)):
+        raise CrawlError('invalid_page_observation')
+    return rendered

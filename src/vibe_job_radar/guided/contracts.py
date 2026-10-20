@@ -20,6 +20,7 @@ class PageSnapshot:
     business: tuple = field(default=(), repr=False)  # Private observations, never task/diagnostic output.
     visible_text: str | None = field(default=None, repr=False)
     business_required: bool = field(default=False, repr=False)
+    rendered_html: str | None = field(default=None, repr=False)  # Read-only computed-style copy; html stays original.
 
 
 class CrawlError(RuntimeError):

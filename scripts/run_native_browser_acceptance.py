@@ -141,7 +141,7 @@ class Fixture:
                     body=owner.recorded_body
                     self.send(('<h1>'+RECORDED_TITLE+'</h1><dl><dt>职位介绍</dt><dd>'+body+'</dd></dl>')
                         if owner.recorded_semantic else recorded_markup(recorded_posting(url=URL+'/job/123.shtml',description=body),body))
-                elif path=='/job/1':self.send('<h1>时间序列算法工程师</h1><div class="job-description">要求熟练使用 Cursor 进行 AI 辅助编程，编写单元测试与代码审查，负责时间序列预测系统。仅为本地人工测试，不是真实招聘信息。</div>')
+                elif path=='/job/1':self.send('<style>.shown{display:block!important}.dormant{display:none!important}</style><h1 class="dormant">旧岗位</h1><section class="shown" style="display:none"><h1>时间序列算法工程师</h1><div class="job-description">要求熟练使用 Cursor 进行 AI 辅助编程，编写单元测试与代码审查，负责时间序列预测系统。仅为本地人工测试，不是真实招聘信息。</div></section>')
                 elif path=='/redirect':self.send('',status=302,extra=[('Location','/search')])
                 elif path=='/cross':self.send('',status=302,extra=[('Location','https://outside.fixture.test/forbidden')])
                 elif path=='/origin-auth':self.send('origin auth',status=401,extra=[('WWW-Authenticate','Basic realm="Radar local native session"')])

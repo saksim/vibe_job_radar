@@ -73,15 +73,79 @@ class PageSurfaceTests(unittest.TestCase):
             with self.subTest(kind=type(value).__name__), self.assertRaises(CrawlError):
                 surface_text(PageSnapshot(DETAIL, HTML, visible_text=value))
 
+    def test_computed_dom_preserves_stylesheet_override_and_original_evidence(self):
+        for key, url, markup in (
+            ('liepin', DETAIL, HTML),
+            ('boss', 'https://www.zhipin.com/job_detail/fixture.html',
+             '<h1>算法工程师</h1><div class="job-sec-text">'+BODY+'</div>'),
+            ('51job', 'https://we.51job.com/pc/jobdetail?jobId=123',
+             '<h1>算法工程师</h1><div class="job_msg">'+BODY+'</div>')):
+            with self.subTest(site=key):
+                raw='<style>.shown{display:block!important}</style><section class="shown" style="display:none">'+markup+'</section>'
+                computed='<section style="display:block!important">'+markup+'</section>'
+                page=SimpleNamespace(url=url, html=raw, visible_text=BODY,
+                    rendered_html=computed, business=(), business_required=False)
+                self.assertEqual(builtins().get(key).detail(page)['text'],BODY)
+                self.assertEqual(page.html,raw)
+                page.rendered_html='<section style="display:none!important">'+markup+'</section>'
+                with self.assertRaises(CrawlError):
+                    builtins().get(key).detail(page)
+
+    def test_backend_uses_one_coherent_observation_after_in_page_update(self):
+        from vibe_job_radar.guided.contracts import PageSnapshotChanged
+        page=Mock()
+        page.url=DETAIL
+        page.is_closed.return_value=False
+        page.locator.return_value.inner_text.return_value=BODY
+        page.content.return_value=HTML
+        updated=HTML.replace(BODY,BODY+'新增职责。')
+        page.evaluate.return_value={'source':updated, 'doctype':'',
+            'text':BODY+'新增职责。', 'rendered':updated,'url':DETAIL}
+        backend=SimpleNamespace(error=None,page=page,adapter=self.adapter)
+        result=PlaywrightBackend.snapshot(backend)
+        self.assertEqual(result.html,updated)
+        self.assertEqual(result.rendered_html,updated)
+        self.assertEqual(result.visible_text,BODY+'新增职责。')
+        self.assertIn('新增职责。',self.adapter.detail(result)['text'])
+
+    def test_final_rendered_observation_cannot_hide_navigation_or_new_gate(self):
+        from vibe_job_radar.guided.contracts import PageSnapshotChanged
+        page=Mock()
+        page.url=DETAIL
+        page.is_closed.return_value=False
+        page.locator.return_value.inner_text.return_value=BODY
+        page.content.return_value=HTML
+        backend=SimpleNamespace(error=None,page=page,adapter=self.adapter)
+        page.evaluate.return_value={'source':HTML,'doctype':'','text':BODY,
+            'rendered':HTML,'url':SEARCH}
+        with self.assertRaises(PageSnapshotChanged):
+            PlaywrightBackend.snapshot(backend)
+        page.evaluate.return_value={'source':HTML,'doctype':'','text':'安全验证',
+            'rendered':HTML,'url':DETAIL}
+        with self.assertRaisesRegex(CrawlError,'manual_required'):
+            PlaywrightBackend.snapshot(backend)
+
+    def test_rendered_dom_is_private_and_requires_rendered_text(self):
+        from vibe_job_radar.guided.page_surface import parsing_html
+        for value in (True, [], 'x'*5_000_001):
+            with self.subTest(value=type(value).__name__),self.assertRaises(CrawlError):
+                parsing_html(SimpleNamespace(html=HTML,visible_text=BODY,rendered_html=value))
+        with self.assertRaises(CrawlError):
+            parsing_html(SimpleNamespace(html=HTML,visible_text=None,rendered_html=HTML))
+
     def test_backend_passes_the_same_rendered_text_to_adapter(self):
         page = Mock()
         page.url = DETAIL
         page.is_closed.return_value = False
         page.locator.return_value.inner_text.return_value = BODY
         page.content.return_value = HTML + '<div hidden>安全验证</div>'
+        page.evaluate.return_value={'source':page.content.return_value,'doctype':'',
+            'text':BODY,'rendered':page.content.return_value,'url':DETAIL}
         backend = SimpleNamespace(error=None, page=page, adapter=self.adapter)
         snapshot = PlaywrightBackend.snapshot(backend)
         self.assertEqual(snapshot.visible_text, BODY)
+        self.assertEqual(snapshot.html, page.content.return_value)
+        self.assertNotIn(BODY, repr(snapshot))
         self.assertEqual(self.adapter.detail(snapshot)['text'], BODY)
 
 

@@ -53,8 +53,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
-      - name: Install optional browser version validator for tests
-        run: python -m pip install "packaging>=24.2" tzdata "quickjs-ng==0.17.0.1" "pyspnego==0.12.4"
+      - name: Prepare test and declared build dependencies
+        run: python -m pip install "packaging>=24.2" tzdata "quickjs-ng==0.17.0.1" "pyspnego==0.12.4" "setuptools>=68" wheel
       - name: Cover the native TLS dependency in the existing Windows full suite
         if: runner.os == 'Windows' && matrix.python == '3.12'
         run: python -m pip install "truststore>=0.10.4,<0.11"
@@ -65,7 +65,8 @@ jobs:
       - run: python scripts/start_workbench.py --doctor --workspace .ci-source-workspace
       - name: Verify installed entrypoint and bundled UI
         run: |
-          python -m pip install --no-deps .
+          # Build tools were prepared above; do not fetch them again after the suite.
+          python -m pip install --no-deps --no-build-isolation --no-index .
           vibe-radar-ui --doctor --workspace .ci-installed-workspace
           python -c "import importlib.metadata as m; from vibe_job_radar import __version__; assert m.version('vibe-job-radar') == __version__"
           python -c "from importlib.resources import files; p=files('vibe_job_radar'); assert p.joinpath('workbench.html').is_file(); assert p.joinpath('workbench.js').is_file()"

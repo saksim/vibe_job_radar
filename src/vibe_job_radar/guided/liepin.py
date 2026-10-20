@@ -16,7 +16,7 @@ from ..html_parser import (Document, Node, ParseError, jobpostings, plain_text,
                            _posting_identity, _posting_location, _unique_object)
 from .adapters import DOMAdapter
 from .contracts import Card, CrawlError, PageSnapshot
-from .page_surface import surface_text
+from .page_surface import surface_text, parsing_html
 
 _OMIT = {'script', 'style', 'nav', 'footer', 'aside', 'noscript', 'template', 'iframe', 'svg'}
 _HEADINGS = {'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'dt'}
@@ -182,27 +182,27 @@ def _english_duties_and_qualifications(body: str) -> bool:
             and sum(bool(_ENGLISH_QUALIFICATION.search(item)) for item in qualifications) >= 2)
 
 
-def _hidden(node: Node) -> bool:
-    style = re.sub(r'\s+', '', node.attrs.get('style', '')).lower()
-    return (node.tag in _OMIT or 'hidden' in node.attrs
-            or node.attrs.get('aria-hidden', '').lower() == 'true'
-            or bool(re.search(r'(?:^|;)display:none(?:!important)?(?:;|$)', style))
-            or bool(re.search(r'(?:^|;)visibility:hidden(?:!important)?(?:;|$)', style)))
+def _blocked(node: Node) -> bool:
+    return (node.tag in _OMIT or node.blocks_subtree()
+            or (node.attrs.get('aria-hidden') or '').lower() == 'true')
 
 
 def _walk(node: Node, parent: Node | None = None):
-    if _hidden(node):
+    if _blocked(node):
         return
-    yield node, parent
+    if not node.hidden() or _text(node).strip():
+        yield node, parent
     for child in node.children:
         if isinstance(child, Node):
             yield from _walk(child, node)
 
 
 def _text(node: Node) -> str:
-    if _hidden(node):
+    if _blocked(node):
         return ''
-    result = ''.join(_text(c) if isinstance(c, Node) else c for c in node.children)
+    own_visible = not node.hidden()
+    result = ''.join(_text(c) if isinstance(c, Node) else
+                     (c if own_visible else '') for c in node.children)
     return result + ('\n' if node.tag in {'p','div','li','br','h1','h2','h3','h4','section','dd'} else '')
 
 
@@ -213,7 +213,7 @@ def _clean(value: str) -> str:
 def _has_structured_job(root: Node) -> bool:
     # An explicit structured identity conflict must not disappear through DOM
     # fallback. The established JSON-LD parser remains authoritative in that case.
-    for node in root.walk():
+    for node in root.walk(exclude_tags=("template", "noscript")):
         if node.tag == 'script' and node.attrs.get('type', '').lower() == 'application/ld+json':
             try:
                 if any(jobpostings(json.loads(node.text(include_script=True)))):
@@ -247,7 +247,7 @@ def semantic_detail(markup: str) -> dict:
                 if child.strip():
                     raise CrawlError('structure_changed')
                 continue
-            if _hidden(child):
+            if _blocked(child) or not _text(child).strip():
                 continue
             if child.tag in _HEADINGS:
                 break
@@ -344,7 +344,8 @@ def structured_intro_detail(markup: str, url: str,
         anchors = [n for n in nodes if n.attrs.get('data-selector') == 'job-intro-content']
         visible_ids = {id(n) for n, _ in _walk(root)}
         postings, repaired_job = [], False
-        scripts = [n for n in nodes if n.tag == 'script'
+        scripts = [n for n in root.walk(exclude_tags=("template", "noscript"))
+                   if n.tag == 'script'
                    and n.attrs.get('type', '').strip().lower() == 'application/ld+json']
         if len(scripts) > 64:
             raise CrawlError('response_too_large')
@@ -496,7 +497,8 @@ class LiepinAdapter(DOMAdapter):
             raise CrawlError('job_unavailable')
         if self.challenged(visible, page.url):
             raise CrawlError('manual_required')
-        intro = structured_intro_detail(page.html, page.url, self.job_identity)
+        markup = parsing_html(page)
+        intro = structured_intro_detail(markup, page.url, self.job_identity)
         if intro is not None:
             return intro
         try:
@@ -504,9 +506,9 @@ class LiepinAdapter(DOMAdapter):
         except CrawlError as exc:
             if exc.code != 'structure_changed':
                 raise
-            if _has_structured_job(Document(page.html).root):
+            if _has_structured_job(Document(markup).root):
                 raise
-            return semantic_detail(page.html)
+            return semantic_detail(markup)
         # Parsing succeeded. Validation errors are fatal: a second layout must
         # not replace an oversized or incomplete body selected by the parser.
         # Keep the established batch status previously supplied by JobRecord.
