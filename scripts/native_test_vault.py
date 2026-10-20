@@ -4,6 +4,10 @@ import json
 import os
 from pathlib import Path
 import shlex
+import socket
+import stat
+import struct
+import time
 import subprocess
 import sys
 import tempfile
@@ -21,6 +25,46 @@ def _run(args, **kwargs):
     return subprocess.run(args,check=True,capture_output=True,timeout=20,**kwargs).stdout.decode('utf-8')
 
 
+def _unlock_linux(root):
+    """Unlock this fixture's existing daemon without replacing its D-Bus objects.
+
+    GNOME's control protocol: credentials byte, big-endian frame size/opcode,
+    length-prefixed password; the reply is size plus result. Fixture use only.
+    https://github.com/GNOME/gnome-keyring/blob/gnome-46/daemon/control/gkd-control-client.c
+    """
+    endpoint = root / 'control/control'
+    if endpoint.parent.resolve() != root / 'control':
+        raise ValueError('Fixture control directory escaped')
+    info = endpoint.lstat()
+    if not stat.S_ISSOCK(info.st_mode) or info.st_uid != os.geteuid():
+        raise ValueError('Fixture control socket is invalid')
+    deadline = time.monotonic() + 20
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as channel:
+        def remaining():
+            value = deadline - time.monotonic()
+            if value <= 0:
+                raise TimeoutError('Fixture unlock timeout')
+            channel.settimeout(value)
+        def receive(size):
+            data = bytearray()
+            while len(data) < size:
+                remaining()
+                part = channel.recv(size - len(data))
+                if not part:
+                    raise ValueError('Truncated fixture unlock reply')
+                data.extend(part)
+            return bytes(data)
+        remaining()
+        channel.connect(str(endpoint))
+        password = PASSWORD.encode('utf-8')
+        remaining()
+        channel.sendall(bytes([0]) + struct.pack('>III', 12 + len(password), 1, len(password)) + password)
+        if struct.unpack('>I', receive(4))[0] != 8:
+            raise ValueError('Invalid fixture unlock reply size')
+        if struct.unpack('>I', receive(4))[0] != 0:
+            raise ValueError('Fixture unlock refused')
+
+
 def control(action):
     _ci()
     if action not in {'lock','unlock'}:raise ValueError('Invalid fixture action')
@@ -31,8 +75,7 @@ def control(action):
         _run(['/usr/bin/security',action+'-keychain']+(['-p',PASSWORD] if action=='unlock' else [])+[str(keychain)])
     elif sys.platform=='linux':
         if action=='unlock':
-            _run(['/usr/bin/gnome-keyring-daemon','--replace','--unlock','--components=secrets',
-                  '--control-directory='+str(root/'control')],input=PASSWORD.encode())
+            _unlock_linux(root)
             import secretstorage
             from secretstorage.collection import Collection
             connection=secretstorage.dbus_init()
