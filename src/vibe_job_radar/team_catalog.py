@@ -78,6 +78,8 @@ class TeamCatalog:
 
     @contextmanager
     def connection(self,*,write=False):
+        from .team_store import ensure_recovery_complete
+        ensure_recovery_complete(self.path.parent)
         safe_path(self.path)
         try:
             with closing(sqlite3.connect(self.path.resolve().as_uri()+'?mode=rw',uri=True,timeout=10)) as conn:

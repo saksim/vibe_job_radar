@@ -84,6 +84,12 @@ def safe_path(path):
     return path
 
 
+def ensure_recovery_complete(root):
+    marker = Path(root) / '.restore-in-progress'
+    if marker.exists() or marker.is_symlink():
+        raise TeamError('team_restore_incomplete', 503)
+
+
 def remove_private_file(path, identity):
     path=Path(path)
     try:
@@ -153,6 +159,7 @@ class TeamStore:
 
     @contextmanager
     def connection(self, *, write=False):
+        ensure_recovery_complete(self.root)
         safe_path(self.path); safe_path(self.rate_path)
         try:
             with closing(sqlite3.connect(self.path.resolve().as_uri()+'?mode=rw', uri=True, timeout=10)) as conn:
