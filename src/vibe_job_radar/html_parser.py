@@ -51,6 +51,13 @@ def _style_declarations(style: str):
 
 
 _CSS_WIDE = {"initial", "inherit", "unset", "revert", "revert-layer"}
+_HTML_ROW_DISPLAY = {"tr": "table-row", "tbody": "table-row-group",
+                     "thead": "table-header-group", "tfoot": "table-footer-group"}
+_INLINE_KEYWORDS = {
+    "visibility": {"visible", "hidden", "collapse"},
+    "position": {"static", "relative", "absolute", "fixed", "sticky"},
+    "float": {"none", "left", "right", "inline-start", "inline-end"},
+}
 _DISPLAY_OUTSIDE = {"block", "inline", "run-in"}
 _DISPLAY_INSIDE = {"flow", "flow-root", "table", "flex", "grid", "ruby"}
 _DISPLAY_SINGLE = {
@@ -83,18 +90,17 @@ def _inline_values(style: str) -> dict[str, str]:
     for declaration in _style_declarations(style):
         name, separator, value = declaration.partition(":")
         name, value = name.strip().lower(), value.strip().lower()
-        if not separator or name not in {"display", "visibility", "all"} or not value:
+        if not separator or name not in {"display", "visibility", "position", "float", "all"} or not value:
             continue
         annotation = re.search(r"!\s*important\s*$", value)
         important = annotation is not None
         if annotation:
             value = value[:annotation.start()].strip()
         valid = (_valid_display(value) if name == "display" else
-                 value in _CSS_WIDE | ({"visible", "hidden", "collapse"}
-                                      if name == "visibility" else set()))
+                 value in _CSS_WIDE | _INLINE_KEYWORDS.get(name, set()))
         if not valid:
             continue
-        for key in (("display", "visibility") if name == "all" else (name,)):
+        for key in (("display", "visibility", "position", "float") if name == "all" else (name,)):
             if key not in values or important >= values[key][1]:
                 values[key] = value, important
     return {key: value for key, (value, _) in values.items()}
@@ -107,7 +113,11 @@ class Node:
     children: list = field(default_factory=list)
     parent: InitVar[Node | None] = None
     _subtree_hidden: bool = field(init=False, repr=False, compare=False)
-    _visibility_hidden: bool = field(init=False, repr=False, compare=False)
+    _visibility: str = field(init=False, repr=False, compare=False)
+    _display: str = field(init=False, repr=False, compare=False)
+    _position: str = field(init=False, repr=False, compare=False)
+    _float: str = field(init=False, repr=False, compare=False)
+    _box_parent_display: str = field(init=False, repr=False, compare=False)
 
     def __post_init__(self, parent):
         # Document builds immutable snapshots, parent before child. Compute
@@ -115,24 +125,48 @@ class Node:
         # on every traversal. A child's declaration overrides inherited values
         # even when the parent's declaration was !important.
         values = _inline_values(self.attrs.get("style") or "")
+        def noninherited(name, initial, default):
+            value = values.get(name)
+            if value == "inherit":
+                return getattr(parent, "_" + name, initial)
+            if value in {"initial", "unset"}:
+                return initial
+            return default if value in {None, "revert", "revert-layer"} else value
+
+        self._display = noninherited("display", "inline", _HTML_ROW_DISPLAY.get(self.tag, "inline"))
+        self._position = noninherited("position", "static", "static")
+        self._float = noninherited("float", "none", "none")
+        visibility = values.get("visibility")
+        self._visibility = ("visible" if visibility == "initial" else visibility
+                            if visibility in {"visible", "hidden", "collapse"} else
+                            getattr(parent, "_visibility", "visible"))
+        # display:contents has no item box, so children use its box parent.
+        self._box_parent_display = (
+            parent._box_parent_display if parent is not None and parent._display == "contents"
+            else getattr(parent, "_display", ""))
+        in_flow = self._position not in {"absolute", "fixed"}
+        flex_item = (in_flow and self._display != "contents"
+                     and bool({"flex", "inline-flex"} & set(self._box_parent_display.split())))
+        # Known row roles are blockified out of flow or as flex items. Store
+        # that result so an explicit display:inherit child gets the same role.
+        if self._display in _HTML_ROW_DISPLAY.values() and (not in_flow or self._float != "none" or flex_item):
+            self._display = "block"
+        row = self._display in _HTML_ROW_DISPLAY.values()
+        # Collapsed rows/groups and known inline flex items remove their boxes:
+        # descendant visibility cannot undo that. Ordinary hidden/collapse
+        # content remains inherited and overrideable. External layout is unknown.
+        collapsed_box = self._visibility == "collapse" and (row or flex_item)
         self._subtree_hidden = bool(
             (parent is not None and parent.blocks_subtree())
             or self.tag in {"script", "style", "template", "noscript", "head"}
-            or "hidden" in self.attrs or values.get("display") == "none")
-        visibility = values.get("visibility")
-        if visibility in {"visible", "initial"}:
-            self._visibility_hidden = False
-        elif visibility in {"hidden", "collapse"}:
-            self._visibility_hidden = True
-        else:
-            self._visibility_hidden = bool(parent is not None and parent._visibility_hidden)
+            or "hidden" in self.attrs or self._display == "none" or collapsed_box)
 
     def blocks_subtree(self) -> bool:
         return self._subtree_hidden
 
     def hidden(self) -> bool:
         """Own visibility, including ancestors; aria-hidden is not visual hiding."""
-        return self._subtree_hidden or self._visibility_hidden
+        return self._subtree_hidden or self._visibility in {"hidden", "collapse"}
 
     def walk(self, *, visible_only: bool = False, exclude_tags: tuple[str, ...] = ()):
         if self.tag in exclude_tags or (visible_only and self.blocks_subtree()):

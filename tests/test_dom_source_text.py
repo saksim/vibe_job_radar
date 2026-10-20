@@ -287,5 +287,53 @@ class DOMSourceTextTests(unittest.TestCase):
                         self.assertEqual(adapter.detail(page)["text"], BODY + visible)
 
 
+    def test_collapsed_rows_and_row_groups_cannot_restore_postings(self):
+        restored = '<section style="visibility:visible">' + markup() + '</section>'
+        wrappers = [
+            '<table><tr style="visibility:collapse"><td>{}</td></tr></table>',
+            '<table><tbody style="visibility:collapse"><tr style="visibility:visible"><td>{}</td></tr></tbody></table>',
+        ] + [f'<div style="display:{role};visibility:collapse">{{}}</div>'
+             for role in ("table-row", "table-row-group", "table-header-group", "table-footer-group")]
+        wrappers.append('<div style="visibility:collapse"><div style="display:table-row">{}</div></div>')
+        for wrapper in wrappers:
+            with self.subTest(wrapper=wrapper):
+                hidden = wrapper.format(restored)
+                with self.assertRaises(ParseError):
+                    parse_job_html(hidden)
+                self.assertEqual(parse_job_html(hidden + markup())["text"], BODY)
+        # A row explicitly changed to block layout is no longer a collapsed
+        # table track; ordinary visibility inheritance remains overrideable.
+        for style in ("display:table-row;display:block", "display:table-row;position:absolute",
+                      "display:table-row;position:fixed", "display:table-row;float:left"):
+            with self.subTest(no_track=style):
+                html = f'<div style="{style};visibility:collapse">' + restored + '</div>'
+                self.assertEqual(parse_job_html(html)["text"], BODY)
+                inherited = '<div style="display:inherit">' + restored + '</div>'
+                html = f'<div style="{style};visibility:collapse">' + inherited + '</div>'
+                self.assertEqual(parse_job_html(html)["text"], BODY)
+
+    def test_collapsed_flex_items_respect_boxes_and_out_of_flow_position(self):
+        restored = '<section style="visibility:visible">' + markup() + '</section>'
+        for display in ("flex", "inline-flex", "inline flex", "flex block"):
+            for position in ("static", "relative", "sticky"):
+                with self.subTest(display=display, position=position):
+                    html = (f'<div style="display:{display}"><div style="display:contents">'
+                            f'<article style="visibility:collapse;position:{position}">{restored}'
+                            '</article></div></div>')
+                    with self.assertRaises(ParseError):
+                        parse_job_html(html)
+                    self.assertEqual(parse_job_html(html + markup())["text"], BODY)
+        for position in ("absolute", "fixed"):
+            with self.subTest(out_of_flow=position):
+                html = (f'<div style="display:flex"><article style="visibility:collapse;position:{position}">'
+                        + restored + '</article></div>')
+                self.assertEqual(parse_job_html(html)["text"], BODY)
+        html = '<div style="display:flex"><div style="display:contents;visibility:collapse">' + restored + '</div></div>'
+        self.assertEqual(parse_job_html(html)["text"], BODY)
+        html = ('<div style="display:flex"><div style="display:table-row">'
+                '<div style="display:inherit;visibility:collapse">' + restored + '</div></div></div>')
+        self.assertEqual(parse_job_html(html)["text"], BODY)
+
+
 if __name__ == "__main__":
     unittest.main()
