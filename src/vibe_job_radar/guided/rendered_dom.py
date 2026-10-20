@@ -21,6 +21,7 @@ CAPTURE = """() => {
         // Hidden's actual CSS effect is captured below, including until-found
         // and author overrides. Only the inert observation loses the attribute.
         target.removeAttribute("hidden");
+        target.style.removeProperty("all");
         for (const name of ["display", "visibility", "position", "float"]) {
             target.style.setProperty(name, style.getPropertyValue(name), "important");
         }
@@ -30,17 +31,22 @@ CAPTURE = """() => {
     }
     const rendered = copy.outerHTML;
     if (rendered.length > 5000000) return null;
-    return {source, doctype, text, rendered};
+    return {source, doctype, text, rendered, url: location.href};
 }"""
 
 
-def capture(page, original, text):
+def capture(page, expected_url):
     value = page.evaluate(CAPTURE)
     if not isinstance(value, dict) or any(
             not isinstance(value.get(k), str) or len(value[k]) > 5_000_000
-            for k in ('source', 'doctype', 'text', 'rendered')):
+            for k in ('source', 'doctype', 'text', 'rendered', 'url')):
         raise CrawlError('invalid_page_observation')
-    # Playwright includes the doctype; the minimal CDP backend returns outerHTML.
-    if original not in (value['source'], value['doctype'] + value['source']) or text != value['text']:
+    if value['url'] != expected_url:
         raise PageSnapshotChanged()
-    return value['rendered']
+    original = value['doctype'] + value['source']
+    if len(original) > 5_000_000:
+        raise CrawlError('response_too_large')
+    # One synchronous observation supplies all three. Comparing it to an
+    # earlier body/content call rejects normal in-page updates, especially
+    # the login-return search form. Never combine bytes from different reads.
+    return original, value['text'], value['rendered']

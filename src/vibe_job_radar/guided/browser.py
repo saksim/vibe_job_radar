@@ -337,7 +337,9 @@ class PlaywrightBackend:
         if self.page.url != url:
             raise PageSnapshotChanged()
         from .rendered_dom import capture
-        rendered = capture(self.page, content, text)
+        content, text, rendered = capture(self.page, url)
+        if self.adapter.challenged(text, url):
+            raise CrawlError('manual_required')
         if self.page.url != url:
             raise PageSnapshotChanged()
         return PageSnapshot(url, content, visible_text=text, rendered_html=rendered)

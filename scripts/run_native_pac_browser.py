@@ -120,7 +120,7 @@ def main():
                                         'protocol':keyword,'dns_helpers':dns_scope,
                                         'code':refusal_code,'controller_code':backend.error,
                                         'tunnel_code':backend.tunnel.last_error,
-                                        'authenticated_challenges':len(backend._auth_attempts),
+                                        'retained_auth_attempts':len(backend._auth_attempts),
                                         'tunnel_connections':backend.tunnel.connections,
                                         'proxy_dials':len(fixture.dials)-before,
                                         'proxy_connects':len(fixture.connects)-before_connects,

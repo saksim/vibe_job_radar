@@ -91,17 +91,38 @@ class PageSurfaceTests(unittest.TestCase):
                 with self.assertRaises(CrawlError):
                     builtins().get(key).detail(page)
 
-    def test_backend_rejects_dom_change_between_original_and_computed_read(self):
+    def test_backend_uses_one_coherent_observation_after_in_page_update(self):
         from vibe_job_radar.guided.contracts import PageSnapshotChanged
         page=Mock()
         page.url=DETAIL
         page.is_closed.return_value=False
         page.locator.return_value.inner_text.return_value=BODY
         page.content.return_value=HTML
-        page.evaluate.return_value={'source':HTML+'changed', 'doctype':'',
-            'text':BODY, 'rendered':HTML}
+        updated=HTML.replace(BODY,BODY+'新增职责。')
+        page.evaluate.return_value={'source':updated, 'doctype':'',
+            'text':BODY+'新增职责。', 'rendered':updated,'url':DETAIL}
         backend=SimpleNamespace(error=None,page=page,adapter=self.adapter)
+        result=PlaywrightBackend.snapshot(backend)
+        self.assertEqual(result.html,updated)
+        self.assertEqual(result.rendered_html,updated)
+        self.assertEqual(result.visible_text,BODY+'新增职责。')
+        self.assertIn('新增职责。',self.adapter.detail(result)['text'])
+
+    def test_final_rendered_observation_cannot_hide_navigation_or_new_gate(self):
+        from vibe_job_radar.guided.contracts import PageSnapshotChanged
+        page=Mock()
+        page.url=DETAIL
+        page.is_closed.return_value=False
+        page.locator.return_value.inner_text.return_value=BODY
+        page.content.return_value=HTML
+        backend=SimpleNamespace(error=None,page=page,adapter=self.adapter)
+        page.evaluate.return_value={'source':HTML,'doctype':'','text':BODY,
+            'rendered':HTML,'url':SEARCH}
         with self.assertRaises(PageSnapshotChanged):
+            PlaywrightBackend.snapshot(backend)
+        page.evaluate.return_value={'source':HTML,'doctype':'','text':'安全验证',
+            'rendered':HTML,'url':DETAIL}
+        with self.assertRaisesRegex(CrawlError,'manual_required'):
             PlaywrightBackend.snapshot(backend)
 
     def test_rendered_dom_is_private_and_requires_rendered_text(self):
@@ -119,7 +140,7 @@ class PageSurfaceTests(unittest.TestCase):
         page.locator.return_value.inner_text.return_value = BODY
         page.content.return_value = HTML + '<div hidden>安全验证</div>'
         page.evaluate.return_value={'source':page.content.return_value,'doctype':'',
-            'text':BODY,'rendered':page.content.return_value}
+            'text':BODY,'rendered':page.content.return_value,'url':DETAIL}
         backend = SimpleNamespace(error=None, page=page, adapter=self.adapter)
         snapshot = PlaywrightBackend.snapshot(backend)
         self.assertEqual(snapshot.visible_text, BODY)
