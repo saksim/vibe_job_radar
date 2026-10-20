@@ -7,19 +7,12 @@ conservative fallback which only omits explicitly hidden markup.
 """
 from __future__ import annotations
 
-import re
-
 from ..html_parser import Document, Node
 from .contracts import CrawlError, PageSnapshot
 
-_INERT = {'script', 'style', 'template', 'noscript', 'head'}
-
 
 def _text(node: Node) -> str:
-    if node.tag in _INERT or 'hidden' in node.attrs:
-        return ''
-    style = re.sub(r'\s+', '', node.attrs.get('style', '')).lower()
-    if re.search(r'(?:^|;)(?:display:none|visibility:(?:hidden|collapse))(?:!important)?(?:;|$)', style):
+    if node.hidden():
         return ''
     text = ''.join(_text(child) if isinstance(child, Node) else child for child in node.children)
     return text + ('\n' if node.tag in {'p', 'div', 'li', 'br', 'section', 'h1', 'h2', 'h3'} else '')

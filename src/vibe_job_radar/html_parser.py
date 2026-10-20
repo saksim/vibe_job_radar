@@ -20,16 +20,29 @@ class Node:
     attrs: dict[str, str] = field(default_factory=dict)
     children: list = field(default_factory=list)
 
-    def walk(self):
+    def hidden(self) -> bool:
+        """Only explicit HTML/inline hiding; aria-hidden is not visual hiding."""
+        if self.tag in {"script", "style", "template", "noscript", "head"} or "hidden" in self.attrs:
+            return True
+        style = re.sub(r"\s+", "", self.attrs.get("style") or "").lower()
+        return bool(re.search(
+            r"(?:^|;)(?:display:none|visibility:(?:hidden|collapse))(?:!important)?(?:;|$)", style))
+
+    def walk(self, *, visible_only: bool = False):
+        if visible_only and self.hidden():
+            return
         yield self
         for child in self.children:
             if isinstance(child, Node):
-                yield from child.walk()
+                yield from child.walk(visible_only=visible_only)
 
-    def text(self, include_script: bool = False) -> str:
+    def text(self, include_script: bool = False, *, visible_only: bool = False) -> str:
+        if visible_only and self.hidden():
+            return ""
         if not include_script and self.tag in {"script", "style", "nav", "footer", "noscript"}:
             return ""
-        s = "".join(c.text(include_script) if isinstance(c, Node) else c for c in self.children)
+        s = "".join(c.text(include_script, visible_only=visible_only)
+                    if isinstance(c, Node) else c for c in self.children)
         return s + ("\n" if self.tag in {"p", "div", "li", "br", "h1", "h2", "h3", "section"} else "")
 
 
@@ -62,10 +75,13 @@ class Document(HTMLParser):
         self.stack[-1].children.append(data)
 
 
-def plain_text(markup: str) -> str:
-    text = Document(markup).root.text()
+def _normalize_text(text: str) -> str:
     text = re.sub(r"[ \t\xa0]+", " ", text)
     return re.sub(r"\n\s*\n+", "\n", text).strip()
+
+
+def plain_text(markup: str) -> str:
+    return _normalize_text(Document(markup).root.text())
 
 
 def jobpostings(value, depth=0):
@@ -196,13 +212,20 @@ def _posting_location(posting: dict) -> str:
     return result if len(result) <= 2048 else ""
 
 
-def parse_job_html(markup: str, *, source_url: str = "") -> dict:
+_CHALLENGE = re.compile(
+    r"请完成.{0,12}验证|滑动.{0,8}验证|安全验证|captcha|登录后.{0,8}(?:查看|浏览)", re.I)
+
+
+def parse_job_html(markup: str, *, source_url: str = "", visible_text: str | None = None) -> dict:
     """Return only an isolated JD, never the entire body or search recommendations."""
     if source_url and urlsplit(source_url).path in {"", "/"}:
         raise ParseError("homepage is not a job-detail URL")
-    if re.search(r"请完成.{0,12}验证|滑动.{0,8}验证|安全验证|captcha|登录后.{0,8}(?:查看|浏览)", plain_text(markup), re.I):
-        raise ParseError("login/challenge page")
+    if visible_text is not None and (not isinstance(visible_text, str) or len(visible_text) > 5_000_000):
+        raise ParseError("invalid rendered observation")
     doc = Document(markup)
+    observed = visible_text if visible_text is not None else doc.root.text(visible_only=True)
+    if _CHALLENGE.search(observed):
+        raise ParseError("login/challenge page")
     nodes = list(doc.root.walk())
     structured = []
     for node in nodes:
@@ -223,6 +246,8 @@ def parse_job_html(markup: str, *, source_url: str = "") -> dict:
         company = org.get("name", "") if isinstance(org, dict) else ""
         return {"title": title, "text": text, "company": str(company), "parser": "json_ld_jobposting",
                 "published_at": str(posting.get("datePosted") or ""), "location": _posting_location(posting)}
+    # Structured metadata above may live in <head>; DOM candidates must not.
+    nodes = list(doc.root.walk(visible_only=True))
     # Dedicated containers only. No full-body fallback, and no brittle undocumented API.
     for selector in ("job-sec-text", "job-description", "job-detail-body", "job-detail-content", "job_msg", "bmsg", "job-detail"):
         matches = [n for n in nodes if selector in (n.attrs.get("class") or "").split()]
@@ -232,9 +257,14 @@ def parse_job_html(markup: str, *, source_url: str = "") -> dict:
             title_nodes = [n for n in nodes if n.tag == "h1"]
             if len(title_nodes) != 1:
                 raise ParseError("exactly one job title h1 required for DOM extraction")
-            text = plain_text(matches[0].text())
-            if len(text) < 20:
-                raise ParseError("job-description container too short")
-            return {"title": title_nodes[0].text().strip(), "text": text,
+            # Node.text is already HTML-decoded. Parsing it again destroys
+            # literal <T>/<script> examples and decodes escaped entities twice.
+            text = _normalize_text(matches[0].text(visible_only=True))
+            title = _normalize_text(title_nodes[0].text(visible_only=True))
+            if len(text) < 20 or not title:
+                raise ParseError("incomplete job-description container/title")
+            if _CHALLENGE.search(text):
+                raise ParseError("login/challenge job-description container")
+            return {"title": title, "text": text,
                     "parser": "dom:" + selector}
     raise ParseError("no isolated JobPosting/container found; supply authorized JD text")
