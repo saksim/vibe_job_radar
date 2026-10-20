@@ -110,3 +110,38 @@ class TableVisibilityTests(unittest.TestCase):
         # Block end tags use their own scope rules, not the generic algorithm.
         html = '<div hidden><section></div>' + posting()
         self.assertEqual(parse_job_html(html)["title"], "Engineer")
+
+
+    def test_nonvoid_self_closing_keeps_hidden_scope(self):
+        for tag in ("div", "section", "article", "span", "template", "noscript",
+                    "custom-card"):
+            with self.subTest(tag=tag):
+                stale = f'<{tag} hidden/>' + posting("Stale") + f'</{tag}>'
+                self.assertEqual(parse_job_html(stale + posting())["title"], "Engineer")
+                with self.assertRaises(ParseError):
+                    parse_job_html(stale)
+        for tag in ("script", "style"):
+            with self.subTest(rawtext=tag):
+                html = (f'<div hidden><{tag}/>"</div>"</{tag}>' + posting("Stale")
+                        + '</div>' + posting())
+                self.assertEqual(parse_job_html(html)["title"], "Engineer")
+        with self.assertRaisesRegex(ParseError, "nesting too deep"):
+            Document("<div/>" * 202)
+
+    def test_void_and_foreign_self_closing_remain_empty(self):
+        for tag in ("br", "hr", "img", "input", "wbr", "meta", "link", "svg", "math"):
+            with self.subTest(tag=tag):
+                self.assertEqual(parse_job_html(f'<{tag} hidden/>' + posting())["title"],
+                                 "Engineer")
+        for outer, child, content in (("svg", "g", "text"), ("math", "mrow", "mtext")):
+            with self.subTest(outer=outer):
+                doc = Document(f'<{outer}><{child} hidden/><{content}>visible</{content}></{outer}>')
+                self.assertIn("visible", doc.root.text(visible_only=True))
+        for outer, integration in (
+                ("svg", "foreignObject"), ("svg", "desc"), ("svg", "title"),
+                ("math", 'annotation-xml encoding="text/html"'), ("math", "mtext")):
+            with self.subTest(integration=integration):
+                end = integration.split()[0]
+                html = (f'<{outer}><{integration}><div hidden/>' + posting("Stale")
+                        + '</div>' + posting() + f'</{end}></{outer}>')
+                self.assertEqual(parse_job_html(html)["title"], "Engineer")

@@ -459,7 +459,38 @@ class Document(HTMLParser):
                 raise ParseError("HTML nesting too deep")
             self.stack.append(node)
 
+    def _foreign_self_closing(self, tag):
+        # Preserve the existing empty-node handling in SVG/MathML content.
+        # HTML integration points resume HTML start-tag semantics.
+        if tag in {"svg", "math"}:
+            return True
+        for index in range(len(self.stack) - 1, 0, -1):
+            namespace = self.stack[index].tag
+            if namespace not in {"svg", "math"}:
+                continue
+            for ancestor in self.stack[index + 1:]:
+                if namespace == "svg" and ancestor.tag in {"foreignobject", "desc", "title"}:
+                    return False
+                if namespace == "math":
+                    if (ancestor.tag == "annotation-xml"
+                            and (ancestor.attrs.get("encoding") or "").lower()
+                            in {"text/html", "application/xhtml+xml"}):
+                        return False
+                    if ancestor.tag in {"mi", "mo", "mn", "ms", "mtext"}:
+                        return ancestor is self.stack[-1] and tag in {"mglyph", "malignmark"}
+            return True
+        return False
+
     def handle_startendtag(self, tag, attrs):
+        if not self._foreign_self_closing(tag):
+            # A trailing slash never closes a non-void HTML element. Reuse
+            # normal insertion, inherited visibility and the nesting bound.
+            self.handle_starttag(tag, attrs)
+            # HTMLParser normally enters raw-text mode only on its ordinary
+            # start-tag path, so an ignored slash needs the same transition.
+            if tag in self.CDATA_CONTENT_ELEMENTS:
+                self.set_cdata_mode(tag)
+            return
         self._close_optional_elements(tag)
         parent, position = self._insertion_location(tag)
         node = Node(tag, _first_attributes(attrs), parent=parent)
