@@ -144,4 +144,12 @@ class TableVisibilityTests(unittest.TestCase):
                 end = integration.split()[0]
                 html = (f'<{outer}><{integration}><div hidden/>' + posting("Stale")
                         + '</div>' + posting() + f'</{end}></{outer}>')
-                self.assertEqual(parse_job_html(html)["title"], "Engineer")
+                if outer == "svg" and integration in {"desc", "title"}:
+                    # SVG descriptive metadata is never visually rendered;
+                    # HTML integration changes tokenization, not that rule.
+                    with self.assertRaises(ParseError):
+                        parse_job_html(html)
+                    self.assertEqual(parse_job_html(html + posting("Outside"))["title"],
+                                     "Outside")
+                else:
+                    self.assertEqual(parse_job_html(html)["title"], "Engineer")

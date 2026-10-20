@@ -89,3 +89,7 @@ f84452候选完整矩阵另有Windows 3.10/3.11/3.12及macOS 3.12各8个错误�
 
 第十九条审查：非空HTML元素的自闭合斜杠按普通起始标签处理，保持隐藏祖先、正常插入位置和原200层嵌套上限；空元素保持空，SVG/MathML既有空节点行为及HTML集成点保留。script/style同时进入原始文本模式，避免脚本中的字面结束标签关闭外层容器。此为现有有界HTML导入解析修复，不宣称完整实现外部命名空间树构造。新增2项回归在0363f18上实际1失败/12错误；初次修复后相关51项通过（0.673秒）。同机制复查原始文本时，单项新增子场景复现2个错误；补齐后最终51项通过（0.582秒），源测试3431项。0363f18的11个必需工作流首次通过记录保留，不能当作本次新提交的验证；没有重跑旧CI或改动原验收断言。
 依据：https://html.spec.whatwg.org/multipage/parsing.html#parse-error-non-void-html-element-start-tag-with-trailing-solidus 。
+
+
+772554e完整矩阵首失败：三个Ubuntu作业各有1个新增用例错误（run39451712178，jobs118727955504/118727955594/118727955644），Windows三组、macOS一组及两组旧工作区兼容通过。新用例错误期待SVG title/desc内部岗位可见；Ubuntu的新版HTMLParser（日志中的Python3.11.17及其官方实现可核查）把title作为RCDATA，暴露此错误。SVG规范明确title/desc不参与视觉渲染，HTML集成点只改变子内容的解析规则，不改变这一可见性。修正新增用例为拒绝描述内容并保留SVG外正常岗位，同时补齐旧解释器中描述元素子树不可见的生产逻辑，不改原始属性或HTML证据。该项在旧实现上出现2个实际失败；最终相关51项通过（0.472秒），源测试仍3431。三份原CI失败日志保留，没有跳过测试、撤销既有断言、扩大时限或重跑旧CI。
+依据：https://www.w3.org/TR/SVG2/struct.html#DescriptionAndTitleElements 与 https://raw.githubusercontent.com/python/cpython/v3.11.17/Lib/html/parser.py 。

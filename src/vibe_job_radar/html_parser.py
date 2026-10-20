@@ -447,9 +447,15 @@ class Document(HTMLParser):
             self.stack.append(row)
 
     def handle_starttag(self, tag, attrs):
+        namespace = self._foreign_namespace(tag)
         self._close_optional_elements(tag)
         parent, position = self._insertion_location(tag)
         node = Node(tag, _first_attributes(attrs), parent=parent)
+        # SVG descriptive metadata is never rendered, even when its children
+        # are parsed in the HTML namespace or an author supplies display.
+        if namespace == "svg" and tag in {"desc", "title"}:
+            node._display = "none"
+            node._subtree_hidden = True
         if position is None:
             parent.children.append(node)
         else:
@@ -459,30 +465,31 @@ class Document(HTMLParser):
                 raise ParseError("HTML nesting too deep")
             self.stack.append(node)
 
-    def _foreign_self_closing(self, tag):
-        # Preserve the existing empty-node handling in SVG/MathML content.
+    def _foreign_namespace(self, tag):
+        # Identify the bounded SVG/MathML scope used by empty-node handling.
         # HTML integration points resume HTML start-tag semantics.
         if tag in {"svg", "math"}:
-            return True
+            return tag
         for index in range(len(self.stack) - 1, 0, -1):
             namespace = self.stack[index].tag
             if namespace not in {"svg", "math"}:
                 continue
             for ancestor in self.stack[index + 1:]:
                 if namespace == "svg" and ancestor.tag in {"foreignobject", "desc", "title"}:
-                    return False
+                    return ""
                 if namespace == "math":
                     if (ancestor.tag == "annotation-xml"
                             and (ancestor.attrs.get("encoding") or "").lower()
                             in {"text/html", "application/xhtml+xml"}):
-                        return False
+                        return ""
                     if ancestor.tag in {"mi", "mo", "mn", "ms", "mtext"}:
-                        return ancestor is self.stack[-1] and tag in {"mglyph", "malignmark"}
-            return True
-        return False
+                        return namespace if (ancestor is self.stack[-1]
+                                             and tag in {"mglyph", "malignmark"}) else ""
+            return namespace
+        return ""
 
     def handle_startendtag(self, tag, attrs):
-        if not self._foreign_self_closing(tag):
+        if not self._foreign_namespace(tag):
             # A trailing slash never closes a non-void HTML element. Reuse
             # normal insertion, inherited visibility and the nesting bound.
             self.handle_starttag(tag, attrs)
