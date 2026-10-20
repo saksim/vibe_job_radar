@@ -57,6 +57,7 @@ _HTML_TABLE_DISPLAY = {**_HTML_ROW_DISPLAY, "table": "table", "col": "table-colu
                        "colgroup": "table-column-group", "td": "table-cell",
                        "th": "table-cell", "caption": "table-caption"}
 _INLINE_KEYWORDS = {
+    "content-visibility": {"visible", "hidden", "auto"},
     "visibility": {"visible", "hidden", "collapse"},
     "position": {"static", "relative", "absolute", "fixed", "sticky"},
     "float": {"none", "left", "right", "inline-start", "inline-end"},
@@ -142,7 +143,7 @@ def _inline_values(style: str) -> dict[str, str]:
         if not separator or len(names) != 1 or not tokens:
             continue
         name = names[0]
-        if name not in {"display", "visibility", "position", "float", "all"}:
+        if name not in {"display", "visibility", "position", "float", "content-visibility", "all"}:
             continue
         important = tokens[-2:] == ["!", "important"]
         value = " ".join(tokens[:-2] if important else tokens)
@@ -150,7 +151,7 @@ def _inline_values(style: str) -> dict[str, str]:
                  value in _CSS_WIDE | _INLINE_KEYWORDS.get(name, set()))
         if not valid:
             continue
-        for key in (("display", "visibility", "position", "float") if name == "all" else (name,)):
+        for key in (("display", "visibility", "position", "float", "content-visibility") if name == "all" else (name,)):
             if key not in values or important >= values[key][1]:
                 values[key] = value, important
     return {key: value for key, (value, _) in values.items()}
@@ -168,6 +169,8 @@ class Node:
     _position: str = field(init=False, repr=False, compare=False)
     _float: str = field(init=False, repr=False, compare=False)
     _box_parent_display: str = field(init=False, repr=False, compare=False)
+    _content_visibility: str = field(init=False, repr=False, compare=False)
+    _details_summary_seen: bool = field(default=False, init=False, repr=False, compare=False)
 
     def __post_init__(self, parent):
         # Document builds immutable snapshots, parent before child. Compute
@@ -175,10 +178,16 @@ class Node:
         # on every traversal. A child's declaration overrides inherited values
         # even when the parent's declaration was !important.
         values = _inline_values(self.attrs.get("style") or "")
+        closed_details_child = False
+        if parent is not None and parent.tag == "details" and "open" not in parent.attrs:
+            if self.tag == "summary" and not parent._details_summary_seen:
+                parent._details_summary_seen = True
+            else:
+                closed_details_child = True
         def noninherited(name, initial, default):
             value = values.get(name)
             if value == "inherit":
-                return getattr(parent, "_" + name, initial)
+                return getattr(parent, "_" + name.replace("-", "_"), initial)
             if value in {"initial", "unset"}:
                 return initial
             return default if value in {None, "revert", "revert-layer"} else value
@@ -188,6 +197,7 @@ class Node:
         # a distinct Chromium layout mode; do not pretend it is modern flex.
         self._display = {"-webkit-flex": "flex", "-webkit-inline-flex": "inline-flex"}.get(
             self._display, self._display)
+        self._content_visibility = noninherited("content-visibility", "visible", "visible")
         self._position = noninherited("position", "static", "static")
         self._float = noninherited("float", "none", "none")
         visibility = values.get("visibility")
@@ -219,7 +229,8 @@ class Node:
         self._subtree_hidden = bool(
             (parent is not None and parent.blocks_subtree())
             or self.tag in {"script", "style", "template", "noscript", "head"}
-            or hidden_attribute or self._display == "none" or collapsed_box)
+            or hidden_attribute or self._display == "none" or collapsed_box
+            or self._content_visibility == "hidden" or closed_details_child)
 
     def blocks_subtree(self) -> bool:
         return self._subtree_hidden
@@ -243,7 +254,8 @@ class Node:
             return ""
         if not include_script and self.tag in {"script", "style", "nav", "footer", "noscript"}:
             return ""
-        own_visible = not visible_only or not self.hidden()
+        own_visible = not visible_only or (not self.hidden()
+                       and not (self.tag == "details" and "open" not in self.attrs))
         s = "".join(c.text(include_script, visible_only=visible_only)
                     if isinstance(c, Node) else (c if own_visible else "") for c in self.children)
         return s + ("\n" if (s or own_visible) and self.tag in {"p", "div", "li", "br", "h1", "h2", "h3", "section"} else "")
@@ -259,7 +271,7 @@ _P_END_BLOCKS = {
 }
 _TABLE_PARTS = {"caption", "colgroup", "thead", "tbody", "tfoot", "tr"}
 _VOID_TAGS = {"br", "hr", "meta", "link", "img", "input", "area", "base", "col",
-              "embed", "source", "track", "wbr", "param"}
+              "embed", "source", "track", "wbr", "param", "basefont", "bgsound", "keygen", "frame"}
 
 
 
@@ -433,6 +445,9 @@ class Document(HTMLParser):
 
     def _close_optional_elements(self, tag):
         self._close_optional_head(tag)
+        if tag == "a" and not self._foreign_namespace(tag):
+            self._close_open({"a"}, {"table", "td", "th", "caption",
+                                    "applet", "marquee", "object", "select"})
         if tag == "button":
             self._close_open({"button"}, {"table", "td", "th", "caption",
                                          "applet", "marquee", "object", "select"})
@@ -473,14 +488,18 @@ class Document(HTMLParser):
 
     def handle_starttag(self, tag, attrs):
         namespace = self._foreign_namespace(tag)
+        if tag == "image" and not namespace:
+            tag = "img"
         self._close_optional_elements(tag)
         table_form = tag == "form" and self.stack[-1].tag in {
             "table", "tbody", "thead", "tfoot", "tr"}
         parent, position = self._insertion_location(tag)
         node = Node(tag, _first_attributes(attrs), parent=parent)
-        # SVG descriptive metadata is never rendered, even when its children
+        # SVG source definitions are never directly rendered, even when children
         # are parsed in the HTML namespace or an author supplies display.
-        if namespace == "svg" and tag in {"desc", "title"}:
+        if namespace == "svg" and tag in {
+                "clippath", "defs", "desc", "lineargradient", "marker", "mask", "metadata",
+                "pattern", "radialgradient", "script", "style", "symbol", "title"}:
             node._display = "none"
             node._subtree_hidden = True
         self._insert(parent, node, position)
