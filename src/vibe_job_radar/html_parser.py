@@ -407,7 +407,7 @@ class Document(HTMLParser):
             self._close_open({"option"}, {"select", "datalist", "optgroup"})
             if tag in {"optgroup", "hr"}:
                 self._close_open({"optgroup"}, {"select", "datalist"})
-        if tag in _TABLE_PARTS:
+        if tag in _TABLE_PARTS | {"td", "th"}:
             self._close_open({"colgroup", "caption"}, {"table"})
         if tag in {"thead", "tbody", "tfoot"}:
             self._close_open({"thead", "tbody", "tfoot"}, {"table"})
@@ -416,11 +416,16 @@ class Document(HTMLParser):
         elif tag in {"td", "th"}:
             self._close_open({"td", "th"}, {"tr", "table"})
         # These omitted start tags also participate in inherited visibility.
-        if self.stack[-1].tag == "table" and tag in {"tr", "col"}:
+        if self.stack[-1].tag == "table" and tag in {"tr", "col", "td", "th"}:
             parent = self.stack[-1]
-            group = Node("tbody" if tag == "tr" else "colgroup", parent=parent)
+            group = Node("colgroup" if tag == "col" else "tbody", parent=parent)
             parent.children.append(group)
             self.stack.append(group)
+        if tag in {"td", "th"} and self.stack[-1].tag in {"tbody", "thead", "tfoot"}:
+            parent = self.stack[-1]
+            row = Node("tr", parent=parent)
+            parent.children.append(row)
+            self.stack.append(row)
 
     def handle_starttag(self, tag, attrs):
         self._close_optional_elements(tag)
@@ -445,9 +450,27 @@ class Document(HTMLParser):
             parent.children.insert(position, node)
 
     def handle_endtag(self, tag):
+        # A tokenizer's matching end tag is not enough: an outer element cannot
+        # be closed through a template, table cell, or another scope boundary.
+        if tag in {"body", "html"}:
+            # Subsequent body tokens still belong to the existing body/html.
+            return
+        barriers = {"template", "noscript", "html", "table", "td", "th", "caption",
+                    "applet", "marquee", "object", "select"}
+        if tag in {"template", "noscript"}:
+            barriers = {"template", "noscript", "html"}
+        elif tag in _TABLE_PARTS | {"td", "th", "table"}:
+            barriers = {"template", "noscript", "html", "table"}
+        elif tag == "p":
+            barriers |= {"button"}
+        elif tag == "li":
+            barriers |= {"ol", "ul"}
         for i in range(len(self.stack) - 1, 0, -1):
-            if self.stack[i].tag == tag:
+            current = self.stack[i].tag
+            if current == tag:
                 del self.stack[i:]
+                break
+            if current in barriers:
                 break
 
     def handle_data(self, data):

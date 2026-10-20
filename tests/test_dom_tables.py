@@ -64,3 +64,37 @@ class TableVisibilityTests(unittest.TestCase):
         html = '<table hidden><div class="job-description"><span>' + BODY + '</span></div>' + \
                '<h1>Engineer</h1></table>'
         self.assertEqual(parse_job_html(html)["text"], BODY)
+
+    def test_implicit_rows_cover_direct_cells_and_row_groups(self):
+        for opening in ("", "<tbody>", "<thead>", "<tfoot>", "<colgroup></colgroup>"):
+            for cell in ("td", "th"):
+                with self.subTest(opening=opening, cell=cell):
+                    html = '<table><col style="visibility:collapse"><col>' + opening
+                    html += f'<{cell}>' + posting("Stale") + f'</{cell}><{cell}>' + posting() + '</table>'
+                    self.assertEqual(parse_job_html(html)["title"], "Engineer")
+
+    def test_explicit_end_tags_stay_in_template_and_table_scope(self):
+        for inert in ("template", "noscript"):
+            with self.subTest(inert=inert):
+                html = f'<div hidden><{inert}></div></{inert}>' + posting() + '</div>'
+                with self.assertRaises(ParseError):
+                    parse_job_html(html)
+        for start, end in (("<table><tr><td>", "</td></tr></table>"),
+                           ("<ol><li>", "</li></ol>")):
+            outer = "li" if "<ol>" in start else "div"
+            html = f'<{outer} hidden>' + start + f'</{outer}>' + end + posting() + f'</{outer}>'
+            with self.subTest(start=start):
+                with self.assertRaises(ParseError):
+                    parse_job_html(html)
+        html = '<div hidden><template><div></div></template></div>' + posting()
+        self.assertEqual(parse_job_html(html)["title"], "Engineer")
+
+        # A heading would validly close p; inspect inline content before that.
+        paragraph = Document('<p hidden><button></p></button><span>probe</span></p>')
+        self.assertNotIn("probe", paragraph.root.text(visible_only=True))
+        for inert in ("template", "noscript"):
+            html = f'<{inert}><table><tr><td>inert</{inert}>' + posting()
+            self.assertEqual(parse_job_html(html)["title"], "Engineer")
+        for tag in ("body", "html"):
+            with self.assertRaises(ParseError):
+                parse_job_html(f'<{tag} hidden></{tag}>' + posting())

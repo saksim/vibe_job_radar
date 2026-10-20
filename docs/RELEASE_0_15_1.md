@@ -72,3 +72,6 @@ f84452候选完整矩阵另有Windows 3.10/3.11/3.12及macOS 3.12各8个错误�
 第十三、十四条审查补齐表格语义：折叠col/colgroup通过列区间作用于单元格，处理span、colspan、rowspan（含0）、行组和嵌套表格；部分跨越仍可见的单元格保留。原始HTML中非表格内容按foster parenting插入表格前，使用实际父容器的可见性，正常单元格、模板和隐藏父容器仍保持边界。依据CSS Tables列折叠和HTML插入位置规则，不改变浏览器页面。4项负对照4个失败/12个子场景错误；第一次57项回归中3个子场景因新跨度正则转义笔误失败，修正后57项全部通过（1.578秒）。保留两轮失败日志，最终源测试3422项。
 
 规范：https://www.w3.org/TR/CSS22/tables.html#dynamic-effects 与 https://html.spec.whatwg.org/multipage/parsing.html#foster-parent。
+
+
+第十五、十六条审查：table/行组下直接出现td/th时补齐隐式tbody/tr，再计算可见性与列折叠；显式结束标签遵守template/noscript、表格单元格、列表和button等作用域，不能关闭范围外的隐藏祖先。template自身的结束标签仍可结束其未闭合表格内容，body/html后的内容保持原祖先。2项初始负对照5失败/10错误；首次59项回归的1个失败来自新增测试错误期待h1不结束p，修正为标题出现前的内联探针，没有削弱已有断言。最终59项通过（0.830秒），源测试3424项。
