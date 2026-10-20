@@ -336,7 +336,13 @@ class PlaywrightBackend:
             raise CrawlError('response_too_large')
         if self.page.url != url:
             raise PageSnapshotChanged()
-        return PageSnapshot(url, content, visible_text=text)
+        from .rendered_dom import capture
+        content, text, rendered = capture(self.page, url)
+        if self.adapter.challenged(text, url):
+            raise CrawlError('manual_required')
+        if self.page.url != url:
+            raise PageSnapshotChanged()
+        return PageSnapshot(url, content, visible_text=text, rendered_html=rendered)
 
     def _visible(self, selectors, scope=None):
         for selector in selectors:

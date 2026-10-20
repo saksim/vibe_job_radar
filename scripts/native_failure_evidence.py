@@ -10,6 +10,7 @@ from vibe_job_radar.guided.native_errors import native_failure_code
 from vibe_job_radar.guided.native_policy import liepin_bootstrap
 from native_proxy_evidence import CODES
 from native_guard_evidence import guard_transport_facts
+from native_handshake_evidence import handshake_facts
 
 NET_ERRORS = frozenset({
     'ERR_FAILED', 'ERR_ABORTED', 'ERR_EMPTY_RESPONSE', 'ERR_CONNECTION_CLOSED',
@@ -75,6 +76,7 @@ def facts(backend):
     counts = getattr(backend, 'native_counts', {})
     return {
         'guard_present': guard is not None,
+        'handshake_trace': handshake_facts(backend),
         'guard_transport': guard_transport_facts(backend),
         'guard_thread_alive': bool(worker and worker.is_alive()),
         'guard_closed': bool(getattr(guard, '_closed', False)),

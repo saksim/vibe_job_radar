@@ -15,7 +15,7 @@ from ..url_safety import credential_query_key
 from ..utils import domain_matches, canonical_url
 from .contracts import Card, CrawlError, PageSnapshot, SiteAdapter
 from .selectors import select_nodes
-from .page_surface import surface_text
+from .page_surface import surface_text, parsing_html
 
 
 @dataclass(frozen=True)
@@ -134,13 +134,14 @@ class DOMAdapter:
 
     def detail(self, page: PageSnapshot) -> dict:
         self.accept_url(page.url, detail=True)
-        if self.challenged(surface_text(page), page.url):
+        observed = surface_text(page)
+        if self.challenged(observed, page.url):
             raise CrawlError('manual_required')
         try:
             markup = re.sub(r'<script\b[^>]*>.*?</script\s*>',
                 lambda m: m.group(0) if 'application/ld+json' in m.group(0).split('>', 1)[0].lower() else '',
-                page.html, flags=re.I | re.S)
-            parsed = parse_job_html(markup, source_url=page.url)
+                parsing_html(page), flags=re.I | re.S)
+            parsed = parse_job_html(markup, source_url=page.url, visible_text=observed)
             if self.key in {'boss', '51job'}:
                 self.validate_detail_identity(page.url, page)
                 from .detail_completeness import require_expanded
