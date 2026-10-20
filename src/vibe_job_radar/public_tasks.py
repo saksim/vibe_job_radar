@@ -308,9 +308,10 @@ class PublicTasks:
                 else:
                     query=PublicQuery.from_dict(value)
                     self._check_cancelled()
-                    # Resumed queries select their current workspace policy lazily;
-                    # only the new PAC source needs its owned download tied to stop.
-                    if network_policy is None:
+                    # Only direct-source tasks own this policy argument and PAC
+                    # cancellation binding. Remote clients use their authenticated
+                    # connection's policy and check stop again before committing.
+                    if network_policy is None and self.mode()=='local_direct':
                         candidate = self.workspace.network_policy()
                         if getattr(candidate.pac, 'bind_cancellation', None) is not None:
                             network_policy = candidate

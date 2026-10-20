@@ -20,6 +20,7 @@ from .network import SafeHTTP, FetchError
 from .network_policy import current_policy
 from .public_contract import PublicSource, checked_registry, ContractError
 from .public_data import PublicDataClient
+from .public_cache_guard import TRANSIENT_FETCH_ERRORS
 from .team_store import TeamError, strict_json, ident, TOKEN, safe_path, service_host
 from .utils import atomic_json
 from .workspace import InputError
@@ -252,7 +253,7 @@ class TeamConnection:
             # No offline quota allowance, automatic retry, redirect, token echo,
             # credential forwarding to publishers or fallback to another origin.
             code='team_unauthorized' if error.code=='http_401' else 'team_forbidden' if error.code=='http_403' else 'team_unavailable'
-            raise CrawlError(code) from None
+            raise _TeamTransportError(code, error.code) from None
         if not isinstance(value,dict) or value.get('schema_version')!=1 or token in json.dumps(value,ensure_ascii=False):
             raise CrawlError('team_response_invalid')
         return value
@@ -313,6 +314,13 @@ def workspace_ledger(workspace_root,path,limits=None,*,clock=time.time,local_fac
     return TeamLedger(path,connection,limits,clock=clock)
 
 
+class _TeamTransportError(CrawlError):
+    """Keep the existing team error contract plus a safe cache-only classification."""
+    def __init__(self, code, fetch_code):
+        super().__init__(code)
+        self.transient_fetch_code = fetch_code if fetch_code in TRANSIENT_FETCH_ERRORS else None
+
+
 class AuthenticatedPublicTransport:
     def __init__(self,connection):self.connection=connection
     def json(self,url,*,method='GET',payload=None):
@@ -321,6 +329,8 @@ class AuthenticatedPublicTransport:
         except RateLimit as error:raise FetchError('http_429',retry_after=error.wait) from None
         except (CrawlError,TeamError) as error:
             code={'team_unauthorized':'http_401','team_forbidden':'http_403'}.get(error.code,'team_unavailable')
+            if isinstance(error, _TeamTransportError) and error.transient_fetch_code:
+                code = error.transient_fetch_code
             raise FetchError(code) from None
 
 

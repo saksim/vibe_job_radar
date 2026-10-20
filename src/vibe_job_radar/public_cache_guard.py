@@ -16,6 +16,17 @@ from .utils import atomic_json
 from .workspace import InputError
 
 
+# Only these fixed transport failures may reuse an otherwise valid old snapshot.
+# This does not grant offline permissions/quota, clear a previous hard failure,
+# retry a request or change its route. Auth, protocol, TLS and unknown errors stay hard.
+TRANSIENT_FETCH_ERRORS = frozenset({
+    'dns_error', 'network_error', 'http_429', 'http_500', 'http_502', 'http_503', 'http_504',
+    'local_proxy_connection_failed', 'local_socks_connection_failed', 'local_socks_timeout',
+    'vm_proxy_connection_failed', 'vm_proxy_timeout', 'encrypted_dns_unavailable',
+    'encrypted_dns_timeout', 'encrypted_dns_cooldown', 'encrypted_dns_budget',
+})
+
+
 class CacheFailureGuard:
     def __init__(self, root: Path, scope: str):
         digest = hashlib.sha256(scope.encode('utf-8')).hexdigest()
