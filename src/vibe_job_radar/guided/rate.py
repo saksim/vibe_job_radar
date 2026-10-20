@@ -144,6 +144,12 @@ class RateLedger:
                     and math.isfinite(current[0]) and current[0] >= delay
                     and (requests is None or current[1])):
                 return
+            if current is None and delay == 0 and requests is None:
+                # Absence already means no extra publisher limit. Keep the
+                # storage read above, but do not create a zero-only row or take
+                # a writer lock. Future reservations still read any stricter
+                # policy committed concurrently; this is never authorization.
+                return
             # A stricter/missing rule retains the atomic merge. The UPSERT and
             # unique key recheck under the writer lock if a peer got here first.
             conn.execute('BEGIN IMMEDIATE')
