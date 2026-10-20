@@ -249,6 +249,8 @@ class Node:
         return s + ("\n" if (s or own_visible) and self.tag in {"p", "div", "li", "br", "h1", "h2", "h3", "section"} else "")
 
 
+_HEADINGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
+
 _P_END_BLOCKS = {
     "address", "article", "aside", "blockquote", "details", "dialog", "div", "dl",
     "fieldset", "figcaption", "figure", "footer", "form", "h1", "h2", "h3", "h4",
@@ -292,8 +294,12 @@ class Document(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.root = Node("root")
         self.stack = [self.root]
+        self._table_locations = {}
         self.feed(markup)
         self.close()
+        open_nodes = {id(node) for node in self.stack}
+        self._table_locations = {key: value for key, value in self._table_locations.items()
+                                 if key in open_nodes}
         self._collapse_columns()
 
     @staticmethod
@@ -369,12 +375,27 @@ class Document(HTMLParser):
                             occupied.append((cursor, end, until))
                         cursor = end
 
+    def _insert(self, parent, item, position):
+        if position is None:
+            position = len(parent.children)
+            parent.children.append(item)
+        else:
+            parent.children.insert(position, item)
+            # Only open tables can be used again; stack depth is bounded.
+            # Closed table entries need no index maintenance.
+            for node in self.stack:
+                location = self._table_locations.get(id(node))
+                if location and location[0] is parent and location[1] >= position:
+                    location[1] += 1
+        if isinstance(item, Node) and item.tag == "table":
+            self._table_locations[id(item)] = [parent, position]
+
     def _insertion_location(self, tag="", *, whitespace=False):
         current = self.stack[-1]
         if current.tag == "colgroup" and not whitespace and tag not in {"col", "template", "script"}:
             self.stack.pop()
             current = self.stack[-1]
-        structural = _TABLE_PARTS | {"table", "td", "th", "col", "script", "style", "template"}
+        structural = _TABLE_PARTS | {"table", "td", "th", "col", "script", "style", "template", "form"}
         if (current.tag not in {"table", "tbody", "thead", "tfoot", "tr"}
                 or whitespace or tag in structural):
             return current, None
@@ -385,10 +406,9 @@ class Document(HTMLParser):
             if table.tag in {"template", "noscript"}:
                 return current, None
             if table.tag == "table":
-                for parent in reversed(self.stack[:index]):
-                    for position, child in enumerate(parent.children):
-                        if child is table:
-                            return parent, position
+                location = self._table_locations.get(id(table))
+                if location is not None:
+                    return location[0], location[1]
                 return self.stack[index - 1], None
         return current, None
 
@@ -413,9 +433,14 @@ class Document(HTMLParser):
 
     def _close_optional_elements(self, tag):
         self._close_optional_head(tag)
+        if tag == "button":
+            self._close_open({"button"}, {"table", "td", "th", "caption",
+                                         "applet", "marquee", "object", "select"})
         if tag in _P_END_BLOCKS:
             self._close_open({"p"}, {"button", "table", "td", "th", "caption",
                                     "applet", "marquee", "object"})
+        if tag in _HEADINGS and self.stack[-1].tag in _HEADINGS:
+            self.stack.pop()
         if tag == "li":
             self._close_open({"li"}, {"ul", "ol", "menu", "table", "td", "th"})
         elif tag in {"dt", "dd"}:
@@ -449,6 +474,8 @@ class Document(HTMLParser):
     def handle_starttag(self, tag, attrs):
         namespace = self._foreign_namespace(tag)
         self._close_optional_elements(tag)
+        table_form = tag == "form" and self.stack[-1].tag in {
+            "table", "tbody", "thead", "tfoot", "tr"}
         parent, position = self._insertion_location(tag)
         node = Node(tag, _first_attributes(attrs), parent=parent)
         # SVG descriptive metadata is never rendered, even when its children
@@ -456,11 +483,8 @@ class Document(HTMLParser):
         if namespace == "svg" and tag in {"desc", "title"}:
             node._display = "none"
             node._subtree_hidden = True
-        if position is None:
-            parent.children.append(node)
-        else:
-            parent.children.insert(position, node)
-        if tag not in _VOID_TAGS:
+        self._insert(parent, node, position)
+        if tag not in _VOID_TAGS and not table_form:
             if len(self.stack) > 200:
                 raise ParseError("HTML nesting too deep")
             self.stack.append(node)
@@ -501,10 +525,7 @@ class Document(HTMLParser):
         self._close_optional_elements(tag)
         parent, position = self._insertion_location(tag)
         node = Node(tag, _first_attributes(attrs), parent=parent)
-        if position is None:
-            parent.children.append(node)
-        else:
-            parent.children.insert(position, node)
+        self._insert(parent, node, position)
 
     def handle_endtag(self, tag):
         # A tokenizer's matching end tag is not enough: an outer element cannot
@@ -524,6 +545,9 @@ class Document(HTMLParser):
             barriers |= {"ol", "ul"}
         elif tag not in _SPECIFIC_END_TAGS:
             barriers |= _SPECIAL_TAGS
+        if tag in _HEADINGS:
+            self._close_open(_HEADINGS, barriers)
+            return
         for i in range(len(self.stack) - 1, 0, -1):
             current = self.stack[i].tag
             if current == tag:
@@ -536,10 +560,7 @@ class Document(HTMLParser):
         if self.stack[-1].tag == "head" and data.strip():
             self.stack.pop()
         parent, position = self._insertion_location(whitespace=not data.strip())
-        if position is None:
-            parent.children.append(data)
-        else:
-            parent.children.insert(position, data)
+        self._insert(parent, data, position)
 
 
 def _normalize_text(text: str) -> str:

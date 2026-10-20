@@ -153,3 +153,58 @@ class TableVisibilityTests(unittest.TestCase):
                                      "Outside")
                 else:
                     self.assertEqual(parse_job_html(html)["title"], "Engineer")
+
+
+    def test_table_form_does_not_remain_open(self):
+        for group in ("", "<tbody>", "<tbody><tr>"):
+            with self.subTest(group=group):
+                html = "<table>" + group + '<form hidden>' + posting()
+                self.assertEqual(parse_job_html(html)["title"], "Engineer")
+                doc = Document("<table>" + group + '<form hidden><br>')
+                form = next(n for n in doc.root.walk() if n.tag == "form")
+                self.assertEqual(form.children, [])
+        with self.assertRaises(ParseError):
+            parse_job_html("<form hidden>" + posting() + "</form>")
+
+    def test_nested_button_closes_only_an_in_scope_button(self):
+        for middle in ("", "<span>", "<div>"):
+            with self.subTest(middle=middle), self.assertRaises(ParseError):
+                parse_job_html(posting() + "<button hidden>old" + middle
+                               + "<button>登录后查看</button>")
+        html = (posting() + "<button hidden><table><tr><td>"
+                "<button>登录后查看</button></td></tr></table></button>")
+        self.assertEqual(parse_job_html(html)["title"], "Engineer")
+
+    def test_heading_tokens_share_their_scope_rules(self):
+        for opening, ending in (("h1", "h2"), ("h3", "h6"), ("h6", "h1")):
+            with self.subTest(ending=ending), self.assertRaises(ParseError):
+                parse_job_html(posting() + f"<{opening} hidden>old</{ending}>登录后查看")
+        for paragraph in ("", "<p>"):
+            with self.subTest(paragraph=paragraph), self.assertRaises(ParseError):
+                parse_job_html(posting() + "<h2 hidden>old" + paragraph
+                               + "<h3>登录后查看</h3>")
+        for hidden in ("<div hidden></h2>", "<h2 hidden><span><h3>"):
+            with self.subTest(hidden=hidden):
+                self.assertEqual(parse_job_html(posting() + hidden + "登录后查看")["title"],
+                                 "Engineer")
+
+    def test_foster_parent_work_does_not_rescan_growing_siblings(self):
+        class CountedChildren(list):
+            visits = 0
+            def __iter__(self):
+                for item in super().__iter__():
+                    self.visits += 1
+                    yield item
+        doc = Document("")
+        doc.root.children = CountedChildren()
+        count = 1000
+        doc.feed("<table>" + "<br>" * count + "</table>")
+        doc.close()
+        self.assertLessEqual(doc.root.children.visits, count * 4)
+        self.assertEqual([n.tag for n in doc.root.children], ["br"] * count + ["table"])
+
+        chunked = Document("<table>")
+        chunked.feed("before<br></table>")
+        chunked.close()
+        self.assertEqual([n.tag if not isinstance(n, str) else "#text"
+                          for n in chunked.root.children], ["#text", "br", "table"])
