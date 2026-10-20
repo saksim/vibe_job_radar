@@ -335,5 +335,46 @@ class DOMSourceTextTests(unittest.TestCase):
         self.assertEqual(parse_job_html(html)["text"], BODY)
 
 
+    def test_implicit_paragraph_end_does_not_hide_following_job(self):
+        for block in ("div", "section", "article", "main", "dl", "table"):
+            with self.subTest(block=block):
+                body = ('<tr><td>' + markup() + '</td></tr>') if block == "table" else markup()
+                if block == "dl":
+                    body = '<dt>职位</dt><dd>' + markup() + '</dd>'
+                html = f'<p style="display:none">登录后查看<{block}>{body}</{block}>'
+                self.assertEqual(parse_job_html(html)["text"], BODY)
+        self.assertEqual(parse_job_html('<p hidden>安全验证' + markup())["text"], BODY)
+        # A block inside a template must not pop an outer paragraph and escape
+        # its inert template ancestry.
+        hidden = '<p hidden><template>' + markup() + '</template></p>'
+        self.assertEqual(parse_job_html(hidden + markup())["text"], BODY)
+
+    def test_implicit_list_item_ends_respect_nested_list_and_template_scope(self):
+        stale = markup("旧岗位不应混入正文" * 8)
+        wrappers = (
+            '<ul><li hidden>' + stale + '<li>{}</ul>',
+            '<dl><dt hidden>旧标签<dd>{}</dl>',
+            '<dl><dt>职位<dd hidden>' + stale + '<dd>{}</dl>',
+            '<ul><li hidden><ul><li>' + stale + '</ul></li><li>{}</ul>',
+            '<ul><li hidden><template><li>' + stale + '</li></template></li><li>{}</ul>',
+        )
+        for wrapper in wrappers:
+            with self.subTest(wrapper=wrapper):
+                self.assertEqual(parse_job_html(wrapper.format(markup()))["text"], BODY)
+
+    def test_implicit_table_ends_preserve_visible_cells_and_nested_table_scope(self):
+        stale = markup("旧岗位不应混入正文" * 8)
+        wrappers = (
+            '<table><tbody hidden><tr><td>' + stale + '<tbody><tr><td>{}</table>',
+            '<table><tr hidden><td>' + stale + '<tr><td>{}</table>',
+            '<table><tr><td hidden>' + stale + '<td>{}</table>',
+            '<table><colgroup hidden><col><tbody><tr><td>{}</table>',
+            '<table><tr><td hidden><table><tr><td>' + stale + '</table></td><td>{}</table>',
+        )
+        for wrapper in wrappers:
+            with self.subTest(wrapper=wrapper):
+                self.assertEqual(parse_job_html(wrapper.format(markup()))["text"], BODY)
+
+
 if __name__ == "__main__":
     unittest.main()

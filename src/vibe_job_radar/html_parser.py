@@ -189,6 +189,17 @@ class Node:
         return s + ("\n" if (s or own_visible) and self.tag in {"p", "div", "li", "br", "h1", "h2", "h3", "section"} else "")
 
 
+_P_END_BLOCKS = {
+    "address", "article", "aside", "blockquote", "details", "dialog", "div", "dl",
+    "fieldset", "figcaption", "figure", "footer", "form", "h1", "h2", "h3", "h4",
+    "h5", "h6", "header", "hgroup", "hr", "main", "menu", "nav", "ol", "p",
+    "pre", "search", "section", "table", "ul",
+}
+_TABLE_PARTS = {"caption", "colgroup", "thead", "tbody", "tfoot", "tr"}
+_VOID_TAGS = {"br", "hr", "meta", "link", "img", "input", "area", "base", "col",
+              "embed", "source", "track", "wbr", "param"}
+
+
 class Document(HTMLParser):
     def __init__(self, markup: str):
         super().__init__(convert_charrefs=True)
@@ -205,17 +216,58 @@ class Document(HTMLParser):
         if self.stack[-1].tag == "head" and tag not in head_content:
             self.stack.pop()
 
-    def handle_starttag(self, tag, attrs):
+    def _close_open(self, tags, boundaries):
+        # Never close an outer element across a template or a nested structural
+        # container. Its descendants must keep the correct visibility ancestry.
+        for index in range(len(self.stack) - 1, 0, -1):
+            current = self.stack[index].tag
+            if current in tags:
+                del self.stack[index:]
+                return
+            if current in boundaries or current in {"template", "noscript", "html"}:
+                return
+
+    def _close_optional_elements(self, tag):
         self._close_optional_head(tag)
+        if tag in _P_END_BLOCKS:
+            self._close_open({"p"}, {"button", "table", "td", "th", "caption",
+                                    "applet", "marquee", "object"})
+        if tag == "li":
+            self._close_open({"li"}, {"ul", "ol", "menu", "table", "td", "th"})
+        elif tag in {"dt", "dd"}:
+            self._close_open({"dt", "dd"}, {"dl", "table", "td", "th"})
+        elif tag in {"rt", "rp"}:
+            self._close_open({"rt", "rp"}, {"ruby"})
+        if tag in {"option", "optgroup", "hr"}:
+            self._close_open({"option"}, {"select", "datalist", "optgroup"})
+            if tag in {"optgroup", "hr"}:
+                self._close_open({"optgroup"}, {"select", "datalist"})
+        if tag in _TABLE_PARTS:
+            self._close_open({"colgroup", "caption"}, {"table"})
+        if tag in {"thead", "tbody", "tfoot"}:
+            self._close_open({"thead", "tbody", "tfoot"}, {"table"})
+        elif tag == "tr":
+            self._close_open({"tr"}, {"table", "thead", "tbody", "tfoot"})
+        elif tag in {"td", "th"}:
+            self._close_open({"td", "th"}, {"tr", "table"})
+        # These omitted start tags also participate in inherited visibility.
+        if self.stack[-1].tag == "table" and tag in {"tr", "col"}:
+            parent = self.stack[-1]
+            group = Node("tbody" if tag == "tr" else "colgroup", parent=parent)
+            parent.children.append(group)
+            self.stack.append(group)
+
+    def handle_starttag(self, tag, attrs):
+        self._close_optional_elements(tag)
         node = Node(tag, dict(attrs), parent=self.stack[-1])
         self.stack[-1].children.append(node)
-        if tag not in {"br", "hr", "meta", "link", "img", "input", "area", "base", "embed", "source", "wbr", "param"}:
+        if tag not in _VOID_TAGS:
             if len(self.stack) > 200:
                 raise ParseError("HTML nesting too deep")
             self.stack.append(node)
 
     def handle_startendtag(self, tag, attrs):
-        self._close_optional_head(tag)
+        self._close_optional_elements(tag)
         self.stack[-1].children.append(Node(tag, dict(attrs), parent=self.stack[-1]))
 
     def handle_endtag(self, tag):
