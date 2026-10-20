@@ -199,3 +199,27 @@ class TeamRecoveryTests(unittest.TestCase):
         status, output, error = self.command('verify-backup', '--backup', str(self.backup))
         self.assertEqual(status, 0, error)
         self.assertTrue(json.loads(output)['ok'])
+
+    def test_os_ancestor_alias_is_allowed_but_snapshot_links_are_refused(self):
+        import stat
+        from types import SimpleNamespace
+        self.create_backup()
+        original = Path.lstat
+        ancestor = self.root.parent
+        def ancestor_alias(path):
+            if path == ancestor:
+                return SimpleNamespace(st_mode=stat.S_IFLNK, st_file_attributes=0)
+            return original(path)
+        # macOS commonly exposes its temporary directory through /var ->
+        # /private/var. This is outside the snapshot, not a linked payload.
+        with patch.object(Path, 'lstat', ancestor_alias):
+            self.assertTrue(verify_backup(self.backup)['ok'])
+        for attributes in (0, 0x400):
+            def linked_payload(path):
+                if path == self.backup/'control.sqlite':
+                    return SimpleNamespace(st_mode=stat.S_IFLNK if attributes==0 else stat.S_IFREG,
+                                           st_file_attributes=attributes)
+                return original(path)
+            with patch.object(Path, 'lstat', linked_payload):
+                with self.assertRaisesRegex(TeamError, 'team_backup_unsafe'):
+                    verify_backup(self.backup)

@@ -31,15 +31,17 @@ MAX_MANIFEST_BYTES = 2_000_000
 
 def _checked(path, *, directory=False):
     path = Path(path).absolute()
-    for parent in (*reversed(path.parents), path):
-        info = parent.lstat()
+    # Resolve OS-level ancestors (for example macOS /var) before traversing
+    # the snapshot. Payload entries and their immediate parent may not link
+    # elsewhere; _inventory checks each descendant directory before entering.
+    for entry in (path.parent, path):
+        info = entry.lstat()
         if (stat.S_ISLNK(info.st_mode)
                 or getattr(info, 'st_file_attributes', 0) & 0x400):
             raise TeamError('team_backup_unsafe')
-    info = path.lstat()
     if not (stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode)):
         raise TeamError('team_backup_unsafe')
-    return path
+    return path.resolve(strict=True)
 
 
 def _inventory(root):
@@ -170,7 +172,7 @@ def restore_backup(source, target, *, confirm_quiescent=False):
         raise TeamError('team_restore_quiescent_confirmation_required')
     source = _checked(source, directory=True)
     target = Path(target).absolute()
-    _checked(target.parent, directory=True)
+    target = _checked(target.parent, directory=True) / target.name
     if target.exists() or target.is_symlink():
         raise TeamError('team_output_exists', 409)
     # Never publish within the backup, even through a relative path.
