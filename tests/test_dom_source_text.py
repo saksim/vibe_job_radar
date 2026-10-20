@@ -29,6 +29,23 @@ def markup(body=ENCODED, container="job-description"):
 
 
 class DOMSourceTextTests(unittest.TestCase):
+    def test_duplicate_attributes_keep_first_browser_value(self):
+        for first, second in (("display:block", "display:none"),
+                              ("visibility:visible", "visibility:hidden")):
+            with self.subTest(first=first):
+                visible = f'<section style="{first}" STYLE="{second}">{markup()}</section>'
+                self.assertEqual(parse_job_html(visible)["text"], BODY)
+                hidden = f'<section style="{second}" STYLE="{first}">{markup()}</section>'
+                with self.assertRaises(ParseError):
+                    parse_job_html(hidden)
+        from vibe_job_radar.html_parser import Document
+        for closing in (">", "/>"):
+            document = Document("")
+            document.feed('<input id="first" ID="second" style="display:block" STYLE="display:none"' + closing)
+            node = next(item for item in document.root.walk() if item.tag == "input")
+            self.assertEqual(node.attrs["id"], "first")
+            self.assertFalse(node.hidden())
+
     def test_decoded_dom_text_is_not_parsed_as_html_again(self):
         self.assertEqual(parse_job_html(markup())["text"], BODY)
 

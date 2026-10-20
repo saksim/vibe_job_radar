@@ -200,6 +200,14 @@ _VOID_TAGS = {"br", "hr", "meta", "link", "img", "input", "area", "base", "col",
               "embed", "source", "track", "wbr", "param"}
 
 
+def _first_attributes(attrs):
+    """HTML tokenization discards later attributes with the same name."""
+    result = {}
+    for name, value in attrs:
+        result.setdefault(name, value)
+    return result
+
+
 class Document(HTMLParser):
     def __init__(self, markup: str):
         super().__init__(convert_charrefs=True)
@@ -259,7 +267,7 @@ class Document(HTMLParser):
 
     def handle_starttag(self, tag, attrs):
         self._close_optional_elements(tag)
-        node = Node(tag, dict(attrs), parent=self.stack[-1])
+        node = Node(tag, _first_attributes(attrs), parent=self.stack[-1])
         self.stack[-1].children.append(node)
         if tag not in _VOID_TAGS:
             if len(self.stack) > 200:
@@ -268,7 +276,7 @@ class Document(HTMLParser):
 
     def handle_startendtag(self, tag, attrs):
         self._close_optional_elements(tag)
-        self.stack[-1].children.append(Node(tag, dict(attrs), parent=self.stack[-1]))
+        self.stack[-1].children.append(Node(tag, _first_attributes(attrs), parent=self.stack[-1]))
 
     def handle_endtag(self, tag):
         for i in range(len(self.stack) - 1, 0, -1):
