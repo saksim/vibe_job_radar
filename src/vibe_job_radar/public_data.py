@@ -21,7 +21,7 @@ from .network import FetchError, SafeHTTP
 from .public_contract import ContractError, PublicQuery, validate_batch, checked_registry
 from .utils import atomic_json, parse_time
 from .workspace import InputError
-from .public_cache_guard import CacheFailureGuard
+from .public_cache_guard import CacheFailureGuard, TRANSIENT_FETCH_ERRORS
 
 
 class PublicDataClient:
@@ -129,13 +129,11 @@ class PublicDataClient:
                 if exc.code=='http_429':
                     self._rate_blocked=True
                     self.ledger.cool(self.scope,exc.retry_after or 300)
-                recoverable={'dns_error','network_error','http_429','http_500','http_502','http_503','http_504',
-                             'local_proxy_connection_failed'}
-                if exc.code not in recoverable:
+                if exc.code not in TRANSIENT_FETCH_ERRORS:
                     self.failure_guard.record(exc.code,now)
                 elif hard_failure:
                     raise FetchError(hard_failure) from None
-                if cached and exc.code in recoverable:
+                if cached and exc.code in TRANSIENT_FETCH_ERRORS:
                     return {**cached,'refresh_error':exc.code,'network_requests':1}
                 raise  # No fallback on 401/403, invalid source, TLS, or bad data.
             try:

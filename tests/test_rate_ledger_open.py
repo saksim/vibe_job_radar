@@ -400,5 +400,57 @@ class LedgerOpenTests(unittest.TestCase):
             else: self.assertEqual(self.path.read_bytes(), b'Artificial invalid database')
 
 
+
+    def test_initial_empty_publisher_rules_preserve_database_bytes(self):
+        from test_guided import fixture_adapter
+        from vibe_job_radar.guided.native_browser import NativeControl
+        from vibe_job_radar.guided.transport import PinnedTransport, WireResponse
+        ledger = self.ledger(); before = self.snapshot()
+        digest = hashlib.sha256(self.path.read_bytes()).hexdigest(); statements = []
+        native = NativeControl(fixture_adapter(), ledger, threading.Event())
+        bridge = PinnedTransport(fixture_adapter(), ledger, threading.Event())
+        with self.trace(statements):
+            native.install_robots('https://jobs.fixture.test', 200, 'text/plain', b'User-agent: *\nAllow: /\n')
+            native.install_robots('https://api.fixture.test', 404, 'text/html', b'Not Found')
+            with patch.object(bridge, 'fetch', return_value=WireResponse(200, {'content-type':'text/plain'}, b'User-agent: *\nAllow: /\n')):
+                bridge.ensure_robots('https://jobs.fixture.test/job/1')
+        self.assertTrue(statements)
+        self.assertTrue(all(sql.startswith('SELECT ') for sql in statements), statements)
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(hashlib.sha256(self.path.read_bytes()).hexdigest(), digest)
+        self.assertEqual(len(native.rules), 2)
+
+    def test_initial_empty_rule_does_not_wait_for_pending_stricter_writer(self):
+        ledger = self.ledger(); origin = 'https://jobs.fixture.test'
+        done = threading.Event(); errors = []
+        def install():
+            try: ledger.set_publisher('fixture', origin)
+            except BaseException as exc: errors.append(exc)
+            finally: done.set()
+        with closing(self.real_connect(self.path)) as writer:
+            writer.execute('BEGIN IMMEDIATE')
+            writer.execute('INSERT INTO publisher_policy VALUES (?,?,?)', ('fixture', origin, 120))
+            worker = threading.Thread(target=install); worker.start()
+            try:
+                self.assertTrue(done.wait(5), 'Empty rule waited for an unrelated write transaction')
+                self.assertTrue(writer.in_transaction)
+            finally:
+                writer.commit(); worker.join(15)
+        self.assertFalse(worker.is_alive()); self.assertEqual(errors, [])
+        ledger.reserve('fixture', 'request', origin=origin)
+        self.now += 1
+        with self.assertRaises(RateLimit) as caught: ledger.reserve('fixture', 'request', origin=origin)
+        self.assertEqual(caught.exception.wait, 119)
+
+    def test_empty_rule_still_rejects_missing_or_corrupt_storage(self):
+        for damaged in ('missing', 'corrupt'):
+            self.path = Path(self.temp.name)/(damaged+'.sqlite'); ledger = self.ledger()
+            if damaged == 'missing': self.path.unlink()
+            else: self.path.write_bytes(b'Artificial invalid database')
+            with self.subTest(damaged=damaged), self.assertRaisesRegex(CrawlError, 'rate_storage_error'):
+                ledger.set_publisher('fixture', 'https://jobs.fixture.test')
+            if damaged == 'missing': self.assertFalse(self.path.exists())
+            else: self.assertEqual(self.path.read_bytes(), b'Artificial invalid database')
+
 if __name__ == '__main__':
     unittest.main()
