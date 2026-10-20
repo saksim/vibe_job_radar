@@ -21,7 +21,7 @@ class TeamRecoveryTests(unittest.TestCase):
     def setUp(self):
         temp = tempfile.TemporaryDirectory(prefix='team-recovery-')
         self.addCleanup(temp.cleanup)
-        self.root = Path(temp.name)
+        self.root = Path(temp.name).resolve()
         self.service = self.root / 'service'
         self.backup = self.root / 'backup'
         initialize_service(self.service)
