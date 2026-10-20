@@ -269,5 +269,23 @@ class DOMSourceTextTests(unittest.TestCase):
             "https://www.liepin.com/job/123456.shtml", html))["text"], BODY)
 
 
+    def test_expansion_controls_use_only_effectively_visible_text(self):
+        for site, url, container in SITES:
+            adapter = builtins().get(site)
+            for hidden, visible, should_block in (
+                ("展开", "全部", False),
+                ("隐藏说明", "展开全部", True),
+            ):
+                with self.subTest(site=site, should_block=should_block):
+                    control = (f'<button style="visibility:hidden">{hidden}'
+                               f'<span style="visibility:visible">{visible}</span></button>')
+                    page = PageSnapshot(url, markup(ENCODED + control, container))
+                    if should_block:
+                        with self.assertRaisesRegex(CrawlError, "jd_incomplete"):
+                            adapter.detail(page)
+                    else:
+                        self.assertEqual(adapter.detail(page)["text"], BODY + visible)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -44,5 +44,5 @@ def require_expanded(markup, parsed, *, visible_text=None):
             raise CrawlError('jd_incomplete')
         for node in _visible_nodes(container):
             if ((node.tag in {'button', 'a'} or node.attrs.get('role') == 'button')
-                    and active_prompt(node.text())):
+                    and active_prompt(node.text(visible_only=True))):
                 raise CrawlError('jd_incomplete')
