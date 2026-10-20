@@ -23,7 +23,7 @@ class NativeTestVaultTests(unittest.TestCase):
     def setUp(self):
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
-        self.root = Path(self.stack.enter_context(tempfile.TemporaryDirectory(prefix="radar-vault-test-")))
+        self.root = Path(self.stack.enter_context(tempfile.TemporaryDirectory(prefix="radar-vault-test-"))).resolve()
         (self.root / "control").mkdir()
         self.stack.enter_context(patch.dict(os.environ, {
             "GITHUB_ACTIONS": "true", "RUNNER_OS": "Linux",

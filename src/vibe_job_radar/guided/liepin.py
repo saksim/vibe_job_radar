@@ -16,7 +16,7 @@ from ..html_parser import (Document, Node, ParseError, jobpostings, plain_text,
                            _posting_identity, _posting_location, _unique_object)
 from .adapters import DOMAdapter
 from .contracts import Card, CrawlError, PageSnapshot
-from .page_surface import surface_text
+from .page_surface import surface_text, parsing_html
 
 _OMIT = {'script', 'style', 'nav', 'footer', 'aside', 'noscript', 'template', 'iframe', 'svg'}
 _HEADINGS = {'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'dt'}
@@ -497,7 +497,8 @@ class LiepinAdapter(DOMAdapter):
             raise CrawlError('job_unavailable')
         if self.challenged(visible, page.url):
             raise CrawlError('manual_required')
-        intro = structured_intro_detail(page.html, page.url, self.job_identity)
+        markup = parsing_html(page)
+        intro = structured_intro_detail(markup, page.url, self.job_identity)
         if intro is not None:
             return intro
         try:
@@ -505,9 +506,9 @@ class LiepinAdapter(DOMAdapter):
         except CrawlError as exc:
             if exc.code != 'structure_changed':
                 raise
-            if _has_structured_job(Document(page.html).root):
+            if _has_structured_job(Document(markup).root):
                 raise
-            return semantic_detail(page.html)
+            return semantic_detail(markup)
         # Parsing succeeded. Validation errors are fatal: a second layout must
         # not replace an oversized or incomplete body selected by the parser.
         # Keep the established batch status previously supplied by JobRecord.

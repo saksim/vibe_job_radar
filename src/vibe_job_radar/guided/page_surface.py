@@ -31,3 +31,14 @@ def surface_text(page: PageSnapshot) -> str:
         return _text(Document(page.html).root)
     except (ValueError, RecursionError) as exc:
         raise CrawlError('structure_changed') from exc
+
+
+def parsing_html(page: PageSnapshot) -> str:
+    """Use an observed style copy for parsing, retaining original HTML evidence."""
+    rendered = getattr(page, 'rendered_html', None)
+    if rendered is None:
+        return page.html
+    if (not isinstance(rendered, str) or len(rendered) > 5_000_000
+            or not isinstance(page.visible_text, str)):
+        raise CrawlError('invalid_page_observation')
+    return rendered
