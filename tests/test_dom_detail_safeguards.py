@@ -60,3 +60,11 @@ class DOMDetailSafeguards(unittest.TestCase):
                     parsed = builtins().get(site).detail(page(url, container,
                         f'<div {hidden}><button>展开全部</button></div>'))
                     self.assertIn(TEXT, parsed['text'])
+
+    def test_full_description_suffixes_are_explicit_expansion_controls(self):
+        for site, url, container in SITES:
+            for label in ('展开全部职位描述', '展开更多职位描述', '点击展开全部职位描述',
+                          '查看完整职位描述'):
+                with self.subTest(site=site, label=label):
+                    with self.assertRaisesRegex(CrawlError, 'jd_incomplete'):
+                        builtins().get(site).detail(page(url, container, f'<button>{label}</button>'))

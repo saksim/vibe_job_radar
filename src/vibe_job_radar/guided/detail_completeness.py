@@ -8,8 +8,7 @@ from .contracts import CrawlError
 from .page_surface import _text
 
 _PROMPT = re.compile(
-    r'(?:展开(?:全部|更多|完整描述)|查看完整(?:职位|职位描述|描述)|'
-    r'点击(?:展开|查看)(?:全部|完整(?:职位|职位描述|描述))|'
+    r'(?:(?:点击)?(?:展开|查看)(?:全部|更多|完整)(?:职位描述|岗位描述|职位|描述)?|'
     r'(?:show|view|read)\s+(?:the\s+)?(?:full|complete)\s+job\s+description)',
     re.I,
 )

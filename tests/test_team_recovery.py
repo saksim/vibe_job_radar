@@ -83,7 +83,7 @@ class TeamRecoveryTests(unittest.TestCase):
         sentinel.write_text('keep')
         with self.assertRaisesRegex(TeamError, 'team_output_exists'):
             restore_backup(self.backup, target, confirm_quiescent=True)
-        self.assertEqual(sentinel.read_text(), 'keep')
+        self.assertEqual(sentinel.read_text(encoding='utf-8'), 'keep')
 
     def test_corrupt_digest_and_missing_file_do_not_create_target(self):
         self.create_backup()
@@ -104,7 +104,7 @@ class TeamRecoveryTests(unittest.TestCase):
         path = self.backup/'control.sqlite'
         with closing(sqlite3.connect(path)) as conn:
             conn.execute('PRAGMA user_version=99')
-        manifest = json.loads((self.backup/MANIFEST).read_text())
+        manifest = json.loads((self.backup/MANIFEST).read_text(encoding='utf-8'))
         manifest['files']['control.sqlite']['sha256'] = hashlib.sha256(path.read_bytes()).hexdigest()
         manifest['files']['control.sqlite']['bytes'] = path.stat().st_size
         (self.backup/MANIFEST).write_text(json.dumps(manifest))
@@ -223,3 +223,88 @@ class TeamRecoveryTests(unittest.TestCase):
             with patch.object(Path, 'lstat', linked_payload):
                 with self.assertRaisesRegex(TeamError, 'team_backup_unsafe'):
                     verify_backup(self.backup)
+
+    def test_incompatible_table_definitions_are_not_certified_by_matching_hashes(self):
+        from vibe_job_radar.team_recovery import write_manifest
+        self.create_backup()
+        manifest = (self.backup/MANIFEST).read_bytes()
+        originals = {name: (self.backup/name).read_bytes()
+                     for name in ('control.sqlite', 'catalog.sqlite')}
+        def reset_databases():
+            for name, data in originals.items():
+                (self.backup/name).write_bytes(data)
+            (self.backup/MANIFEST).write_bytes(manifest)
+        for name, tables in (
+            ('control.sqlite', ('members', 'devices', 'resources', 'grants',
+             'source_grants', 'audit', 'clock', 'watermarks', 'sync_views', 'task_leases')),
+            ('catalog.sqlite', ('meta', 'jobs', 'changes', 'sources')),
+        ):
+            path = self.backup/name
+            original = path.read_bytes()
+            for table in tables:
+                with self.subTest(database=name, table=table):
+                    reset_databases()
+                    with closing(sqlite3.connect(path)) as conn:
+                        conn.execute('DROP TABLE '+table)
+                        conn.execute('CREATE TABLE '+table+'(foo TEXT)')
+                        conn.commit()
+                    value = json.loads(manifest)
+                    value['files'][name] = {'bytes': path.stat().st_size,
+                        'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
+                    (self.backup/MANIFEST).write_text(json.dumps(value), encoding='utf-8')
+                    with self.assertRaisesRegex(TeamError, 'database_invalid'):
+                        verify_backup(self.backup)
+                    with self.assertRaisesRegex((TeamError, sqlite3.Error), 'database_invalid|no such column'):
+                        write_manifest(self.backup)
+                    path.write_bytes(original)
+                    (self.backup/MANIFEST).write_bytes(manifest)
+        reset_databases()
+        # Existing columns alone cannot prove the uniqueness used by tokens.
+        path = self.backup/'control.sqlite'
+        with closing(sqlite3.connect(path)) as conn:
+            conn.execute('DROP TABLE devices')
+            conn.execute('CREATE TABLE devices(id TEXT PRIMARY KEY, tenant TEXT NOT NULL, '
+                         'member TEXT NOT NULL, digest TEXT NOT NULL, '
+                         'expires REAL NOT NULL, revoked INTEGER NOT NULL)')
+            conn.commit()
+        value = json.loads(manifest)
+        value['files']['control.sqlite'] = {'bytes': path.stat().st_size,
+            'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
+        (self.backup/MANIFEST).write_text(json.dumps(value), encoding='utf-8')
+        with self.assertRaisesRegex(TeamError, 'database_invalid'):
+            verify_backup(self.backup)
+
+    def test_final_sync_failure_reinstates_marker_and_keeps_restore_blocked(self):
+        self.create_backup()
+        original = self.fingerprint(self.backup)
+        target = self.root/'target'
+        from vibe_job_radar.team_service import sync_directory
+        def fail_final(path):
+            if Path(path) == target and not (target/'.restore-in-progress').exists():
+                raise OSError('final sync failed')
+            return sync_directory(path)
+        with patch('vibe_job_radar.team_service.sync_directory', fail_final):
+            with self.assertRaisesRegex(OSError, 'final sync failed'):
+                restore_backup(self.backup, target, confirm_quiescent=True)
+        self.assertTrue((target/'.restore-in-progress').is_file())
+        self.assertEqual(original, self.fingerprint(self.backup))
+        with self.assertRaisesRegex(TeamError, 'team_restore_incomplete'):
+            TeamApplication(target, host='recovery.fixture.test')
+
+    def test_legacy_control_restore_keeps_token_and_quota_through_migration(self):
+        from vibe_job_radar.team_recovery import write_manifest
+        self.create_backup()
+        with closing(sqlite3.connect(self.backup/'control.sqlite')) as conn:
+            conn.execute('DROP TABLE task_leases')
+            conn.execute('PRAGMA user_version=1')
+            conn.commit()
+        (self.backup/MANIFEST).unlink()
+        write_manifest(self.backup)
+        target = self.root/'target'
+        restore_backup(self.backup, target, confirm_quiescent=True)
+        restored = TeamStore(target)
+        self.assertEqual(restored.state(self.token)['role'], 'collector')
+        restored.member('group', 'other', 'reader')
+        self.assertEqual(restored.state(self.token)['role'], 'collector')
+        with self.assertRaises(RateLimit):
+            RateLedger(target/'rates.sqlite').reserve('fixture', 'request')

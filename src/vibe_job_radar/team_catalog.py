@@ -52,6 +52,19 @@ def read_snapshot(path):
     return registry,gateway.jobs,observations
 
 
+SCHEMA_SQL = '''
+BEGIN IMMEDIATE;
+CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+CREATE TABLE jobs(source TEXT,id TEXT,body TEXT NOT NULL,digest TEXT NOT NULL,PRIMARY KEY(source,id));
+CREATE TABLE changes(seq INTEGER PRIMARY KEY,revision INTEGER NOT NULL,source TEXT NOT NULL,
+                     id TEXT NOT NULL,kind TEXT NOT NULL,body TEXT,ts REAL NOT NULL);
+CREATE INDEX change_revision ON changes(revision,seq);
+CREATE TABLE sources(id TEXT PRIMARY KEY,definition TEXT NOT NULL,observed REAL NOT NULL,revision INTEGER NOT NULL);
+PRAGMA user_version=1;
+COMMIT;
+'''
+
+
 class TeamCatalog:
     def __init__(self,root,*,clock=time.time):
         self.path=Path(root)/'catalog.sqlite'
@@ -62,17 +75,7 @@ class TeamCatalog:
         with self.path.open('xb'):pass
         self.path.chmod(0o600)
         with closing(sqlite3.connect(self.path)) as conn:
-            conn.executescript('''
-                BEGIN IMMEDIATE;
-                CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
-                CREATE TABLE jobs(source TEXT,id TEXT,body TEXT NOT NULL,digest TEXT NOT NULL,PRIMARY KEY(source,id));
-                CREATE TABLE changes(seq INTEGER PRIMARY KEY,revision INTEGER NOT NULL,source TEXT NOT NULL,
-                                     id TEXT NOT NULL,kind TEXT NOT NULL,body TEXT,ts REAL NOT NULL);
-                CREATE INDEX change_revision ON changes(revision,seq);
-                CREATE TABLE sources(id TEXT PRIMARY KEY,definition TEXT NOT NULL,observed REAL NOT NULL,revision INTEGER NOT NULL);
-                PRAGMA user_version=1;
-                COMMIT;
-            ''')
+            conn.executescript(SCHEMA_SQL)
             conn.executemany('INSERT INTO meta VALUES(?,?)',[('revision','0'),('floor','0'),('clock','0'),
                               ('secret',secrets.token_hex(32))]);conn.commit()
 

@@ -78,6 +78,36 @@ def _inventory(root):
     return files
 
 
+def _validate_definition(conn, name, version):
+    from .team_store import SCHEMA_SQL as CONTROL_SCHEMA
+    from .team_catalog import SCHEMA_SQL as CATALOG_SCHEMA
+    # Include every table and index: matching column names alone does not
+    # establish the primary/unique/check constraints relied upon by requests.
+    def definition(db):
+        return {(kind, name, table, re.sub(r'\s+', '', sql).casefold() if sql else None)
+                for kind, name, table, sql in db.execute(
+                    'SELECT type,name,tbl_name,sql FROM sqlite_master')}
+    with closing(sqlite3.connect(':memory:')) as expected:
+        expected.executescript(CONTROL_SCHEMA if name == 'control.sqlite' else CATALOG_SCHEMA)
+        if name == 'control.sqlite' and version == 1:
+            expected.execute('DROP TABLE task_leases')
+        if definition(conn) != definition(expected):
+            raise TeamError('team_backup_database_invalid')
+
+
+def _create_restore_marker(target):
+    # Unlike a normal JSON publication, a failed flush must retain this file:
+    # its mere presence prevents use of a destination with uncertain durability.
+    marker = target / '.restore-in-progress'
+    with marker.open('xb') as stream:
+        marker.chmod(0o600)
+        stream.write(b'{"schema_version": 1}\n')
+        stream.flush()
+        os.fsync(stream.fileno())
+    from .team_service import sync_directory
+    sync_directory(target)
+
+
 def _validate_database(path, name):
     # Completed backups have no live WAL/journal. Immutable mode also prevents
     # verification from creating sidecars or changing a read-only backup.
@@ -96,6 +126,7 @@ def _validate_database(path, name):
         if name == 'control.sqlite':
             if (version, tables) not in ((1, LEGACY_TABLES), (2, TABLES)):
                 raise TeamError('team_backup_database_invalid')
+            _validate_definition(conn, name, version)
             # Check the columns consumed by service startup and authentication.
             conn.execute('SELECT tenant,member,role,active FROM members LIMIT 0')
             conn.execute('SELECT id,tenant,member,digest,expires,revoked FROM devices LIMIT 0')
@@ -104,6 +135,7 @@ def _validate_database(path, name):
         else:
             if version != 1 or tables != {'meta', 'jobs', 'changes', 'sources'}:
                 raise TeamError('team_backup_database_invalid')
+            _validate_definition(conn, name, version)
             meta = dict(conn.execute('SELECT key,value FROM meta'))
             if (set(meta) != {'revision', 'floor', 'clock', 'secret'}
                     or not re.fullmatch('[0-9a-fA-F]{64}', meta['secret'])
@@ -184,7 +216,7 @@ def restore_backup(source, target, *, confirm_quiescent=False):
     # Stage beneath an exclusively created destination. All service entry
     # points refuse the recovery marker until the complete copy is published.
     target.mkdir(mode=0o700)
-    private_json(target / '.restore-in-progress', {'schema_version': 1})
+    _create_restore_marker(target)
     try:
         with tempfile.TemporaryDirectory(prefix='.restore-', dir=target) as directory:
             staged = Path(directory)
@@ -217,9 +249,16 @@ def restore_backup(source, target, *, confirm_quiescent=False):
                     path.rename(target / path.name)
                 sync_directory(target)
                 (target / '.restore-in-progress').unlink()
-                sync_directory(target)
+                try:
+                    sync_directory(target)
+                except BaseException:
+                    # Re-block while still holding the publication lock.
+                    _create_restore_marker(target)
+                    raise
         return {k: v for k, v in verified.items() if k != 'files'}
     except BaseException:
         # Retain the marked destination for inspection; never delete or replace
         # operator data. The unchanged source can be restored to another path.
+        if not (target / '.restore-in-progress').exists():
+            _create_restore_marker(target)
         raise
