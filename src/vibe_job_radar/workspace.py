@@ -302,10 +302,12 @@ class Workspace:
             # Validation is all-or-nothing: never quietly import only the valid rows.
             path.unlink(missing_ok=True)
             raise InputError("未导入任何行。" + "；".join(errors[:10] or ["文件没有职位记录。"] ))
-        with Store(self.db) as store:
-            inserted = sum(int(store.add(job)) for job in jobs)
-            store.event("workbench_import", "ok", {"file": path.name,
-                        "observations": len(jobs), "new_snapshots": inserted})
+        try:
+            with Store(self.db) as store:
+                inserted = store.add_batch(jobs, action="workbench_import", details={"file": path.name})
+        except (sqlite3.Error, OSError) as exc:
+            raise InputError("批次写入失败，未导入任何行。请检查工作区权限和可用空间，或稍后重试；"
+                             "原始文件保留在本机 imports 目录。") from exc
         return {"observations": len(jobs), "new_snapshots": inserted,
                 "message": "校验通过并已导入；原始文件保存在本机 imports 目录。"}
 
