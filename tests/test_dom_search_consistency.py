@@ -45,9 +45,11 @@ class DOMSearchConsistencyTests(unittest.TestCase):
                           'hidden<span style="visibility:visible">restored</span></a>'
                           '<a title="full title" href="' + path.format(3) + '">short title</a>'
                           '<a title="hidden title" style="visibility:hidden" href="'
-                          + path.format(4) + '">hidden</a>')
+                          + path.format(4) + '">hidden</a>'
+                          '<a title="icon title" style="visibility:hidden" href="'
+                          + path.format(5) + '"><img style="visibility:visible" alt="job icon"></a>')
                 cards = adapter.cards(PageSnapshot(adapter.search_url('test'), markup))
-                self.assertEqual([c.title for c in cards], ['visible', 'restored', 'full title'])
+                self.assertEqual([c.title for c in cards], ['visible', 'restored', 'full title', 'icon title'])
 
     def test_unpaired_rendered_observation_is_rejected(self):
         for adapter, path in self.cases():

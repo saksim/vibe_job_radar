@@ -10,7 +10,7 @@ import re
 from dataclasses import dataclass
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
-from ..html_parser import Document, ParseError, parse_job_html
+from ..html_parser import Document, Node, ParseError, parse_job_html
 from ..url_safety import credential_query_key
 from ..utils import domain_matches, canonical_url
 from .contracts import Card, CrawlError, PageSnapshot, SiteAdapter
@@ -94,7 +94,21 @@ class DOMAdapter:
             raise CrawlError('structure_changed') from exc
         # Use the same rendered snapshot as detail parsing. Dormant cards must
         # not win URL deduplication or consume the existing result limit.
-        visible = {id(node) for node in root.walk(visible_only=True)}
+        visible = set()
+        def collect_visible_links(node):
+            if node.blocks_subtree():
+                return False
+            shown = not node.hidden()
+            for child in node.children:
+                if isinstance(child, Node):
+                    child_shown = collect_visible_links(child)
+                    shown = shown or child_shown
+            # An explicitly visible icon can expose a link whose title is in
+            # its title attribute. Do not require descendant text here.
+            if shown and node.tag == 'a':
+                visible.add(id(node))
+            return shown
+        collect_visible_links(root)
         out = {}
         for node in select_nodes(root, self.card_selector):
             if id(node) not in visible or node.tag != 'a' or not node.attrs.get('href'):
