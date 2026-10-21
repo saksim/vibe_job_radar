@@ -112,6 +112,28 @@ class PersonalEvidenceIntegrityTests(unittest.TestCase):
             EvidenceService(self.workspace)
         self.assertFalse(self.service.db.exists())
 
+    def test_sqlite_maintenance_statistics_preserve_valid_history(self):
+        with closing(sqlite3.connect(self.service.db)) as connection, connection:
+            connection.execute("ANALYZE")
+            self.assertIsNotNone(connection.execute("SELECT name FROM sqlite_master WHERE name='sqlite_stat1'").fetchone())
+        previous = self.service.db.read_bytes()
+        reopened = EvidenceService(self.workspace).state()
+        self.assertEqual(reopened["revision"], 1)
+        self.assertEqual(len(reopened["reviews"]), 1)
+        self.assertEqual(self.service.db.read_bytes(), previous)
+
+    def test_input_cleanup_failure_does_not_publish_a_completed_report(self):
+        original = tempfile.TemporaryDirectory.cleanup
+        def fail_input_cleanup(temporary):
+            original(temporary)
+            if Path(temporary.name).name.startswith(".evidence-input-"):
+                raise OSError("artificial input cleanup failure")
+        with patch.object(tempfile.TemporaryDirectory, "cleanup", fail_input_cleanup):
+            with self.assertRaisesRegex(OSError, "artificial input cleanup"):
+                self.generate()
+        self.assert_source_only()
+        self.assertEqual(list((self.workspace.root / "reports").glob(".evidence-*")), [])
+
 
 if __name__ == "__main__":
     unittest.main()

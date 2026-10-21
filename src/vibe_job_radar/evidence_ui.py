@@ -10,6 +10,7 @@ import json
 import os
 import re
 import sqlite3
+import shutil
 import tempfile
 import uuid
 import zipfile
@@ -75,7 +76,7 @@ class EvidenceService:
             if not existed:
                 connection.execute("BEGIN IMMEDIATE")
             tables = {row[0] for row in connection.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'")}
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT GLOB 'sqlite_*'")}
             version = connection.execute("PRAGMA user_version").fetchone()[0]
             if not existed and not tables and version == 0:
                 connection.execute("CREATE TABLE revisions(revision INTEGER PRIMARY KEY, body TEXT NOT NULL, action TEXT NOT NULL, created_at TEXT NOT NULL)")
@@ -392,39 +393,45 @@ class EvidenceService:
         state["reviews"] = self._reviews_for_run(state, run_id)
         ident = uuid.uuid4().hex
         output = self.workspace.root / "reports" / ident
-        with tempfile.TemporaryDirectory(prefix=".evidence-input-", dir=output.parent) as tmp:
-            tmp = Path(tmp)
-            staged = tmp / "report"
-            with Store(tmp / "snapshot.sqlite") as store:
-                for job in jobs:
-                    store.add(job)
-            candidate = self._candidate(state, tmp)
-            atomic_json(tmp / "candidate.json", candidate)
-            atomic_json(tmp / "reviews.json", state["reviews"])
-            analyze(tmp / "snapshot.sqlite", staged, config=config, candidate_path=tmp / "candidate.json",
-                    reviews_path=tmp / "reviews.json", role_filter=manifest["filters"]["roles"],
-                    platform_filter=manifest["filters"]["platforms"], as_of=manifest["as_of"],
-                    max_age_days=manifest["filters"]["max_collection_age_days"])
-            # Version labels alone are not enough (e.g. an unversioned change or
-            # a prior LLM proposal). Reject semantic drift before publication.
-            fields = ("requirement_id", "record_id", "job_group_id", "capability", "quote", "start", "end",
-                      "relation", "strength", "tools", "roles", "evidence_level", "is_synthetic")
-            def semantics(rows):
-                return sorted((json_text({k: row[k] for k in fields}) for row in rows))
-            regenerated = [json.loads(line) for line in (staged / "requirements.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
-            if semantics(regenerated) != semantics(frozen_rows):
-                raise InputError("提取结果与已冻结的来源要求不一致；请重新分析，并显式复核和映射，旧报告未被修改。")
-            # Bind the personal revision and final hashes while still invisible
-            # to report listings. Any failure removes only this private staging.
-            atomic_json(staged / "evidence_revision.json", {"revision": state["revision"], "source_run_id": run_id,
-                        "source_as_of": manifest["as_of"], "generated_at": utc_now(),
-                        "source_evidence_count": len(state["evidence"]),
-                        "excluded_other_report_evidence_count": all_evidence_count - len(state["evidence"]),
-                        "note": "基于所选历史招聘快照和本次个人证据生成，不表示重新核实职位仍在招聘。"})
-            result = json.loads((staged / "run_manifest.json").read_text(encoding="utf-8"))
-            result["output_files_sha256"]["evidence_revision.json"] = hashlib.sha256((staged / "evidence_revision.json").read_bytes()).hexdigest()
-            atomic_json(staged / "run_manifest.json", result)
+        staged = Path(tempfile.mkdtemp(prefix=".evidence-report-", dir=output.parent))
+        try:
+            with tempfile.TemporaryDirectory(prefix=".evidence-input-", dir=output.parent) as tmp:
+                tmp = Path(tmp)
+                with Store(tmp / "snapshot.sqlite") as store:
+                    for job in jobs:
+                        store.add(job)
+                candidate = self._candidate(state, tmp)
+                atomic_json(tmp / "candidate.json", candidate)
+                atomic_json(tmp / "reviews.json", state["reviews"])
+                analyze(tmp / "snapshot.sqlite", staged, config=config, candidate_path=tmp / "candidate.json",
+                        reviews_path=tmp / "reviews.json", role_filter=manifest["filters"]["roles"],
+                        platform_filter=manifest["filters"]["platforms"], as_of=manifest["as_of"],
+                        max_age_days=manifest["filters"]["max_collection_age_days"])
+                # Version labels alone are not enough (e.g. an unversioned change or
+                # a prior LLM proposal). Reject semantic drift before publication.
+                fields = ("requirement_id", "record_id", "job_group_id", "capability", "quote", "start", "end",
+                          "relation", "strength", "tools", "roles", "evidence_level", "is_synthetic")
+                def semantics(rows):
+                    return sorted((json_text({k: row[k] for k in fields}) for row in rows))
+                regenerated = [json.loads(line) for line in (staged / "requirements.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
+                if semantics(regenerated) != semantics(frozen_rows):
+                    raise InputError("提取结果与已冻结的来源要求不一致；请重新分析，并显式复核和映射，旧报告未被修改。")
+                # Bind the personal revision and final hashes while still invisible
+                # to report listings. Any failure removes only this private staging.
+                atomic_json(staged / "evidence_revision.json", {"revision": state["revision"], "source_run_id": run_id,
+                            "source_as_of": manifest["as_of"], "generated_at": utc_now(),
+                            "source_evidence_count": len(state["evidence"]),
+                            "excluded_other_report_evidence_count": all_evidence_count - len(state["evidence"]),
+                            "note": "基于所选历史招聘快照和本次个人证据生成，不表示重新核实职位仍在招聘。"})
+                result = json.loads((staged / "run_manifest.json").read_text(encoding="utf-8"))
+                result["output_files_sha256"]["evidence_revision.json"] = hashlib.sha256((staged / "evidence_revision.json").read_bytes()).hexdigest()
+                atomic_json(staged / "run_manifest.json", result)
+            # Input cleanup is fallible too (for example a Windows file lock).
+            # Complete it before the one-way publication into the report list.
             os.replace(staged, output)
+        except Exception:
+            shutil.rmtree(staged, ignore_errors=True)
+            raise
         report = self.workspace.report(ident)
         with self.workspace.report_file(ident, "job_coverage.csv").open(encoding="utf-8-sig", newline="") as stream:
             report["coverage"] = list(csv.DictReader(stream))
