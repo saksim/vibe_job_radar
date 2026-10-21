@@ -9,8 +9,19 @@ from .utils import json_text, utc_now, parse_time
 
 class Store:
     """Single-writer local store; exact snapshots and source observations are retained."""
-    def __init__(self, path: str | Path):
+    def __init__(self, path: str | Path, *, read_only: bool = False):
         self.path = Path(path)
+        if read_only:
+            # Reading a report must neither migrate its input nor repair lost
+            # tables into an apparently successful empty source database.
+            self.conn = sqlite3.connect(self.path.resolve().as_uri() + "?mode=ro", uri=True, timeout=30)
+            try:
+                self.conn.execute("PRAGMA query_only=ON")
+                self._validate_read_schema()
+            except BaseException:
+                self.conn.close()
+                raise
+            return
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(self.path, timeout=30)
         try:
@@ -49,6 +60,25 @@ class Store:
             # interrupted initialization and releases Windows file handles.
             self.conn.close()
             raise
+
+    def _validate_read_schema(self):
+        version = self.conn.execute("PRAGMA user_version").fetchone()[0]
+        if version not in {0, 1}:
+            raise ValueError(f"unsupported database schema: {version}")
+        for table, expected in (
+            ("records", [("record_id", "TEXT", 0, 1), ("identity_key", "TEXT", 1, 0),
+                         ("fingerprint", "TEXT", 1, 0), ("body", "TEXT", 1, 0),
+                         ("first_seen", "TEXT", 1, 0), ("last_seen", "TEXT", 1, 0)]),
+            ("observations", [("id", "INTEGER", 0, 1), ("record_id", "TEXT", 1, 0),
+                              ("collected_at", "TEXT", 1, 0), ("source_ref", "TEXT", 1, 0),
+                              ("source_mode", "TEXT", 1, 0)]),
+            ("events", [("id", "INTEGER", 0, 1), ("created_at", "TEXT", 1, 0),
+                        ("action", "TEXT", 1, 0), ("status", "TEXT", 1, 0), ("details", "TEXT", 1, 0)]),
+        ):
+            columns = [(row[1], row[2].upper(), row[3], row[5]) for row in
+                       self.conn.execute("PRAGMA table_info(" + table + ")")]
+            if columns != expected:
+                raise ValueError("source database is incomplete or incompatible; no tables were rebuilt")
 
     def __enter__(self):
         return self

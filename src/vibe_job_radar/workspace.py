@@ -184,8 +184,11 @@ class Workspace:
     def _records(self) -> list[JobRecord]:
         if not self.db.is_file():
             return []
-        with Store(self.db) as store:
-            return [j for j in store.records() if not j.is_synthetic]
+        try:
+            with Store(self.db, read_only=True) as store:
+                return [j for j in store.records() if not j.is_synthetic]
+        except (sqlite3.DatabaseError, ValueError) as error:
+            raise InputError("岗位数据库损坏或版本不兼容；未重建或清空记录，请保留文件并检查工作区。") from error
 
     def status(self) -> dict:
         records = self._records()
