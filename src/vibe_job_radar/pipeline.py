@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import tempfile
 from collections import defaultdict
@@ -32,8 +33,13 @@ HARD_FIELDS = ["constraint_id", "job_group_id", "record_id", "roles", "category"
 def analyze(db: str | Path | Store, output: str | Path, *, config: dict | None = None,
             role_filter: list[str] | None = None, platform_filter: list[str] | None = None,
             candidate_path: str | Path | None = None, reviews_path: str | Path | None = None,
-            demo_mode: bool = False, max_age_days: int = 90, as_of: str | None = None, llm=None) -> dict:
-    """Analyze a database path or borrow an open Store without closing it."""
+            demo_mode: bool = False, max_age_days: int = 90, as_of: str | None = None, llm=None,
+            json_attachments=None) -> dict:
+    """Analyze a source; optional JSON attachments share the report's publication.
+
+    The internal attachment factory receives the computed manifest and returns
+    filename/value pairs. It cannot replace any original report output.
+    """
     conf = config or cfg.load_config()
     if max_age_days < 1:
         raise ValueError("max_age_days must be positive")
@@ -177,8 +183,12 @@ def analyze(db: str | Path | Store, output: str | Path, *, config: dict | None =
         # The manifest/public directory remain unavailable until every writer
         # has completed; executor shutdown also precedes failure cleanup.
         with ThreadPoolExecutor(max_workers=4, thread_name_prefix=f'radar-report-{threading.get_ident()}') as writer:
-            writes = []
+            writes, names = [], set()
             def write(function, *args):
+                name = args[0].name
+                if name in names or name == "run_manifest.json":
+                    raise ValueError("report attachment conflicts with an original output")
+                names.add(name)
                 writes.append(writer.submit(function, *args))
             write(atomic_text, staging / "jobs.jsonl", "".join(json.dumps(j.to_dict(), ensure_ascii=False) + "\n" for j in current))
             write(atomic_text, staging / "requirements.jsonl", "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in req_dicts))
@@ -219,6 +229,14 @@ def analyze(db: str | Path | Store, output: str | Path, *, config: dict | None =
                         "\n同一原文可能对应多项能力；精确原文见 requirements.jsonl，CSV 为防公式注入可能增加前导单引号。\n"
                         "\n输入快照与生成文件SHA256见 run_manifest.json。当前目录为一次运行的不可覆盖产物。\n")
             write(dashboard, staging / "dashboard.html", manifest, summary, req_dicts, claims, conf)
+            if json_attachments is not None:
+                attachments = json_attachments(manifest)
+                if not isinstance(attachments, dict):
+                    raise ValueError("report attachments must be a filename/value mapping")
+                for name, value in attachments.items():
+                    if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*\.json", name):
+                        raise ValueError("report attachment must be a plain JSON filename")
+                    write(atomic_json, staging / name, value)
             try:
                 for future in as_completed(writes):
                     future.result()
