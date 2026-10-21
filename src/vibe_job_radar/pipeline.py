@@ -51,7 +51,7 @@ def analyze(db: str | Path | Store, output: str | Path, *, config: dict | None =
     reviews = load_json(reviews_path) if reviews_path else {}
     if not isinstance(reviews, dict):
         raise ValueError("reviews must be an object keyed by requirement_id")
-    with (nullcontext(db) if isinstance(db, Store) else Store(db)) as store:
+    with (nullcontext(db) if isinstance(db, Store) else Store(db, read_only=True)) as store:
         current = store.records()
         historical = store.records(latest_only=False)
         events = store.events()

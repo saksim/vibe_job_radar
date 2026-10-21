@@ -5,6 +5,10 @@ from contextlib import closing
 import copy
 import io
 import json
+import os
+from pathlib import Path
+import shutil
+import tempfile
 import re
 import sqlite3
 import uuid
@@ -27,27 +31,65 @@ class QualityService:
     def _connect(self):
         if self.root.is_symlink():
             raise InputError("质量复核目录不能使用符号链接。")
-        self.root.mkdir(exist_ok=True, mode=0o700)
-        db = self.root / "history.sqlite"
-        if db.is_symlink():
-            raise InputError("质量复核历史不能使用符号链接。")
+        if not self.root.exists():
+            # Only a complete initial database is published. An established
+            # directory without its history must never become blank labels.
+            staged = Path(tempfile.mkdtemp(prefix=".quality-init-", dir=self.workspace.root))
+            try:
+                with closing(self._open_history(staged, create=True)):
+                    pass
+                try:
+                    if not self.root.exists():
+                        os.rename(staged, self.root)
+                except OSError:
+                    if not self.root.is_dir():
+                        raise
+            finally:
+                shutil.rmtree(staged, ignore_errors=True)
+        return self._open_history(self.root)
+
+    @staticmethod
+    def _open_history(root, *, create=False):
+        invalid = "质量复核历史缺失、损坏或版本不兼容；未重建或清空标注，请保留文件并检查工作区。"
+        db = root / "history.sqlite"
+        if root.is_symlink() or db.is_symlink():
+            raise InputError(invalid)
         existed = db.exists()
-        connection = sqlite3.connect(db.resolve().as_uri() + ("?mode=rw" if existed else "?mode=rwc"), uri=True, timeout=15)
+        if not existed and not create:
+            raise InputError(invalid)
+        connection = None
         try:
-            connection.execute("BEGIN IMMEDIATE")
+            connection = sqlite3.connect(db.resolve().as_uri() + ("?mode=rw" if existed else "?mode=rwc"), uri=True, timeout=15)
+            if not existed:
+                connection.execute("BEGIN IMMEDIATE")
             version = connection.execute("PRAGMA user_version").fetchone()[0]
-            tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            tables = {row[0] for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT GLOB 'sqlite_*'")}
             if not existed and version == 0 and not tables:
                 connection.execute("CREATE TABLE packets(report_id TEXT PRIMARY KEY, packet_name TEXT NOT NULL)")
                 connection.execute("CREATE TABLE revisions(report_id TEXT NOT NULL, revision INTEGER NOT NULL, body TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(report_id, revision))")
                 connection.execute("PRAGMA user_version=1")
-            elif version != 1 or tables != {"packets", "revisions"}:
-                raise InputError("质量复核历史损坏或版本不兼容；未重建或清空标注，请保留文件并检查工作区。")
-            connection.commit()
-        except Exception:
-            connection.close()
+                version, tables = 1, {"packets", "revisions"}
+            if version != 1 or tables != {"packets", "revisions"}:
+                raise InputError(invalid)
+            for table, expected in (
+                ("packets", [("report_id", "TEXT", 0, 1), ("packet_name", "TEXT", 1, 0)]),
+                ("revisions", [("report_id", "TEXT", 1, 1), ("revision", "INTEGER", 1, 2),
+                               ("body", "TEXT", 1, 0), ("created_at", "TEXT", 1, 0)]),
+            ):
+                columns = [(row[1], row[2].upper(), row[3], row[5]) for row in
+                           connection.execute("PRAGMA table_info(" + table + ")")]
+                if columns != expected:
+                    raise InputError(invalid)
+            if not existed:
+                connection.commit()
+            return connection
+        except BaseException as error:
+            if connection is not None:
+                connection.close()
+            if isinstance(error, sqlite3.DatabaseError):
+                raise InputError(invalid) from error
             raise
-        return connection
 
     def _report(self, data):
         run_id = text_field(data, "report_id", required=True, limit=32)
