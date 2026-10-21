@@ -1,25 +1,41 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import shutil
+import tempfile
 import sqlite3
 from pathlib import Path
 from .models import JobRecord
 from .utils import json_text, utc_now, parse_time
 
 
+class SourceReadBusy(sqlite3.OperationalError):
+    """A stable source image could not be captured without changing it."""
+
+
+def _digest(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.digest()
+
+
 class Store:
     """Single-writer local store; exact snapshots and source observations are retained."""
     def __init__(self, path: str | Path, *, read_only: bool = False):
         self.path = Path(path)
+        self._read_snapshot = None
         if read_only:
-            # Reading a report must neither migrate its input nor repair lost
-            # tables into an apparently successful empty source database.
-            self.conn = sqlite3.connect(self.path.resolve().as_uri() + "?mode=ro", uri=True, timeout=30)
+            # SQLite mode=ro can still create WAL coordination files. Open only
+            # a private stable image; never tell SQLite a live source is immutable.
+            self.conn = self._connect_read_snapshot()
             try:
                 self.conn.execute("PRAGMA query_only=ON")
                 self._validate_read_schema()
             except BaseException:
-                self.conn.close()
+                self.__exit__()
                 raise
             return
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -61,6 +77,42 @@ class Store:
             self.conn.close()
             raise
 
+    def _connect_read_snapshot(self):
+        source = self.path.resolve()
+        wal = source.with_name(source.name + "-wal")
+        journal = source.with_name(source.name + "-journal")
+        for _ in range(3):
+            temporary = tempfile.TemporaryDirectory(prefix="vjr-source-read-")
+            target = Path(temporary.name) / source.name
+            try:
+                # A rollback journal requires coordinated recovery. Do not
+                # copy possibly uncommitted database pages without that lock.
+                if journal.exists():
+                    temporary.cleanup()
+                    continue
+                files = [source] + ([wal] if wal.exists() else [])
+                for original in files:
+                    shutil.copyfile(original, target.with_name(original.name))
+                # Compare contents, not just timestamps: Windows may delay
+                # mtime updates while a WAL writer keeps its handle open.
+                stable = all(_digest(original) == _digest(target.with_name(original.name))
+                             for original in files)
+                if not stable or journal.exists() or wal.exists() != (wal in files):
+                    temporary.cleanup()
+                    continue
+                # The WAL is part of the database. SQLite reconstructs its
+                # coordination index privately and ignores uncommitted frames.
+                connection = sqlite3.connect(target, timeout=30)
+                self._read_snapshot = temporary
+                return connection
+            except FileNotFoundError:
+                temporary.cleanup()
+                continue
+            except BaseException:
+                temporary.cleanup()
+                raise
+        raise SourceReadBusy("source database changed during read; retry when writes settle")
+
     def _validate_read_schema(self):
         version = self.conn.execute("PRAGMA user_version").fetchone()[0]
         if version not in {0, 1}:
@@ -84,7 +136,12 @@ class Store:
         return self
 
     def __exit__(self, *exc):
-        self.conn.close()
+        try:
+            self.conn.close()
+        finally:
+            if self._read_snapshot is not None:
+                self._read_snapshot.cleanup()
+                self._read_snapshot = None
 
     def add(self, job: JobRecord) -> bool:
         exists = self.conn.execute("SELECT body FROM records WHERE record_id=?", (job.record_id,)).fetchone()
