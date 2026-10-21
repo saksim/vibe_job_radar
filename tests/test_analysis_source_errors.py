@@ -65,6 +65,34 @@ class AnalysisHTTPErrorTests(unittest.TestCase):
         self.assert_no_report()
 
 
+    def test_corrupt_demo_database_is_actionable_and_preserves_both_datasets(self):
+        real_before = self.prepare()
+        demo = self.server.workspace.demo_db
+        demo.write_bytes(b'artificial damaged demo database')
+        demo_before = demo.read_bytes()
+        code, _, body = self.call('/api/analyze', {'dataset': 'demo'})
+        self.assertEqual(code, 400, body)
+        self.assertIn('数据库', json.loads(body)['error'])
+        self.assertEqual(demo.read_bytes(), demo_before)
+        self.assertEqual(self.server.workspace.db.read_bytes(), real_before)
+        self.assert_no_report()
+
+    def test_demo_initialization_permission_error_is_actionable(self):
+        real_before = self.prepare()
+        demo = self.server.workspace.demo_db
+        with Store(demo):
+            pass
+        demo_before = demo.read_bytes()
+        with patch('vibe_job_radar.workspace.Store', side_effect=PermissionError('artificial demo denial')) as initialize:
+            code, _, body = self.call('/api/analyze', {'dataset': 'demo'})
+        initialize.assert_called_once_with(demo)
+        self.assertEqual(code, 400, body)
+        self.assertIn('文件权限', json.loads(body)['error'])
+        self.assertEqual(demo.read_bytes(), demo_before)
+        self.assertEqual(self.server.workspace.db.read_bytes(), real_before)
+        self.assert_no_report()
+
+
 class AnalysisCLIErrorTests(unittest.TestCase):
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
