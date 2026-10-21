@@ -20,7 +20,7 @@ from urllib.parse import parse_qsl, urlsplit
 
 from .config import detect_roles, load_config, platform_for_url
 from .models import JobRecord
-from .store import Store
+from .store import SourceReadBusy, Store
 
 MAX_UPLOAD = 1_000_000
 RUN_ID = re.compile(r"[a-f0-9]{32}")
@@ -184,8 +184,13 @@ class Workspace:
     def _records(self) -> list[JobRecord]:
         if not self.db.is_file():
             return []
-        with Store(self.db) as store:
-            return [j for j in store.records() if not j.is_synthetic]
+        try:
+            with Store(self.db, read_only=True) as store:
+                return [j for j in store.records() if not j.is_synthetic]
+        except SourceReadBusy as error:
+            raise InputError("岗位数据正在变化或等待事务恢复，请稍后重试；源库未改写。") from error
+        except (sqlite3.DatabaseError, ValueError, OSError) as error:
+            raise InputError("岗位数据库无法读取、损坏或版本不兼容；未重建或清空记录，请保留文件并检查工作区。") from error
 
     def status(self) -> dict:
         records = self._records()
