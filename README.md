@@ -1,6 +1,6 @@
 # Vibe Job Radar｜招聘要求与个人证据工作台
 
-0.15.2 [修复搜索卡片可见性与异常链接中断](docs/RELEASE_0_15_2.md)，实际缺陷配对 #440/#441；[剩余 18 项](docs/ISSUE_SCOPE_0_15_2.md)逐项列出未完功能、历史未知原因和最小验收条件。正式 Tag 与资产见 [Releases](https://github.com/saksim/vibe_job_radar/releases)。
+0.15.3 [修复个人报告发布与证据历史完整性](docs/RELEASE_0_15_3.md)，实际缺陷配对 #445/#446；[剩余 18 项](docs/ISSUE_SCOPE_0_15_3.md)逐项列出未完功能、历史未知原因和最小验收条件。正式 Tag 与资产见 [Releases](https://github.com/saksim/vibe_job_radar/releases)。
 
 0.15.0 增加[团队整组备份校验与恢复](docs/RELEASE_0_15_0.md)，修复 BOSS/51job 现有 DOM 路径的未展开正文与岗位身份防护。原24项按[本期范围](docs/ISSUE_SCOPE_0_15_0.md)收口，[待环境和材料](docs/PENDING_ACCEPTANCE_0_15_0.md)单列；既有功能保留，正式发布状态以 [Releases](https://github.com/saksim/vibe_job_radar/releases) 为准。
 

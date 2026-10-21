@@ -10,7 +10,6 @@ import json
 import os
 import re
 import sqlite3
-import shutil
 import tempfile
 import uuid
 import zipfile
@@ -48,23 +47,60 @@ class EvidenceService:
     def __init__(self, workspace: Workspace):
         self.workspace = workspace
         self.root = workspace.root / "evidence"
+        if self.root.is_symlink():
+            raise InputError("证据目录不能使用符号链接。")
         self.root.mkdir(exist_ok=True, mode=0o700)
         self.artifacts = self.root / "artifacts"
-        self.artifacts.mkdir(exist_ok=True, mode=0o700)
-        if self.root.is_symlink() or self.artifacts.is_symlink():
+        if self.artifacts.is_symlink():
             raise InputError("证据目录不能使用符号链接。")
+        self.artifacts.mkdir(exist_ok=True, mode=0o700)
         self.db = self.root / "history.sqlite"
-        with closing(self.connect()) as c:
-            c.executescript("""
-            CREATE TABLE IF NOT EXISTS revisions(revision INTEGER PRIMARY KEY, body TEXT NOT NULL,
-                                                 action TEXT NOT NULL, created_at TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS artifacts(id TEXT PRIMARY KEY, name TEXT NOT NULL,
-                                                size INTEGER NOT NULL, created_at TEXT NOT NULL);
-            """)
-            c.commit()
+        with closing(self.connect(create=True)):
+            pass
 
-    def connect(self):
-        return sqlite3.connect(self.db, timeout=30)
+    def connect(self, *, create=False):
+        # Keep the existing unversioned schema and bytes. A damaged old history
+        # must never be mistaken for a new workspace or repaired by CREATE IF NOT EXISTS.
+        invalid = "个人证据历史缺失、损坏或版本不兼容；未重建或清空记录，请保留文件并检查工作区。"
+        if self.root.is_symlink() or self.artifacts.is_symlink() or self.db.is_symlink():
+            raise InputError(invalid)
+        existed = self.db.exists()
+        if not existed and (not create or any(self.artifacts.iterdir())):
+            raise InputError(invalid)
+        connection = None
+        try:
+            connection = sqlite3.connect(self.db.resolve().as_uri() +
+                ("?mode=rw" if existed else "?mode=rwc"), uri=True, timeout=30)
+            if not existed:
+                connection.execute("BEGIN IMMEDIATE")
+            tables = {row[0] for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
+            version = connection.execute("PRAGMA user_version").fetchone()[0]
+            if not existed and not tables and version == 0:
+                connection.execute("CREATE TABLE revisions(revision INTEGER PRIMARY KEY, body TEXT NOT NULL, action TEXT NOT NULL, created_at TEXT NOT NULL)")
+                connection.execute("CREATE TABLE artifacts(id TEXT PRIMARY KEY, name TEXT NOT NULL, size INTEGER NOT NULL, created_at TEXT NOT NULL)")
+                tables = {"revisions", "artifacts"}
+            if version != 0 or tables != {"revisions", "artifacts"}:
+                raise InputError(invalid)
+            for table, expected in (
+                ("revisions", [("revision", "INTEGER", 0, 1), ("body", "TEXT", 1, 0),
+                               ("action", "TEXT", 1, 0), ("created_at", "TEXT", 1, 0)]),
+                ("artifacts", [("id", "TEXT", 0, 1), ("name", "TEXT", 1, 0),
+                               ("size", "INTEGER", 1, 0), ("created_at", "TEXT", 1, 0)]),
+            ):
+                columns = [(r[1], r[2].upper(), r[3], r[5]) for r in
+                           connection.execute("PRAGMA table_info(" + table + ")")]
+                if columns != expected:
+                    raise InputError(invalid)
+            if not existed:
+                connection.commit()
+            return connection
+        except Exception as error:
+            if connection is not None:
+                connection.close()
+            if isinstance(error, sqlite3.DatabaseError):
+                raise InputError(invalid) from error
+            raise
 
     @staticmethod
     def _current(c):
@@ -357,36 +393,37 @@ class EvidenceService:
         output = self.workspace.root / "reports" / ident
         with tempfile.TemporaryDirectory(prefix=".evidence-input-", dir=output.parent) as tmp:
             tmp = Path(tmp)
+            staged = tmp / "report"
             with Store(tmp / "snapshot.sqlite") as store:
                 for job in jobs:
                     store.add(job)
             candidate = self._candidate(state, tmp)
             atomic_json(tmp / "candidate.json", candidate)
             atomic_json(tmp / "reviews.json", state["reviews"])
-            analyze(tmp / "snapshot.sqlite", output, config=config, candidate_path=tmp / "candidate.json",
+            analyze(tmp / "snapshot.sqlite", staged, config=config, candidate_path=tmp / "candidate.json",
                     reviews_path=tmp / "reviews.json", role_filter=manifest["filters"]["roles"],
                     platform_filter=manifest["filters"]["platforms"], as_of=manifest["as_of"],
                     max_age_days=manifest["filters"]["max_collection_age_days"])
-        # Version labels alone are not enough (e.g. an unversioned change or
-        # a prior LLM proposal). Reject semantic drift rather than silently
-        # reusing review/mapping IDs for a different extracted requirement set.
-        fields = ("requirement_id", "record_id", "job_group_id", "capability", "quote", "start", "end",
-                  "relation", "strength", "tools", "roles", "evidence_level", "is_synthetic")
-        def semantics(rows):
-            return sorted((json_text({k: row[k] for k in fields}) for row in rows))
-        regenerated = [json.loads(line) for line in (output / "requirements.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
-        if semantics(regenerated) != semantics(frozen_rows):
-            shutil.rmtree(output)
-            raise InputError("提取结果与已冻结的来源要求不一致；请重新分析，并显式复核和映射，旧报告未被修改。")
-        # Include the UI revision in the same auditable report, without rewriting the source report.
-        atomic_json(output / "evidence_revision.json", {"revision": state["revision"], "source_run_id": run_id,
-                    "source_as_of": manifest["as_of"], "generated_at": utc_now(),
-                    "source_evidence_count": len(state["evidence"]),
-                    "excluded_other_report_evidence_count": all_evidence_count - len(state["evidence"]),
-                    "note": "基于所选历史招聘快照和本次个人证据生成，不表示重新核实职位仍在招聘。"})
-        result = json.loads((output / "run_manifest.json").read_text(encoding="utf-8"))
-        result["output_files_sha256"]["evidence_revision.json"] = hashlib.sha256((output / "evidence_revision.json").read_bytes()).hexdigest()
-        atomic_json(output / "run_manifest.json", result)
+            # Version labels alone are not enough (e.g. an unversioned change or
+            # a prior LLM proposal). Reject semantic drift before publication.
+            fields = ("requirement_id", "record_id", "job_group_id", "capability", "quote", "start", "end",
+                      "relation", "strength", "tools", "roles", "evidence_level", "is_synthetic")
+            def semantics(rows):
+                return sorted((json_text({k: row[k] for k in fields}) for row in rows))
+            regenerated = [json.loads(line) for line in (staged / "requirements.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
+            if semantics(regenerated) != semantics(frozen_rows):
+                raise InputError("提取结果与已冻结的来源要求不一致；请重新分析，并显式复核和映射，旧报告未被修改。")
+            # Bind the personal revision and final hashes while still invisible
+            # to report listings. Any failure removes only this private staging.
+            atomic_json(staged / "evidence_revision.json", {"revision": state["revision"], "source_run_id": run_id,
+                        "source_as_of": manifest["as_of"], "generated_at": utc_now(),
+                        "source_evidence_count": len(state["evidence"]),
+                        "excluded_other_report_evidence_count": all_evidence_count - len(state["evidence"]),
+                        "note": "基于所选历史招聘快照和本次个人证据生成，不表示重新核实职位仍在招聘。"})
+            result = json.loads((staged / "run_manifest.json").read_text(encoding="utf-8"))
+            result["output_files_sha256"]["evidence_revision.json"] = hashlib.sha256((staged / "evidence_revision.json").read_bytes()).hexdigest()
+            atomic_json(staged / "run_manifest.json", result)
+            os.replace(staged, output)
         report = self.workspace.report(ident)
         with self.workspace.report_file(ident, "job_coverage.csv").open(encoding="utf-8-sig", newline="") as stream:
             report["coverage"] = list(csv.DictReader(stream))
