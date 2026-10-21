@@ -119,24 +119,22 @@ class PublicExample:
             config['platforms']['greenhouse_anthropic'] = {'label': 'Anthropic公开招聘（Greenhouse）',
                                                           'domains': ['job-boards.greenhouse.io']}
             report_id = uuid.uuid4().hex
+            def source_audit(manifest):
+                audit.update(success=True, title=record.title, company=record.company,
+                             record_id=record.record_id, report_id=report_id, collected_at=record.collected_at,
+                             publisher_updated_at=payload.get('updated_at'), text_characters=len(record.text),
+                             content_sha256=record.raw_sha256, stats=manifest['stats'],
+                             code='real_source_received')
+                return {'public_source.json':audit}
             with tempfile.TemporaryDirectory(prefix='.public-example-', dir=self.root) as tmp:
                 db = Path(tmp)/'batch.sqlite'
                 with Store(db) as batch:
                     batch.add(record)
-                manifest = analyze(db, self.workspace.root/'reports'/report_id, config=config,
-                                   role_filter=['architect'], platform_filter=['greenhouse_anthropic'])
-            audit.update(success=True, title=record.title, company=record.company,
-                         record_id=record.record_id, report_id=report_id, collected_at=record.collected_at,
-                         publisher_updated_at=payload.get('updated_at'), text_characters=len(record.text),
-                         content_sha256=record.raw_sha256, stats=manifest['stats'],
-                         code='real_source_received')
+                analyze(db, self.workspace.root/'reports'/report_id, config=config,
+                        role_filter=['architect'], platform_filter=['greenhouse_anthropic'],
+                        json_attachments=source_audit)
             atomic_json(self.root/(audit['id']+'.json'), audit)
             atomic_json(last, audit)
-            # Attach source audit to the report and its hash manifest.
-            folder = self.workspace.root/'reports'/report_id
-            atomic_json(folder/'public_source.json', audit)
-            manifest['output_files_sha256']['public_source.json'] = hashlib.sha256((folder/'public_source.json').read_bytes()).hexdigest()
-            atomic_json(folder/'run_manifest.json', manifest)
             return {**audit, 'report': self.workspace.report(report_id),
                     'message': '已从真实公开接口取得正文并生成本批报告；英文原文保留，不是合成演示。'}
         except (FetchError, ValueError, TypeError, KeyError) as exc:

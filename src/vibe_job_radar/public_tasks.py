@@ -390,23 +390,20 @@ class PublicTasks:
                 config['platforms'][key]={'label':source.label,'domains':list(source.domains)}
             report_id=uuid.uuid4().hex
             folder=self.workspace.root/'reports'/report_id
-            # Original records above are durable; this copy only isolates the
-            # current batch from the workspace's other saved records.
-            with Store(':memory:') as batch:
-                for record in records: batch.add(record)
-                manifest=analyze(batch,folder,config=config,platform_filter=list(query.source_scope))
             audit={**summary,'report_id':report_id,'generated_at':result['response']['generated_at'],
                    'observed_at':result['observed_at'],'next_cursor':result['response']['next_cursor'],
                    'jobs':[dict(j, text_sha256=hashlib.sha256(j['text'].encode()).hexdigest())
                            for j in jobs]}
             for job in audit['jobs']:job.pop('text')
+            attachments={'public_source.json':audit}
             if change is not None:
-                atomic_json(folder/'catalog_changes.json', change)
-                manifest['output_files_sha256']['catalog_changes.json'] = hashlib.sha256(
-                    (folder/'catalog_changes.json').read_bytes()).hexdigest()
-            atomic_json(folder/'public_source.json',audit)
-            manifest['output_files_sha256']['public_source.json']=hashlib.sha256((folder/'public_source.json').read_bytes()).hexdigest()
-            atomic_json(folder/'run_manifest.json',manifest)
+                attachments['catalog_changes.json']=change
+            # Original records above are durable; the current batch and its
+            # provenance become visible together after all report writes finish.
+            with Store(':memory:') as batch:
+                for record in records: batch.add(record)
+                analyze(batch,folder,config=config,platform_filter=list(query.source_scope),
+                        json_attachments=lambda manifest:attachments)
         message=('使用缓存结果生成本地报告，采集时间保持原值。' if result['cache_reused']
                  else '已取得所选公开来源结果并生成本地报告；完整正文与摘要保持区分。')
         if result.get('not_modified'):
