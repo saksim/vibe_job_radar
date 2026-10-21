@@ -144,19 +144,31 @@ class Store:
                 self._read_snapshot = None
 
     def add(self, job: JobRecord) -> bool:
+        with self.conn:
+            return self._add(job)
+
+    def _add(self, job: JobRecord) -> bool:
+        """Write within the caller's transaction; preserve every observation."""
         exists = self.conn.execute("SELECT body FROM records WHERE record_id=?", (job.record_id,)).fetchone()
         body = job.to_dict()
         if exists:
             old = json.loads(exists[0])
             if parse_time(old["collected_at"]) > parse_time(job.collected_at):
                 body = old
-        with self.conn:
-            self.conn.execute('''INSERT INTO records VALUES(?,?,?,?,?,?)
-                ON CONFLICT(record_id) DO UPDATE SET last_seen=excluded.last_seen,body=excluded.body''',
-                (job.record_id, job.identity, job.fingerprint, json_text(body), utc_now(), utc_now()))
-            self.conn.execute("INSERT INTO observations(record_id,collected_at,source_ref,source_mode) VALUES(?,?,?,?)",
-                              (job.record_id, job.collected_at, job.source_ref, job.source_mode))
+        self.conn.execute('''INSERT INTO records VALUES(?,?,?,?,?,?)
+            ON CONFLICT(record_id) DO UPDATE SET last_seen=excluded.last_seen,body=excluded.body''',
+            (job.record_id, job.identity, job.fingerprint, json_text(body), utc_now(), utc_now()))
+        self.conn.execute("INSERT INTO observations(record_id,collected_at,source_ref,source_mode) VALUES(?,?,?,?)",
+                          (job.record_id, job.collected_at, job.source_ref, job.source_mode))
         return not bool(exists)
+
+    def add_batch(self, jobs: list[JobRecord], *, action: str, details: dict) -> int:
+        """Commit a validated batch and its audit event together, or neither."""
+        with self.conn:
+            self.conn.execute("BEGIN IMMEDIATE")
+            inserted = sum(int(self._add(job)) for job in jobs)
+            self._event(action, "ok", {**details, "observations": len(jobs), "new_snapshots": inserted})
+        return inserted
 
     def records(self, *, latest_only: bool = True) -> list[JobRecord]:
         rows = self.conn.execute("SELECT identity_key,body FROM records ORDER BY last_seen,record_id").fetchall()
@@ -174,8 +186,11 @@ class Store:
 
     def event(self, action: str, status: str, details: dict) -> None:
         with self.conn:
-            self.conn.execute("INSERT INTO events(created_at,action,status,details) VALUES(?,?,?,?)",
-                              (utc_now(), action, status, json_text(details)))
+            self._event(action, status, details)
+
+    def _event(self, action: str, status: str, details: dict) -> None:
+        self.conn.execute("INSERT INTO events(created_at,action,status,details) VALUES(?,?,?,?)",
+                          (utc_now(), action, status, json_text(details)))
 
     def events(self) -> list[dict]:
         return [{"event_id": r[0], "created_at": r[1], "action": r[2], "status": r[3], "details": json.loads(r[4])}
