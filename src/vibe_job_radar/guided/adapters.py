@@ -54,8 +54,8 @@ class DOMAdapter:
     def accept_url(self, url: str, *, detail: bool = False) -> str:
         if not isinstance(url, str) or len(url) > 2048:
             raise CrawlError('invalid_url')
-        p = urlsplit(url)
         try:
+            p = urlsplit(url)
             if (p.scheme != 'https' or not p.hostname or p.port not in (None, 443)
                     or p.username or p.password or '\\' in url or any(ord(c) < 32 for c in url)):
                 raise CrawlError('invalid_url')
@@ -85,15 +85,25 @@ class DOMAdapter:
             raise CrawlError('not_job_list')
         if self.challenged(surface_text(page), page.url):
             raise CrawlError('manual_required')
+        markup = parsing_html(page)
+        if not isinstance(markup, str) or len(markup) > 5_000_000:
+            raise CrawlError('response_too_large')
+        try:
+            root = Document(markup).root
+        except (ValueError, RecursionError) as exc:
+            raise CrawlError('structure_changed') from exc
+        # Use the same rendered snapshot as detail parsing. Dormant cards must
+        # not win URL deduplication or consume the existing result limit.
+        visible = {id(node) for node in root.walk(visible_only=True)}
         out = {}
-        for node in select_nodes(Document(page.html).root, self.card_selector):
-            if node.tag != 'a' or not node.attrs.get('href'):
+        for node in select_nodes(root, self.card_selector):
+            if id(node) not in visible or node.tag != 'a' or not node.attrs.get('href'):
                 continue
             try:
                 url = self.accept_url(urljoin(page.url, node.attrs['href']), detail=True)
-            except CrawlError:
+            except (CrawlError, ValueError):
                 continue
-            title = (node.attrs.get('title') or node.text()).strip()
+            title = (node.attrs.get('title') or node.text(visible_only=True)).strip()
             if not title:
                 continue
             ident = hashlib.sha256(url.encode()).hexdigest()[:24]
