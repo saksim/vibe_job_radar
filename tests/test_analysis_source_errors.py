@@ -46,6 +46,25 @@ class AnalysisHTTPErrorTests(unittest.TestCase):
         self.assert_no_report()
 
 
+    def test_source_copy_permission_error_is_actionable_and_preserves_source(self):
+        before = self.prepare()
+        with patch('vibe_job_radar.store.shutil.copyfile', side_effect=PermissionError('artificial source denial')):
+            code, _, body = self.call('/api/analyze', {})
+        self.assertEqual(code, 400, body)
+        self.assertIn('文件权限', json.loads(body)['error'])
+        self.assertEqual(self.server.workspace.db.read_bytes(), before)
+        self.assert_no_report()
+
+    def test_report_write_io_error_is_actionable_and_cleans_partial_output(self):
+        before = self.prepare()
+        with patch('vibe_job_radar.pipeline.atomic_text', side_effect=OSError('artificial report I/O')):
+            code, _, body = self.call('/api/analyze', {})
+        self.assertEqual(code, 400, body)
+        self.assertIn('工作区', json.loads(body)['error'])
+        self.assertEqual(self.server.workspace.db.read_bytes(), before)
+        self.assert_no_report()
+
+
 class AnalysisCLIErrorTests(unittest.TestCase):
     def setUp(self):
         temp = tempfile.TemporaryDirectory()

@@ -375,8 +375,8 @@ class Workspace:
                     config=self.config, role_filter=roles, demo_mode=demo)
         except SourceReadBusy as error:
             raise InputError("岗位数据正在变化或等待事务恢复，请稍后重试；源库未改写。") from error
-        except (sqlite3.DatabaseError, ValueError) as error:
-            raise InputError("无法读取岗位数据库或分析配置不兼容；请检查后重试，源数据未清空。") from error
+        except (sqlite3.DatabaseError, ValueError, OSError) as error:
+            raise InputError("无法读取岗位数据库、写入报告或使用当前分析配置；请检查文件权限和工作区后重试，源数据未清空。") from error
         return self.report(run_id)
 
     def report_file(self, run_id: str, name: str) -> Path:
