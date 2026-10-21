@@ -20,7 +20,7 @@ from urllib.parse import parse_qsl, urlsplit
 
 from .config import detect_roles, load_config, platform_for_url
 from .models import JobRecord
-from .store import Store
+from .store import SourceReadBusy, Store
 
 MAX_UPLOAD = 1_000_000
 RUN_ID = re.compile(r"[a-f0-9]{32}")
@@ -184,8 +184,13 @@ class Workspace:
     def _records(self) -> list[JobRecord]:
         if not self.db.is_file():
             return []
-        with Store(self.db) as store:
-            return [j for j in store.records() if not j.is_synthetic]
+        try:
+            with Store(self.db, read_only=True) as store:
+                return [j for j in store.records() if not j.is_synthetic]
+        except SourceReadBusy as error:
+            raise InputError("岗位数据正在变化或等待事务恢复，请稍后重试；源库未改写。") from error
+        except (sqlite3.DatabaseError, ValueError, OSError) as error:
+            raise InputError("岗位数据库无法读取、损坏或版本不兼容；未重建或清空记录，请保留文件并检查工作区。") from error
 
     def status(self) -> dict:
         records = self._records()
@@ -356,17 +361,22 @@ class Workspace:
         if dataset not in {"real", "demo"}:
             raise InputError("dataset 必须是 real 或 demo。")
         demo = dataset == "demo"
-        if demo:
-            with Store(self.demo_db) as store:
-                store.add(JobRecord(title="时间序列算法工程师", company="合成演示公司（非真实招聘）",
-                    text="负责时间序列预测。要求熟练使用 Cursor 进行 AI 辅助编程，编写单元测试并进行代码审查。",
-                    platform="manual", source_mode="synthetic", is_synthetic=True,
-                    source_ref="workbench:synthetic-demo", rights_note="项目内置合成演示，不是市场样本"))
-        elif not self.db.is_file():
+        if not demo and not self.db.is_file():
             raise InputError("还没有真实数据，请先粘贴 JD、导入文件或执行搜索发现。")
         run_id = uuid.uuid4().hex
-        analyze(self.demo_db if demo else self.db, self.root / "reports" / run_id,
-                           config=self.config, role_filter=roles, demo_mode=demo)
+        try:
+            if demo:
+                with Store(self.demo_db) as store:
+                    store.add(JobRecord(title="时间序列算法工程师", company="合成演示公司（非真实招聘）",
+                        text="负责时间序列预测。要求熟练使用 Cursor 进行 AI 辅助编程，编写单元测试并进行代码审查。",
+                        platform="manual", source_mode="synthetic", is_synthetic=True,
+                        source_ref="workbench:synthetic-demo", rights_note="项目内置合成演示，不是市场样本"))
+            analyze(self.demo_db if demo else self.db, self.root / "reports" / run_id,
+                    config=self.config, role_filter=roles, demo_mode=demo)
+        except SourceReadBusy as error:
+            raise InputError("岗位数据正在变化或等待事务恢复，请稍后重试；源库未改写。") from error
+        except (sqlite3.DatabaseError, ValueError, OSError) as error:
+            raise InputError("无法读取岗位数据库、写入报告或使用当前分析配置；请检查文件权限和工作区后重试，源数据未清空。") from error
         return self.report(run_id)
 
     def report_file(self, run_id: str, name: str) -> Path:

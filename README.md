@@ -1,5 +1,7 @@
 # Vibe Job Radar｜招聘要求与个人证据工作台
 
+当前代码版本 **0.15.4**：修复质量标注历史缺库/首次初始化及正常 ANALYZE 兼容，并让原分析与工作台状态只读查询源库，避免静默补表或改写旧库。保留已有功能；[发行说明](docs/RELEASE_0_15_4.md)、[18项逐项判断与材料条件](docs/ISSUE_SCOPE_0_15_4.md)。正式 Tag 和附件以 [GitHub Releases](https://github.com/saksim/vibe_job_radar/releases) 为准。
+
 0.15.3 [修复个人报告发布与证据历史完整性](docs/RELEASE_0_15_3.md)，实际缺陷配对 #445/#446；[剩余 18 项](docs/ISSUE_SCOPE_0_15_3.md)逐项列出未完功能、历史未知原因和最小验收条件。正式 Tag 与资产见 [Releases](https://github.com/saksim/vibe_job_radar/releases)。
 
 0.15.0 增加[团队整组备份校验与恢复](docs/RELEASE_0_15_0.md)，修复 BOSS/51job 现有 DOM 路径的未展开正文与岗位身份防护。原24项按[本期范围](docs/ISSUE_SCOPE_0_15_0.md)收口，[待环境和材料](docs/PENDING_ACCEPTANCE_0_15_0.md)单列；既有功能保留，正式发布状态以 [Releases](https://github.com/saksim/vibe_job_radar/releases) 为准。
