@@ -50,28 +50,49 @@ class EvidenceService:
         self.root = workspace.root / "evidence"
         if self.root.is_symlink():
             raise InputError("证据目录不能使用符号链接。")
-        new_history = not self.root.exists()
-        self.root.mkdir(exist_ok=True, mode=0o700)
         self.artifacts = self.root / "artifacts"
-        if self.artifacts.is_symlink():
-            raise InputError("证据目录不能使用符号链接。")
-        self.artifacts.mkdir(exist_ok=True, mode=0o700)
         self.db = self.root / "history.sqlite"
-        with closing(self.connect(create=new_history)):
+        if not self.root.exists():
+            # Publish a complete tree: interrupted first launches must not leave
+            # an ambiguous canonical directory that resembles lost old history.
+            staged = Path(tempfile.mkdtemp(prefix=".evidence-init-", dir=workspace.root))
+            try:
+                (staged / "artifacts").mkdir(mode=0o700)
+                with closing(self._connect(staged, create=True)):
+                    pass
+                try:
+                    if not self.root.exists():
+                        os.rename(staged, self.root)
+                except OSError:
+                    # A competing initializer can publish its nonempty tree
+                    # between the check and rename. Validate and reuse it below.
+                    if not self.root.is_dir():
+                        raise
+            finally:
+                shutil.rmtree(staged, ignore_errors=True)
+        if self.root.is_symlink() or self.artifacts.is_symlink():
+            raise InputError("证据目录不能使用符号链接。")
+        with closing(self.connect()):
             pass
+        self.artifacts.mkdir(exist_ok=True, mode=0o700)
 
-    def connect(self, *, create=False):
+    def connect(self):
+        return self._connect(self.root)
+
+    @staticmethod
+    def _connect(root, *, create=False):
         # Keep the existing unversioned schema and bytes. A damaged old history
         # must never be mistaken for a new workspace or repaired by CREATE IF NOT EXISTS.
         invalid = "个人证据历史缺失、损坏或版本不兼容；未重建或清空记录，请保留文件并检查工作区。"
-        if self.root.is_symlink() or self.artifacts.is_symlink() or self.db.is_symlink():
+        artifacts, db = root / "artifacts", root / "history.sqlite"
+        if root.is_symlink() or artifacts.is_symlink() or db.is_symlink():
             raise InputError(invalid)
-        existed = self.db.exists()
-        if not existed and (not create or any(self.artifacts.iterdir())):
+        existed = db.exists()
+        if not existed and (not create or any(artifacts.iterdir())):
             raise InputError(invalid)
         connection = None
         try:
-            connection = sqlite3.connect(self.db.resolve().as_uri() +
+            connection = sqlite3.connect(db.resolve().as_uri() +
                 ("?mode=rw" if existed else "?mode=rwc"), uri=True, timeout=30)
             if not existed:
                 connection.execute("BEGIN IMMEDIATE")
