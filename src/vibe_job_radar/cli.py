@@ -4,6 +4,7 @@ import argparse
 import csv
 import json
 import os
+import sqlite3
 import sys
 from dataclasses import asdict
 from pathlib import Path
@@ -169,6 +170,6 @@ def main(argv: list[str] | None = None) -> int:
             print(json_text({"status": report["status"], "mode": report["mode"], "stats": report["stats"], "out": str(args.out)}))
             return 2 if report["status"] == "incomplete" else 0
         return 0
-    except (OSError, ValueError, TypeError, FetchError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError, TypeError, FetchError, json.JSONDecodeError, sqlite3.DatabaseError) as exc:
         print(f"ERROR [{type(exc).__name__}]: {exc}", file=sys.stderr)
         return 2

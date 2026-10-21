@@ -370,8 +370,13 @@ class Workspace:
         elif not self.db.is_file():
             raise InputError("还没有真实数据，请先粘贴 JD、导入文件或执行搜索发现。")
         run_id = uuid.uuid4().hex
-        analyze(self.demo_db if demo else self.db, self.root / "reports" / run_id,
-                           config=self.config, role_filter=roles, demo_mode=demo)
+        try:
+            analyze(self.demo_db if demo else self.db, self.root / "reports" / run_id,
+                    config=self.config, role_filter=roles, demo_mode=demo)
+        except SourceReadBusy as error:
+            raise InputError("岗位数据正在变化或等待事务恢复，请稍后重试；源库未改写。") from error
+        except (sqlite3.DatabaseError, ValueError) as error:
+            raise InputError("无法读取岗位数据库或分析配置不兼容；请检查后重试，源数据未清空。") from error
         return self.report(run_id)
 
     def report_file(self, run_id: str, name: str) -> Path:
