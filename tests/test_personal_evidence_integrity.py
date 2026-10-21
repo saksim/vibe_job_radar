@@ -105,6 +105,13 @@ class PersonalEvidenceIntegrityTests(unittest.TestCase):
         self.assertEqual(len(reopened["reviews"]), 1)
         self.assertEqual(self.service.db.read_bytes(), previous)
 
+    def test_restart_with_missing_artifact_free_history_does_not_create_revision_zero(self):
+        self.assertEqual(list(self.service.artifacts.iterdir()), [])
+        self.service.db.unlink()
+        with self.assertRaises(InputError):
+            EvidenceService(self.workspace)
+        self.assertFalse(self.service.db.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

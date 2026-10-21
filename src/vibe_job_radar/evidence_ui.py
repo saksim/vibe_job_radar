@@ -49,13 +49,14 @@ class EvidenceService:
         self.root = workspace.root / "evidence"
         if self.root.is_symlink():
             raise InputError("证据目录不能使用符号链接。")
+        new_history = not self.root.exists()
         self.root.mkdir(exist_ok=True, mode=0o700)
         self.artifacts = self.root / "artifacts"
         if self.artifacts.is_symlink():
             raise InputError("证据目录不能使用符号链接。")
         self.artifacts.mkdir(exist_ok=True, mode=0o700)
         self.db = self.root / "history.sqlite"
-        with closing(self.connect(create=True)):
+        with closing(self.connect(create=new_history)):
             pass
 
     def connect(self, *, create=False):
