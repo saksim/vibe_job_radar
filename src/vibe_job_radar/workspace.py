@@ -252,10 +252,13 @@ class Workspace:
             raise InputError("未知平台。")
         job = JobRecord(**fields, platform=selected, evidence_level=level, source_mode="manual")
         self._check_source(job)
-        with Store(self.db) as store:
-            inserted = store.add(job)
-            store.event("workbench_capture", "ok", {"record_id": job.record_id,
-                        "evidence_level": job.evidence_level})
+        try:
+            with Store(self.db) as store:
+                inserted = store.add_batch([job], action="workbench_capture", details={
+                    "record_id": job.record_id, "evidence_level": job.evidence_level})
+        except (sqlite3.Error, OSError) as exc:
+            raise InputError("岗位保存失败，未记录本次输入。请检查工作区权限和可用空间，或稍后重试；"
+                             "原岗位与观察历史保留。") from exc
         roles = detect_roles(job, self.config)
         return {"new_snapshots": int(inserted), "record_id": job.record_id, "roles": roles,
                 "message": ("已保存。" if inserted else "内容快照已存在，已记录本次观察。") +
