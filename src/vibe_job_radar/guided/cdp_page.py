@@ -237,8 +237,10 @@ class CDPPage:
         if self.closed:
             return
         self.closed = True
-        self._emit('close')
-        self.callbacks.clear()
+        try:
+            self._emit('close')
+        finally:
+            self.callbacks.clear()
 
     def close(self):
         if not self.closed:

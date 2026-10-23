@@ -37,7 +37,9 @@ jobs:
         run: python -m playwright install chromium
       - name: Install matching Chromium and Linux system libraries
         if: runner.os == 'Linux'
-        run: python -m playwright install --with-deps chromium
+        run: |
+          python scripts/configure_ci_apt.py
+          python -m playwright install --with-deps chromium
       - name: Exercise visible collector check on Windows
         if: runner.os == 'Windows'
         run: |

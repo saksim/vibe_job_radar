@@ -150,8 +150,14 @@ class CDPBrowser:
             self.version = self.connection.root.send('Browser.getVersion', timeout=timeout / 1000)['product'].split('/', 1)[-1]
             self.connection.root.on('Target.targetDestroyed', self._destroyed)
             self.connection.root.send('Target.setDiscoverTargets', {'discover': True})
-        except Exception:
-            self.close()
+        except Exception as startup_error:
+            try:
+                self.close()
+            except Exception as cleanup_error:
+                self.cleanup_failed = True
+                # Startup classification must retain the original timeout or
+                # protocol error. Keep the independent cleanup fault as cause.
+                raise startup_error from cleanup_error
             raise
 
     def _destroyed(self, event):
@@ -178,7 +184,7 @@ class CDPBrowser:
     def is_connected(self):
         return bool(self.connection and not self.connection.closed and self.process.poll() is None)
 
-    def close(self):
+    def _stop_owned_process(self, attempt):
         if self.connection:
             if not self.connection.closed:
                 try:
@@ -193,7 +199,7 @@ class CDPBrowser:
                 # EOF. Do not send EOF immediately after Browser.close: that
                 # would kill Chromium while it is flushing its private profile.
                 if self.connection:
-                    self.connection.close()
+                    attempt(self.connection.close)
                 try:
                     self.process.wait(timeout=3)
                 except subprocess.TimeoutExpired:
@@ -205,15 +211,45 @@ class CDPBrowser:
                 elif self.process.poll() is None:
                     self.process.kill()
                 self.process.wait(timeout=5)
+
+    def close(self):
+        # An owned resource failing to close must not prevent independent
+        # resources from being released. Preserve the first failure for callers.
+        errors = []
+        def attempt(operation):
+            try:
+                return operation()
+            except Exception as error:
+                self.cleanup_failed = True
+                errors.append(error)
+                return None
+
+        attempt(lambda: self._stop_owned_process(attempt))
         if self.connection:
-            self.connection.close()
+            attempt(self.connection.close)
         if self.process:
-            self.process.stdout.close()
+            attempt(self.process.stdout.close)
         for context in self.contexts:
-            for page in context._pages.values():
-                page._did_close()
-        # Validate the exact owned path before recursive Windows cleanup. No
-        # search by browser name, reuse of a profile, or deletion of caller paths.
+            for page in tuple(context._pages.values()):
+                attempt(page._did_close)
+
+        # Validate the exact owned path before recursive cleanup. Retain the
+        # profile if the owned process is still alive or its state is unknown;
+        # removing files under a live browser could damage its final flush.
+        exited = self.process is None
+        if self.process is not None:
+            state = []
+            attempt(lambda: state.append(self.process.poll()))
+            exited = bool(state and state[0] is not None)
+        if exited:
+            attempt(self._remove_owned_profile)
+        else:
+            self.cleanup_failed = True
+        if errors:
+            raise errors[0]
+
+    def _remove_owned_profile(self):
+        # No search by browser name, reused profile, or caller-supplied path.
         if self.profile.resolve() != self.profile or self.profile.parent != self.profile_parent:
             raise CrawlError('native_protocol_error')
         if not self.profile.name.startswith('vibe-native-cdp-'):
