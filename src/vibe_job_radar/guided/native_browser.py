@@ -1015,11 +1015,22 @@ class NativeBackend(PlaywrightBackend):
 
     def close(self):
         self._closing=True
+        errors = []
+        def attempt(operation):
+            try:
+                operation()
+            except Exception as error:
+                errors.append(error)
+
+        # Pacing, browser control and the tunnel have independent ownership.
+        # A failure in one must not skip release of the others or retain the
+        # stopped session's request/response bookkeeping.
         if pacer := self.__dict__.get('_request_pacer'):
-            pacer.close()
-        super().close()
+            attempt(pacer.close)
+        attempt(super().close)
         if self.tunnel:
-            self.tunnel.close(); self.tunnel=None
+            tunnel, self.tunnel = self.tunnel, None
+            attempt(tunnel.close)
         self._sessions.clear(); self._pending.clear(); self._requests.clear(); self._hops.clear()
         self._observations.clear()
         self.__dict__.get('_latest_business', {}).clear(); self._auth_attempts.clear()
@@ -1027,3 +1038,5 @@ class NativeBackend(PlaywrightBackend):
         self.__dict__.get('_page_documents', {}).clear()
         self.__dict__.get('_committed_pages', set()).clear()
         self._rejected_targets.clear(); self._pending_rejected_targets.clear(); self._rejected_pages.clear()
+        if errors:
+            raise errors[0]

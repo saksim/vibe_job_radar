@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import platform
 import shutil
 import subprocess
@@ -19,10 +20,80 @@ ROOT = Path(__file__).resolve().parents[1]
 UNIT_SNAPSHOT_SECONDS = 570
 # Complete supported Windows suite measured 677s; see SOURCE_QUALIFICATION.md.
 UNIT_TEST_TIMEOUT_SECONDS = 1200
+MAX_FAILURE_EVIDENCE_BYTES = 10_000_000
 sys.path.insert(0, str(ROOT/'src'))
 from vibe_job_radar.qualification import check_source, fingerprint, output_directory, require_local_evidence
 from vibe_job_radar.guided.browser_health import safe_text
-from vibe_job_radar.utils import atomic_json
+from vibe_job_radar.utils import atomic_json, atomic_text
+
+
+def _failure_record(record: object) -> bool:
+    """Accept only the existing FailureResult code-location schema."""
+    def text(value, limit=1024):
+        return isinstance(value, str) and 0 < len(value) <= limit and value.isprintable()
+    def integer(value):
+        return type(value) is int and value >= 0
+    if not isinstance(record, dict):
+        return False
+    common = {'event', 'test', 'elapsed_seconds'}
+    if set(record) not in (common | {'capture_status'}, common | {'threads', 'threads_omitted'}):
+        return False
+    if record['event'] not in ('failure', 'error', 'subtest_failure', 'subtest_error'):
+        return False
+    elapsed = record['elapsed_seconds']
+    if not text(record['test']) or type(elapsed) not in (int, float) or not math.isfinite(elapsed) or elapsed < 0:
+        return False
+    if 'capture_status' in record:
+        return record['capture_status'] == 'unavailable'
+    threads = record['threads']
+    if not isinstance(threads, list) or len(threads) > 16 or not integer(record['threads_omitted']):
+        return False
+    for thread in threads:
+        if not isinstance(thread, dict) or set(thread) != {'current', 'stack', 'frames_truncated'}:
+            return False
+        if type(thread['current']) is not bool or type(thread['frames_truncated']) is not bool:
+            return False
+        if not isinstance(thread['stack'], list) or len(thread['stack']) > 24:
+            return False
+        for frame in thread['stack']:
+            if not isinstance(frame, dict) or set(frame) != {'file', 'line', 'function'}:
+                return False
+            if (not text(frame['file']) or any(char in frame['file'] for char in '/\\:')
+                    or not text(frame['function']) or not integer(frame['line'])):
+                return False
+    return True
+
+
+def retain_failure_evidence(source: Path, target: Path) -> str:
+    """Keep bounded current diagnostics without changing the original test result."""
+    def unique_fields(pairs):
+        value = dict(pairs)
+        if len(value) != len(pairs):
+            raise ValueError('duplicate fields')
+        return value
+    try:
+        if source.is_symlink():
+            return 'invalid'
+        try:
+            stream = source.open('rb')
+        except FileNotFoundError:
+            return 'missing'
+        with stream:
+            raw = stream.read(MAX_FAILURE_EVIDENCE_BYTES + 1)
+        if len(raw) > MAX_FAILURE_EVIDENCE_BYTES:
+            return 'too_large'
+        content = raw.decode('utf-8')
+        lines = content.splitlines()
+        if len(lines) > 10_000:
+            return 'too_large'
+        if any(not _failure_record(json.loads(line, object_pairs_hook=unique_fields)) for line in lines):
+            return 'invalid'
+        atomic_text(target, content)
+        return 'retained' if lines else 'empty'
+    except OSError:
+        return 'unavailable'
+    except (ValueError, TypeError, RecursionError, OverflowError):
+        return 'invalid'
 
 
 def verify(out: Path) -> dict:
@@ -36,6 +107,7 @@ def verify(out: Path) -> dict:
     try:
         (out/'unit-tests.json').unlink(missing_ok=True)
         (out/'unit-tests.progress.log').unlink(missing_ok=True)
+        (out/'unit-tests.failures.jsonl').unlink(missing_ok=True)
         before = fingerprint(ROOT)
         report['source'] = before
         report['source_checks'] = check_source(ROOT)
@@ -67,6 +139,10 @@ def verify(out: Path) -> dict:
                     break
                 if run.returncode:
                     break
+            # FailureResult flushes this before tearDown, even if the final
+            # summary is absent. Retain it before deleting the isolated run.
+            report['unit_failure_evidence'] = retain_failure_evidence(
+                unit_file.with_suffix('.failures.jsonl'), out/'unit-tests.failures.jsonl')
             progress=unit_file.with_suffix('.progress.log')
             if progress.is_file() and progress.stat().st_size<=10_000_000:
                 shutil.copyfile(progress,out/'unit-tests.progress.log')
