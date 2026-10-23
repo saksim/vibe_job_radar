@@ -229,5 +229,15 @@ class NativeTunnel:
             except OSError: pass
             try: sock.close()
             except OSError: pass
-        self.server.shutdown(); self.server.server_close()
-        self.thread.join(timeout=2)
+        errors = []
+        # Closing is already marked above: a later close cannot recover a
+        # skipped listener or join. Attempt each independent owned resource
+        # now, and retain the first error rather than hiding it with a later one.
+        for operation in (self.server.shutdown, self.server.server_close,
+                          lambda: self.thread.join(timeout=2)):
+            try:
+                operation()
+            except Exception as error:
+                errors.append(error)
+        if errors:
+            raise errors[0]

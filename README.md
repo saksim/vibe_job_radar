@@ -1,6 +1,6 @@
 # Vibe Job Radar｜招聘要求与个人证据工作台
 
-当前代码版本 **0.15.7**：修复原生代理启动失败遗留端口、浏览器异常清理中断，以及公开查询批次失败留下半批观察。保留已有功能；[发行说明与四项根因调查](docs/RELEASE_0_15_7.md)、[其余验收材料条件](docs/ISSUE_SCOPE_0_15_6.md)。正式 Tag 和附件以 [GitHub Releases](https://github.com/saksim/vibe_job_radar/releases) 为准。
+当前代码版本 **0.15.8**：修复代理 CONNECT 分片响应突破总时限、原生管道与隧道异常清理，以及公开计划恢复丢失活任务和时钟回拨暂停。保留已有功能；[发行说明与四项根因调查](docs/RELEASE_0_15_8.md)、[剩余18项及验收材料条件](docs/ISSUE_SCOPE_0_15_8.md)。正式 Tag 和附件以 [GitHub Releases](https://github.com/saksim/vibe_job_radar/releases) 为准。
 
 0.15.3 [修复个人报告发布与证据历史完整性](docs/RELEASE_0_15_3.md)，实际缺陷配对 #445/#446；[剩余 18 项](docs/ISSUE_SCOPE_0_15_3.md)逐项列出未完功能、历史未知原因和最小验收条件。正式 Tag 与资产见 [Releases](https://github.com/saksim/vibe_job_radar/releases)。
 
