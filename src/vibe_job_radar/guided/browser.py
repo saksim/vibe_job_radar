@@ -115,7 +115,12 @@ class PlaywrightBackend:
                 message=HEALTH_MESSAGES['browser_ready'])
         except Exception as exc:
             report = exc.report if isinstance(exc, BrowserStartupError) else failed_report(self.startup_report, exc)
-            self.close()
+            try:
+                self.close()
+            except Exception as cleanup_error:
+                # Keep the original startup classification; a separate cleanup
+                # failure remains in the exception chain rather than replacing it.
+                raise BrowserStartupError(report) from cleanup_error
             raise BrowserStartupError(report) from exc
 
     def _new_page(self):
@@ -406,16 +411,23 @@ class PlaywrightBackend:
         return bool(self.browser and self.browser.is_connected() and self.page and not self.page.is_closed())
 
     def close(self):
+        errors = []
+        def attempt(operation):
+            try:
+                operation()
+            except Exception as error:
+                errors.append(error)
+
+        # A policy cleanup fault must not strand the independently owned
+        # browser/driver. Surface the first fault to the service's existing
+        # uncertain-closure guard after every owned resource was attempted.
         policy = getattr(getattr(self, 'wire', None), 'network_policy', None)
-        if policy is not None: policy.close()
+        if policy is not None:
+            attempt(policy.close)
         if self.browser:
-            try:
-                self.browser.close()
-            except Exception:
-                pass
+            attempt(self.browser.close)
         if self.runtime:
-            try:
-                self.runtime.stop()
-            except Exception:
-                pass
+            attempt(self.runtime.stop)
         self.runtime = self.browser = self.context = self.page = None
+        if errors:
+            raise errors[0]
