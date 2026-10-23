@@ -135,8 +135,10 @@ class NativeRequestPacer:
         self.bytes = sum(i.size for i in self.queue)
 
     def close(self):
-        if self.connection is not None and not self.connection.closed:
-            self.connection.remove_pump_callback(self.pump)
-        self.connection = None
-        self.queue.clear()
-        self.bytes = 0
+        try:
+            if self.connection is not None and not self.connection.closed:
+                self.connection.remove_pump_callback(self.pump)
+        finally:
+            self.connection = None
+            self.queue.clear()
+            self.bytes = 0

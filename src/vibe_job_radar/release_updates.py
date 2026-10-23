@@ -341,10 +341,15 @@ class ReleaseUpdates:
     def _save(self,**value):
         with self._lock:self._state.update(value)
 
-    def _start(self, fn):
+    def _start(self, fn, *, selected=None, statuses=()):
         with self._lock:
             if self._stop.is_set():raise InputError('工作台正在退出。')
             if self._thread and self._thread.is_alive():raise InputError('版本操作正在进行，请等待完成。')
+            # A newer check can finish while a request waits to start, or
+            # while install preflight runs. Reserve the worker and validate
+            # the exact approved selection in this same critical section.
+            if selected is not None and (self._selected!=selected or self._state.get('status') not in statuses):
+                raise InputError('版本检查结果已变化，请重新核对当前稳定版后再确认。')
             self._state={'status':'running','current_version':self.current_version,'message':'正在核对官方版本及文件。'}
             self._thread=threading.Thread(target=self._run,args=(fn,),name='radar-release-update',daemon=True)
             self._thread.start()
@@ -380,7 +385,7 @@ class ReleaseUpdates:
                    and isinstance(data,dict) and data.get('consent') is True and type(data.get('release_id')) is int
                    and data=={'consent':True,'release_id':selected['release_id'],'sha256':selected['sha256']})
         if not valid:raise InputError('请先检查并确认当前显示的稳定版本；旧页面不能更换下载目标。')
-        return self._start(lambda:self._download(selected))
+        return self._start(lambda:self._download(selected),selected=selected,statuses={'available'})
 
     def _download(self,selected,*,prepare=True):
         self._save(message='正在下载、校验并解压新版；旧程序和工作区保留。')
@@ -415,7 +420,7 @@ class ReleaseUpdates:
         if self.platform!='windows-x64' and selected.get('automatic_update') is not True:
             raise InputError('此原生发行没有自动交接证明，请使用手动准备。')
         self.installer.preflight()
-        return self._start(lambda:self._install(selected))
+        return self._start(lambda:self._install(selected),selected=selected,statuses={'available','ready'})
 
     def _install(self,selected):
         package=self._download(selected,prepare=False)

@@ -65,6 +65,26 @@ class NativeTestVaultTests(unittest.TestCase):
         self.database.close.assert_called_once_with()
         self.assertTrue(all(0 < call.args[0] <= 20 for call in self.transport.settimeout.call_args_list))
 
+    def test_unlock_equal_clock_ticks_keep_socket_timeout_inside_twenty_seconds(self):
+        # A nondecreasing clock may repeat a tick. Floating addition/subtraction
+        # at this value produces 20.000000000000004 without any clock rollback.
+        clock = SimpleNamespace(monotonic=lambda: 12.072)
+        with patch.object(vault, 'time', clock):
+            vault.control('unlock')
+        timeouts = [call.args[0] for call in self.transport.settimeout.call_args_list]
+        self.assertTrue(timeouts)
+        self.assertTrue(all(0 < timeout <= 20 for timeout in timeouts), timeouts)
+
+    def test_unlock_elapsed_budget_is_not_renewed_before_sending_password(self):
+        clock = SimpleNamespace(monotonic=Mock(side_effect=[100, 105, 120]))
+        with patch.object(vault, 'time', clock), self.assertRaisesRegex(TimeoutError, 'Fixture unlock timeout'):
+            vault.control('unlock')
+        self.transport.settimeout.assert_called_once_with(15)
+        self.transport.connect.assert_called_once_with(str(self.root / 'control/control'))
+        self.transport.sendall.assert_not_called()
+        self.transport.__exit__.assert_called_once()
+        self.collection.is_locked.assert_not_called()
+
     def test_unlock_rejects_denied_truncated_oversized_and_still_locked_replies(self):
         for reply in ([struct.pack(">I", 8), struct.pack(">I", 1)],
                       [struct.pack(">I", 8), b""],
