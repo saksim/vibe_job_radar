@@ -1,6 +1,6 @@
 # Vibe Job Radar｜招聘要求与个人证据工作台
 
-当前代码版本 **0.15.5**：修复 CSV/JSON 导入时正文被静默覆盖或截断、合法长 CSV 异常、工作台批量导入失败残留半批数据，以及公开来源附件完成前报告提前可见。保留已有功能；[发行说明](docs/RELEASE_0_15_5.md)、[18项逐项判断与材料条件](docs/ISSUE_SCOPE_0_15_5.md)。正式 Tag 和附件以 [GitHub Releases](https://github.com/saksim/vibe_job_radar/releases) 为准。
+当前代码版本 **0.15.6**：修复个人附件中断后无法重传、并发上传越过容量限制，以及手动保存JD审计失败仍留下数据。保留已有功能；[发行说明](docs/RELEASE_0_15_6.md)、[18项逐项判断与材料条件](docs/ISSUE_SCOPE_0_15_6.md)。正式 Tag 和附件以 [GitHub Releases](https://github.com/saksim/vibe_job_radar/releases) 为准。
 
 0.15.3 [修复个人报告发布与证据历史完整性](docs/RELEASE_0_15_3.md)，实际缺陷配对 #445/#446；[剩余 18 项](docs/ISSUE_SCOPE_0_15_3.md)逐项列出未完功能、历史未知原因和最小验收条件。正式 Tag 与资产见 [Releases](https://github.com/saksim/vibe_job_radar/releases)。
 
