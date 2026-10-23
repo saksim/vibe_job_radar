@@ -10,9 +10,7 @@ import copy
 import hashlib
 import html
 import json
-import tempfile
 import uuid
-from pathlib import Path
 
 from .collection import writer_lock
 from .html_parser import plain_text
@@ -126,11 +124,11 @@ class PublicExample:
                              content_sha256=record.raw_sha256, stats=manifest['stats'],
                              code='real_source_received')
                 return {'public_source.json':audit}
-            with tempfile.TemporaryDirectory(prefix='.public-example-', dir=self.root) as tmp:
-                db = Path(tmp)/'batch.sqlite'
-                with Store(db) as batch:
-                    batch.add(record)
-                analyze(db, self.workspace.root/'reports'/report_id, config=config,
+            # The source record above is already durable. Keep the isolated
+            # report input in memory; all report files retain their own fsync.
+            with Store(':memory:') as batch:
+                batch.add(record)
+                analyze(batch, self.workspace.root/'reports'/report_id, config=config,
                         role_filter=['architect'], platform_filter=['greenhouse_anthropic'],
                         json_attachments=source_audit)
             atomic_json(self.root/(audit['id']+'.json'), audit)

@@ -44,7 +44,9 @@ def _unlock_linux(root):
             value = deadline - time.monotonic()
             if value <= 0:
                 raise TimeoutError('Fixture unlock timeout')
-            channel.settimeout(value)
+            # Equal clock ticks can make (start + 20) - start round just above
+            # 20. Keep the original per-operation cap and absolute deadline.
+            channel.settimeout(min(20, value))
         def receive(size):
             data = bytearray()
             while len(data) < size:

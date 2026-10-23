@@ -1,6 +1,6 @@
 # Vibe Job Radar｜招聘要求与个人证据工作台
 
-当前代码版本 **0.15.9**：修复HTTP正文提前断流、升级版本选择并发窗口和浏览器上层异常清理。保留已有功能；[发行说明](docs/RELEASE_0_15_9.md)、[剩余18项及环境材料条件](docs/ISSUE_SCOPE_0_15_9.md)。正式Tag与附件以[GitHub Releases](https://github.com/saksim/vibe_job_radar/releases)为准。
+当前代码版本 **0.15.9**：修复HTTP正文提前断流、升级版本选择并发、浏览器异常清理及报告附件大小写保护，减少公开案例的冗余磁盘批次，并保全候选失败证据。保留已有功能；[发行说明](docs/RELEASE_0_15_9.md)、[剩余18项及环境材料条件](docs/ISSUE_SCOPE_0_15_9.md)。正式Tag与附件以[GitHub Releases](https://github.com/saksim/vibe_job_radar/releases)为准。
 
 0.15.3 [修复个人报告发布与证据历史完整性](docs/RELEASE_0_15_3.md)，实际缺陷配对 #445/#446；[剩余 18 项](docs/ISSUE_SCOPE_0_15_3.md)逐项列出未完功能、历史未知原因和最小验收条件。正式 Tag 与资产见 [Releases](https://github.com/saksim/vibe_job_radar/releases)。
 
