@@ -178,21 +178,42 @@ class EvidenceService:
         if not 0 < len(raw) <= 1_000_000:
             raise InputError("单个附件必须在 1 字节～1 MB 之间。")
         ident = hashlib.sha256(raw).hexdigest()
-        with closing(self.connect()) as c:
-            total, count = c.execute("SELECT COALESCE(SUM(size),0),COUNT(*) FROM artifacts").fetchone()
-            exists = c.execute("SELECT 1 FROM artifacts WHERE id=?", (ident,)).fetchone()
-            if not exists and (total + len(raw) > 50_000_000 or count >= 100):
-                raise InputError("此工作区附件总量上限为 50 MB / 100 个。请使用新的工作区。")
-            path = self.artifacts / ident
-            if path.is_symlink():
-                raise InputError("附件路径不能使用符号链接。")
-            if not path.exists():
-                with path.open("xb") as stream:
-                    stream.write(raw)
-            if hashlib.sha256(path.read_bytes()).hexdigest() != ident:
-                raise InputError("附件哈希不一致。")
-            c.execute("INSERT OR IGNORE INTO artifacts VALUES(?,?,?,?)", (ident, Path(name.replace("\\", "/")).name, len(raw), utc_now()))
-            c.commit()
+        try:
+            with closing(self.connect()) as c, c:
+                # Serialize capacity checks with publication and metadata, even
+                # across workbench processes using the same evidence history.
+                c.execute("BEGIN IMMEDIATE")
+                total, count = c.execute("SELECT COALESCE(SUM(size),0),COUNT(*) FROM artifacts").fetchone()
+                exists = c.execute("SELECT 1 FROM artifacts WHERE id=?", (ident,)).fetchone()
+                if not exists and (total + len(raw) > 50_000_000 or count >= 100):
+                    raise InputError("此工作区附件总量上限为 50 MB / 100 个。请使用新的工作区。")
+                path = self.artifacts / ident
+                if path.is_symlink():
+                    raise InputError("附件路径不能使用符号链接。")
+                if not path.exists():
+                    # A failed write/flush cannot occupy the canonical digest
+                    # path with partial bytes and block the user's next upload.
+                    with tempfile.TemporaryDirectory(prefix=".upload-", dir=self.artifacts) as directory:
+                        staged = Path(directory) / ident
+                        with staged.open("xb") as stream:
+                            stream.write(raw)
+                            stream.flush()
+                            os.fsync(stream.fileno())
+                        os.replace(staged, path)
+                    if os.name != "nt":
+                        directory_fd = os.open(self.artifacts, os.O_RDONLY | os.O_DIRECTORY)
+                        try:
+                            os.fsync(directory_fd)
+                        finally:
+                            os.close(directory_fd)
+                if hashlib.sha256(path.read_bytes()).hexdigest() != ident:
+                    raise InputError("附件哈希不一致。")
+                c.execute("INSERT OR IGNORE INTO artifacts VALUES(?,?,?,?)", (ident, Path(name.replace("\\", "/")).name, len(raw), utc_now()))
+                # If metadata commit fails, retain the complete hash-checked
+                # file. A retry can safely register it without changing bytes.
+        except (OSError, sqlite3.Error) as exc:
+            raise InputError("附件保存失败，未登记本次上传。请检查工作区权限和可用空间，或稍后重试；"
+                             "原附件和证据历史保留。") from exc
         return {"artifact_id": ident, "sha256": ident, "size": len(raw)}
 
     def _source(self, run_id):
