@@ -95,9 +95,9 @@ def safe_snapshot(probe):
         return {'available': False}
 
 
-def wait_diagnostic(tasks, probe, before, elapsed):
+def wait_diagnostic(tasks, probe, before, elapsed, *, worker=None):
     # No task lock, snapshot(), file read, query, descriptor or exception text.
-    worker = tasks._thread
+    worker = tasks._thread if worker is None else worker
     allowed = {'status': {'idle', 'queued', 'running', 'cancelling', 'cancelled',
                           'completed', 'failed', 'interrupted'}, 'phase': {'saving'}}
     state = {}
@@ -126,9 +126,10 @@ def wait_diagnostic(tasks, probe, before, elapsed):
             'worker_fsync': {'before_wait': before, 'at_timeout': safe_snapshot(probe)}}
 
 
-def join_observed(tasks, *, timeout):
+def join_observed(tasks, *, timeout, worker=None):
     """Return the original alive result; optional evidence never releases a worker."""
-    worker = tasks._thread
+    # A scheduler caller selects its worker under the submission lock.
+    worker = tasks._thread if worker is None else worker
     probe = WaitFsyncProbe(lambda: worker)
     installed = False
     try:
@@ -146,7 +147,7 @@ def join_observed(tasks, *, timeout):
         try:
             if not installed:
                 raise RuntimeError('observation unavailable')
-            details = wait_diagnostic(tasks, probe, before, time.perf_counter() - begin)
+            details = wait_diagnostic(tasks, probe, before, time.perf_counter() - begin, worker=worker)
             text = json.dumps(details, ensure_ascii=False, allow_nan=False)
         except Exception:
             text = '{"capture_status":"unavailable"}'

@@ -503,6 +503,7 @@ def verify_visible_forms(root, server, local, factory, wait, query, result):
                 requested={**query,'keyword':key,'max_pages':1}
                 if label=='query-document-refused':requested=explicit_seed(requested,local)
                 service.create(requested);task=wait(service)
+                result['visible_form_last_task']={'case':label,'status':task['status'],'code':task.get('code')}
                 requests=server.requests[before:];shapes=server.search_shapes[shape_before:]
                 posts=sum(not row['keyword_empty'] for row in shapes)
                 assert not any(r['path']=='/job/999.shtml' for r in requests)
@@ -510,8 +511,13 @@ def verify_visible_forms(root, server, local, factory, wait, query, result):
                 assert ledger.summary('liepin')['login']['day']==0
                 row={'case':label,'keyword_posts':posts,'query_document_requests':0,'stale_recommendation_used':False,'login_attempts':0}
                 if label in ('matched','empty','entry-without-recommendations'):
+                    # A failed open/search never reaches the success-only form
+                    # observer. Preserve its original stop before reading that
+                    # observation; a missing observation is still a failure.
+                    assert task['status']=='ready',task.get('code')
                     native=service._backends[task['id']]
-                    observed=native.fixture_form_observation
+                    observed=getattr(native,'fixture_form_observation',None)
+                    assert isinstance(observed,dict),'visible_form_observation_missing'
                     no_recommendations = label == 'entry-without-recommendations'
                     assert observed['submissions']==1 and observed['initializations'] in (
                         (0,) if no_recommendations else (0,1)),observed
