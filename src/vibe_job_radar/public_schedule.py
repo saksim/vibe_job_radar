@@ -248,11 +248,21 @@ class PublicSchedule:
         with self._edit():
             value=self._read()
             if not value['attempt_id']:return
+            now=self._now()
+            rolled_back=now<max(value['last_seen'],self._last_seen)
+            if rolled_back:
+                value.update(status='paused',code='clock_rollback',next_due=None,last_seen=now)
+            self._last_seen=now
             task=self._plan_task(value)
             matched=bool(value['active_task_id']) and task.get('id')==value['active_task_id']
-            if matched and task.get('owned_elsewhere') and task.get('status') in {'queued','running','cancelling'}:return
+            # A restarted scheduler can share this process's still-running task.
+            # Keep its identity so stop/reconciliation can reach the real owner.
+            if matched and task.get('status') in {'queued','running','cancelling'}:
+                if rolled_back:self._write(value)
+                return
             complete=matched and task.get('status')=='completed'
-            self._finish(value,task if matched else {},self._now(),interrupted=not complete)
+            # Preserve a detected clock pause while retaining a completed report.
+            self._finish(value,task if matched else {},now,interrupted=not complete)
 
     def tick(self):
         """One bounded scheduling decision; network happens in PublicTasks."""
