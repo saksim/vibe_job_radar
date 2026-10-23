@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from email.utils import parsedate_to_datetime
 from urllib.parse import urlsplit
 
-from ..network import FetchError, PinnedHTTPSConnection, validate_public_url, validate_url_target
+from ..network import FetchError, PinnedHTTPSConnection, read_response_body, validate_public_url, validate_url_target
 from ..utils import domain_matches
 from ..network_policy import NetworkPolicy, current_policy, use_policy
 from ..loopback_proxy import LocalProxyError
@@ -174,9 +174,7 @@ class PinnedTransport:
                         self.retry_until[host] = self.ledger.clock() + delay
                         raise RateLimit(delay, 'http_429', next_allowed_at=self.retry_until[host])
                 raise CrawlError(f'http_{response.status}')
-            content = response.read(5_000_001)
-            if len(content) > 5_000_000:
-                raise CrawlError('response_too_large')
+            content = read_response_body(response, 5_000_000)
             if metadata.get('content-encoding', 'identity').lower() != 'identity':
                 raise CrawlError('unexpected_compression')
             return WireResponse(response.status, metadata, content,

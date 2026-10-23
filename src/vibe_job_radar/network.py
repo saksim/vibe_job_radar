@@ -72,6 +72,22 @@ class Response:
         raise FetchError("encoding_unknown", "save and review the page manually")
 
 
+def read_response_body(response, max_bytes: int) -> bytes:
+    """Bound memory and reject an EOF before the HTTP parser's framing ends."""
+    data = response.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        raise FetchError("response_too_large")
+    # HTTPResponse.read(amt) may return a truncated Content-Length body without
+    # raising. Its remaining length also respects HEAD/204/304 bodyless semantics;
+    # comparing the raw header would incorrectly reject those valid responses.
+    # Chunked truncation already raises IncompleteRead; close-delimited bodies
+    # have length=None and keep their existing EOF semantics.
+    remaining = getattr(response, 'length', None)
+    if type(remaining) is int and remaining > 0:
+        raise http.client.IncompleteRead(b'', remaining)
+    return data
+
+
 def valid_etag(value) -> bool:
     # One bounded ASCII entity-tag, never '*', a list, controls or header lines.
     return isinstance(value,str) and len(value)<=512 and re.fullmatch(r'(?:W/)?"[\x21\x23-\x7e]*"',value) is not None
@@ -321,9 +337,7 @@ class SafeHTTP:
                 raise FetchError("redirect_not_followed", "redirect requires an explicit site policy")
             if response_headers.get("content-encoding", "identity").lower() != "identity":
                 raise FetchError("unexpected_compression")
-            data = resp.read(self.max_bytes + 1)
-            if len(data) > self.max_bytes:
-                raise FetchError("response_too_large")
+            data = read_response_body(resp, self.max_bytes)
             return Response(resp.status, response_headers, data, url, resolution=dict(self.last_resolution))
         except FetchError:
             raise

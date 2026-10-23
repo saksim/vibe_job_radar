@@ -185,7 +185,9 @@ def analyze(db: str | Path | Store, output: str | Path, *, config: dict | None =
         with ThreadPoolExecutor(max_workers=4, thread_name_prefix=f'radar-report-{threading.get_ident()}') as writer:
             writes, names = [], set()
             def write(function, *args):
-                name = args[0].name
+                # Attachments must remain distinct on case-insensitive volumes
+                # too; preserve their original spelling in the actual files.
+                name = args[0].name.casefold()
                 if name in names or name == "run_manifest.json":
                     raise ValueError("report attachment conflicts with an original output")
                 names.add(name)
