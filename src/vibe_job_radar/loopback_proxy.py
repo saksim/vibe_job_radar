@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import http.client
 import ipaddress
+import io
 import math
 import os
 import socket
@@ -24,6 +25,64 @@ class LocalProxyError(RuntimeError):
     def __init__(self, code: str):
         self.code = code
         super().__init__(code)
+
+
+class _DeadlineReader(io.RawIOBase):
+    """The CONNECT response owns a reader, never ownership of the socket."""
+    def __init__(self, connection):
+        super().__init__()
+        self.connection = connection
+
+    def readable(self):
+        return True
+
+    def readinto(self, buffer):
+        self.connection.set_remaining()
+        return self.connection.socket.recv_into(buffer)
+
+
+class _DeadlineSocket:
+    def __init__(self, sock, deadline):
+        self.socket, self.deadline = sock, deadline
+
+    def __getattr__(self, name):
+        return getattr(self.socket, name)
+
+    def set_remaining(self):
+        remaining = self.deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError('local proxy timeout')
+        self.socket.settimeout(remaining)
+
+    def sendall(self, data):
+        self.set_remaining()
+        self.socket.sendall(data)
+
+    def makefile(self, mode):
+        if mode != 'rb':
+            raise ValueError('CONNECT requires a binary response reader')
+        return io.BufferedReader(_DeadlineReader(self))
+
+
+class _DeadlineHTTPConnection(http.client.HTTPConnection):
+    def __init__(self, *args, deadline, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._connect_deadline = deadline
+
+    def _tunnel(self):
+        # Keep stdlib CONNECT formatting/parsing and authentication behavior.
+        # A per-recv timeout alone lets a dripping status/header renew the wait.
+        # Apply the original budget to every send and raw socket read instead.
+        sock = self.sock
+        guarded = _DeadlineSocket(sock, self._connect_deadline)
+        self.sock = guarded
+        try:
+            super()._tunnel()
+        finally:
+            # A refusal can already have closed and cleared self.sock. Success
+            # transfers the real socket, with no wrapper in the TLS/data path.
+            if self.sock is guarded:
+                self.sock = sock
 
 
 @dataclass(frozen=True)
@@ -102,7 +161,7 @@ class LoopbackProxy:
         if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not math.isfinite(timeout) or timeout <= 0:
             raise ValueError('a finite positive connection timeout is required')
         deadline = time.monotonic() + timeout
-        proxy = http.client.HTTPConnection(self.host, self.port, timeout=timeout,
+        proxy = _DeadlineHTTPConnection(self.host, self.port, deadline=deadline, timeout=timeout,
                                             source_address=source_address)
         proxy.set_debuglevel(0)  # Inherited stdlib debug output must not print secrets.
         # CONNECT only the verified numeric IP, never ask the proxy to resolve a

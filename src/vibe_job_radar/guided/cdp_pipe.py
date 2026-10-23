@@ -37,10 +37,29 @@ class PipeTransport:
         self.outgoing = queue.Queue(maxsize=32)
         self.stopping = threading.Event()
         self.failed = threading.Event()
-        self.reader = threading.Thread(target=self._read, daemon=True, name='native-cdp-read')
-        self.writer = threading.Thread(target=self._write, daemon=True, name='native-cdp-write')
-        self.reader.start()
-        self.writer.start()
+        started = []
+        try:
+            self.reader = threading.Thread(target=self._read, daemon=True, name='native-cdp-read')
+            self.writer = threading.Thread(target=self._write, daemon=True, name='native-cdp-write')
+            self.reader.start()
+            started.append(self.reader)
+            self.writer.start()
+            started.append(self.writer)
+        except Exception:
+            # A failed constructor cannot transfer pipe ownership to the CDP
+            # connection. Send EOF to the owned bridge and stop any thread
+            # already started; never join a thread whose start failed.
+            self.stopping.set()
+            try:
+                self.process.stdin.close()
+            except Exception:
+                pass
+            for thread in started:
+                try:
+                    thread.join(timeout=1)
+                except Exception:
+                    pass
+            raise  # Keep the startup error even if its cleanup also failed.
 
     def _read(self):
         buffered = bytearray()
