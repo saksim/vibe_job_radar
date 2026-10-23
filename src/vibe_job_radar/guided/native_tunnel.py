@@ -66,9 +66,20 @@ class NativeTunnel:
                     owner._slots.release()
         self.server = Server(('127.0.0.1', 0), Handler)
         self.endpoint = f'http://127.0.0.1:{self.server.server_address[1]}'
-        self.thread = threading.Thread(target=self.server.serve_forever,
-            kwargs={'poll_interval': .05}, daemon=True, name='radar-native-connect')
-        self.thread.start()
+        try:
+            self.thread = threading.Thread(target=self.server.serve_forever,
+                kwargs={'poll_interval': .05}, daemon=True, name='radar-native-connect')
+            self.thread.start()
+        except Exception:
+            # The caller cannot retain a constructor that failed. The listener
+            # is already bound, so release it here; shutdown() would wait for a
+            # serve_forever loop that did not start. Retain the startup failure.
+            self._stop.set()
+            try:
+                self.server.server_close()
+            except OSError:
+                pass
+            raise
 
     def resolve_host(self, host):
         """Use the session's same public resolver without opening a target socket."""

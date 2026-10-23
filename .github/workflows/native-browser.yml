@@ -28,6 +28,7 @@ jobs:
       - name: Install Chromium and isolated test trust tooling
         if: runner.os == 'Linux'
         run: |
+          python scripts/configure_ci_apt.py
           python -m playwright install --with-deps chromium
           sudo apt-get install -y libnss3-tools xvfb
       - name: Compare public page CDP session on Windows

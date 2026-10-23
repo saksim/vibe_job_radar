@@ -383,7 +383,11 @@ class PublicTasks:
         from .pipeline import analyze
         with writer_lock(self.workspace.root):
             with Store(self.workspace.db) as store:
-                for record in records: store.add(record)
+                # This validated source page is one durable unit. A later row
+                # or audit failure must not leave earlier observations behind;
+                # completed source batches still survive a later report failure.
+                store.add_batch(records, action='public_query_import', details={
+                    'source_scope': list(query.source_scope), 'execution_mode': self.mode()})
             config=copy.deepcopy(self.workspace.config)
             for key in query.source_scope:
                 source=self.hybrid.registry[key]
