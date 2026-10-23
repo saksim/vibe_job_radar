@@ -14,6 +14,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from test_local_public import payload, query
+from public_task_wait_diagnostics import join_observed
 import test_workbench as http_fixtures
 from vibe_job_radar.local_public import LocalPublicDataClient, SOURCE
 from vibe_job_radar.network import FetchError
@@ -43,8 +44,8 @@ class ScheduleTests(unittest.TestCase):
         # The background scheduler may publish a Thread immediately before
         # start(). Take the same lock as submit before inspecting/joining it.
         with self.tasks._lock:worker=self.tasks._thread
-        worker.join(15)
-        self.assertFalse(worker.is_alive())
+        alive, diagnostic = join_observed(self.tasks, timeout=15, worker=worker)
+        self.assertFalse(alive, 'worker did not finish' + diagnostic)
         return self.tasks._state.copy()
 
     def hold(self,url):
