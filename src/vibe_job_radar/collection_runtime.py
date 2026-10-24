@@ -1,12 +1,13 @@
-"""One explicitly started category batch, owned by the local application."""
+"""One explicitly started, bounded collection batch owned by the application."""
 from contextlib import contextmanager
 import hashlib
 import json
+import os
 import re
 import threading
 
 from .utils import atomic_json
-from .workspace import InputError
+from .workspace import InputError, text_field
 
 
 class CollectionBusy(InputError):
@@ -17,7 +18,7 @@ def fingerprint(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
-def validate_scope(collector, state):
+def _validate_category_scope(collector, state):
     """A stored checkpoint cannot turn a bounded category batch into another route."""
     from .public_category import category_for_state, MAX_DETAILS
     from .public_job_links import public_detail_parser
@@ -73,6 +74,115 @@ def validate_scope(collector, state):
         plan=collector.category_next_preview({'id':context.get('parent_id')})
         if (plan['fingerprint']!=context.get('parent_fingerprint') or plan['existing_task_id']!=original['id']):
             raise InputError('原名单来源已变化，未继续访问。')
+
+
+def configuration_fingerprint(collector):
+    """Bind both effective settings and the persisted platform override."""
+    path = collector.platform_config
+    if path.is_symlink():
+        raise InputError('平台配置不能使用符号链接。')
+    override = hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else None
+    return fingerprint(dict(config=collector.workspace.config, override=override))
+
+
+def validate_scope(collector, state):
+    from .public_category import MODE
+    if state.get('mode') == MODE:
+        return _validate_category_scope(collector, state)
+    from .collection import safe_url
+    from .config import platform_for_url
+    from .discovery import build_plan
+    from .public_job_links import public_detail_parser
+    from urllib.parse import parse_qsl, urlsplit
+
+    def require(condition):
+        if not condition:
+            raise InputError('保存的采集范围、阶段或预算无效，未继续访问。')
+
+    mode = state.get('mode')
+    require(mode in {'search', 'urls', 'feed'})
+    require(type(state.get('schema_version')) is int and state['schema_version'] == 1
+            and state.get('status') in {'paused', 'running'}
+            and state.get('phase') in {'search': {'search', 'detail', 'report'},
+                                      'urls': {'detail', 'report'}, 'feed': {'feed', 'report'}}[mode]
+            and not any(key.startswith('category_') for key in state))
+    roles, platforms = collector.workspace.filters(state)
+    require(state.get('roles') == roles and state.get('platforms') == platforms)
+    permits = state.get('permit_platforms')
+    require(isinstance(permits, list) and all(isinstance(p, str) and p in platforms for p in permits)
+            and isinstance(state.get('rights_note'), str) and bool(state['rights_note'].strip())
+            and len(state['rights_note']) <= 2000)
+    for name, low, high in (('pages', 1, 10), ('search_budget', 1, 300), ('detail_budget', 0, 300),
+                            ('feed_budget', 1, 20), ('fresh_hours', 1, 720)):
+        require(type(state.get(name)) is int and low <= state[name] <= high)
+    for name, budget in (('search_requests', 'search_budget'), ('detail_attempts', 'detail_budget'),
+                         ('feed_requests', 'feed_budget')):
+        require(type(state.get(name)) is int and 0 <= state[name] <= state[budget])
+    details = state.get('details')
+    require(isinstance(details, list) and len(details) <= (300 if mode == 'urls' else 3000))
+    for row in details:
+        require(isinstance(row, dict) and row.get('platform') in platforms
+                and isinstance(row.get('status'), str) and isinstance(row.get('record_id'), str))
+        url = safe_url(row.get('url'))
+        require(url == row['url'] and platform_for_url(url, collector.workspace.config) == row['platform']
+                and urlsplit(url).path not in {'', '/'})
+        if row.get('status') == 'pending' and row.get('detail_parser'):
+            require(row['detail_parser'] == public_detail_parser(url))
+    require(len({row['url'] for row in details}) == len(details))
+    tasks = state.get('tasks')
+    require(isinstance(tasks, list) and type(state.get('task_cursor')) is int and state['task_cursor'] >= 0)
+    if mode == 'search':
+        plan = build_plan(collector.workspace.config, platforms, roles)
+        require(len(tasks) == len(plan))
+        for row, task in zip(tasks, plan):
+            require(isinstance(row, dict) and all(row.get(k) == getattr(task, k)
+                    for k in ('query_id', 'platform', 'role', 'query'))
+                    and type(row.get('attempts')) is int and 0 <= row['attempts'] <= state['pages']
+                    and type(row.get('offset')) is int and 0 <= row['offset'] <= row['attempts']
+                    and isinstance(row.get('status'), str))
+        require(sum(row['attempts'] for row in tasks) == state['search_requests'])
+    else:
+        require(not tasks and state['search_requests'] == 0)
+    outcomes = state.get('feed_outcomes')
+    require(isinstance(outcomes, list) and len(outcomes) == state['feed_requests']
+            and all(isinstance(row, dict) and isinstance(row.get('status'), str) for row in outcomes))
+    if mode == 'feed':
+        require(not details and state['detail_attempts'] == 0)
+        endpoint = safe_url(state.get('endpoint'))
+        require(endpoint == state['endpoint'] and safe_url(state.get('contract_ref')) == state['contract_ref']
+                and 'cursor' not in dict(parse_qsl(urlsplit(endpoint).query))
+                and type(state.get('feed_done')) is bool and isinstance(state.get('feed_cursor'), str)
+                and len(state['feed_cursor']) <= 1000 and isinstance(state.get('seen_cursors'), list)
+                and len(state['seen_cursors']) <= state['feed_requests']
+                and all(isinstance(c, str) and len(c) <= 1000 for c in state['seen_cursors']))
+    else:
+        require(not outcomes and state['feed_requests'] == 0)
+
+
+def step_limit(state):
+    # Each original request consumes budget before I/O; skipped/cached details
+    # consume a row. Only the existing phase transitions and report remain.
+    from .public_category import MODE
+    if state['mode'] == MODE:
+        return 9
+    if state['mode'] == 'feed':
+        return state['feed_budget'] + 2
+    if state['mode'] == 'urls':
+        return len(state['details']) + 2
+    return state['search_budget'] + 3000 + 3
+
+
+def phase_key(state, data):
+    from .public_category import MODE
+    if state['mode'] == MODE and 'api_key' in data:
+        raise InputError('公开分类批次不接受 API 凭据。')
+    key = text_field(data, 'api_key', limit=1000).strip()
+    if state['phase'] == 'search':
+        key = key or text_field({'api_key': os.environ.get('BRAVE_SEARCH_API_KEY', '')}, 'api_key', limit=1000).strip()
+        if not key:
+            raise InputError('搜索阶段需要 Brave Key；未启动或消耗请求。')
+        return key
+    return key if state['phase'] == 'feed' else ''
 
 
 def claim(root):
@@ -176,8 +286,9 @@ class CollectionRunner:
     def start(self, data):
         from .collection import TERMINAL, writer_lock
         from .public_category import MODE
-        if not isinstance(data, dict) or set(data) != {'id','consent'} or data['consent'] is not True:
-            raise InputError('请确认在本机完成已选择的当前分类批次。')
+        if (not isinstance(data, dict) or set(data) not in ({'id','consent'}, {'id','consent','api_key'})
+                or data['consent'] is not True):
+            raise InputError('请确认完成已选择的当前采集批次。')
         with self._lock:
             if self._closed:
                 raise InputError('本工作台已关闭，未启动新请求。')
@@ -185,18 +296,21 @@ class CollectionRunner:
             if self.is_running():
                 if previous['id'] != data['id']:
                     raise CollectionBusy('本机正在完成另一个批次，请先暂停。')
+                if 'api_key' in data and self.collector._load(data['id'])['mode'] == MODE:
+                    raise InputError('公开分类批次不接受 API 凭据。')
                 return self.state()
             lease = claim(self.collector.root)
             try:
                 with writer_lock(self.collector.root):
                     state = self.collector._load(data['id'])
-                    if state['mode'] != MODE or state['status'] in TERMINAL:
-                        raise InputError('后台执行只接受尚未结束的公开分类批次。')
+                    if state['status'] in TERMINAL:
+                        raise InputError('后台执行只接受尚未结束的采集批次。')
                     validate_scope(self.collector, state)
                     if state.get('in_flight'):
                         raise InputError('上次请求结果未知；请重新打开工作台核对中断记录，不能直接重放。')
-                    if state.get('permit_platforms') != ['liepin'] or not state.get('rights_note'):
-                        raise InputError('原任务许可不完整，未执行。')
+                    key = phase_key(state, data)
+                    config_id = configuration_fingerprint(self.collector)
+                    limit = step_limit(state)
                     policy = self.collector.workspace.network_policy()
                     if policy.error:
                         raise InputError('当前网络设置不可用，未执行。')
@@ -204,7 +318,7 @@ class CollectionRunner:
                     self._save(state['id'], 'running', 'running')
                 self._stop.clear()
                 self._thread = threading.Thread(target=self._run,
-                    args=(state['id'], expected, policy.fingerprint, lease), daemon=True)
+                    args=(state['id'], expected, policy.fingerprint, config_id, limit, key, lease), daemon=True)
                 self._thread.start()
             except BaseException:
                 lease.__exit__(None, None, None)
@@ -225,20 +339,21 @@ class CollectionRunner:
                 raise CollectionBusy('该批次由另一个本机服务执行，请回到原服务暂停。')
             return self.state()
 
-    def _run(self, ident, expected, policy_id, lease):
+    def _run(self, ident, expected, policy_id, config_id, limit, key, lease):
         from .collection import TERMINAL, writer_lock
         execution = self.collector._execution
         execution.owned = True
         execution.expected = (ident, expected)
         execution.policy_id = policy_id
+        execution.config_id = config_id
         status, code = 'paused', 'user_pause'
         try:
-            # One original small batch has at most one list, five details,
-            # the detail-to-report transition and report commit.
-            for _ in range(9):
+            for _ in range(limit):
                 if self._stop.is_set():
                     break
-                task = self.collector.step({'id': ident})
+                task = self.collector.step({'id': ident, 'api_key': key})
+                if task['phase'] not in {'search', 'feed'}:
+                    key = ''
                 if task['status'] in TERMINAL:
                     status, code = task['status'], 'finished'
                     break
@@ -264,6 +379,7 @@ class CollectionRunner:
                         code = 'application_closed'
                     self._save(ident, status, code)
             finally:
+                key = ''
                 execution.__dict__.clear()
                 lease.__exit__(None, None, None)
 

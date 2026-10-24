@@ -1,10 +1,7 @@
 name: vibe-radar-workbench
 services:
   workbench:
-    image: ${RADAR_IMAGE:-vibe-job-radar-workbench:local}
-    build:
-      context: ../..
-      dockerfile: Dockerfile
+    image: ${RADAR_IMAGE:-ghcr.io/saksim/vibe_job_radar:0.18.0}
     command:
       - --workspace
       - /data
