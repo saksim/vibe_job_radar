@@ -77,6 +77,42 @@ class NativePageRetirementTests(TestCase):
         callback.assert_not_called()
         self.assertEqual(self.b._pending, {})
 
+    def _finished_body(self, body, *, retire):
+        self.b._requests[(self.session, 'body')] = {
+            'role': 'business', 'json': True, 'epoch': self.b._epoch,
+            'status': 200, 'size': 2, 'operation': 'query_jobs',
+        }
+        def receive_body(*args):
+            if retire:
+                self.b._detached({'sessionId': self.session})
+            return {'body': body}
+        self.client.send.side_effect = receive_body
+        self.b._finished(self.session, {'requestId': 'body'})
+        self.client.send.assert_called_once_with('Network.getResponseBody', {'requestId': 'body'})
+        self.assertEqual(self.b._pending, {})
+
+    def test_successful_body_return_after_page_close_cannot_add_observation(self):
+        self._finished_body('{"jobs": [{"id": "retired-page"}]}', retire=True)
+        self.assertEqual(self.b.observations(), ())
+        self.assertEqual(self.b._observed_bytes, 0)
+        self.assertIsNone(self.b.error)
+        self.assertEqual(self.b._sessions, {'session': 'frame'})
+
+    def test_invalid_body_return_after_page_close_cannot_stop_surviving_job(self):
+        self._finished_body('not-json', retire=True)
+        self.assertIsNone(self.b.error)
+        self.assertFalse(self.b._halted)
+        self.assertEqual(self.b.observations(), ())
+        self.b._cdp.send.assert_not_called()
+
+    def test_successful_body_return_from_live_page_is_retained(self):
+        self._finished_body('{"jobs": [{"id": "live-page"}]}', retire=False)
+        observed, = self.b.observations()
+        self.assertEqual(observed.operation, 'query_jobs')
+        self.assertEqual(observed.payload, {'jobs': [{'id': 'live-page'}]})
+        self.assertGreater(self.b._observed_bytes, 0)
+        self.assertIsNone(self.b.error)
+
     def test_retirement_releases_only_own_request_and_authentication_state(self):
         self.b._requests[(self.session, 'old')] = {'size': 1}
         self.b._requests[('session', 'live')] = {'size': 2}
