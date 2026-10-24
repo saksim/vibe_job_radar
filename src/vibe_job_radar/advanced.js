@@ -243,7 +243,7 @@ function showCollection(s){
     if(row.fetch_diagnostic){const detail=document.createElement("details");detail.append(text("summary","本条跳转与请求诊断（已移除目标参数）"),text("pre",JSON.stringify(row.fetch_diagnostic,null,2)));card.append(detail);}
     root.append(card);
   }
-  if(["urls","search"].includes(s.mode)&&s.details.some(d=>!["ok","fresh_reused","pending","budget_skipped"].includes(d.status))){
+  if(!window.radarServer && ["urls","search"].includes(s.mode)&&s.details.some(d=>!["ok","fresh_reused","pending","budget_skipped"].includes(d.status))){
     const handoff=text("div","");root.append(handoff);
     handoff.append(button("将未完成链接转交浏览器（先预览，不联网）",async()=>{
       const plan=await api("/api/collection/handoff_preview",{id:s.id});handoff.replaceChildren(text("p",plan.notice));

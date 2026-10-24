@@ -42,6 +42,13 @@ def verify(candidate,out):
             for entry in ['vibe-radar','vibe-radar-ui','vibe-radar-collect','vibe-radar-service','vibe-radar-team']:
                 run([str(binary/(entry+('.exe' if os.name=='nt' else ''))),'--help'],cwd=work)
             result['steps'].append('five_installed_entrypoints')
+            run([str(binary/('vibe-radar-web.exe' if os.name=='nt' else 'vibe-radar-web')),
+                 '--help'],cwd=work)
+            run([str(python),'-I','-c',
+                 'from importlib.resources import files; '
+                 'assert all(files("vibe_job_radar").joinpath(n).read_bytes() for n in '
+                 '("server_login.html","server_login.js","server_ui.js"))'],cwd=work)
+            result['server_entrypoint_and_assets_checked']=True
             run([str(binary/('vibe-radar-ui.exe' if os.name=='nt' else 'vibe-radar-ui')),
                  '--doctor','--workspace',str(work/'doctor')],cwd=work)
             config=work/'config.json'

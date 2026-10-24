@@ -1,6 +1,6 @@
 # Vibe Job Radar｜招聘要求与个人证据工作台
 
-当前代码版本 **0.16.0**：修复SQLite配额等锁取时、退休页面同步回复污染及PAC许可撤销后的请求发送。保留已有功能；[发行说明](docs/RELEASE_0_16_0.md)、[剩余18项及环境材料条件](docs/ISSUE_SCOPE_0_16_0.md)。正式Tag与附件以[GitHub Releases](https://github.com/saksim/vibe_job_radar/releases)为准。
+当前代码版本 **0.17.0**：新增单拥有者服务器浏览器入口与 Docker 部署，拆分共享应用层和 HTTP 路由层。保留桌面、CLI、团队服务和原报告链路；[发行说明](docs/RELEASE_0_17_0.md)、[Docker 部署](docs/DOCKER.md)、[剩余18项及环境材料条件](docs/ISSUE_SCOPE_0_16_0.md)。正式Tag与附件以[GitHub Releases](https://github.com/saksim/vibe_job_radar/releases)为准。
 
 0.15.3 [修复个人报告发布与证据历史完整性](docs/RELEASE_0_15_3.md)，实际缺陷配对 #445/#446；[剩余 18 项](docs/ISSUE_SCOPE_0_15_3.md)逐项列出未完功能、历史未知原因和最小验收条件。正式 Tag 与资产见 [Releases](https://github.com/saksim/vibe_job_radar/releases)。
 
@@ -180,3 +180,9 @@ python scripts/run_guided_browser.py
 新建任务可显式选择原生实验并确认范围，旧HTTP桥仍默认。页面HTTP/TLS由浏览器完成，经过只透明转发加密字节的本机公网目标CONNECT守卫；不是Python重发页面。猎聘已包含经审查的只读搜索、筛选初始化、必要资源及用户明确发起的密码登录请求控制；真实账号到完整JD和原报告仍待实站验收。BOSS/51job未启用native，未知路径与操作仍停止；不能把开关出现当成三站取数成功。详见[实现与限制](docs/NATIVE_BROWSER_D02.md)。
 
 报告分析重新打开当前版本的职位库时，本分支移除重复版本写锁；原数据库等待与写入语义保持，范围和首次失败记录见[并发报告读取](docs/STORE_READ_OPEN.md)。
+
+## 服务器浏览器工作台与 Docker
+
+新增单拥有者远程工作台入口，复用原有公开采集、导入、分析、证据、质量复核与报告服务。桌面入口和团队设备服务保留。服务器通过独立登录会话访问一个私人工作区，材料保存在服务器；不提供多人数据隔离或远程接管招聘平台登录浏览器。
+
+源码部署与容器配置见 [Docker 工作台说明](docs/DOCKER.md)，当前模块边界与后续拆分见 [架构说明](docs/ARCHITECTURE.md)。使用正式发行源码构建；本地镜像标签不等于已发布容器注册表镜像。实际容器构建、运行与公网验收结果分别记录在对应 PR，不能由配置文件存在推断全部通过。
