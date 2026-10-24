@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import Mock,patch
 from urllib.parse import urlsplit
 ROOT=Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT/'src'))
-from vibe_job_radar import workbench
+from vibe_job_radar import application, workbench
 from vibe_job_radar.guided.rate import RateLedger
 from vibe_job_radar.guided.service import GuidedService
 from vibe_job_radar.workspace import Workspace
@@ -25,7 +25,7 @@ def main():
             now[0]=first+offset;ledger.reserve('liepin','login')
         now[0]=first+903
         original=rows()
-        with patch.object(workbench,'GuidedService',partial(GuidedService,ledger=ledger)):
+        with patch.object(application,'GuidedService',partial(GuidedService,ledger=ledger)):
             server=workbench.LocalServer(Workspace(Path(tmp)/'workspace'),port=0)
         server.guided._submit=Mock()
         ident=server.guided.create({'platform':'liepin','keyword':'synthetic quota UI','consent':True,'rights_note':'local synthetic fixture','max_pages':1,'max_jobs':1})['id']

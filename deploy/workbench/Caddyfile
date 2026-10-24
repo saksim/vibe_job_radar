@@ -1,0 +1,9 @@
+# Run Caddy on the Docker host. RADAR_HOST is the actual public DNS name.
+# This is separate from deploy/team/Caddyfile (the team API has a 16 KB body limit).
+{$RADAR_HOST} {
+    request_body {
+        max_size 2000000
+    }
+    # The original Host is preserved; the app checks the configured exact origin.
+    reverse_proxy 127.0.0.1:8080
+}

@@ -53,8 +53,11 @@ def main():
                 if not release_state.wait(30):result['state_hold_timed_out']=True
             return super().do_GET()
         def _json(self, status, value):
+            # Shared application responses are already serialized; observe their
+            # JSON value while forwarding the original bytes unchanged.
+            observed = json.loads(value) if isinstance(value, bytes) else value
             if (self.command=='POST' and self.path=='/api/guided/action' and status==200
-                    and isinstance(value,dict) and value.get('queued') is True and hold_next.is_set()):
+                    and isinstance(observed,dict) and observed.get('queued') is True and hold_next.is_set()):
                 hold_next.clear();held.set()
                 if not release.wait(30):
                     result['hold_timed_out']=True

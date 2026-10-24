@@ -65,7 +65,7 @@ function selected(id) { return [...$(id).querySelectorAll("input:checked")].map(
 function filters() { return {roles: selected("roles"), platforms: selected("platforms")}; }
 async function refresh() {
   state = await request("/api/status");
-  $("workspace").textContent = `本机数据目录：${state.workspace}`;
+  $("workspace").textContent = `${window.radarServer ? "服务器" : "本机"}数据目录：${state.workspace}`;
   $("counts").textContent = `真实记录 ${state.counts.records} · 完整正文 ${state.counts.full_text} · 摘要线索 ${state.counts.snippet}`;
   $("key-status").textContent = state.brave_key_configured ? "已检测到环境变量中的 Brave Key，但未验证联网和额度。" : "未配置 Brave Key：不影响粘贴、导入、演示与离线分析。";
   choices("roles", state.roles, Object.keys(state.roles));
