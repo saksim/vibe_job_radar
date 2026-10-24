@@ -84,15 +84,21 @@ def writer_lock(root):
 def serialized(method):
     @wraps(method)
     def wrapped(self, *args, **kwargs):
-        from .collection_runtime import operation, fingerprint, validate_scope
+        from .collection_runtime import operation, fingerprint, validate_scope, configuration_fingerprint
         with operation(self), writer_lock(self.root):
             expected = getattr(self._execution, 'expected', None)
             if expected is not None:
                 data = args[0] if args else kwargs.get('data', {})
+                saved = self._load(expected[0])
                 if (method.__name__ != 'step' or data.get('id') != expected[0]
-                        or fingerprint(self._load(expected[0])) != expected[1]):
+                        or fingerprint(saved) != expected[1]
+                        or configuration_fingerprint(self) != self._execution.config_id):
                     raise InputError('后台批次的任务条件已变化，未继续访问。')
-                validate_scope(self, self._load(expected[0]))
+                # Advanced scope was fully checked at start; this exact checkpoint
+                # can only come from the previous original Collector step. Category
+                # ancestry includes other records and must still be rechecked.
+                if saved['mode'] == CATEGORY_MODE:
+                    validate_scope(self, saved)
             return method(self, *args, **kwargs)
     return wrapped
 
@@ -588,7 +594,9 @@ class Collector:
             category_for_state(state)
             validate_parent(self, state)
         key = text_field(data, "api_key", limit=1000).strip()
-        if state["mode"] == "search":
+        # A background owner supplies its captured credential; environment
+        # changes cannot replace it during the batch. Manual API/CLI keep fallback.
+        if state["mode"] == "search" and not getattr(self._execution, "owned", False):
             key = key or os.environ.get("BRAVE_SEARCH_API_KEY", "")
         if state["phase"] in {"search", "detail", "feed", "category"}:
             # Read/validate consent before reserving any attempt or saving an

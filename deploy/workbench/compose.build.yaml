@@ -1,0 +1,7 @@
+# Optional local-source build; ordinary deployment uses compose.yaml alone.
+services:
+  workbench:
+    image: ${RADAR_BUILD_IMAGE:-vibe-job-radar-workbench:local}
+    build:
+      context: ../..
+      dockerfile: Dockerfile

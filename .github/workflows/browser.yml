@@ -52,6 +52,7 @@ jobs:
       - name: Exercise browser collection, reports and policy binding
         timeout-minutes: 10
         run: |
+          python scripts/run_collection_background_browser.py
           python scripts/run_public_schedule_browser.py
           python scripts/run_public_outcomes_browser.py
           python scripts/run_public_worker_browser.py

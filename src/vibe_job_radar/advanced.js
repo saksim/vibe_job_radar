@@ -1,9 +1,9 @@
 "use strict";
 const $ = id => document.getElementById(id);
 const token = sessionStorage.getItem("radar-session") || "";
-let profile = null, page = 0, total = 0, runId = "", activeCollection = "", looping = false, collecting = false;
+let profile = null, page = 0, total = 0, runId = "", activeCollection = "", collecting = false;
 let collectionGuide = null, initializing = true;
-let collectionMode = "", backgroundCollection = false, foreignCollection = false;
+let collectionMode = "", collectionPhase = "", foreignCollection = false;
 const linkedReport = new URLSearchParams(location.hash.slice(1)).get("report");
 let linkedReportLoaded = false;
 let selected = new Map(), metrics = [], busy = false, snapshotCapabilities = {};
@@ -131,6 +131,7 @@ async function refreshCollections(){const result=await api("/api/collection/list
 function showCollection(s){
   activeCollection=s.id;
   collectionMode=s.mode;
+  collectionPhase=s.phase;
   $("collect-progress").textContent=`任务 ${s.id.slice(0,8)} · ${s.route_label||s.mode} · ${s.status} · 阶段 ${s.phase} · 正文尝试 ${s.detail_attempts}/${s.detail_budget}`;
   table("collect-summary",["平台","搜索请求","正文状态","平台接入认证"],Object.entries(s.platform_summary).map(([k,v])=>[k,v.queries_attempted,JSON.stringify(v.detail_outcomes),"未认证；仅显示本次观测"]));
   $("collect-json").textContent=JSON.stringify(s,null,2);
@@ -262,8 +263,8 @@ function showCollection(s){
   }
   if(s.report_id)root.append(button("下载采集审计",()=>download(`/api/download/${s.report_id}/collection_manifest.json`,"collection_manifest.json")),button("下载逐条要求",()=>download(`/api/download/${s.report_id}/requirements_zh.csv`,"requirements_zh.csv")));
 }
-async function watchCategory(initial){
-  collecting=true;backgroundCollection=true;looping=true;
+async function watchCollection(initial){
+  collecting=true;
   let current=initial;
   try{
     while(true){
@@ -271,8 +272,8 @@ async function watchCategory(initial){
       if(current.task){collectionGuide.selectMode(current.task.mode);showCollection(current.task);}
       updateButtons();
       $("collect-background-note").textContent=current.active?
-        (foreignCollection?"此批由另一个本机服务执行；可查看进度，请回到原服务暂停。":
-        "本机正在完成已确认的当前批次。可以关闭或刷新网页；退出工作台应用会停止后续步骤，重启后须点击继续。"):
+        (foreignCollection?"此批由另一个服务进程执行；可查看进度，请回到原服务暂停。":
+        "工作台服务正在完成已确认的当前批次。可以关闭或刷新网页；退出工作台应用或停止服务器会停止后续步骤，重启后须点击继续。"):
         ({conditions_changed:"任务条件或网络设置已变化，后台已停止。请核对后再继续。",
           interrupted_uncertain:"上次执行结果未知。保留检查点，重新打开工作台后核对中断条目；不会自动重放。",
           execution_failed:"后台执行中止。已保存的正文和配额保留，请核对任务记录。",
@@ -284,18 +285,29 @@ async function watchCategory(initial){
       current=await api("/api/collection/background/state");
     }
   }catch(error){note(error.message+"；后台可能仍在执行，请重新打开页面查看进度。");}
-  finally{looping=false;collecting=false;backgroundCollection=false;foreignCollection=false;try{await refreshCollections();}finally{updateButtons();}}
+  finally{collecting=false;foreignCollection=false;try{await refreshCollections();}finally{updateButtons();}}
 }
-async function continueCollection(){if(initializing||busy||collecting)return;
-  if(collectionMode==="liepin_category"){
-    collecting=true;updateButtons();
-    try{const started=await api("/api/collection/background/start",{id:activeCollection,consent:true});await watchCategory(started);}
-    catch(error){collecting=false;note(error.message);updateButtons();}return;
+async function continueCollection(){
+  if(initializing||busy||collecting)return;
+  const keyInput=$("collect-form").elements.api_key;
+  if(collectionPhase==="feed"&&!keyInput.value.trim()&&!window.confirm("未填写数据源 Token。只有提供方明确允许无需 Token 访问时，才确认无 Token 继续；否则点取消，先填 Token。")){
+    note("已取消继续；未发出采集请求，未消耗任务预算。请补填数据源 Token。");
+    return;
   }
-  $("collect-background-note").textContent="";
-  collecting=true;looping=true;updateButtons();try{while(looping){const s=await api("/api/collection/step",{id:activeCollection,api_key:$("collect-form").elements.api_key.value});showCollection(s);if(["completed","needs_attention","empty"].includes(s.status)){looping=false;$("collect-form").elements.api_key.value="";note(`采集结束：${s.status}。请核对各平台失败和预算跳过项。`);await refreshProfile();break;}await new Promise(resolve=>setTimeout(resolve,30));}}catch(error){note(error.message);looping=false;}finally{looping=false;try{await refreshCollections();}catch(error){note(error.message);}finally{collecting=false;updateButtons();}}}
+  collecting=true;updateButtons();
+  try{
+    const request={id:activeCollection,consent:true};
+    if((collectionMode==="search"&&collectionPhase==="search")||collectionPhase==="feed")request.api_key=keyInput.value;
+    const started=await api("/api/collection/background/start",request);
+    // Acknowledgement transfers this batch's credential to the worker. Keep no
+    // copy in the form or polling requests; a rejected start retains the input.
+    delete request.api_key;
+    keyInput.value="";
+    await watchCollection(started);
+  }catch(error){collecting=false;note(error.message);updateButtons();}
+}
 $("collect-form").onsubmit=async event=>{event.preventDefault();if(initializing||collecting||busy)return;let created=false;await act(async()=>{const d=collectionGuide.data();const check=await api("/api/collection/preview",d);collectionGuide.render(check);if(!check.ready)return;delete d.api_key;showCollection(await api("/api/collection/start",d));await refreshCollections();created=true;});if(created)await continueCollection();};
-$("collect-pause").onclick=async()=>{if(backgroundCollection){try{await api("/api/collection/background/pause",{id:activeCollection});}catch(error){note(error.message);return;}}else{looping=false;}note("已请求暂停；当前请求结束后不再发出下一次请求。任务进度已保留。");};
+$("collect-pause").onclick=async()=>{if(!collecting||foreignCollection)return;try{await api("/api/collection/background/pause",{id:activeCollection});}catch(error){note(error.message);return;}note("已请求暂停；当前请求结束后不再发出下一次请求。任务进度已保留。");};
 $("collect-resume").onclick=async()=>{
   if(initializing||collecting||busy)return;
   activeCollection=$("collect-history").value||activeCollection;
@@ -316,10 +328,6 @@ $("collect-resume").onclick=async()=>{
       throw new Error("所选任务仍在搜索阶段：请先填入自己的 Brave Key，再点击继续；任务尚未执行。");
     if(saved.phase==="feed"&&switched){
       note("已切换到数据源任务，尚未发出请求。请补填该数据源 Token 后再点继续；只有提供方明确无需 Token 时才确认无 Token 继续。");
-      return;
-    }
-    if(saved.phase==="feed"&&!key&&!window.confirm("未填写数据源 Token。只有提供方明确允许无需 Token 访问时，才确认无 Token 继续；否则点取消，先填 Token。")){
-      note("已取消继续；未发出采集请求，未消耗任务预算。请补填数据源 Token。");
       return;
     }
     resume=true;
@@ -360,5 +368,5 @@ init().then(async()=>{
   const background=await api("/api/collection/background/state");
   initializing=false;updateButtons();
   if(!location.hash)note("");
-  if(background.active||(background.task&&background.status==="paused"))await watchCategory(background);
+  if(background.active||(background.task&&background.status==="paused"))await watchCollection(background);
 }).catch(error=>note(error.message+"；请刷新页面重新读取配置与后台状态。"));
