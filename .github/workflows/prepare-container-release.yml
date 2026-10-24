@@ -1,0 +1,53 @@
+name: prepare-container-release
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_run_id:
+        description: Original successful exact-main container-image run
+        required: true
+        type: string
+      publish:
+        description: Push verified version and source tags; Latest waits for anonymous verification
+        type: boolean
+        default: false
+concurrency:
+  group: stable-release-publication
+  cancel-in-progress: false
+permissions:
+  contents: read
+jobs:
+  qualified-container-release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Publish the tested image bytes after all three formal releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          PUBLISH_IMAGE: ${{ inputs.publish }}
+        run: |
+          publish_args=()
+          if [ "$PUBLISH_IMAGE" = "true" ]; then publish_args+=(--publish); fi
+          python scripts/prepare_container_release.py --repository "$GITHUB_REPOSITORY" --run-id "$CANDIDATE_RUN_ID" --out .verify/container-release "${publish_args[@]}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: container-release-preparation
+          retention-days: 30
+          include-hidden-files: true
+          if-no-files-found: warn
+          path: |
+            .verify/container-release/qualified.json
+            .verify/container-release/pushed-*.json
+            .verify/container-release/publication.json
