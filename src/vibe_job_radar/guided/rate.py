@@ -209,9 +209,13 @@ class RateLedger:
             raise ValueError('unknown budget kind')
         if origin is not None:
             origin = self._origin(origin)
-        now = self._now()
         with self._connection() as conn:
             conn.execute('BEGIN IMMEDIATE')
+            # The writer lock can wait for another reservation to commit. Use
+            # one clock reading for this transaction after that wait, so newly
+            # committed visits do not look like rollback and expired cooldowns
+            # do not remain blocked by a timestamp sampled before the lock.
+            now = self._now()
             candidates = self._budget_candidates(conn, site, kind, now)
             if kind == 'request' and origin is not None:
                 policy = conn.execute('SELECT delay FROM publisher_policy WHERE site=? AND origin=?',
