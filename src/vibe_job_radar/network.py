@@ -175,6 +175,9 @@ class PinnedHTTPSConnection(http.client.HTTPSConnection):
                     sock = self._local_proxy.open_tunnel(ip, attempt_budget, self.source_address)
                 else:
                     sock = socket.create_connection((ip, 443), attempt_budget, self.source_address)
+                # Permission can be withdrawn while a TCP/proxy handshake blocks.
+                # Recheck before starting TLS or sending anything to the origin.
+                self.network_policy.ensure_active()
                 remaining = min(deadline, attempt_deadline) - time.monotonic()
                 if remaining <= 0:
                     raise TimeoutError("connection attempt deadline exceeded")
@@ -183,6 +186,7 @@ class PinnedHTTPSConnection(http.client.HTTPSConnection):
                 # Keep the original hostname for SNI and certificate validation.
                 secured = self._context.wrap_socket(sock, server_hostname=self.host)
                 sock = secured
+                self.network_policy.ensure_active()
                 if time.monotonic() >= deadline:
                     raise TimeoutError("connection deadline exceeded")
                 secured.settimeout(self.timeout)
@@ -193,7 +197,10 @@ class PinnedHTTPSConnection(http.client.HTTPSConnection):
             except LocalProxyError as exc:
                 record.update(outcome='proxy_failed', error_type=type(exc).__name__)
                 if sock is not None:
-                    sock.close()
+                    try:
+                        sock.close()
+                    except OSError:
+                        pass  # Keep the policy/proxy failure as the primary cause.
                 # A selected proxy never falls back to a direct TCP connection.
                 raise FetchError(exc.code) from exc
             except ssl.SSLError as exc:
@@ -213,6 +220,19 @@ class PinnedHTTPSConnection(http.client.HTTPSConnection):
         if last_error is not None:
             raise last_error
         raise TimeoutError("connection deadline exceeded")
+
+    def send(self, data) -> None:
+        # A caller may connect first or reuse a connection. Revocation also stops
+        # those later sends; connect() covers withdrawal while opening a socket.
+        try:
+            self.network_policy.ensure_active()
+        except LocalProxyError as exc:
+            try:
+                self.close()
+            except OSError:
+                pass  # A close error cannot turn withdrawal into a retryable error.
+            raise FetchError(exc.code) from exc
+        super().send(data)
 
 
 def validate_url_target(url: str, allowed_domains: set[str]) -> tuple[str, str]:

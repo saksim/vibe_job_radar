@@ -300,8 +300,13 @@ class NativeBackend(PlaywrightBackend):
             client = self._page_sessions.get(session)
             if client is not None:
                 result = client.send(method, params or {})
-                self._pending.pop(ident, None)
-                if callback:
+                entry = self._pending.pop(ident, None)
+                # A successful reply can arrive after send() pumped the page's
+                # close event. Retiring the command cancels its result too:
+                # never let that old body populate or stop the surviving job.
+                if (callback and entry is not None and not self._closing
+                        and session in self._sessions
+                        and self._page_sessions.get(session) is client):
                     callback(result)
                 return
             self._cdp.send('Target.sendMessageToTarget', {'sessionId':session,
