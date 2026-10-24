@@ -1,0 +1,17 @@
+# Allow only packaging inputs: no workspaces, credentials, tests or local evidence.
+**
+!Dockerfile
+!pyproject.toml
+!README.md
+!LICENSE
+!src/
+!src/**
+**/__pycache__/
+**/*.py[cod]
+**/*.secret
+**/*.pem
+**/*.key
+**/.env
+**/.env.*
+**/*.p12
+**/*.pfx

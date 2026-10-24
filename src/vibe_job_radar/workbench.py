@@ -7,11 +7,9 @@ import json
 import secrets
 from socketserver import TCPServer
 import sys
-import threading
 import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from importlib.resources import files
 from pathlib import Path
 from urllib.parse import quote, unquote, urlsplit
 
@@ -19,23 +17,9 @@ from .runtime_identity import bootstrap as _bootstrap_runtime
 _bootstrap_runtime()
 
 from .workspace import InputError, Workspace
-from .collection import Collector
-from .collection_runtime import CollectionRunner, CollectionBusy
-from .collection_handoff import CollectionHandoff
-from .guided.service import GuidedService, MESSAGES
 from .guided.contracts import CrawlError
-from .collection_guidance import CollectionGuidance
-from .evidence_ui import Conflict, EvidenceService
-from .quality_ui import QualityService
-from .quality_packet import decode_json
-from .public_tasks import PublicTasks, PublicTaskBusy
-from .guided.ownership import GuidedTaskBusy
-from .public_schedule import PublicSchedule
-from .public_queue import PublicQueue
-from .windows_startup import WindowsStartup, StartupChanged
-
-MAX_BODY = 2_000_000
-_DEFAULT_PUBLIC_CLIENT = object()
+from .application import WorkbenchApplication, SERVICE_NAMES, _DEFAULT_PUBLIC_CLIENT
+from .application_http import MAX_BODY, STATIC_ROUTES, Response, WorkbenchHTTP, decode_request_body
 
 
 class LocalServer(ThreadingHTTPServer):
@@ -46,30 +30,33 @@ class LocalServer(ThreadingHTTPServer):
     request_queue_size = 64
 
     def __init__(self, workspace: Workspace, port: int = 0, *, public_client=_DEFAULT_PUBLIC_CLIENT):
-        self.workspace = workspace
-        self.collector = Collector(workspace)
-        self.collection_runner = CollectionRunner(self.collector)
-        self.guidance = CollectionGuidance(workspace)
-        self.evidence = EvidenceService(workspace)
-        self.quality = QualityService(workspace)
-        from .team_client import TeamUI
-        self.team = TeamUI(workspace)
-        from .release_updates import ReleaseUpdates
-        self.releases = ReleaseUpdates(workspace)
-        self.guided = GuidedService(workspace)
-        self.handoff = CollectionHandoff(self.collector, self.guided)
-        if public_client is _DEFAULT_PUBLIC_CLIENT:
-            from .team_client import public_client as configured_public_client
-            public_client = configured_public_client(workspace)
-        self.public_tasks = PublicTasks(workspace, hybrid_client=public_client)
-        self.public_schedule = PublicSchedule(workspace, self.public_tasks)
-        self.public_queue = PublicQueue(workspace, self.public_tasks)
-        self.windows_startup = WindowsStartup(workspace)
+        self.application = WorkbenchApplication(workspace, public_client=public_client)
+        self.http = WorkbenchHTTP(self.application)
         self.token = secrets.token_urlsafe(32)
-        self.mutation_lock = threading.Lock()
-        super().__init__(("127.0.0.1", port), Handler)
+        try:
+            super().__init__(("127.0.0.1", port), Handler)
+        except BaseException:
+            self.application.close()
+            raise
         self.authority = f"127.0.0.1:{self.server_address[1]}"
         self.origin = f"http://{self.authority}"
+
+    def __getattr__(self, name):
+        if name in SERVICE_NAMES:
+            return getattr(self.application, name)
+        raise AttributeError(name)
+
+    def __setattr__(self, name, value):
+        if name in SERVICE_NAMES and 'application' in self.__dict__:
+            setattr(self.application, name, value)
+        else:
+            super().__setattr__(name, value)
+
+    def __delattr__(self, name):
+        if name in SERVICE_NAMES:
+            delattr(self.application, name)
+        else:
+            super().__delattr__(name)
 
     def server_bind(self):
         # This listener has a fixed numeric loopback address. Reverse DNS is
@@ -79,49 +66,22 @@ class LocalServer(ThreadingHTTPServer):
 
     def serve_forever(self, poll_interval=0.5):
         try:
-            self.public_schedule.start()
-            self.public_queue.start()
+            self.application.start()
             super().serve_forever(poll_interval=poll_interval)
         finally:
-            self.public_queue.close()
-            self.collection_runner.close()
-            self.public_schedule.close()
+            self.application.close()
 
     def server_close(self):
-        self.team.close()
-        self.releases.close()
-        self.workspace.close_network()
-        self.public_queue.close()
-        self.collection_runner.close()
-        self.public_schedule.close()
-        self.guided.close()
-        self.public_tasks.close()
-        super().server_close()
+        try:
+            self.application.close()
+        finally:
+            super().server_close()
 
     def upgrade_preflight(self):
-        with self.guided._lock:
-            if (self.guided._busy or self.guided._backends or self.guided._closing_backends
-                    or self.guided._closure_uncertain or self.guided._ownership.foreign()):
-                raise InputError('请先停止采集并关闭采集浏览器；自动升级不会中断该会话。')
-        if self.public_tasks.busy() or (self.collection_runner._thread and self.collection_runner._thread.is_alive()):
-            raise InputError('请先等待或停止当前公开/后台采集任务，再自动升级。')
-        if self.team._thread and self.team._thread.is_alive():
-            raise InputError('团队同步正在执行，请完成后再自动升级。')
+        return self.application.upgrade_preflight()
 
     def upgrade_quiesce(self):
-        if not self.mutation_lock.acquire(blocking=False):
-            raise InputError('另一个操作正在执行，请完成后再自动升级。')
-        try:
-            self.upgrade_preflight()
-            self.public_queue.close();self.public_schedule.close()
-            self.upgrade_preflight()
-            if self.public_queue.is_running() or self.public_schedule.is_running():
-                raise InputError('后台调度尚未退出，未切换版本。请等待任务完成后重启当前工作台；原计划和待办保留。')
-        except BaseException:
-            self.mutation_lock.release()
-            self.public_schedule.start();self.public_queue.start()
-            raise
-        # Keep mutations closed until this process exits and releases OS owners.
+        return self.application.upgrade_quiesce()
 
     @property
     def entry_url(self) -> str:
@@ -203,8 +163,15 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             self.connection.settimeout(previous_timeout)
 
-    def _json(self, code: int, data: dict):
-        self._respond(code, json.dumps(data, ensure_ascii=False).encode("utf-8"), "application/json; charset=utf-8")
+    def _json(self, code: int, data: dict | bytes):
+        body = data if isinstance(data, bytes) else json.dumps(data, ensure_ascii=False).encode("utf-8")
+        self._respond(code, body, "application/json; charset=utf-8")
+
+    def _deliver(self, response: Response):
+        if response.content_type == "application/json; charset=utf-8" and not response.filename:
+            self._json(response.status, response.body)
+        else:
+            self._respond(response.status, response.body, response.content_type, filename=response.filename)
 
     def _authorized(self, *, token_required: bool = True) -> bool:
         hosts = self.headers.get_all("Host", [])
@@ -220,69 +187,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = unquote(urlsplit(self.path).path)
-        public = path in {"/quality", "/quality.js", "/", "/app.js", "/report-sources.js", "/advanced", "/advanced.js", "/collection-help.js", "/guided", "/guided.js", "/network-settings.js", "/public-schedule.js", "/public-history.js", "/team.js", "/release-updates.js", "/public-queue.js", "/windows-startup.js"}
-        if not self._authorized(token_required=not public):
-            return
-        try:
-            if public:
-                name = {"/quality": "quality.html", "/quality.js": "quality.js", "/": "workbench.html", "/app.js": "workbench.js", "/report-sources.js": "report_sources.js", "/advanced": "advanced.html", "/advanced.js": "advanced.js", "/collection-help.js": "collection_help.js", "/guided": "guided.html", "/guided.js": "guided.js", "/network-settings.js": "network_settings.js", "/public-schedule.js": "public_schedule.js", "/public-history.js": "public_history.js", "/team.js": "team.js", "/release-updates.js": "release_updates.js", "/public-queue.js": "public_queue.js", "/windows-startup.js": "windows_startup.js"}[path]
-                mime = "text/html" if name.endswith(".html") else "text/javascript"
-                self._respond(200, files("vibe_job_radar").joinpath(name).read_bytes(), mime + "; charset=utf-8")
-            elif path == "/api/network/state":
-                self._json(200, self.server.workspace.network_state())
-            elif path == "/api/releases/state":
-                self._json(200, self.server.releases.state())
-            elif path == "/api/team/state":
-                self._json(200, self.server.team.state())
-            elif path == "/api/public/state":
-                self._json(200, self.server.public_tasks.state())
-            elif path == "/api/public/history":
-                self._json(200, self.server.public_tasks.history())
-            elif path == "/api/public/history/export":
-                self._respond(200, json.dumps(self.server.public_tasks.history(), ensure_ascii=False, indent=2).encode("utf-8"),
-                              "application/json; charset=utf-8", filename="source-history.json")
-            elif path == "/api/public/schedule/state":
-                self._json(200, self.server.public_schedule.state())
-            elif path == "/api/public/queue/state":
-                self._json(200, self.server.public_queue.state())
-            elif path == "/api/windows/startup/state":
-                self._json(200, self.server.windows_startup.state())
-            elif path == "/api/guided/state":
-                self._json(200, self.server.guided.state())
-            elif path.startswith("/api/quality/export/"):
-                parts = path.removeprefix("/api/quality/export/").split("/")
-                if len(parts) != 2 or not parts[1].isascii() or not parts[1].isdecimal() or len(parts[1]) > 10:
-                    raise InputError("缺少有效的导出版本。")
-                run_id, revision = parts[0], int(parts[1])
-                self._respond(200, self.server.quality.export({"report_id": run_id, "expected_revision": revision}),
-                              "application/zip", filename=f"jd-quality-{run_id}-v{revision}.zip")
-            elif path == "/api/evidence/export":
-                self._respond(200, self.server.evidence.export(), "application/zip", filename="personal-evidence.zip")
-            elif path.startswith("/api/evidence/attachment/"):
-                artifact = self.server.evidence._artifact_path(path.removeprefix("/api/evidence/attachment/"))
-                self._respond(200, artifact.read_bytes(), "application/octet-stream", filename=artifact.name)
-            elif path == "/api/status":
-                self._json(200, {**self.server.workspace.status(),
-                                'acquisition_sites':self.server.guided.registry.describe()})
-            elif path == "/api/doctor":
-                self._json(200, self.server.workspace.doctor())
-            elif path.startswith("/api/report/"):
-                run_id = path.removeprefix("/api/report/")
-                self._json(200, self.server.workspace.report(run_id))
-            elif path.startswith("/api/download/"):
-                parts = path.removeprefix("/api/download/").split("/")
-                if len(parts) != 2:
-                    raise InputError("无效下载路径。")
-                artifact = self.server.workspace.report_file(*parts)
-                self._respond(200, artifact.read_bytes(), "application/octet-stream", filename=artifact.name)
-            else:
-                self._json(404, {"error": "入口不存在。"})
-        except Conflict as exc:
-            self._json(409, {"error": str(exc)})
-        except InputError as exc:
-            self._json(400, {"error": str(exc)})
-        except Exception as exc:
-            self._json(500, {"error": f"读取失败 [{type(exc).__name__}]；请检查本地目录和报告文件。"})
+        if self._authorized(token_required=path not in STATIC_ROUTES):
+            self._deliver(self.server.http.get(path))
 
     def do_POST(self):
         # Close rejected POST connections: unconsumed bodies must not become another request.
@@ -308,98 +214,11 @@ class Handler(BaseHTTPRequestHandler):
             self._body_consumed = True
             if len(raw) != length:
                 raise ValueError
-            data = (decode_json(raw) if urlsplit(self.path).path.startswith(("/api/quality/", "/api/team/", "/api/releases/", "/api/network/proxy-auth"))
-                    else json.loads(raw.decode("utf-8")))
-            if not isinstance(data, dict):
-                raise ValueError
+            data = decode_request_body(urlsplit(self.path).path, raw)
         except (ValueError, UnicodeError, TimeoutError):
             self._json(400, {"error": "请求必须为完整的 UTF-8 JSON 对象。"})
             return
-        route = urlsplit(self.path).path
-        methods = {"/api/job": "add_job", "/api/import": "import_file", "/api/plan": "plan",
-                   "/api/discover": "discover", "/api/analyze": "analyze", "/api/network/preferences": "network_preferences",
-                   "/api/network/proxy": "network_proxy_preferences",
-                   "/api/network/proxy-auth": "network_proxy_auth_preferences",
-                   "/api/network/proxy-auth/clear": "network_proxy_auth_clear",
-                   "/api/network/pac": "network_pac_preferences",
-                   "/api/network/pac-domain": "network_domain_pac_preferences",
-                   "/api/network/pac-domain-dns": "network_domain_pac_dns_preferences",
-                   "/api/network/pac-url": "network_url_pac_preferences",
-                   "/api/network/pac-url-dns": "network_url_pac_dns_preferences",
-                   "/api/network/system-pac": "network_system_pac_preferences",
-                   "/api/network/wpad/discover": "network_wpad_discover",
-                   "/api/network/wpad/cancel": "network_wpad_cancel",
-                   "/api/network/wpad": "network_wpad_preferences",
-                   "/api/network/pac/check": "network_pac_check"}
-        target = self.server.workspace
-        if route.startswith("/api/windows/startup/"):
-            target = self.server.windows_startup
-            methods = {"/api/windows/startup/" + name: name for name in ("enable", "disable")}
-        elif route.startswith("/api/releases/"):
-            target = self.server.releases
-            methods = {"/api/releases/" + name: name for name in ("check", "download", "install")}
-        elif route.startswith("/api/team/"):
-            target = self.server.team
-            methods = {"/api/team/" + name: name for name in ("check", "sync", "protect")}
-        elif route.startswith("/api/public/schedule/"):
-            target = self.server.public_schedule
-            methods = {"/api/public/schedule/" + name: name for name in ("configure", "disable")}
-        elif route.startswith("/api/public/queue/"):
-            target = self.server.public_queue
-            methods = {"/api/public/queue/" + name: name for name in ("enqueue", "remove", "pause", "resume")}
-        elif route.startswith("/api/public/"):
-            target = self.server.public_tasks
-            methods = {"/api/public/" + name: name for name in ("start", "search", "cancel", "resume")}
-        elif route.startswith("/api/guided/"):
-            target = self.server.guided
-            methods = {"/api/guided/" + name: name for name in ("create", "action", "install", "check_browser", "diagnose", "export", "diagnostics")}
-        elif route.startswith("/api/quality/"):
-            target = self.server.quality
-            methods = {"/api/quality/" + name: name for name in ("open", "save", "save_pair", "import_annotations")}
-        elif route.startswith("/api/evidence/"):
-            target = self.server.evidence
-            methods = {"/api/evidence/" + name: name for name in ("state", "catalogue", "sources", "source", "review", "upload", "metric", "save", "remove", "generate")}
-        elif route in {"/api/collection/handoff_preview", "/api/collection/handoff_start"}:
-            target = self.server.handoff
-            methods = {"/api/collection/" + name: name for name in ("handoff_preview", "handoff_start")}
-        elif route.startswith("/api/collection/background/"):
-            target = self.server.collection_runner
-            methods = {"/api/collection/background/" + name: name for name in ("start", "state", "pause")}
-        elif route.startswith("/api/collection/"):
-            target = self.server.guidance if route == "/api/collection/preview" else self.server.collector
-            methods = {"/api/collection/" + name: name for name in ("start", "step", "status", "list", "register", "preview", "category_next_preview", "category_next_start", "category_page_preview", "category_page_start", "category_recovery_preview", "category_recovery_start", "category_page_retry_preview", "category_page_retry_start")}
-        if route not in methods:
-            self._json(404, {"error": "入口不存在。"})
-            return
-        if not self.server.mutation_lock.acquire(blocking=False):
-            self._json(409, {"error": "已有操作执行中，请勿重复提交。"})
-            return
-        try:
-            result = getattr(target, methods[route])(data)
-            status, response = 200, result
-        except CrawlError as exc:
-            status, response = 400, {"error": MESSAGES.get(exc.code, "请检查平台、输入和当前任务状态。"), "code": exc.code}
-        except Conflict as exc:
-            status, response = 409, {"error": str(exc)}
-        except PublicTaskBusy as exc:
-            status, response = 409, {"error": str(exc), "code": "public_task_busy"}
-        except CollectionBusy as exc:
-            status, response = 409, {"error": str(exc), "code": "collection_busy"}
-        except GuidedTaskBusy as exc:
-            status, response = 409, {"error": str(exc), "code": "guided_task_busy"}
-        except StartupChanged as exc:
-            status, response = 409, {"error": str(exc), "code": "startup_changed"}
-        except InputError as exc:
-            status, response = 400, {"error": str(exc)}
-        except (ValueError, TypeError) as exc:
-            # Core exceptions may contain user data: show the type, not raw contents.
-            status, response = 400, {"error": f"输入校验失败 [{type(exc).__name__}]；请核对字段、来源链接及正文。"}
-        except Exception as exc:
-            status, response = 500, {"error": f"操作失败 [{type(exc).__name__}]；请检查网络/API额度或本地目录。"}
-        finally:
-            self.server.mutation_lock.release()
-        # A successful response must mean the write lock is already released.
-        self._json(status, response)
+        self._deliver(self.server.http.post(urlsplit(self.path).path, data))
 
     def do_OPTIONS(self):
         self._json(403, {"error": "不开放跨站调用。"})
