@@ -104,7 +104,7 @@ class WorkbenchApplication:
             if (self.guided._busy or self.guided._backends or self.guided._closing_backends
                     or self.guided._closure_uncertain or self.guided._ownership.foreign()):
                 raise InputError('请先停止采集并关闭采集浏览器；自动升级不会中断该会话。')
-        if self.public_tasks.busy() or (self.collection_runner._thread and self.collection_runner._thread.is_alive()):
+        if self.public_tasks.busy() or self.collection_runner.is_running():
             raise InputError('请先等待或停止当前公开/后台采集任务，再自动升级。')
         if self.team._thread and self.team._thread.is_alive():
             raise InputError('团队同步正在执行，请完成后再自动升级。')

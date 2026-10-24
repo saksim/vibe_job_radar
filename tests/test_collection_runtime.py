@@ -275,9 +275,8 @@ else:raise AssertionError('ownership was not enforced')
         for payload in ({'id':state['id']},{'id':state['id'],'consent':False},
                         {'id':state['id'],'consent':True,'url':job_url(7)}):
             with self.assertRaises(InputError):runner.start(payload)
-        url=self.collector.start(dict(mode='urls',urls=job_url(1),roles=['architect'],platforms=['liepin'],
-            permit_platforms=['liepin'],consent=True,detail_budget=1,rights_note='controlled runtime test'))
-        with self.assertRaises(InputError):self.start(runner,url)
+        with self.assertRaises(InputError):
+            runner.start({'id':state['id'],'consent':True,'api_key':''})
         runner.path.write_text('{broken',encoding='utf-8')
         with self.assertRaises(InputError):self.start(runner,state)
         self.assertEqual(runner.path.read_text(encoding='utf-8'),'{broken');self.assertEqual(wire.calls,[])

@@ -1,0 +1,90 @@
+name: verify-container-public
+on:
+  workflow_dispatch:
+    inputs:
+      publication_run_id:
+        description: Successful prepare-container-release run; package must already be Public
+        required: true
+        type: string
+      update_latest:
+        description: Move Latest only after both native architectures pass anonymous pull/runtime checks
+        type: boolean
+        default: false
+concurrency:
+  group: stable-release-publication
+  cancel-in-progress: false
+permissions:
+  contents: read
+  actions: read
+jobs:
+  anonymous:
+    name: anonymous-pull-${{ matrix.architecture }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: amd64
+            runner: ubuntu-24.04
+          - architecture: arm64
+            runner: ubuntu-24.04-arm
+    if: github.ref == 'refs/heads/main'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Pull the exact digest anonymously and exercise this native image
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUBLICATION_RUN_ID: ${{ inputs.publication_run_id }}
+          VERIFY_ARCH: ${{ matrix.architecture }}
+        run: |
+          python scripts/prepare_container_release.py --repository "$GITHUB_REPOSITORY" --publication-run-id "$PUBLICATION_RUN_ID" --architecture "$VERIFY_ARCH" --out ".verify/container-public-$VERIFY_ARCH"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: container-public-${{ matrix.architecture }}
+          retention-days: 30
+          include-hidden-files: true
+          if-no-files-found: warn
+          path: |
+            .verify/container-public-${{ matrix.architecture }}/public-verification.json
+            .verify/container-public-${{ matrix.architecture }}/anonymous-smoke.json
+  finalize:
+    name: finalize-public-container
+    needs: anonymous
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Bind both successful producer proofs before updating Latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUBLICATION_RUN_ID: ${{ inputs.publication_run_id }}
+          UPDATE_LATEST: ${{ inputs.update_latest }}
+        run: |
+          latest_args=()
+          if [ "$UPDATE_LATEST" = "true" ]; then latest_args+=(--update-latest); fi
+          python scripts/prepare_container_release.py --repository "$GITHUB_REPOSITORY" --publication-run-id "$PUBLICATION_RUN_ID" --verification-run-id "$GITHUB_RUN_ID" --out .verify/container-public-final "${latest_args[@]}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: container-public-verification
+          retention-days: 30
+          include-hidden-files: true
+          if-no-files-found: warn
+          path: .verify/container-public-final/public-verification.json

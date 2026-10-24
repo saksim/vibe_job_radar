@@ -1,0 +1,77 @@
+name: container-image
+on:
+  pull_request:
+    branches: [dev]
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: container-image-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  base:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    outputs:
+      image: ${{ steps.base.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Match the feature source, not the synthetic pull-request merge commit.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - id: base
+        run: |
+          base=$(python scripts/build_container_candidate.py --resolve-base)
+          echo "image=$base" >> "$GITHUB_OUTPUT"
+  native:
+    needs: base
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: amd64
+            runner: ubuntu-24.04
+          - architecture: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build and exercise the actual native image once
+        env:
+          RADAR_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          CANDIDATE_ARCH: ${{ matrix.architecture }}
+          PINNED_BASE: ${{ needs.base.outputs.image }}
+        run: |
+          python scripts/build_container_candidate.py --repository "$GITHUB_REPOSITORY" --architecture "$CANDIDATE_ARCH" --base "$PINNED_BASE" --out ".verify/container-$CANDIDATE_ARCH"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: container-candidate-${{ matrix.architecture }}
+          compression-level: 0
+          retention-days: 30
+          if-no-files-found: error
+          include-hidden-files: true
+          path: |
+            .verify/container-${{ matrix.architecture }}/image.tar
+            .verify/container-${{ matrix.architecture }}/manifest.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: container-evidence-${{ matrix.architecture }}
+          retention-days: 30
+          if-no-files-found: warn
+          include-hidden-files: true
+          path: |
+            .verify/container-${{ matrix.architecture }}/manifest.json
+            .verify/container-${{ matrix.architecture }}/smoke.json

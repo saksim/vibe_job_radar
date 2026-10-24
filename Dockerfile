@@ -1,6 +1,16 @@
-# Build from the reviewed release source. Override with an approved immutable digest.
+# Candidate CI resolves the official base once and supplies its immutable digest.
 ARG PYTHON_BASE=python:3.12-slim
 FROM ${PYTHON_BASE}
+
+ARG RADAR_VERSION=unreleased
+ARG RADAR_REVISION=unreleased
+ARG RADAR_SOURCE=https://github.com/saksim/vibe_job_radar
+LABEL org.opencontainers.image.title="Vibe Job Radar server workbench" \
+      org.opencontainers.image.description="Single-owner browser workbench; persistent private workspace" \
+      org.opencontainers.image.source="${RADAR_SOURCE}" \
+      org.opencontainers.image.version="${RADAR_VERSION}" \
+      org.opencontainers.image.revision="${RADAR_REVISION}" \
+      org.opencontainers.image.licenses="MIT"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
