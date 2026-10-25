@@ -12,6 +12,7 @@ from .workspace import InputError
 from .application_commands import ApplicationCommands, UnknownCommand, OperationBusy
 from .report_tasks import ReportTaskBusy
 from .collection_runtime import CollectionBusy
+from .collection_workflow import CollectionPreflightRejected
 from .evidence_ui import Conflict
 from .guided.contracts import CrawlError
 from .guided.ownership import GuidedTaskBusy
@@ -21,7 +22,7 @@ from .quality_packet import decode_json
 from .windows_startup import StartupChanged
 
 MAX_BODY = 2_000_000
-STATIC_ROUTES = {'/report-tasks.js': 'report_tasks.js', '/quality': 'quality.html', '/quality.js': 'quality.js', '/': 'workbench.html', '/app.js': 'workbench.js', '/report-sources.js': 'report_sources.js', '/advanced': 'advanced.html', '/advanced.js': 'advanced.js', '/collection-help.js': 'collection_help.js', '/guided': 'guided.html', '/guided.js': 'guided.js', '/network-settings.js': 'network_settings.js', '/public-schedule.js': 'public_schedule.js', '/public-history.js': 'public_history.js', '/team.js': 'team.js', '/release-updates.js': 'release_updates.js', '/public-queue.js': 'public_queue.js', '/windows-startup.js': 'windows_startup.js'}
+STATIC_ROUTES = {'/evidence-draft.js': 'evidence_draft.js', '/report-tasks.js': 'report_tasks.js', '/quality': 'quality.html', '/quality.js': 'quality.js', '/': 'workbench.html', '/app.js': 'workbench.js', '/report-sources.js': 'report_sources.js', '/advanced': 'advanced.html', '/advanced.js': 'advanced.js', '/collection-help.js': 'collection_help.js', '/guided': 'guided.html', '/guided.js': 'guided.js', '/network-settings.js': 'network_settings.js', '/public-schedule.js': 'public_schedule.js', '/public-history.js': 'public_history.js', '/team.js': 'team.js', '/release-updates.js': 'release_updates.js', '/public-queue.js': 'public_queue.js', '/windows-startup.js': 'windows_startup.js'}
 
 
 @dataclass(frozen=True)
@@ -91,6 +92,8 @@ class WorkbenchHTTP:
             elif path.startswith("/api/evidence/attachment/"):
                 artifact = self.application.evidence._artifact_path(path.removeprefix("/api/evidence/attachment/"))
                 return Response(200, artifact.read_bytes(), "application/octet-stream", filename=artifact.name)
+            elif path == "/api/bootstrap":
+                return self._json(200, self.commands.execute("queries.bootstrap", {}))
             elif path == "/api/status":
                 return self._json(200, {**self.application.workspace.status(),
                                 'acquisition_sites':self.application.guided.registry.describe()})
@@ -161,6 +164,9 @@ class WorkbenchHTTP:
         elif route.startswith("/api/evidence/"):
             service = "evidence"
             methods = {"/api/evidence/" + name: name for name in ("state", "catalogue", "sources", "source", "review", "upload", "metric", "save", "remove", "generate")}
+        elif route == "/api/collection/create_and_start":
+            service = "collection_workflow"
+            methods = {route: "create_and_start"}
         elif route in {"/api/collection/handoff_preview", "/api/collection/handoff_start"}:
             service = "handoff"
             methods = {"/api/collection/" + name: name for name in ("handoff_preview", "handoff_start")}
@@ -177,6 +183,9 @@ class WorkbenchHTTP:
             status, response = 200, result
         except UnknownCommand:
             status, response = 404, {"error": "入口不存在。"}
+        except CollectionPreflightRejected as exc:
+            status, response = 400, {"error": str(exc), "code": "collection_preflight_failed",
+                "accepted": False, "created": False, "preview": exc.preview}
         except OperationBusy as exc:
             status, response = 409, {"error": str(exc)}
         except ReportTaskBusy as exc:
