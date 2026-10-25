@@ -5,7 +5,7 @@ let profile = null, page = 0, total = 0, runId = "", activeCollection = "", coll
 let collectionGuide = null, collectionReady = false, evidenceReady = false, backgroundKnown = false, reportBusy = false;
 let collectionMode = "", collectionPhase = "", foreignCollection = false;
 const linkedReport = new URLSearchParams(location.hash.slice(1)).get("report");
-let linkedReportLoaded = false, linkedReportValid = false;
+let linkedReportLoaded = false, linkedReportValid = false, linkedReportPending = linkedReport !== null;
 const draft = new window.EvidenceDraft(), reviewDraft = new window.EvidenceDraft();
 let reviewRun = "", collectionWatching = false, evidenceLoading = false, collectionLoading = false;
 let selected = new Map(), metrics = [], busy = false, snapshotCapabilities = {};
@@ -153,7 +153,9 @@ $("load-requirements").onclick=()=>act(()=>loadRequirements(true));
 $("reload-state").onclick=()=>act(async()=>{
   if(hasUnsaved() && !confirm("重新载入会放弃当前未保存的证据、映射与复核修改。是否继续？"))return;
   const id=draft.evidenceId;
-  await refreshProfile(); evidenceReady=true;
+  await refreshProfile();
+  if(applyInitialLinkedReport())runId=linkedReport;
+  evidenceReady=true;
   draft.begin(profile.revision);draftStatus();
   reviewRun="";reviewDraft.begin(profile.revision);$("review-form").reset();$("review-panel").open=false;reviewStatus();
   const entry=profile.evidence.find(e=>e.evidence_id===id);
@@ -492,6 +494,15 @@ async function loadCollectionArea(){
   collectionLoading=false;updateButtons();
 }
 $("collection-reload").onclick=()=>act(loadCollectionArea,"collection-read");
+function applyInitialLinkedReport(){
+  if(!linkedReportPending||!linkedReportValid)return false;
+  if(![...$("source-run").options].some(o=>o.value===linkedReport))$("source-run").append(new Option(`指定历史报告 · ${linkedReport.slice(0,8)}`,linkedReport));
+  $("source-run").value=linkedReport;
+  // Consume the initial choice when it is applied, even if catalogue loading
+  // fails later. Subsequent explicit report choices must remain the user's.
+  linkedReportPending=false;
+  return true;
+}
 async function openLinkedReport() {
   if(linkedReport===null||linkedReportLoaded)return;
   linkedReportLoaded=true;
@@ -517,9 +528,7 @@ async function loadEvidenceArea(){
   }
   if(linkedReport!==null){
     $("source-run").value="";
-    if(linkedReportValid){
-      if(![...$("source-run").options].some(o=>o.value===linkedReport))$("source-run").append(new Option(`指定历史报告 · ${linkedReport.slice(0,8)}`,linkedReport));
-      $("source-run").value=linkedReport;
+    if(applyInitialLinkedReport()){
       try{await loadRequirements(true);$("linked-report-state").textContent="已加载来自研究结果的同一份报告；没有自动批准或修改个人资料。";}
       catch(error){$("linked-report-state").textContent=error.message+"；指定报告的原文要求暂不可用，未改用其它报告。";}
     }

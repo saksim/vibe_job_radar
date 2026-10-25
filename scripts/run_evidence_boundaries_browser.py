@@ -21,7 +21,7 @@ from test_workbench import capture
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--channel', choices=['msedge'])
-    parser.add_argument('--case', choices=['all','draft','areas','collection'], default='all')
+    parser.add_argument('--case', choices=['all','draft','areas','collection','linked-recovery'], default='all')
     parser.add_argument('--out', type=Path, default=ROOT/'browser-acceptance/evidence-boundaries')
     args = parser.parse_args()
     from playwright.sync_api import sync_playwright, expect
@@ -186,6 +186,45 @@ def main():
                     page.close()
                     assert not any(path=='/api/status' for path,_ in requests)
                     result['checks'].append('configuration, personal-store and historical-report reads have independent failure boundaries; an unknown collection owner blocks execution until an explicit read, with no auto-start')
+
+                if args.case in {'all','linked-recovery'}:
+                    result['phase']='linked_report_recovers_after_personal_store_failure'
+                    workspace.analyze({})
+                    history=server.evidence.state()['runs']
+                    assert len(history)>=2
+                    decoy, linked=history[0]['id'],history[1]['id']
+                    assert decoy!=linked
+                    writes=lambda:sum(path in {'/api/evidence/save','/api/evidence/review','/api/evidence/remove','/api/reports/start'} for path,_ in requests)
+                    before_writes=writes()
+                    page=new_page([('/api/evidence/state','Artificial initial personal-store outage')],linked=linked)
+                    expect(page.locator('#evidence-state')).to_contain_text('Artificial initial personal-store outage')
+                    expect(page.locator('#research-return')).to_have_attribute('href','/#report='+linked)
+                    expect(page.locator('#source-run')).to_have_value('')
+                    expect(page.locator('#new-evidence')).to_be_disabled()
+                    page.unroute('**/api/evidence/state')
+                    page.locator('#reload-state').click()
+                    expect(page.locator('#new-evidence')).to_be_enabled()
+                    result['linked_recovery']={'linked_report':linked,'first_history_report':decoy,
+                        'selection_after_recovery':page.locator('#source-run').input_value(),
+                        'loaded_run_after_recovery':page.evaluate('runId'),
+                        'return_href':page.locator('#research-return').get_attribute('href')}
+                    expect(page.locator('#source-run')).to_have_value(linked)
+                    assert page.evaluate('runId')==linked
+                    expect(page.locator('#requirement-list input[type=checkbox]').first).to_be_visible()
+                    catalogue=[json.loads(body)['run_id'] for path,body in requests if path=='/api/evidence/catalogue']
+                    assert catalogue[-1]==linked
+                    # The pending initial selection is consumed when applied, not
+                    # on each later explicit reload or ordinary profile observation.
+                    page.locator('#source-run').select_option(decoy)
+                    page.locator('#load-requirements').click()
+                    expect(page.locator('#new-evidence')).to_be_enabled()
+                    assert page.evaluate('runId')==decoy
+                    page.locator('#reload-state').click()
+                    expect(page.locator('#new-evidence')).to_be_enabled()
+                    expect(page.locator('#source-run')).to_have_value(decoy)
+                    assert page.evaluate('runId')==decoy and writes()==before_writes
+                    result['checks'].append('a verified nonfirst historical report survives initial personal-store failure and explicit recovery, loads the same source, then preserves a later explicit different report without automatic profile writes')
+                    page.close()
 
                 if args.case in {'all','collection'}:
                     result['phase'] = 'combined_feed_preflight_and_acceptance'
