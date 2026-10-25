@@ -39,7 +39,8 @@ def consent_for(platform):
 MAX_BACKUP = 5 * 1024**3
 MAX_FILES = 50000
 OWNER_DIRS = ('', 'collections', 'collections/owner', 'guided/owner',
-              'public_tasks/owner', 'public_schedule/owner', 'public_queue/owner')
+              'public_tasks/owner', 'public_schedule/owner', 'public_queue/owner',
+              'report_tasks/owner')
 
 
 def supported():
