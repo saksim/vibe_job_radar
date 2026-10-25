@@ -30,6 +30,7 @@ jobs:
         run: |
           python scripts/run_browser_acceptance.py
           python scripts/run_advanced_browser.py
+          python scripts/run_evidence_boundaries_browser.py
           python scripts/run_collection_guidance_browser.py
           python scripts/run_resume_browser.py
           python scripts/run_guided_browser.py

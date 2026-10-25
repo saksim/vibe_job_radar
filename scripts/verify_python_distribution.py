@@ -47,7 +47,7 @@ def verify(candidate,out):
             run([str(python),'-I','-c',
                  'from importlib.resources import files; '
                  'assert all(files("vibe_job_radar").joinpath(n).read_bytes() for n in '
-                 '("server_login.html","server_login.js","server_ui.js","report_tasks.js"))'],cwd=work)
+                 '("server_login.html","server_login.js","server_ui.js","report_tasks.js","evidence_draft.js"))'],cwd=work)
             result['server_entrypoint_and_assets_checked']=True
             run([str(binary/('vibe-radar-ui.exe' if os.name=='nt' else 'vibe-radar-ui')),
                  '--doctor','--workspace',str(work/'doctor')],cwd=work)

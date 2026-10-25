@@ -1,6 +1,6 @@
 # Vibe Job Radar｜招聘要求与个人证据工作台
 
-当前代码版本 **0.19.0**：应用命令、报告访问和后台报告任务分层；页面负责提交与观察，普通分析和个人报告可离页继续，冻结报告与个人证据不再依赖当前岗位库状态。保留桌面、CLI、采集、团队服务与原报告链路；[发行说明](docs/RELEASE_0_19_0.md)、[Docker 部署](docs/DOCKER.md)、[当前架构](docs/ARCHITECTURE.md)、[剩余18项及环境材料条件](docs/ISSUE_SCOPE_0_16_0.md)。正式 Tag、资产及镜像以[GitHub Releases](https://github.com/saksim/vibe_job_radar/releases)为准。
+当前代码版本 **0.20.0**：高级工作台按证据、采集和后台观察分开初始化；个人草稿保留自己的版本，防止资料刷新后覆盖另一窗口的修改；采集创建与后台接纳由应用用例完成。保留桌面、CLI、团队服务与原报告链路；[发行说明](docs/RELEASE_0_20_0.md)、[Docker 部署](docs/DOCKER.md)、[当前架构](docs/ARCHITECTURE.md)、[剩余18项及环境材料条件](docs/ISSUE_SCOPE_0_16_0.md)。正式 Tag、资产及镜像以[GitHub Releases](https://github.com/saksim/vibe_job_radar/releases)为准。
 
 0.15.3 [修复个人报告发布与证据历史完整性](docs/RELEASE_0_15_3.md)，实际缺陷配对 #445/#446；[剩余 18 项](docs/ISSUE_SCOPE_0_15_3.md)逐项列出未完功能、历史未知原因和最小验收条件。正式 Tag 与资产见 [Releases](https://github.com/saksim/vibe_job_radar/releases)。
 

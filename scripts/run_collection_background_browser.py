@@ -64,6 +64,8 @@ def main():
                         if 'api_key' in json.loads(request.post_data):
                             credential_polling_requests.append(path)
                 context.on('request', observed_request)
+                def execution_requests():
+                    return sum(path in {'/api/collection/background/start', '/api/collection/create_and_start'} for path in requests)
                 def open_page(*, active=False):
                     page = context.new_page()
                     page.on('pageerror', lambda error: result['page_errors'].append(str(error)))
@@ -130,11 +132,11 @@ def main():
                 assert json.loads((report/'run_manifest.json').read_text(encoding='utf-8'))['stats']['full_text_job_groups']==2
                 result['checks'].append('closing the real URL page during the first body still completes both bodies and the original report, with zero UI step calls')
                 page = open_page(); form = page.locator('#collect-form')
-                starts = requests.count('/api/collection/background/start')
+                starts = execution_requests()
                 page.locator('#collect-history').select_option(ident); page.locator('#collect-load').click()
                 expect(page.locator('#collect-progress')).to_contain_text('completed')
                 assert json.loads(page.locator('#collect-json').text_content())['report_id']==saved['report_id']
-                assert requests.count('/api/collection/background/start')==starts
+                assert execution_requests()==starts
                 result['checks'].append('a newly opened page reads the completed URL task/report without authorizing another start')
 
                 result['phase'] = 'feed_rejected_start_preserves_input'
@@ -146,9 +148,21 @@ def main():
                 form.locator('[name=feed_budget]').fill('2')
                 form.locator('[name=rights_note]').fill('人工 feed 后台与密钥生命周期验收。')
                 form.locator('[name=api_key]').fill(secrets[0]); form.locator('[name=consent]').check()
+                # This case verifies the retained explicit-resume endpoint. New
+                # create+execute is one application command and cannot be split by
+                # intercepting its internal worker call from the browser.
+                feed_data = page.evaluate('() => collectionGuide.data()')
+                feed_data.pop('api_key', None)
+                feed_id = server.collector.start(feed_data)['id']
+                page.locator('#collect-refresh').click()
+                expect(page.locator('#collect-history')).to_have_value(ident)
+                expect(page.locator('#collect-history option[value="'+feed_id+'"]')).to_have_count(1)
+                page.locator('#collect-history').select_option(feed_id)
+                page.locator('#collect-load').click()
+                expect(page.locator('#collect-json')).to_contain_text(feed_id)
                 rejected_path = server.origin+'/api/collection/background/start'
                 context.route(rejected_path, lambda route: route.fulfill(status=400, content_type='application/json', body=json.dumps({'error':'人工拒绝：请核对启动条件。'})))
-                page.locator('#collect-start').click()
+                page.locator('#collect-resume').click()
                 expect(page.locator('#notice')).to_contain_text('人工拒绝')
                 expect(form.locator('[name=api_key]')).to_have_value(secrets[0])
                 expect(page.locator('#collect-resume')).to_be_enabled()
@@ -172,11 +186,11 @@ def main():
                     result['phase'] = 'feed_accept_reopen_pause'
                     page.locator('#collect-resume').click(); await_event(page, entered)
                     expect(form.locator('[name=api_key]')).to_have_value('')
-                    starts = requests.count('/api/collection/background/start')
+                    starts = execution_requests()
                     reopened = open_page(active=True)
                     expect(reopened.locator('#collect-json')).to_contain_text(feed_id)
                     expect(reopened.locator('#collect-background-note')).to_contain_text('可以关闭或刷新网页')
-                    assert requests.count('/api/collection/background/start')==starts
+                    assert execution_requests()==starts
                     page.close(); page = reopened; form = page.locator('#collect-form')
                     no_secret_saved(page)
                     page.locator('#collect-pause').click()
@@ -189,12 +203,12 @@ def main():
                     page.reload()
                     expect(page.locator('#collect-progress')).to_contain_text('paused', timeout=10000)
                     expect(page.locator('#collect-resume')).to_be_enabled()
-                    assert requests.count('/api/collection/background/start')==starts and len(feed_calls)==1
+                    assert execution_requests()==starts and len(feed_calls)==1
                     no_secret_saved(page)
                     page.once('dialog', lambda dialog: dialog.dismiss())
                     page.locator('#collect-resume').click()
                     expect(page.locator('#notice')).to_contain_text('已取消继续')
-                    assert requests.count('/api/collection/background/start')==starts and len(feed_calls)==1
+                    assert execution_requests()==starts and len(feed_calls)==1
                     result['checks'].append('accepted feed clears its form token immediately; another page observes then pauses it, reload stays paused and cancelling anonymous resume sends no request')
                     result['phase'] = 'feed_explicit_resume_with_new_token'
                     form.locator('[name=api_key]').fill(secrets[1])
@@ -217,6 +231,7 @@ def main():
                 assert not credential_polling_requests
                 assert not result['page_errors'] and not result['external_browser_requests']
                 result['background_start_requests'] = requests.count('/api/collection/background/start')
+                result['create_and_start_requests'] = requests.count('/api/collection/create_and_start')
                 result['ui_step_requests'] = 0
                 result['credential_polling_requests'] = 0
                 result['checks'].append('no original report changes, no direct step requests, no browser external network requests or JavaScript errors')

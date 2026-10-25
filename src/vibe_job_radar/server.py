@@ -257,7 +257,7 @@ class ServerWorkbench:
                 return error, []
             return self.http.post(path, data), []
         response = self.http.get(path)
-        if path == "/api/status" and response.status == 200:
+        if path in {"/api/status", "/api/bootstrap"} and response.status == 200:
             value = json.loads(response.body)
             value["runtime"] = SERVER_CAPABILITIES
             value["acquisition_sites"] = []

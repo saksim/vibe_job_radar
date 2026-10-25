@@ -1,5 +1,6 @@
 """Real browser acceptance of acquisition and evidence UI; remote responses are artificial."""
 from __future__ import annotations
+import argparse
 import io
 import json
 import sys
@@ -18,8 +19,12 @@ from vibe_job_radar.utils import utc_now
 
 
 def main():
+    parser=argparse.ArgumentParser()
+    parser.add_argument('--channel',choices=['msedge'])
+    parser.add_argument('--out',type=Path,default=ROOT/'browser-acceptance'/'advanced')
+    args=parser.parse_args()
     from playwright.sync_api import sync_playwright, expect
-    output=ROOT/'browser-acceptance'/'advanced'
+    output=args.out
     output.mkdir(parents=True,exist_ok=True)
     results={'created_at':utc_now(),'success':False,'checks':[],'page_errors':[], 'external_browser_requests':[],
              'scope':'人工编写数据与模拟上游；真实浏览器、采集状态机、SQLite、证据与报告，不是实站采集验收。'}
@@ -30,7 +35,7 @@ def main():
         worker.start()
         try:
             with sync_playwright() as pw:
-                browser=pw.chromium.launch(headless=True)
+                browser=pw.chromium.launch(headless=True,**({'channel':args.channel} if args.channel else {}))
                 context=browser.new_context(viewport={'width':1440,'height':1000},accept_downloads=True)
                 def local(route):
                     if route.request.url.startswith(server.origin+'/'):route.continue_()
