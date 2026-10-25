@@ -23,8 +23,9 @@ def main() -> int:
     from playwright.sync_api import expect, sync_playwright
     parser = argparse.ArgumentParser()
     parser.add_argument('--browser-executable', help='Developer test only; otherwise use Playwright Chromium.')
+    parser.add_argument('--out', type=Path, default=ROOT / 'browser-acceptance' / 'research')
     args = parser.parse_args()
-    out = ROOT / 'browser-acceptance' / 'research'
+    out = args.out
     out.mkdir(parents=True, exist_ok=True)
     result = {'created_at': utc_now(), 'success': False, 'checks': [], 'page_errors': [],
               'external_browser_requests': [],
@@ -220,7 +221,7 @@ def main() -> int:
                         finally:
                             manifest_path.write_bytes(current_manifest)
                         page.goto(server.origin + '/advanced#report=invalid')
-                        expect(page.locator('#notice')).to_contain_text('未自动加载其他报告')
+                        expect(page.locator('#linked-report-state')).to_contain_text('未自动加载其他报告')
                         expect(page.locator('#source-run')).to_have_value('')
                         result['checks'].append('readable guide downloads, narrow-screen layout holds, invalid report never falls back to another batch')
                         # A separate synthetic report supplies source pairs without
