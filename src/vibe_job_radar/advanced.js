@@ -467,6 +467,9 @@ async function loadCollectionConfig(){
     collectionGuide=new window.CollectionGuide({api,note,act:collectAct,actPreset,chosen,setChecks,platforms:s.platforms,keyConfigured:s.brave_key_configured});
     if(location.hash==="#liepin-category")collectionGuide.preset("liepin_category");
     if(location.hash==="#liepin-algorithm")collectionGuide.preset("liepin_category","algorithm");
+    // The owner may be observed before bootstrap. A paused observation will
+    // not poll again, so consume its selected mode before enabling controls.
+    if(activeCollection&&collectionMode)collectionGuide.selectMode(collectionMode);
   }else{collectionGuide.platforms=s.platforms;collectionGuide.keyConfigured=s.brave_key_configured;}
   collectionReady=true;updateButtons();
 }

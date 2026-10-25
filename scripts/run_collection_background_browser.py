@@ -23,6 +23,7 @@ from test_public_category import Wire, listing, card, job_url
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--channel', choices=['msedge'])
+    parser.add_argument('--case', choices=['all','paused-startup'], default='all')
     parser.add_argument('--out', type=Path, default=ROOT/'browser-acceptance/collection-background')
     args = parser.parse_args()
     from playwright.sync_api import sync_playwright, expect
@@ -95,6 +96,66 @@ def main():
                                 continue
                             raw = path.read_bytes()
                             assert all(secret.encode() not in raw for secret in secrets), 'credential persisted in '+path.name
+                def check_paused_startup_order():
+                    result['phase'] = 'paused_owner_precedes_bootstrap'
+                    task = server.collector.start({'mode':'feed','roles':['time_series'],
+                        'platforms':['liepin'],'permit_platforms':[], 'feed_budget':2,
+                        'endpoint':'https://www.liepin.com/artificial-startup-feed',
+                        'contract_ref':'https://www.liepin.com/artificial-contract',
+                        'rights_note':'Authored paused-owner startup order; no real upstream.', 'consent':True})
+                    entered, release = threading.Event(), threading.Event(); releases.append(release)
+                    calls = []
+                    def startup_feed(url, *, headers=None, **kwargs):
+                        assert url=='https://www.liepin.com/artificial-startup-feed'
+                        calls.append(dict(headers or {})); entered.set()
+                        assert release.wait(30), 'authored startup response release missing'
+                        return {'jobs':[], 'next_cursor':'remaining'}
+                    page = context.new_page()
+                    page.on('pageerror', lambda error:result['page_errors'].append(str(error)))
+                    try:
+                        with patch.object(SafeHTTP,'json',side_effect=startup_feed):
+                            server.collection_runner.start({'id':task['id'],'consent':True,'api_key':secrets[0]})
+                            await_event(page, entered)
+                            server.collection_runner.pause({'id':task['id']}); release.set()
+                            deadline=time.monotonic()+10
+                            while time.monotonic()<deadline:
+                                paused=server.collection_runner.state()
+                                if not paused['active'] and paused['status']=='paused':break
+                                time.sleep(.02)
+                            assert not paused['active'] and paused['status']=='paused'
+                        assert calls==[{'Authorization':'Bearer '+secrets[0]}]
+                        starts=execution_requests()
+                        held=[]
+                        page.route('**/api/bootstrap',lambda route:held.append(route))
+                        page.add_init_script('if(location.origin === '+json.dumps(server.origin)+') sessionStorage.setItem("radar-session",'+json.dumps(server.token)+');')
+                        page.goto(server.origin+'/advanced')
+                        expect(page.locator('#collect-progress')).to_contain_text('paused',timeout=10000)
+                        expect(page.locator('#collect-json')).to_contain_text(task['id'])
+                        expect(page.locator('#collect-resume')).to_be_disabled()
+                        assert len(held)==1
+                        result['startup_order']={'paused_task_id':task['id'],'bootstrap_held_until_paused':True,
+                            'mode_before_bootstrap':page.locator('#collect-form [name=mode]').input_value()}
+                        held[0].continue_()
+                        expect(page.locator('#collect-resume')).to_be_enabled()
+                        result['startup_order']['mode_after_bootstrap']=page.locator('#collect-form [name=mode]').input_value()
+                        expect(page.locator('#collect-form [name=mode]')).to_have_value('feed')
+                        page.once('dialog',lambda dialog:dialog.dismiss())
+                        page.locator('#collect-resume').click()
+                        expect(page.locator('#notice')).to_contain_text('已取消继续')
+                        assert execution_requests()==starts and len(calls)==1
+                        assert server.collector.status({'id':task['id']})['feed_requests']==1
+                        no_secret_saved(page)
+                        result['checks'].append('a paused feed observed before delayed bootstrap keeps its mode when configuration arrives; cancelling tokenless resume sends no start and consumes no additional budget')
+                    finally:
+                        page.close()
+
+                if args.case=='paused-startup':
+                    check_paused_startup_order()
+                    assert not result['page_errors'] and not result['external_browser_requests']
+                    result['phase']='completed';result['success']=True
+                    browser.close();browser=None
+                    print(json.dumps(result,ensure_ascii=True,indent=2))
+                    return 0
                 page = open_page()
                 form = page.locator('#collect-form')
                 result['phase'] = 'url_close_without_ui_steps'
@@ -235,6 +296,8 @@ def main():
                 result['ui_step_requests'] = 0
                 result['credential_polling_requests'] = 0
                 result['checks'].append('no original report changes, no direct step requests, no browser external network requests or JavaScript errors')
+                check_paused_startup_order()
+                assert not result['page_errors'] and not result['external_browser_requests']
                 result['phase'] = 'completed'; result['success'] = True
                 browser.close(); browser = None
         finally:
