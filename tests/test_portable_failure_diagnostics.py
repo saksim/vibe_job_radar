@@ -23,6 +23,8 @@ class PortableFailureDiagnosticsTests(unittest.TestCase):
         value=json.dumps(frames)
         self.assertNotIn('PRIVATE',value);self.assertNotIn(str(SCRIPTS),value)
         self.assertNotIn('AssertionError',value);self.assertNotIn('private',value)
+        update=self.trace("raise AssertionError('PRIVATE')",SCRIPTS/'automatic_update_acceptance.py')
+        self.assertEqual(update,[{'file':'automatic_update_acceptance.py','function':'<module>','line':1}])
 
     def test_other_modules_and_same_basename_elsewhere_are_omitted_and_depth_is_bounded(self):
         with tempfile.TemporaryDirectory() as tmp:
