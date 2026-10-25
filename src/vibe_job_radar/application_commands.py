@@ -22,6 +22,8 @@ class Command:
 # New entry points use these named operations; they cannot invoke arbitrary
 # service attributes. Existing Workspace/CLI APIs remain compatibility paths.
 _ACTIONS = {
+    'queries': ('bootstrap',),
+    'collection_workflow': ('create_and_start',),
     'workspace': ('add_job', 'import_file', 'plan', 'discover', 'analyze',
         'network_preferences', 'network_proxy_preferences', 'network_proxy_auth_preferences',
         'network_proxy_auth_clear', 'network_pac_preferences', 'network_domain_pac_preferences',
@@ -50,7 +52,7 @@ COMMANDS = {service + '.' + action: Command(service, action)
             for service, actions in _ACTIONS.items() for action in actions}
 # These observations have their own bounded read/state contracts. In
 # particular, not every POST or method named "open" is read-only.
-for name in ('evidence.state', 'collector.list', 'collector.status',
+for name in ('queries.bootstrap', 'evidence.state', 'collector.list', 'collector.status',
              'collection_runner.state', 'report_tasks.state'):
     command = COMMANDS[name]
     COMMANDS[name] = Command(command.service, command.method, 'observe')
