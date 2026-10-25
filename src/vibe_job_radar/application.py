@@ -5,6 +5,8 @@ import threading
 
 from .workspace import InputError, Workspace
 from .application_commands import ApplicationCommands
+from .application_queries import ApplicationQueries
+from .collection_workflow import CollectionWorkflow
 from .report_tasks import ReportTasks
 from .collection import Collector
 from .collection_runtime import CollectionRunner
@@ -19,6 +21,7 @@ from .public_queue import PublicQueue
 from .windows_startup import WindowsStartup
 
 _DEFAULT_PUBLIC_CLIENT = object()
+_UNINITIALIZED_EVIDENCE = object()
 
 # LocalServer keeps these attributes as a compatibility facade. The service
 # objects themselves belong to one application, never to an HTTP connection.
@@ -26,16 +29,20 @@ SERVICE_NAMES = frozenset({
     'workspace', 'collector', 'collection_runner', 'guidance', 'evidence',
     'quality', 'team', 'releases', 'guided', 'handoff', 'public_tasks',
     'public_schedule', 'public_queue', 'windows_startup', 'mutation_lock', 'report_tasks',
+    'queries', 'collection_workflow',
 })
 
 
 class WorkbenchApplication:
     def __init__(self, workspace: Workspace, *, public_client=_DEFAULT_PUBLIC_CLIENT):
+        self._lifecycle_lock = threading.RLock()
+        self._closed = False
+        self._evidence_lock = threading.Lock()
+        self._evidence = _UNINITIALIZED_EVIDENCE
         self.workspace = workspace
         self.collector = Collector(workspace)
         self.collection_runner = CollectionRunner(self.collector)
         self.guidance = CollectionGuidance(workspace)
-        self.evidence = EvidenceService(workspace)
         self.quality = QualityService(workspace)
         from .team_client import TeamUI
         self.team = TeamUI(workspace)
@@ -51,12 +58,36 @@ class WorkbenchApplication:
         self.public_queue = PublicQueue(workspace, self.public_tasks)
         self.windows_startup = WindowsStartup(workspace)
         self.mutation_lock = threading.Lock()
+        self.queries = ApplicationQueries(self)
+        self.collection_workflow = CollectionWorkflow(self)
         self.commands = ApplicationCommands(self)
         self.report_tasks = ReportTasks(self)
-        self._lifecycle_lock = threading.RLock()
         self._started = False
-        self._closed = False
         self._closed_services = {}
+
+    @property
+    def evidence(self):
+        # An optional damaged history must not prevent the listener or ordinary
+        # reports from opening. Never take the lifecycle lock here: shutdown
+        # joins report workers which can be waiting for this property. An
+        # initialization begun before close may finish; later first access is
+        # rejected. Failed initialization leaves the original bytes untouched.
+        with self._evidence_lock:
+            if self._evidence is _UNINITIALIZED_EVIDENCE:
+                if self._closed:
+                    raise InputError('本工作台已关闭，未初始化个人证据。')
+                self._evidence = EvidenceService(self.workspace)
+            return self._evidence
+
+    @evidence.setter
+    def evidence(self, service):
+        with self._evidence_lock:
+            self._evidence = service
+
+    @evidence.deleter
+    def evidence(self):
+        with self._evidence_lock:
+            del self._evidence
 
     def execute(self, command, data):
         """Run a named use case without a listener, page or HTTP response."""

@@ -51,7 +51,7 @@ class ServerTests(unittest.TestCase):
         return headers
 
     def test_private_routes_require_session_even_with_old_desktop_token(self):
-        for path in ("/api/status", "/api/evidence/export", "/api/public/history/export",
+        for path in ("/api/status", "/api/bootstrap", "/evidence-draft.js", "/api/evidence/export", "/api/public/history/export",
                      "/api/download/missing/report", "/app.js", "/server-session.js"):
             with self.subTest(path=path):
                 self.assertEqual(self.request(path, token="old-desktop-token")[0], 401)
@@ -81,6 +81,21 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(headers["X-Frame-Options"], "DENY")
         self.assertNotIn(PASSWORD.encode(), body)
         self.assertEqual(self.request("/api/status", cookie=self.cookie+"; "+self.cookie)[0], 401)
+
+    def test_bootstrap_retains_server_capabilities_without_opening_jobs(self):
+        self.login()
+        self.assertEqual(self.request("/api/bootstrap", token="incorrect")[0], 403)
+        with patch.object(self.app.workspace, "status", side_effect=AssertionError("operational query")):
+            status, _, body = self.request("/api/bootstrap")
+        self.assertEqual(status, 200, body)
+        value = json.loads(body)
+        self.assertEqual(value["runtime"]["mode"], "server")
+        self.assertFalse(value["runtime"]["desktop_browser"])
+        self.assertEqual(value["acquisition_sites"], [])
+        self.assertTrue(value["roles"])
+        self.assertTrue(value["platforms"])
+        self.assertNotIn("runs", value)
+        self.assertNotIn(PASSWORD.encode(), body)
 
     def test_expiry_logout_and_rotation_revoke(self):
         self.login()
