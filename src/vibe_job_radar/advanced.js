@@ -2,7 +2,7 @@
 const $ = id => document.getElementById(id);
 const token = sessionStorage.getItem("radar-session") || "";
 let profile = null, page = 0, total = 0, runId = "", activeCollection = "", collecting = false;
-let collectionGuide = null, initializing = true;
+let collectionGuide = null, initializing = true, reportBusy = false;
 let collectionMode = "", collectionPhase = "", foreignCollection = false;
 const linkedReport = new URLSearchParams(location.hash.slice(1)).get("report");
 let linkedReportLoaded = false;
@@ -19,8 +19,9 @@ $('source-run').addEventListener('change', () => reportSources.setRun(''));
 function updateButtons() {
   const locked=initializing||busy||collecting;
   $("collection-controls").disabled=initializing;
-  document.querySelectorAll("button").forEach(b=>{if(!b.closest("#report-sources"))b.disabled=locked;});
+  document.querySelectorAll("button").forEach(b=>{if(!b.closest("#report-sources, #report-task-panel"))b.disabled=locked;});
   document.querySelectorAll("[data-collection-preset]").forEach(b=>{b.disabled=busy||collecting;});
+  $("generate").disabled=locked||reportBusy;
   $("collect-pause").disabled=!collecting||foreignCollection;
   $("prev-page").disabled=locked||page===0;
   $("next-page").disabled=locked||(page+1)*50>=total;
@@ -124,8 +125,32 @@ $("metric-preview").onclick=()=>act(async()=>{$("metric-preview-text").textConte
 $("metric-form").onsubmit=event=>{event.preventDefault();act(async()=>{const d=metricData(),result=await api("/api/evidence/metric",d);metrics.push(d);renderMetrics();$("metric-preview-text").textContent=result.description;note("指标已添加到当前编辑表单；需保存证据才会持久化。");});};
 $("evidence-form").onsubmit=event=>{event.preventDefault();act(async()=>{if(runId!==$("source-run").value)throw new Error("请先加载当前选择报告的要求，防止跨报告误映射。");const d=Object.fromEntries(new FormData(event.target));Object.assign(d,{run_id:runId,expected_revision:profile.revision,metrics,requirement_ids:[...selected.keys()],capabilities:chosen("capabilities"),attested:event.target.elements.attested.checked});await refreshProfile(await api("/api/evidence/save",d));event.target.elements.evidence_id.value=profile.evidence[profile.evidence.length-1].evidence_id;note("个人证据已保存。重新生成报告后才会体现本次修改。");});};
 $("new-evidence").onclick=()=>act(async()=>{$("evidence-form").reset();$("evidence-form").elements.evidence_id.value="";$("evidence-form").elements.name.value=profile.name;metrics=[];selected=new Map();renderMetrics();setChecks("capabilities",[]);mappingCount();if(runId)await loadRequirements();});
-$("generate").onclick=()=>act(async()=>{const result=await api("/api/evidence/generate",{run_id:$("source-run").value,expected_revision:profile.revision});$("generated-summary").textContent=`个人报告 ${result.id} · 版本 ${profile.revision}。证据映射覆盖率不是录用概率。`;$("generated-descriptions").textContent=result.descriptions;
-  table("generated-coverage",["岗位","人工声明映射覆盖率","说明"],result.coverage.map(r=>[r.title,r.evidence_mapping_coverage,r.note]));table("generated-matrix",["要求ID","状态","证据ID","说明"],result.matrix.map(r=>[r.requirement_id,r.status,r.evidence_ids,r.note]));reportDownloads(result,"downloads");await refreshProfile();note("个人报告已生成，旧报告保持不变。");});
+let reportRequestedHere = false;
+async function reportRequest(path, data) {
+  if (data !== undefined) return api(path, data);
+  const response=await fetch(path,{headers:{"X-Radar-Token":token},cache:"no-store"});
+  const result=await response.json();
+  if(!response.ok)throw new Error(result.error||`HTTP ${response.status}`);
+  return result;
+}
+const reportTasks = window.createReportTasks({request:reportRequest,
+  status:$("report-task-status"),open:$("report-task-open"),refresh:$("report-task-refresh"),
+  accepts:task=>task.kind === "evidence", shouldOpen:()=>reportRequestedHere||!linkedReport,
+  onBusy:value=>{reportBusy=value;updateButtons();}, onAccepted:()=>{reportRequestedHere=true;},
+  onComplete:async(task, explicit, current)=>{
+    const result=await reportRequest('/api/report/'+task.report_id);
+    if(!current())return false;
+    $("generated-summary").textContent=`个人报告 ${result.id} · 版本 ${task.revision}。证据映射覆盖率不是录用概率。`;
+    $("generated-descriptions").textContent=result.descriptions;
+    table("generated-coverage",["岗位","人工声明映射覆盖率","说明"],result.coverage.map(r=>[r.title,r.evidence_mapping_coverage,r.note]));
+    table("generated-matrix",["要求ID","状态","证据ID","说明"],result.matrix.map(r=>[r.requirement_id,r.status,r.evidence_ids,r.note]));
+    reportDownloads(result,"downloads");
+    note("个人报告已生成，旧报告保持不变；未自动修改正在编辑的个人资料。");
+    updateButtons();
+  }
+});
+$("generate").onclick=()=>act(()=>reportTasks.start({kind:"evidence",run_id:$("source-run").value,expected_revision:profile.revision}));
+if(token)void reportTasks.observe();
 $("export-evidence").onclick=()=>act(()=>download("/api/evidence/export","personal-evidence.zip"));
 async function refreshCollections(){const result=await api("/api/collection/list");options($("collect-history"),Object.fromEntries(result.runs.map(s=>[s.id,`${s.updated_at} · ${s.mode} · ${s.status} · ${s.id.slice(0,8)}`])),activeCollection);}
 function showCollection(s){

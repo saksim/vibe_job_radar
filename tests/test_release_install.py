@@ -1,5 +1,5 @@
 """Automatic update orchestration without executing authored fixture bytes."""
-from contextlib import closing
+from contextlib import ExitStack, closing
 import copy
 import json
 import os
@@ -7,6 +7,7 @@ from pathlib import Path
 import sqlite3
 import tempfile
 import threading
+from types import SimpleNamespace
 import unittest
 from unittest.mock import MagicMock, patch
 import zipfile
@@ -14,6 +15,8 @@ import zipfile
 from vibe_job_radar import release_install as install, release_updates as updates
 from vibe_job_radar.workspace import Workspace, InputError
 from vibe_job_radar.windows_startup import WindowsStartup
+from vibe_job_radar.evidence_ui import EvidenceService
+from vibe_job_radar.report_tasks import ReportTaskBusy, ReportTasks
 from test_release_updates import ReleaseFixture
 
 
@@ -83,6 +86,84 @@ class InstallTests(unittest.TestCase):
         self.assertEqual(list(self.updates.glob('backup-*')),[])
         self.assertEqual(operator.read_bytes(),b'KEEP')
         self.assertEqual((self.workspace.root/'private.txt').read_bytes(),b'KEEP PRIVATE ORIGINAL')
+
+    def report_service(self):
+        application=SimpleNamespace(workspace=self.workspace,evidence=EvidenceService(self.workspace),
+                                    mutation_lock=threading.Lock())
+        service=ReportTasks(application)
+        self.addCleanup(service.close)
+        return service
+
+    def test_upgrade_owner_blocks_reports_and_backup_excludes_only_its_marker(self):
+        first=self.report_service()
+        report=self.workspace.root/'reports'/('a'*32)/'run_manifest.json'
+        report.parent.mkdir();report.write_bytes(b'RETAIN ORIGINAL REPORT')
+        first._save(dict(id='b'*32,kind='analysis',status='succeeded',report_id='a'*32,
+                         source_run_id='',revision=None,error=None))
+        state_before=first.path.read_bytes()
+        first.owner.mkdir()
+        retained={first.root/'.writer.lock':b'USER FILE OUTSIDE OWNER',
+                  first.owner/'.writer.lock.user':b'USER FILE BESIDE MARKER',
+                  first.owner/'notes.txt':b'USER NOTES'}
+        for path,raw in retained.items():path.write_bytes(raw)
+        with ExitStack() as locks, patch.object(self.workspace,'analyze') as analyze:
+            for relative in install.OWNER_DIRS:
+                target=self.workspace.root/relative
+                target.mkdir(parents=True,exist_ok=True)
+                locks.enter_context(install.writer_lock(target))
+            # New runtime construction still reads the receipt: the installer
+            # holds task ownership, never the separate report record lock.
+            second=self.report_service()
+            self.assertEqual(second.state()['task']['report_id'],'a'*32)
+            for service in (first,second):
+                with self.assertRaises(ReportTaskBusy):
+                    service.start(dict(kind='analysis',dataset='demo'))
+                self.assertFalse(service.application.mutation_lock.locked())
+            analyze.assert_not_called()
+            self.assertEqual(first.path.read_bytes(),state_before)
+            backup=install.backup_workspace(self.workspace.root,self.updates)/'workspace'
+            self.assertFalse((backup/'report_tasks/owner/.writer.lock').exists())
+            for path,raw in retained.items():
+                self.assertEqual((backup/path.relative_to(self.workspace.root)).read_bytes(),raw)
+            self.assertEqual((backup/'report_tasks/state.json').read_bytes(),state_before)
+            self.assertEqual((backup/report.relative_to(self.workspace.root)).read_bytes(),report.read_bytes())
+        self.assertFalse(first.is_running())
+        self.assertEqual(first.path.read_bytes(),state_before)
+
+    def test_running_report_stops_upgrade_and_releases_other_owners(self):
+        service=self.report_service()
+        observer=self.report_service()
+        entered,release=threading.Event(),threading.Event()
+        self.addCleanup(release.set)
+        report=self.workspace.root/'reports'/('a'*32)/'run_manifest.json'
+        report.parent.mkdir();report.write_bytes(b'RETAIN ORIGINAL REPORT')
+        original=report.read_bytes()
+        def analyze(data):
+            entered.set()
+            if not release.wait(5):raise AssertionError('controlled report was not released')
+            return {'id':'a'*32}
+        with patch.object(self.workspace,'analyze',side_effect=analyze):
+            accepted=service.start(dict(kind='analysis',dataset='demo'))
+            self.assertTrue(entered.wait(3))
+            state_before=service.path.read_bytes()
+            code,child,execute,startup=self.run_helper()
+            self.assertEqual(code,2)
+            execute.assert_not_called()
+            startup.assert_not_called()
+            self.assertFalse((self.updates/'current.json').exists())
+            self.assertEqual(list(self.updates.glob('backup-*')),[])
+            self.assertEqual(service.path.read_bytes(),state_before)
+            self.assertEqual(report.read_bytes(),original)
+            self.assertEqual(observer.state()['task']['id'],accepted['task']['id'])
+            self.assertTrue(observer.state()['owned_elsewhere'])
+            for relative in install.OWNER_DIRS:
+                if relative!='report_tasks/owner':
+                    with install.writer_lock(self.workspace.root/relative):pass
+            release.set();service._thread.join(3)
+            self.assertFalse(service._thread.is_alive())
+        self.assertEqual(service.state()['task']['status'],'succeeded')
+        self.assertEqual(report.read_bytes(),original)
+        with install.writer_lock(service.owner):pass
 
     def test_staging_tampering_or_extra_dependency_cannot_be_executed(self):
         install.verify_directory(self.directory,self.package,self.selected)

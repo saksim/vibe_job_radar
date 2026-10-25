@@ -4,6 +4,8 @@ from __future__ import annotations
 import threading
 
 from .workspace import InputError, Workspace
+from .application_commands import ApplicationCommands
+from .report_tasks import ReportTasks
 from .collection import Collector
 from .collection_runtime import CollectionRunner
 from .collection_handoff import CollectionHandoff
@@ -23,7 +25,7 @@ _DEFAULT_PUBLIC_CLIENT = object()
 SERVICE_NAMES = frozenset({
     'workspace', 'collector', 'collection_runner', 'guidance', 'evidence',
     'quality', 'team', 'releases', 'guided', 'handoff', 'public_tasks',
-    'public_schedule', 'public_queue', 'windows_startup', 'mutation_lock',
+    'public_schedule', 'public_queue', 'windows_startup', 'mutation_lock', 'report_tasks',
 })
 
 
@@ -49,10 +51,16 @@ class WorkbenchApplication:
         self.public_queue = PublicQueue(workspace, self.public_tasks)
         self.windows_startup = WindowsStartup(workspace)
         self.mutation_lock = threading.Lock()
+        self.commands = ApplicationCommands(self)
+        self.report_tasks = ReportTasks(self)
         self._lifecycle_lock = threading.RLock()
         self._started = False
         self._closed = False
         self._closed_services = {}
+
+    def execute(self, command, data):
+        """Run a named use case without a listener, page or HTTP response."""
+        return self.commands.execute(command, data)
 
     def _start_background(self):
         for name in ('public_schedule', 'public_queue'):
@@ -89,7 +97,7 @@ class WorkbenchApplication:
             error = None
             # Stop dispatch first, matching the local serve_forever shutdown.
             # All owners are released even if another service fails to close.
-            for name in ('public_queue', 'collection_runner', 'public_schedule',
+            for name in ('public_queue', 'collection_runner', 'public_schedule', 'report_tasks',
                          'team', 'releases', 'workspace', 'guided', 'public_tasks'):
                 try:
                     self._close_service(name)
@@ -100,6 +108,8 @@ class WorkbenchApplication:
                 raise error
 
     def upgrade_preflight(self):
+        if self.report_tasks.is_running():
+            raise InputError('报告仍在生成，请等待完成后再自动升级；报告不会被强制中断。')
         with self.guided._lock:
             if (self.guided._busy or self.guided._backends or self.guided._closing_backends
                     or self.guided._closure_uncertain or self.guided._ownership.foreign()):

@@ -10,7 +10,7 @@ body{overflow-wrap:anywhere}
 </style>
 <style>#workspace,#public-saved-query{overflow-wrap:anywhere}</style>
 <script src="/report-sources.js" defer></script>
-<script src="/app.js" defer></script>
+<script src="/report-tasks.js" defer></script><script src="/app.js" defer></script>
 <script src="/network-settings.js" defer></script>
 <script src="/public-schedule.js" defer></script>
 <script src="/public-history.js" defer></script>
@@ -79,7 +79,7 @@ body{overflow-wrap:anywhere}
 <div id="notice" role="status" aria-live="polite"></div>
 <section><h2>本地数据与辅助工具</h2><p id="workspace" class="muted"></p><p id="counts" class="stats">正在读取本地数据…</p>
 <button id="doctor" type="button" class="secondary">环境自检（不联网）</button><button id="demo" type="button">运行合成演示</button><button id="refresh" type="button" class="secondary">刷新数据</button>
-<small>演示只写入独立 demo.sqlite，绝不混入真实数据库。</small>
+<small>演示只写入独立 demo.sqlite，绝不混入真实数据库。报告在后台生成，关闭网页后仍继续；重开可查看任务和结果。</small>
 <details><summary>平台接入状态与账号说明</summary><div id="sources" class="scroll"></div>
 <p>使用浏览器采集时，请在程序打开的采集浏览器中登录并完成人工验证。猎聘另有可选的单次密码提交，仅通过受控测试，尚未验通实站登录。已有材料可直接导入；不要把密码、验证码、Cookie、候选人简历或不必要的联系人信息粘贴到招聘文本中。</p>
 <p id="key-status"></p></details></section>
@@ -137,6 +137,7 @@ body{overflow-wrap:anywhere}
 <details><summary>通用描述模板预览</summary><pre id="descriptions"></pre></details>
 <h3>下载报告文件</h3><p class="muted">先读本批研究结论；需要带走时下载 research_brief.md，再按需下载原文清单、分岗位模板和缺口表。dashboard.html 下载后在本机浏览器打开。完整来源审计可能包含原始职位文本，请勿不加检查地公开。</p><div id="files" class="files"></div>
 <details><summary>本次审计信息与警告</summary><pre id="manifest"></pre></details></div>
+<div id="report-task-panel"><p id="report-task-status" role="status" aria-live="polite">正在读取报告任务，不会自动生成。</p><button id="report-task-refresh" type="button" class="secondary">刷新报告状态</button><button id="report-task-open" type="button" class="secondary" hidden>打开本次报告</button></div>
 <h3>历史报告（最近 30 次）</h3><div id="runs"></div></section>
 <section><details id="release-panel"><summary>版本与升级</summary>
 <p id="release-current"></p><p>点击检查后连接官方GitHub仓库；不会上传岗位、报告或个人材料。签名状态以所选发行的核验结果为准；下载后会核对完整性并解压到独立目录。</p>

@@ -17,12 +17,21 @@ import zipfile
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'src'))
 from vibe_job_radar.qualification import check_source,fingerprint,output_directory,require_local_evidence
-from vibe_job_radar.utils import atomic_json
+from vibe_job_radar.utils import atomic_json, atomic_text
 from vibe_job_radar.runtime_identity import source_stamp
 from windows_signing import sign_candidate
 from vibe_job_radar.publisher_signing import is_signed
 
 BUILD_VERSIONS={'pyinstaller':'6.22.3','playwright':'1.63.0','packaging':'26.0','truststore':'0.10.4','quickjs-ng':'0.17.0.1','pyspnego':'0.12.4','cryptography':'50.0.2','sspilib':'0.6.0','cffi':'2.1.1','pycparser':'3.11'}
+
+
+def write_portable_metadata(path, value):
+    # Existing installed updaters enforce 100000 bytes. Preserve every field,
+    # including the complete source manifest and licenses, within that budget.
+    text = json.dumps(value, ensure_ascii=False, separators=(',', ':'), allow_nan=False) + '\n'
+    if len(text.encode('utf-8')) > 100000:
+        raise ValueError('portable metadata exceeds the installed updater budget')
+    atomic_text(path, text)
 
 
 def file_hash(path):
@@ -157,7 +166,7 @@ def build_candidate(out,evidence_path,*,verify_login_startup=False,verify_system
         if runtime_source['raw_sha256']!=expected['sha256']:
             raise ValueError('source changed before portable metadata')
         runtime_source.update(kind='portable_build_manifest',executable_sha256=file_hash(bundle/'VibeJobRadar.exe'))
-        atomic_json(bundle/'PORTABLE.json',{'schema_version':1,'status':'portable_candidate_not_release',
+        write_portable_metadata(bundle/'PORTABLE.json',{'schema_version':1,'status':'portable_candidate_not_release',
             'runtime_source':runtime_source,'signing':signing,
             'version':version,'upgrade_protocol':1,'platform':'windows-x64','source':expected,'python_version':platform.python_version(),
             'components':versions,'build_environment_packages':dependencies,'browser_bundled':True,'live_sites_certified':False,
