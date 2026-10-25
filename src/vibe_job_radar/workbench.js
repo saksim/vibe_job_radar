@@ -98,7 +98,13 @@ async function refresh() {
   state.runs.forEach((run) => {
     const button = document.createElement("button"); button.type = "button"; button.className = "secondary";
     button.textContent = `${run.mode === "synthetic_demo" ? "合成演示" : "真实样本"} · ${run.created_at} · ${run.stats.requirement_rows} 行`;
-    button.addEventListener("click", () => operation(async () => showReport(await request(`/api/report/${run.id}`))));
+    button.addEventListener("click", () => {
+      const selection = ++reportSelection; reportPinned = true;
+      void operation(async () => {
+        const report = await readSelectedReport(run.id, selection);
+        if (report) showReport(report);
+      });
+    });
     $("runs").append(button);
   });
   if (!state.runs.length) $("runs").textContent = "还没有报告。可以先运行演示。";
@@ -166,6 +172,17 @@ function renderBrief(report) {
   $('brief-evidence').textContent = `${brief.evidence_to_check} 条要求需补证或确认。` + brief.evidence_note;
   $('brief-next').textContent = brief.next_step;
 }
+async function readSelectedReport(runId, selection, current = () => true) {
+  // A response belongs to the user's selection when the read began, including
+  // failures. Selecting another report invalidates both pending outcomes.
+  try {
+    const report = await request('/api/report/' + runId);
+    return selection === reportSelection && current() ? report : null;
+  } catch (error) {
+    if (selection !== reportSelection || !current()) return null;
+    throw error;
+  }
+}
 function showReport(report) {
   reportSelection++; reportPinned = true;
   history.replaceState(null, '', location.pathname + '#report=' + report.id);
@@ -231,11 +248,18 @@ const reportTasks = window.createReportTasks({request,
   accepts:task=>task.kind === "analysis", shouldOpen:()=>!reportPinned,
   onBusy:value=>{reportBusy=value;reportControls();}, onAccepted:()=>{reportSelection++;reportPinned=false;},
   onComplete:async(task, explicit, current)=>{
-    const report = await request('/api/report/' + task.report_id);
-    if (!current() || (!explicit && reportPinned)) return false;
+    const selection = ++reportSelection;
+    if (explicit) reportPinned = true;
+    const report = await readSelectedReport(task.report_id, selection,
+      () => current() && (explicit || !reportPinned));
+    if (!report) return false;
     showReport(report);
+    const displayed = reportSelection;
     try { await refresh(); }
-    catch (error) { notice("报告已打开；当前岗位数据状态无法刷新：" + (error.message || "请稍后重试。")); }
+    catch (error) {
+      if (displayed === reportSelection)
+        notice("报告已打开；当前岗位数据状态无法刷新：" + (error.message || "请稍后重试。"));
+    }
     return true;
   }
 });
@@ -251,13 +275,17 @@ else {
     notice($("counts").textContent);
   });
   if (fragment.has("report")) void (async () => {
-    if (!/^[a-f0-9]{32}$/.test(requestedReport)) throw new Error('报告链接无效，未自动改用另一份报告。');
-    const selected = reportSelection;
-    const report = await request('/api/report/' + requestedReport);
-    if (selected !== reportSelection) return;
-    showReport(report);
-    $('report').scrollIntoView({block: 'start'});
-  })().catch(error => notice(error.message));
+    const selection = ++reportSelection;
+    try {
+      if (!/^[a-f0-9]{32}$/.test(requestedReport)) throw new Error('报告链接无效，未自动改用另一份报告。');
+      const report = await readSelectedReport(requestedReport, selection);
+      if (!report) return;
+      showReport(report);
+      $('report').scrollIntoView({block: 'start'});
+    } catch (error) {
+      if (selection === reportSelection) notice(error.message);
+    }
+  })();
 }
 
 

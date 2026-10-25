@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 from pathlib import Path
 import sys
 import tempfile
@@ -22,7 +23,7 @@ from test_workbench import capture
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--channel', choices=['msedge'])
-    parser.add_argument('--case', choices=['all', 'pageshow', 'deep-link', 'result-return', 'ci-followups'], default='all')
+    parser.add_argument('--case', choices=['all', 'pageshow', 'deep-link', 'result-return', 'ci-followups', 'selection-race', 'selection-context'], default='all')
     parser.add_argument('--out', type=Path, default=ROOT/'browser-acceptance/report-tasks')
     args = parser.parse_args()
     from playwright.sync_api import sync_playwright, expect
@@ -215,6 +216,135 @@ def main():
                     page.close()
                     result['checks'].append('late failed explicit report read from the previous page view cannot replace restored completed status or current report; no additional task submission')
 
+                def check_selection_race():
+                    result['stage'] = 'report_selection_fixture'
+                    historical = workspace.analyze({'dataset':'demo'})['id']
+                    page = new_page(navigate=False)
+                    # Count parsed report responses so assertions run after the
+                    # stale continuation, without relying on a timing sleep.
+                    page.add_init_script("""(() => {
+                      window.reportReadsSettled = 0;
+                      const fetchOriginal = window.fetch;
+                      window.fetch = async (...args) => {
+                        const response = await fetchOriginal(...args);
+                        if (new URL(args[0], location.href).pathname.startsWith('/api/report/')) {
+                          const jsonOriginal = response.json.bind(response);
+                          response.json = async (...values) => {
+                            try { return await jsonOriginal(...values); }
+                            finally { window.reportReadsSettled++; }
+                          };
+                        }
+                        return response;
+                      };
+                    })();""")
+                    page.goto(server.origin+'/#report='+historical)
+                    expect(page.locator('#report-title')).to_contain_text(historical[:8])
+                    expect(page.locator('#analyze')).to_be_enabled()
+                    before_starts = sum(path == '/api/reports/start' for _,path in requests)
+                    fixture_before = {'server_task': server.report_tasks.state()['task'],
+                        'ui_status': page.locator('#report-task-status').inner_text(),
+                        'ui_title': page.locator('#report-title').inner_text()}
+                    # An earlier case may leave a completed task. Bind readiness
+                    # to this click's acceptance before using its report ID.
+                    with page.expect_response(lambda response:response.url.endswith('/api/reports/start')) as accepted:
+                        page.locator('#analyze').click()
+                    assert accepted.value.status == 200
+                    accepted_task_id = accepted.value.json()['task']['id']
+                    expect(page.locator('#report-task-status')).to_contain_text(accepted_task_id[:8])
+                    expect(page.locator('#report-task-status')).to_contain_text('已完成',timeout=10000)
+                    fixture_selected = server.report_tasks.state()['task']
+                    assert fixture_selected['id'] == accepted_task_id and fixture_selected['status'] == 'succeeded'
+                    task_report = fixture_selected['report_id']
+                    assert isinstance(task_report,str) and re.fullmatch('[a-f0-9]{32}',task_report)
+                    expect(page.locator('#report-title')).to_contain_text(task_report[:8])
+                    expect(page.locator('#report-task-open')).to_be_enabled()
+                    historical_index = next(i for i, run in enumerate(workspace.status()['runs']) if run['id'] == historical)
+                    expect(page.locator('#runs button')).to_have_count(len(workspace.status()['runs']))
+                    downloaded = []
+                    def download_probe(route):
+                        downloaded.append(route.request.url.removeprefix(server.origin))
+                        route.fulfill(status=400,json={'error':'Local fixture checked download selection; no file saved'})
+                    page.route('**/api/download/**',download_probe)
+                    def selected(report_id):
+                        expect(page.locator('#report-title')).to_contain_text(report_id[:8])
+                        assert page.url.endswith('#report='+report_id)
+                        expect(page.locator('#quality-review')).to_have_attribute('href','/quality#report='+report_id)
+                        name = page.locator('#files button').first.inner_text()
+                        prior = len(downloaded)
+                        page.locator('#files button').first.click()
+                        await_condition(page,lambda:len(downloaded)>prior,'Download selection was not observed')
+                        assert downloaded[-1].startswith('/api/download/'+report_id+'/')
+                        expect(page.locator('#analyze')).to_be_enabled()
+                    for failure in (False, True):
+                        result['stage'] = 'task_read_then_history_'+('error' if failure else 'success')
+                        held = []
+                        def hold_task(route):
+                            response = route.fetch()
+                            assert response.status == 200
+                            held.append((route,response.json()))
+                        page.route('**/api/report/'+task_report,hold_task)
+                        page.locator('#report-task-open').click()
+                        try:
+                            await_condition(page,lambda:bool(held),'Explicit task report read was not held')
+                        except AssertionError:
+                            result['selection_diagnostic'] = {'before':fixture_before,
+                                'accepted_task_id':accepted_task_id,
+                                'selected_server_task':fixture_selected,
+                                'current_server_task':server.report_tasks.state()['task'],
+                                'expected_report_id':task_report,
+                                'ui_status':page.locator('#report-task-status').inner_text(),
+                                'ui_title':page.locator('#report-title').inner_text(),
+                                'ui_url':page.url.removeprefix(server.origin),
+                                'report_requests':[path for method,path in requests if path.startswith('/api/report/')],
+                                'scenario':'error' if failure else 'success'}
+                            raise
+                        page.locator('#runs button').nth(historical_index).click()
+                        expect(page.locator('#report-title')).to_contain_text(historical[:8])
+                        settled = page.evaluate('window.reportReadsSettled')
+                        held[0][0].fulfill(status=500 if failure else 200,
+                            json={'error':'Artificial stale task report failure'} if failure else held[0][1])
+                        await_condition(page,lambda:page.evaluate('window.reportReadsSettled')>settled,'Stale task response was not parsed')
+                        expect(page.locator('#report-task-open')).to_be_enabled()
+                        expect(page.locator('#report-task-status')).to_contain_text('已完成')
+                        selected(historical)
+                        page.unroute('**/api/report/'+task_report,hold_task)
+                        result['checks'].append('late task report '+('failure' if failure else 'success')+' preserves newer historical title, URL, review link and download selection')
+                    for failure in (False, True):
+                        result['stage'] = 'history_read_then_task_'+('error' if failure else 'success')
+                        held = []
+                        def hold_history(route):
+                            response = route.fetch()
+                            assert response.status == 200
+                            held.append((route,response.json()))
+                        page.route('**/api/report/'+historical,hold_history)
+                        page.locator('#runs button').nth(historical_index).click()
+                        await_condition(page,lambda:bool(held),'Historical report read was not held')
+                        page.locator('#report-task-open').click()
+                        expect(page.locator('#report-title')).to_contain_text(task_report[:8])
+                        expect(page.locator('#report-task-open')).to_be_enabled()
+                        settled = page.evaluate('window.reportReadsSettled')
+                        held[0][0].fulfill(status=500 if failure else 200,
+                            json={'error':'Artificial stale historical failure'} if failure else held[0][1])
+                        await_condition(page,lambda:page.evaluate('window.reportReadsSettled')>settled,'Stale historical response was not parsed')
+                        assert 'Artificial stale historical failure' not in page.locator('#notice').inner_text()
+                        selected(task_report)
+                        page.unroute('**/api/report/'+historical,hold_history)
+                        result['checks'].append('late historical report '+('failure' if failure else 'success')+' preserves newer explicit task selection and notice')
+                    result['stage'] = 'task_refresh_error_after_new_history'
+                    held_status = []
+                    page.route('**/api/status',lambda route:held_status.append(route))
+                    page.locator('#report-task-open').click()
+                    await_condition(page,lambda:bool(held_status),'Task completion source refresh was not held')
+                    page.locator('#runs button').nth(historical_index).click()
+                    expect(page.locator('#report-title')).to_contain_text(historical[:8])
+                    held_status[0].fulfill(status=400,json={'error':'Artificial stale source refresh failure'})
+                    expect(page.locator('#report-task-open')).to_be_enabled()
+                    assert 'Artificial stale source refresh failure' not in page.locator('#notice').inner_text()
+                    selected(historical)
+                    assert sum(path == '/api/reports/start' for _,path in requests) == before_starts+1
+                    page.close()
+                    result['checks'].append('late task source refresh error cannot replace newer historical notice; report opens never resubmit the task')
+
                 if args.case == 'all':
                     result['stage'] = 'analysis_survives_page_close'
                     page = new_page()
@@ -336,8 +466,9 @@ def main():
                         result['checks'].append('late pre-mutation queue '+('failure' if failure else 'success')+' cannot replace accepted state or revoke newer consent')
                 if args.case in ('all', 'pageshow', 'ci-followups'): check_pageshow()
                 if args.case in ('all', 'deep-link', 'ci-followups'): check_deep_link()
-                if args.case in ('all', 'result-return'): check_result_return()
-                if args.case in ('all', 'ci-followups'): check_stale_open_error()
+                if args.case in ('all', 'result-return', 'selection-context'): check_result_return()
+                if args.case in ('all', 'ci-followups', 'selection-context'): check_stale_open_error()
+                if args.case in ('all', 'selection-race', 'selection-context'): check_selection_race()
                 assert wire.json.call_count == 0
                 assert not result['page_errors'] and not result['external_requests']
                 result.update(success=True,stage='verified',report_task_starts=sum(path == '/api/reports/start' for _,path in requests),
