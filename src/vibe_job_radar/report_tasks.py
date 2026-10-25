@@ -132,23 +132,34 @@ class ReportTasks:
         if data not in (None, {}):
             raise InputError('查看报告任务不接受新的输入。')
         with self._lock:
-            # A failed terminal write is kept in memory only as uncertain. It
-            # never authorizes replay or replaces the durable running receipt.
-            value = self._read()
-            if self._uncertain:
-                if value['task'] and value['task']['id'] == self._uncertain['task']['id']:
-                    value = copy.deepcopy(self._uncertain)
-                else:
-                    # Another owner may have accepted a later task. Its receipt
-                    # supersedes uncertainty about this instance's old task.
-                    self._uncertain = None
             local = self._local_running()
-            foreign = not local and self._foreign_running()
-            busy = local or foreign
-            task = value['task']
-            if task and task['status'] == 'running' and not busy:
-                task.update(status='interrupted', error=self._error('interrupted'))
-            return {'task': task, 'busy': busy, 'owned_elsewhere': foreign}
+            foreign = False
+            lease = None
+            if not local:
+                try:
+                    lease = self._claim()
+                except ReportTaskBusy:
+                    # That owner may finish while we read. Keep this snapshot
+                    # busy so an earlier running receipt remains pollable.
+                    foreign = True
+            try:
+                # Acquire owner before record, as start does. When no worker
+                # owns this task, keep the lease through the entire snapshot
+                # so running cannot be mistaken for an abandoned receipt.
+                value = self._read()
+                if self._uncertain:
+                    if value['task'] and value['task']['id'] == self._uncertain['task']['id']:
+                        value = copy.deepcopy(self._uncertain)
+                    else:
+                        self._uncertain = None
+                busy = local or foreign
+                task = value['task']
+                if task and task['status'] == 'running' and not busy:
+                    task.update(status='interrupted', error=self._error('interrupted'))
+                return {'task': task, 'busy': busy, 'owned_elsewhere': foreign}
+            finally:
+                if lease is not None:
+                    lease.__exit__(None, None, None)
 
     def _input(self, data):
         if (not isinstance(data, dict) or not isinstance(data.get('kind'), str)

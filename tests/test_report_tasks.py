@@ -131,14 +131,50 @@ class ReportTaskTests(unittest.TestCase):
                  'source_run_id': '', 'revision': None, 'error': None}
         self.tasks._save(saved)
         before = self.tasks.path.read_bytes()
-        observer = self.service(self.app)
-        with patch.object(self.workspace, 'analyze') as analyze:
+        observer = self.service(SimpleNamespace(workspace=self.workspace, evidence=self.evidence,
+                                                mutation_lock=threading.Lock()))
+        read = observer._read
+        def reading_with_owner():
+            value = read()
+            with self.assertRaises(ReportTaskBusy):
+                self.tasks.start({'kind': 'analysis', 'dataset': 'demo'})
+            self.assertFalse(self.app.mutation_lock.locked())
+            return value
+        with patch.object(self.workspace, 'analyze') as analyze, patch.object(observer, '_read', side_effect=reading_with_owner):
             first = observer.state()
             self.assertEqual(first['task']['status'], 'interrupted')
             self.assertFalse(first['busy'])
             self.assertFalse(observer.is_running())
             analyze.assert_not_called()
         self.assertEqual(before, self.tasks.path.read_bytes())
+
+    def test_foreign_completion_after_receipt_read_does_not_stop_polling(self):
+        observer = self.service(SimpleNamespace(workspace=self.workspace, evidence=self.evidence,
+                                                mutation_lock=threading.Lock()))
+        report_id = 'f' * 32
+        operation, entered, release = self.blocked(lambda data: {'id': report_id})
+        read = observer._read
+        def reading_then_completion():
+            value = read()
+            self.assertEqual(value['task']['status'], 'running')
+            release.set()
+            self.tasks._thread.join(3)
+            self.assertFalse(self.tasks._thread.is_alive())
+            return value
+        with patch.object(self.workspace, 'analyze', side_effect=operation):
+            accepted = self.tasks.start({'kind': 'analysis', 'dataset': 'demo'})
+            self.assertTrue(entered.wait(3))
+            with patch.object(observer, '_read', side_effect=reading_then_completion):
+                observed = observer.state()
+        self.assertEqual(observed['task']['id'], accepted['task']['id'])
+        self.assertEqual(observed['task']['status'], 'running')
+        self.assertTrue(observed['busy'])
+        self.assertTrue(observed['owned_elsewhere'])
+        completed = observer.state()
+        self.assertEqual(completed['task']['status'], 'succeeded')
+        self.assertEqual(completed['task']['report_id'], report_id)
+        self.assertFalse(completed['busy'])
+        self.assertFalse(completed['owned_elsewhere'])
 
     def test_worker_rechecks_original_evidence_revision_and_does_not_save_raw_error(self):
         path = Path(self.temporary.name) / 'source-manifest.json'
