@@ -22,7 +22,7 @@ from test_workbench import capture
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--channel', choices=['msedge'])
-    parser.add_argument('--case', choices=['all', 'pageshow', 'deep-link', 'result-return'], default='all')
+    parser.add_argument('--case', choices=['all', 'pageshow', 'deep-link', 'result-return', 'ci-followups'], default='all')
     parser.add_argument('--out', type=Path, default=ROOT/'browser-acceptance/report-tasks')
     args = parser.parse_args()
     from playwright.sync_api import sync_playwright, expect
@@ -53,9 +53,14 @@ def main():
                     else: result['external_requests'].append('unexpected_nonlocal');route.abort()
                 context.route('**/*',local_only)
                 context.on('request',lambda request:requests.append((request.method,request.url.removeprefix(server.origin))))
-                def new_page(path=None):
+                def new_page(path=None, *, navigate=True):
                     page = context.new_page()
                     page.on('pageerror',lambda exc:result['page_errors'].append(str(exc)))
+                    if not navigate:
+                        # Seed only this ephemeral local fixture session, before the
+                        # first document loads. No old report observer can race it.
+                        page.add_init_script('if(location.origin === '+json.dumps(server.origin)+') sessionStorage.setItem("radar-session",'+json.dumps(server.token)+');')
+                        return page
                     page.goto(server.entry_url)
                     expect(page.locator('#analyze')).to_be_visible()
                     if path: page.goto(server.origin+path)
@@ -135,11 +140,10 @@ def main():
                 def check_deep_link():
                     result['stage'] = 'historical_deep_link_without_source_state'
                     report_id = workspace.analyze({'dataset':'real'})['id']
-                    page = new_page()
+                    page = new_page(navigate=False)
                     before_starts = sum(path == '/api/reports/start' for _,path in requests)
                     page.route('**/api/status',lambda route:route.fulfill(status=400,json={'error':'Artificial unavailable source state'}))
                     page.goto(server.origin+'/#report='+report_id)
-                    page.reload()  # Hash-only navigation otherwise retains the previous document.
                     expect(page.locator('#report')).to_be_visible()
                     expect(page.locator('#report-title')).to_contain_text(report_id[:8])
                     expect(page.locator('#counts')).to_contain_text('当前岗位数据状态无法刷新')
@@ -178,6 +182,38 @@ def main():
                     assert sum(path == '/api/reports/start' for _,path in requests) == before_starts+1
                     page.close()
                     result['checks'].append('restoration invalidates the old in-flight report opening and independently displays current result before stale response arrives, without another start')
+
+                def check_stale_open_error():
+                    result['stage'] = 'stale_explicit_report_error_after_restoration'
+                    page = new_page()
+                    expect(page.locator('#report-task-refresh')).to_be_enabled()
+                    expect(page.locator('#report')).to_be_visible()
+                    report_id = server.report_tasks.state()['task']['report_id']
+                    before_starts = sum(path == '/api/reports/start' for _,path in requests)
+                    held = []
+                    def hold_report(route):
+                        if not held: held.append(route)
+                        else: route.continue_()
+                    page.route('**/api/report/*',hold_report)
+                    page.locator('#report-task-open').click()
+                    await_condition(page,lambda:bool(held),'Explicit report read was not held')
+                    expect(page.locator('#report-task-open')).to_be_disabled()
+                    page.evaluate("window.dispatchEvent(new PageTransitionEvent('pagehide',{persisted:true})); window.dispatchEvent(new PageTransitionEvent('pageshow',{persisted:true}));")
+                    expect(page.locator('#report-task-open')).to_be_enabled()
+                    expect(page.locator('#report-task-status')).to_contain_text('已完成')
+                    # Open successfully in the restored view before the old request fails.
+                    page.locator('#report-task-open').click()
+                    expect(page.locator('#report-task-open')).to_be_enabled()
+                    expect(page.locator('#report-title')).to_contain_text(report_id[:8])
+                    held[0].fulfill(status=500,json={'error':'Artificial stale report failure'})
+                    page.wait_for_timeout(150)
+                    expect(page.locator('#report-task-status')).to_contain_text('已完成')
+                    assert 'Artificial stale report failure' not in page.locator('#report-task-status').inner_text()
+                    expect(page.locator('#report-title')).to_contain_text(report_id[:8])
+                    expect(page.locator('#report-task-open')).to_be_enabled()
+                    assert sum(path == '/api/reports/start' for _,path in requests) == before_starts
+                    page.close()
+                    result['checks'].append('late failed explicit report read from the previous page view cannot replace restored completed status or current report; no additional task submission')
 
                 if args.case == 'all':
                     result['stage'] = 'analysis_survives_page_close'
@@ -298,9 +334,10 @@ def main():
                         assert 'Artificial old read failure' not in queue.locator('#queue-status').inner_text()
                         queue.unroute('**/api/public/queue/state',delayed)
                         result['checks'].append('late pre-mutation queue '+('failure' if failure else 'success')+' cannot replace accepted state or revoke newer consent')
-                if args.case in ('all', 'pageshow'): check_pageshow()
-                if args.case in ('all', 'deep-link'): check_deep_link()
+                if args.case in ('all', 'pageshow', 'ci-followups'): check_pageshow()
+                if args.case in ('all', 'deep-link', 'ci-followups'): check_deep_link()
                 if args.case in ('all', 'result-return'): check_result_return()
+                if args.case in ('all', 'ci-followups'): check_stale_open_error()
                 assert wire.json.call_count == 0
                 assert not result['page_errors'] and not result['external_requests']
                 result.update(success=True,stage='verified',report_task_starts=sum(path == '/api/reports/start' for _,path in requests),

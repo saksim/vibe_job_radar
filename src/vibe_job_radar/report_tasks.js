@@ -105,8 +105,12 @@ window.createReportTasks = function ({request, status, open, refresh, accepts, o
   open.addEventListener('click', async () => {
     const task = saved?.task;
     if (saved?.busy || task?.status !== 'succeeded') return;
+    const viewed = viewVersion;
     try { await show(task, true); }
-    catch (error) { status.textContent = error.message || "无法打开报告，请核对历史记录。"; }
+    catch (error) {
+      if (!suspended && viewed === viewVersion && task.id === saved?.task?.id)
+        status.textContent = error.message || "无法打开报告，请核对历史记录。";
+    }
   });
   window.addEventListener('pagehide', () => {
     suspended = true; restoring = true; clearTimeout(timer); generation++; viewVersion++;
