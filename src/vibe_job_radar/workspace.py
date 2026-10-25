@@ -13,7 +13,6 @@ import threading
 import uuid
 from collections import Counter
 from contextlib import closing
-from itertools import islice
 from dataclasses import asdict, replace
 from pathlib import Path
 from urllib.parse import parse_qsl, urlsplit
@@ -21,13 +20,10 @@ from urllib.parse import parse_qsl, urlsplit
 from .config import detect_roles, load_config, platform_for_url
 from .models import JobRecord
 from .store import SourceReadBusy, Store
+from .application_errors import InputError
+from .report_repository import RUN_ID, ReportRepository
 
 MAX_UPLOAD = 1_000_000
-RUN_ID = re.compile(r"[a-f0-9]{32}")
-
-
-class InputError(ValueError):
-    """An actionable error safe to display to the local user."""
 
 
 def text_field(data: dict, key: str, *, required: bool = False, limit: int = 2000) -> str:
@@ -71,6 +67,7 @@ class Workspace:
             (self.root / name).mkdir(exist_ok=True, mode=0o700)
         self.db = self.root / "jobs.sqlite"
         self.demo_db = self.root / "demo.sqlite"
+        self.reports = ReportRepository(self.root / "reports")
         self.config = load_config()
         self._dns_lock = threading.Lock()
         self._network_closed = threading.Event()
@@ -195,18 +192,7 @@ class Workspace:
     def status(self) -> dict:
         records = self._records()
         counts = Counter(j.evidence_level for j in records)
-        runs = []
-        for path in (self.root / "reports").iterdir():
-            if not RUN_ID.fullmatch(path.name) or path.is_symlink():
-                continue
-            manifest = path / "run_manifest.json"
-            if manifest.is_file():
-                try:
-                    report = json.loads(manifest.read_text(encoding="utf-8"))
-                    runs.append({"id": path.name, "created_at": report["created_at"],
-                                 "mode": report["mode"], "stats": report["stats"]})
-                except (ValueError, KeyError, OSError):
-                    continue
+        runs = self.reports.list()
         return {"workspace": str(self.root), "counts": {"records": len(records),
                     "full_text": counts["full_text"], "snippet": counts["snippet"]},
                 "roles": {k: v.get("label", k) for k, v in self.config["roles"].items()},
@@ -217,7 +203,7 @@ class Workspace:
                 "records": [{"title": j.title, "platform": j.platform, "url": j.url,
                     "evidence_level": j.evidence_level, "roles": detect_roles(j, self.config)}
                     for j in records[-200:]], "display_limit": 200,
-                "runs": sorted(runs, key=lambda x: x["created_at"], reverse=True)[:30],
+                "runs": runs,
                 "complete_market_coverage": False}
 
     def _check_source(self, job: JobRecord) -> None:
@@ -385,28 +371,7 @@ class Workspace:
         return self.report(run_id)
 
     def report_file(self, run_id: str, name: str) -> Path:
-        if not RUN_ID.fullmatch(run_id) or not name or Path(name).name != name or "\\" in name:
-            raise InputError("无效报告路径。")
-        directory = self.root / "reports" / run_id
-        root = (self.root / "reports").resolve()
-        path = (directory / name).resolve()
-        if (directory.is_symlink() or not path.is_relative_to(root / run_id)
-                or not (directory / "run_manifest.json").is_file() or not path.is_file()):
-            raise InputError("报告不存在或路径不在允许目录内。")
-        return path
+        return self.reports.file(run_id, name)
 
     def report(self, run_id: str) -> dict:
-        manifest_path = self.report_file(run_id, "run_manifest.json")
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        stats = manifest["stats"]
-        if stats["full_text_job_groups"] == 0:
-            message = "没有纳入完整 JD：请补齐正文、核对岗位匹配和采集新鲜度。不能据此归纳市场要求。"
-        elif stats["accepted_positive_requirement_rows"] == 0:
-            message = "已有正文，但没有已接受的正向 Vibe Coding 要求；请查看原文、否定条款与复核队列。"
-        else:
-            message = "报告已生成。通用能力并集不等于个人完全满足；没有本人证据的描述仍是待填模板。"
-        with self.report_file(run_id, "requirements.jsonl").open(encoding="utf-8") as stream:
-            requirements = [json.loads(line) for line in islice(stream, 100) if line.strip()]
-        return {"id": run_id, "manifest": manifest, "message": message, "requirements": requirements,
-                "descriptions": self.report_file(run_id, "descriptions.md").read_text(encoding="utf-8"),
-                "files": sorted(p.name for p in manifest_path.parent.iterdir() if p.is_file() and not p.is_symlink())}
+        return self.reports.read(run_id)

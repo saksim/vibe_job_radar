@@ -25,7 +25,17 @@ def valid_evidence(value):
             and all(value[key] is True for key in FIELDS))
 
 
-def verify(bundle, root, cwd, env):
+def verify(bundle, root, cwd, env, *, failure=None):
+    from portable_failure_diagnostics import AutomaticUpdateObservation
+    observation = AutomaticUpdateObservation(failure)
+    try:
+        return _verify(bundle, root, cwd, env, observation)
+    except Exception:
+        observation.capture()
+        raise
+
+
+def _verify(bundle, root, cwd, env, observation):
     from verify_windows_portable import RunningApp
     from vibe_job_radar.release_install import (WindowsProcess,write_json,read_json,
                                                 wait_record,launch_environment)
@@ -37,19 +47,27 @@ def verify(bundle, root, cwd, env):
         connection.execute('CREATE TABLE evidence(value TEXT)')
         connection.execute('INSERT INTO evidence VALUES (?)',('preserved',));connection.commit()
     original={p.name:p.read_bytes() for p in (sentinel,db)}
+    observation.phase='archive_payload'
     package=updates/'built-payload.zip'
     with zipfile.ZipFile(package,'w',zipfile.ZIP_DEFLATED,compresslevel=1) as archive:
         for path in bundle.rglob('*'):
             if path.is_file():archive.write(path,'VibeJobRadar/'+path.relative_to(bundle).as_posix())
+    observation.phase='read_manifest'
+    observation.observe_manifest(bundle/'PORTABLE.json')
     meta=read_json(bundle/'PORTABLE.json')
     selected=dict(version=meta['version'],sha256=file_digest(package),
                   revision=meta['runtime_source']['revision'],source_sha256=meta['source']['sha256'])
+    observation.phase='stage_package'
     directory=stage_package(package,selected,updates,threading.Event())
+    observation.phase='journal_prepare'
     journal=updates/('install-'+secrets.token_hex(12));journal.mkdir();nonce=secrets.token_hex(32)
+    observation.journal=journal
+    observation.phase='old_app_start'
     old=RunningApp(bundle/'VibeJobRadar.exe',workspace,cwd,env)
     helper=None;child=None;owned_child=False
     proof=dict(schema_version=1,**{key:False for key in FIELDS})
     try:
+        observation.phase='parent_identity'
         parent=WindowsProcess(old.proc.pid)
         try:created=parent.created
         finally:parent.close()
@@ -57,17 +75,24 @@ def verify(bundle, root, cwd, env):
             selected=selected,parent_pid=old.proc.pid,parent_created=created,
             old_executable=str((bundle/'VibeJobRadar.exe').resolve()),old_version=meta['version'],
             nonce=nonce,no_browser=True)
+        observation.phase='write_request'
         path=journal/'request.json';write_json(path,request)
+        observation.phase='helper_start'
         helper=subprocess.Popen([str(bundle/'VibeJobRadar.exe'),'--apply-update',str(path)],cwd=cwd,
             env={**env,**{k:v for k,v in launch_environment().items() if k=='PYINSTALLER_RESET_ENVIRONMENT'}},
             stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,
             creationflags=subprocess.CREATE_NO_WINDOW)
+        observation.helper=helper
+        observation.phase='wait_armed'
         wait_record(journal/'status.json',nonce,'armed',process=helper,timeout=20)
         # Only the verifier-owned old app is stopped. Product UI quiescence has
         # separate busy/idle tests and normally exits via server.shutdown().
+        observation.phase='old_app_stop'
         old.close()
+        observation.phase='wait_ready'
         ready=wait_record(journal/'ready.json',nonce,'ready',timeout=60)
         # Retain this exact child handle before checking/terminating it; no PID-based taskkill.
+        observation.phase='child_identity'
         child=WindowsProcess(ready['pid'])
         from ctypes import wintypes
         import ctypes
@@ -76,10 +101,13 @@ def verify(bundle, root, cwd, env):
         assert child.api.QueryFullProcessImageNameW(child.handle,0,buffer,ctypes.byref(length))
         assert Path(buffer.value).resolve()==(directory/'VibeJobRadar.exe').resolve()
         owned_child=True
+        observation.phase='wait_helper'
         assert helper.wait(60)==0
+        observation.phase='committed_record'
         state=read_json(journal/'status.json');current=read_json(updates/'current.json')
         assert state['status']=='committed' and state['nonce']==nonce and current['nonce']==nonce
         proof.update(frozen_executable=True,same_build_handoff=True,committed=True)
+        observation.phase='http_ready'
         deadline=time.monotonic()+15
         while True:
             connection=http.client.HTTPConnection('127.0.0.1',ready['port'],timeout=2)
@@ -91,14 +119,21 @@ def verify(bundle, root, cwd, env):
                 time.sleep(.1)
             finally:connection.close()
         proof['new_http_ready']=True
+        observation.phase='backup_check'
         backup=Path(current['backup'])/'workspace'
         assert (backup/sentinel.name).read_bytes()==original[sentinel.name]
         with closing(sqlite3.connect(backup/db.name)) as connection:
             assert connection.execute('SELECT value FROM evidence').fetchall()==[('preserved',)]
         proof['backup_verified']=True
+        observation.phase='original_data_check'
         assert all((workspace/name).read_bytes()==value for name,value in original.items())
         proof['original_data_preserved']=True
+    except Exception:
+        observation.capture()
+        raise
     finally:
+        observation.cleanup_started=True
+        observation.phase='cleanup'
         old.close()
         if helper is not None and helper.poll() is None:helper.terminate();helper.wait(10)
         if child is not None and not owned_child:child.close()
@@ -111,5 +146,6 @@ def verify(bundle, root, cwd, env):
                 termination.terminate();assert termination.exited(10000)
                 proof['owned_child_cleaned']=True
             finally:termination.close();child.close()
+    observation.phase='proof_check'
     assert valid_evidence(proof)
     return proof

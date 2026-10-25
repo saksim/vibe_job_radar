@@ -9,6 +9,8 @@ from importlib.resources import files
 import json
 
 from .workspace import InputError
+from .application_commands import ApplicationCommands, UnknownCommand, OperationBusy
+from .report_tasks import ReportTaskBusy
 from .collection_runtime import CollectionBusy
 from .evidence_ui import Conflict
 from .guided.contracts import CrawlError
@@ -19,7 +21,7 @@ from .quality_packet import decode_json
 from .windows_startup import StartupChanged
 
 MAX_BODY = 2_000_000
-STATIC_ROUTES = {'/quality': 'quality.html', '/quality.js': 'quality.js', '/': 'workbench.html', '/app.js': 'workbench.js', '/report-sources.js': 'report_sources.js', '/advanced': 'advanced.html', '/advanced.js': 'advanced.js', '/collection-help.js': 'collection_help.js', '/guided': 'guided.html', '/guided.js': 'guided.js', '/network-settings.js': 'network_settings.js', '/public-schedule.js': 'public_schedule.js', '/public-history.js': 'public_history.js', '/team.js': 'team.js', '/release-updates.js': 'release_updates.js', '/public-queue.js': 'public_queue.js', '/windows-startup.js': 'windows_startup.js'}
+STATIC_ROUTES = {'/report-tasks.js': 'report_tasks.js', '/quality': 'quality.html', '/quality.js': 'quality.js', '/': 'workbench.html', '/app.js': 'workbench.js', '/report-sources.js': 'report_sources.js', '/advanced': 'advanced.html', '/advanced.js': 'advanced.js', '/collection-help.js': 'collection_help.js', '/guided': 'guided.html', '/guided.js': 'guided.js', '/network-settings.js': 'network_settings.js', '/public-schedule.js': 'public_schedule.js', '/public-history.js': 'public_history.js', '/team.js': 'team.js', '/release-updates.js': 'release_updates.js', '/public-queue.js': 'public_queue.js', '/windows-startup.js': 'windows_startup.js'}
 
 
 @dataclass(frozen=True)
@@ -41,6 +43,7 @@ def decode_request_body(path: str, raw: bytes) -> dict:
 class WorkbenchHTTP:
     def __init__(self, application):
         self.application = application
+        self.commands = ApplicationCommands(application)
 
     @staticmethod
     def _json(code: int, data: dict) -> Response:
@@ -53,6 +56,8 @@ class WorkbenchHTTP:
                 name = STATIC_ROUTES[path]
                 mime = "text/html" if name.endswith(".html") else "text/javascript"
                 return Response(200, files("vibe_job_radar").joinpath(name).read_bytes(), mime + "; charset=utf-8")
+            elif path == "/api/reports/state":
+                return self._json(200, self.commands.execute("report_tasks.state", {}))
             elif path == "/api/network/state":
                 return self._json(200, self.application.workspace.network_state())
             elif path == "/api/releases/state":
@@ -125,50 +130,57 @@ class WorkbenchHTTP:
                    "/api/network/wpad/cancel": "network_wpad_cancel",
                    "/api/network/wpad": "network_wpad_preferences",
                    "/api/network/pac/check": "network_pac_check"}
-        target = self.application.workspace
-        if route.startswith("/api/windows/startup/"):
-            target = self.application.windows_startup
+        service = "workspace"
+        if route.startswith("/api/reports/"):
+            service = "report_tasks"
+            methods = {"/api/reports/start": "start"}
+        elif route.startswith("/api/windows/startup/"):
+            service = "windows_startup"
             methods = {"/api/windows/startup/" + name: name for name in ("enable", "disable")}
         elif route.startswith("/api/releases/"):
-            target = self.application.releases
+            service = "releases"
             methods = {"/api/releases/" + name: name for name in ("check", "download", "install")}
         elif route.startswith("/api/team/"):
-            target = self.application.team
+            service = "team"
             methods = {"/api/team/" + name: name for name in ("check", "sync", "protect")}
         elif route.startswith("/api/public/schedule/"):
-            target = self.application.public_schedule
+            service = "public_schedule"
             methods = {"/api/public/schedule/" + name: name for name in ("configure", "disable")}
         elif route.startswith("/api/public/queue/"):
-            target = self.application.public_queue
+            service = "public_queue"
             methods = {"/api/public/queue/" + name: name for name in ("enqueue", "remove", "pause", "resume")}
         elif route.startswith("/api/public/"):
-            target = self.application.public_tasks
+            service = "public_tasks"
             methods = {"/api/public/" + name: name for name in ("start", "search", "cancel", "resume")}
         elif route.startswith("/api/guided/"):
-            target = self.application.guided
+            service = "guided"
             methods = {"/api/guided/" + name: name for name in ("create", "action", "install", "check_browser", "diagnose", "export", "diagnostics")}
         elif route.startswith("/api/quality/"):
-            target = self.application.quality
+            service = "quality"
             methods = {"/api/quality/" + name: name for name in ("open", "save", "save_pair", "import_annotations")}
         elif route.startswith("/api/evidence/"):
-            target = self.application.evidence
+            service = "evidence"
             methods = {"/api/evidence/" + name: name for name in ("state", "catalogue", "sources", "source", "review", "upload", "metric", "save", "remove", "generate")}
         elif route in {"/api/collection/handoff_preview", "/api/collection/handoff_start"}:
-            target = self.application.handoff
+            service = "handoff"
             methods = {"/api/collection/" + name: name for name in ("handoff_preview", "handoff_start")}
         elif route.startswith("/api/collection/background/"):
-            target = self.application.collection_runner
+            service = "collection_runner"
             methods = {"/api/collection/background/" + name: name for name in ("start", "state", "pause")}
         elif route.startswith("/api/collection/"):
-            target = self.application.guidance if route == "/api/collection/preview" else self.application.collector
+            service = "guidance" if route == "/api/collection/preview" else "collector"
             methods = {"/api/collection/" + name: name for name in ("start", "step", "status", "list", "register", "preview", "category_next_preview", "category_next_start", "category_page_preview", "category_page_start", "category_recovery_preview", "category_recovery_start", "category_page_retry_preview", "category_page_retry_start")}
         if route not in methods:
             return self._json(404, {"error": "入口不存在。"})
-        if not self.application.mutation_lock.acquire(blocking=False):
-            return self._json(409, {"error": "已有操作执行中，请勿重复提交。"})
         try:
-            result = getattr(target, methods[route])(data)
+            result = self.commands.execute(service + "." + methods[route], data)
             status, response = 200, result
+        except UnknownCommand:
+            status, response = 404, {"error": "入口不存在。"}
+        except OperationBusy as exc:
+            status, response = 409, {"error": str(exc)}
+        except ReportTaskBusy as exc:
+            status, response = 409, {"error": str(exc), "code": "report_task_busy"}
         except CrawlError as exc:
             status, response = 400, {"error": MESSAGES.get(exc.code, "请检查平台、输入和当前任务状态。"), "code": exc.code}
         except Conflict as exc:
@@ -188,7 +200,6 @@ class WorkbenchHTTP:
             status, response = 400, {"error": f"输入校验失败 [{type(exc).__name__}]；请核对字段、来源链接及正文。"}
         except Exception as exc:
             status, response = 500, {"error": f"操作失败 [{type(exc).__name__}]；请检查网络/API额度或本地目录。"}
-        finally:
-            self.application.mutation_lock.release()
-        # A successful response must mean the write lock is already released.
+        # Exclusive commands release their gate before returning. Background
+        # report admission explicitly transfers it to the accepted worker.
         return self._json(status, response)

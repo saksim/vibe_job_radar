@@ -763,6 +763,7 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
     env['PATH']=str(Path(os.environ['SystemRoot'])/'System32')
     env['PYTHONUTF8']='1'
     blank_trace=None
+    automatic_update_failure={}
     try:
         from vibe_job_radar.publisher_signing import inspect, evidence
         result['stage']='publisher_signature'
@@ -1279,7 +1280,7 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
             result['checks'].append('actual frozen NTLMv2 isolated artificial protocol and cleanup; DPAPI restart/clear retain original report; proxy TCP is covered separately by native acceptance')
             result['stage']='automatic_update_handoff'
             from automatic_update_acceptance import verify as verify_automatic_update
-            result['automatic_update']=verify_automatic_update(bundle,root/'automatic-update',cwd,env)
+            result['automatic_update']=verify_automatic_update(bundle,root/'automatic-update',cwd,env,failure=automatic_update_failure)
             result['automatic_update_verified']=True
         verify_payload_unchanged(bundle,before,result)
         result.update(success=True,stage='complete',files=before)
@@ -1287,6 +1288,7 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
         from portable_failure_diagnostics import failure_frames
         result['error_type']=type(exc).__name__
         result['failure_frames']=failure_frames(exc)
+        if automatic_update_failure:result['automatic_update_failure']=automatic_update_failure
         raise
     finally:
         if blank_trace is not None:result['blank_page_protocol']=blank_trace.snapshot()
