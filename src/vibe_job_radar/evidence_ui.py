@@ -135,7 +135,7 @@ class EvidenceService:
             revision, state = self._current(c)
             artifacts = [{"id": r[0], "name": r[1], "size": r[2]} for r in c.execute("SELECT id,name,size FROM artifacts ORDER BY created_at DESC")]
             history = [{"revision": r[0], "action": r[1], "created_at": r[2]} for r in c.execute("SELECT revision,action,created_at FROM revisions ORDER BY revision DESC LIMIT 100")]
-        runs = [r for r in self.workspace.status()["runs"] if r["mode"] == "real_sample"]
+        runs = [r for r in self.workspace.reports.list() if r["mode"] == "real_sample"]
         return {"revision": revision, **state, "artifacts": artifacts, "history": history,
                 "runs": runs, "metrics": catalog_rows(),
                 "capabilities": {k: v["label"] for k, v in self.workspace.config["capabilities"].items()}}

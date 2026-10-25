@@ -13,7 +13,7 @@ from vibe_job_radar.workbench import LocalServer
 from vibe_job_radar.workspace import InputError, Workspace
 
 
-CLOSE_NAMES = ('public_queue', 'collection_runner', 'public_schedule', 'team',
+CLOSE_NAMES = ('public_queue', 'collection_runner', 'public_schedule', 'report_tasks', 'team',
                'releases', 'workspace', 'guided', 'public_tasks')
 
 

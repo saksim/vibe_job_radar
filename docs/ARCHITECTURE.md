@@ -2,7 +2,7 @@
 
 Vibe Job Radar 的核心是保留岗位原文、来源和处理判断，把招聘要求与候选人真实证据分开。桌面工作台、服务器浏览器入口、CLI 和可选团队设备服务使用同一代码仓库；当前选择分层模块化单体，不把采集、报告和个人数据拆成微服务。
 
-原 0.1 设计保留在[历史蓝图](ARCHITECTURE_LEGACY_01.md)，用于解释最初的证据原则；其中“未来计划”和旧版能力限制不再代表当前实现。本文件描述 0.18.0 的应用服务、后台采集与服务器入口代码，实际交付以对应 PR、CI 和发行 Tag 为准。
+原 0.1 设计保留在[历史蓝图](ARCHITECTURE_LEGACY_01.md)，用于解释最初的证据原则；其中“未来计划”和旧版能力限制不再代表当前实现。本文件描述 0.19.0 的应用命令、报告服务、后台任务与服务器入口代码，实际交付以对应 PR、CI 和发行 Tag 为准。
 
 ## 入口和信任边界
 
@@ -20,7 +20,7 @@ Vibe Job Radar 的核心是保留岗位原文、来源和处理判断，把招�
 
 ```mermaid
 flowchart TD
-  Desktop["桌面 HTTP / 本机浏览器"] --> App["共享应用服务 / 请求分派"]
+  Desktop["桌面 HTTP / 本机浏览器"] --> App["应用服务 / 显式用例命令"]
   Server["服务器 WSGI / Waitress"] --> App
   App --> Services["采集、公开任务、证据、质量、报告服务"]
   CLI["CLI / 独立 worker"] --> Services
@@ -31,9 +31,9 @@ flowchart TD
 
 | 层 | 主要模块 | 责任 |
 | --- | --- | --- |
-| 传输与认证 | `workbench.py`、`server.py` | 本地/远程认证、来源、请求大小、安全响应头、监听与进程退出 |
-| 共享应用服务 | `application.py`、`application_http.py` | 组合工作区和业务服务，统一生命周期、原有路由与业务调用；不持有桌面监听器 |
-| 业务用例 | `workspace.py`、`collection_runtime.py`、`public_tasks.py`、`public_schedule.py`、`public_queue.py`、`evidence_ui.py`、`quality_ui.py` | 导入、采集推进、计划队列、证据映射、人工审阅及报告访问 |
+| 传输与认证 | `workbench.py`、`server.py`、`application_http.py` | 本地/远程认证、来源、请求大小、安全响应头；HTTP 路由/序列化/脱敏错误，监听与进程退出 |
+| 共享应用服务 | `application.py`、`application_commands.py` | 组合工作区和业务服务；白名单命令、观察/写入协调、后台任务与统一退出；不持有 HTTP 路由或监听器 |
+| 业务用例 | `workspace.py`、`report_repository.py`、`report_tasks.py`、`collection_runtime.py`、`public_tasks.py`、`public_schedule.py`、`public_queue.py`、`evidence_ui.py`、`quality_ui.py` | 导入、采集推进、计划队列、证据映射、人工审阅及报告访问 |
 | 领域与报告 | `models.py`、`extract.py`、`synthesis.py`、`pipeline.py`、`report.py` | 数据校验、保守去重、要求与硬约束、样本汇总、证据矩阵及原报告输出 |
 | 基础设施 | `store.py`、`network.py`、`guided/`、`team_client.py` 及相关模块 | 持久化、网络策略/代理/TLS、浏览器适配、配额和可选跨设备协调 |
 
@@ -87,3 +87,15 @@ flowchart TD
 - 外部验收条件：实际 Linux Docker 主机与域名/TLS、所需真实网络/代理环境、获授权的 JD 标注、真实项目及生产指标材料。缺少这些条件的 Issue 保留待验收；软件测试不能替代它们。
 
 历史失败调查与本次可证明的独立修复分别记录。新测试通过只能证明该测试覆盖的行为；未证明的历史存储等待、网络兼容或真实页面原因继续保持未知。
+
+## 报告与命令边界（0.19.0）
+
+`WorkbenchApplication.execute(name, data)` 是无需网页或 socket 的显式用例入口。命令白名单在 `application_commands.py`，HTTP 仅映射 URL 并转换响应；新入口复用同一写入门控，不能任意访问服务私有方法。原 Workspace、同步 `/api/analyze`、`/api/evidence/generate` 与 CLI 接口继续存在。
+
+`ReportRepository` 只访问已发布报告目录，负责列表、受限文件路径和读取；Workspace 保留兼容委托。个人证据状态直接查询该报告边界，不再为了历史报告列表读取当前 `jobs.sqlite`。因此当前岗位库异常不会连带阻断已有证据的读取、保存后响应、导出和基于冻结报告的生成；新的真实分析与当前岗位状态仍会报告实际源库错误。
+
+`ReportTasks` 管理一次明确接受的普通/个人报告任务：启动后由工作线程调用原用例，页面只读状态。持久任务只保存身份、阶段和结果引用，不保存 JD、个人材料或凭据；个人报告沿用 expected_revision、冻结来源、要求语义校验和原暂存发布。任务运行时保留应用写入门控和跨进程报告所有权；退出有界等待，未退出的线程不提前释放锁，升级拒绝进行中的报告。
+
+纯观察接口有明确清单，报告状态、证据状态和采集状态可以在报告运行时读取；采集暂停仍由原运行器的锁和所有权控制。其他写操作继续拒绝并发，不能依据 GET/POST 或名称猜测安全性。页面重开只观察，进程失去任务所有权后记录中断，不自动重放、不承诺恰好一次完成。既有报告的暂存、fsync、原子发布与失败保留语义不变。
+
+前端共享 `report_tasks.js` 管理报告状态与当前请求归属；首页与高级页复用，固定历史报告不会被另一个任务完成结果覆盖。队列旧请求结果或失败不能覆盖较新的配置/任务状态；公开计划和队列继续由原后台服务负责。

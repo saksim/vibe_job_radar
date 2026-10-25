@@ -6,9 +6,9 @@ if (fragment.has("token")) {
   sessionStorage.setItem("radar-session", token);
   history.replaceState(null, "", location.pathname);
 }
-let state = null;
+let state = null, reportBusy = false;
 const requestedReport = fragment.get("report") || "";
-let reportPinned = fragment.has("report");
+let reportPinned = fragment.has("report"), reportSelection = 0;
 const reportSources = window.createReportSources($('report-sources'), request);
 function notice(value) { $("notice").textContent = value; }
 async function request(path, data) {
@@ -26,12 +26,12 @@ async function request(path, data) {
 async function operation(action) {
   // Startup and queue controls maintain their own state and pending requests.
   const buttons = [...document.querySelectorAll("button")]
-    .filter((button) => !button.closest("#windows-startup, #public-queue, #report-sources"));
+    .filter((button) => !button.closest("#windows-startup, #public-queue, #report-sources, #report-task-panel"));
   buttons.forEach((button) => { button.disabled = true; });
   notice("正在处理本次操作；请勿重复提交。搜索发现可能需要等待外部服务响应。");
   try { await action(); }
   catch (error) { notice(error.message || "操作失败，请检查输入与本地环境。"); }
-  finally { buttons.forEach((button) => { button.disabled = false; }); await publicState().catch(() => {}); }
+  finally { buttons.forEach((button) => { button.disabled = false; }); reportControls(); await publicState().catch(() => {}); }
 }
 function table(target, headers, rows) {
   const element = document.createElement("table");
@@ -167,7 +167,7 @@ function renderBrief(report) {
   $('brief-next').textContent = brief.next_step;
 }
 function showReport(report) {
-  reportPinned = true;
+  reportSelection++; reportPinned = true;
   history.replaceState(null, '', location.pathname + '#report=' + report.id);
   renderBrief(report);
   reportSources.setRun(report.manifest.mode === 'real_sample' ? report.id : '');
@@ -223,20 +223,42 @@ $("plan").addEventListener("click", () => operation(async () => {
 }));
 $("doctor").addEventListener("click", () => operation(async () => notice(JSON.stringify(await request("/api/doctor"), null, 2))));
 $("refresh").addEventListener("click", () => operation(async () => { await refresh(); notice("本地数据已刷新。"); }));
-$("demo").addEventListener("click", () => operation(async () => {
-  const report = await request("/api/analyze", {dataset: "demo"}); await refresh(); showReport(report);
-}));
-$("analyze").addEventListener("click", () => operation(async () => {
-  const report = await request("/api/analyze", {...filters(), dataset: "real"}); await refresh(); showReport(report);
-}));
-if (!token) notice("缺少本地会话令牌，请打开终端中带 #token 的完整地址。");
-else refresh().then(async () => {
-  if (fragment.has("report")) {
-    if (!/^[a-f0-9]{32}$/.test(requestedReport)) throw new Error('报告链接无效，未自动改用另一份报告。');
-    showReport(await request('/api/report/' + requestedReport));
-    $('report').scrollIntoView({block: 'start'});
+function reportControls() {
+  $("demo").disabled = $("analyze").disabled = reportBusy;
+}
+const reportTasks = window.createReportTasks({request,
+  status:$("report-task-status"), open:$("report-task-open"), refresh:$("report-task-refresh"),
+  accepts:task=>task.kind === "analysis", shouldOpen:()=>!reportPinned,
+  onBusy:value=>{reportBusy=value;reportControls();}, onAccepted:()=>{reportSelection++;reportPinned=false;},
+  onComplete:async(task, explicit, current)=>{
+    const report = await request('/api/report/' + task.report_id);
+    if (!current() || (!explicit && reportPinned)) return false;
+    showReport(report);
+    try { await refresh(); }
+    catch (error) { notice("报告已打开；当前岗位数据状态无法刷新：" + (error.message || "请稍后重试。")); }
+    return true;
   }
-}).catch((error) => notice(error.message));
+});
+$("demo").addEventListener("click", () => operation(()=>reportTasks.start({kind:"analysis", dataset:"demo"})));
+$("analyze").addEventListener("click", () => operation(()=>reportTasks.start({kind:"analysis", ...filters(), dataset:"real"})));
+if (token) void reportTasks.observe();
+if (!token) notice("缺少本地会话令牌，请打开终端中带 #token 的完整地址。");
+else {
+  // A published report is independent of the current source database. A failed
+  // source refresh must not prevent its deep link from being opened.
+  void refresh().catch(error => {
+    $("counts").textContent = "当前岗位数据状态无法刷新：" + (error.message || "请稍后重试。");
+    notice($("counts").textContent);
+  });
+  if (fragment.has("report")) void (async () => {
+    if (!/^[a-f0-9]{32}$/.test(requestedReport)) throw new Error('报告链接无效，未自动改用另一份报告。');
+    const selected = reportSelection;
+    const report = await request('/api/report/' + requestedReport);
+    if (selected !== reportSelection) return;
+    showReport(report);
+    $('report').scrollIntoView({block: 'start'});
+  })().catch(error => notice(error.message));
+}
 
 
 // Public tasks poll LOCAL state only. Loading this page never queries a source.
