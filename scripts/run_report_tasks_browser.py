@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 from pathlib import Path
 import sys
 import tempfile
@@ -22,7 +23,7 @@ from test_workbench import capture
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--channel', choices=['msedge'])
-    parser.add_argument('--case', choices=['all', 'pageshow', 'deep-link', 'result-return', 'ci-followups', 'selection-race'], default='all')
+    parser.add_argument('--case', choices=['all', 'pageshow', 'deep-link', 'result-return', 'ci-followups', 'selection-race', 'selection-context'], default='all')
     parser.add_argument('--out', type=Path, default=ROOT/'browser-acceptance/report-tasks')
     args = parser.parse_args()
     from playwright.sync_api import sync_playwright, expect
@@ -240,9 +241,21 @@ def main():
                     expect(page.locator('#report-title')).to_contain_text(historical[:8])
                     expect(page.locator('#analyze')).to_be_enabled()
                     before_starts = sum(path == '/api/reports/start' for _,path in requests)
-                    page.locator('#analyze').click()
+                    fixture_before = {'server_task': server.report_tasks.state()['task'],
+                        'ui_status': page.locator('#report-task-status').inner_text(),
+                        'ui_title': page.locator('#report-title').inner_text()}
+                    # An earlier case may leave a completed task. Bind readiness
+                    # to this click's acceptance before using its report ID.
+                    with page.expect_response(lambda response:response.url.endswith('/api/reports/start')) as accepted:
+                        page.locator('#analyze').click()
+                    assert accepted.value.status == 200
+                    accepted_task_id = accepted.value.json()['task']['id']
+                    expect(page.locator('#report-task-status')).to_contain_text(accepted_task_id[:8])
                     expect(page.locator('#report-task-status')).to_contain_text('已完成',timeout=10000)
-                    task_report = server.report_tasks.state()['task']['report_id']
+                    fixture_selected = server.report_tasks.state()['task']
+                    assert fixture_selected['id'] == accepted_task_id and fixture_selected['status'] == 'succeeded'
+                    task_report = fixture_selected['report_id']
+                    assert isinstance(task_report,str) and re.fullmatch('[a-f0-9]{32}',task_report)
                     expect(page.locator('#report-title')).to_contain_text(task_report[:8])
                     expect(page.locator('#report-task-open')).to_be_enabled()
                     historical_index = next(i for i, run in enumerate(workspace.status()['runs']) if run['id'] == historical)
@@ -271,7 +284,20 @@ def main():
                             held.append((route,response.json()))
                         page.route('**/api/report/'+task_report,hold_task)
                         page.locator('#report-task-open').click()
-                        await_condition(page,lambda:bool(held),'Explicit task report read was not held')
+                        try:
+                            await_condition(page,lambda:bool(held),'Explicit task report read was not held')
+                        except AssertionError:
+                            result['selection_diagnostic'] = {'before':fixture_before,
+                                'accepted_task_id':accepted_task_id,
+                                'selected_server_task':fixture_selected,
+                                'current_server_task':server.report_tasks.state()['task'],
+                                'expected_report_id':task_report,
+                                'ui_status':page.locator('#report-task-status').inner_text(),
+                                'ui_title':page.locator('#report-title').inner_text(),
+                                'ui_url':page.url.removeprefix(server.origin),
+                                'report_requests':[path for method,path in requests if path.startswith('/api/report/')],
+                                'scenario':'error' if failure else 'success'}
+                            raise
                         page.locator('#runs button').nth(historical_index).click()
                         expect(page.locator('#report-title')).to_contain_text(historical[:8])
                         settled = page.evaluate('window.reportReadsSettled')
@@ -440,9 +466,9 @@ def main():
                         result['checks'].append('late pre-mutation queue '+('failure' if failure else 'success')+' cannot replace accepted state or revoke newer consent')
                 if args.case in ('all', 'pageshow', 'ci-followups'): check_pageshow()
                 if args.case in ('all', 'deep-link', 'ci-followups'): check_deep_link()
-                if args.case in ('all', 'result-return'): check_result_return()
-                if args.case in ('all', 'ci-followups'): check_stale_open_error()
-                if args.case in ('all', 'selection-race'): check_selection_race()
+                if args.case in ('all', 'result-return', 'selection-context'): check_result_return()
+                if args.case in ('all', 'ci-followups', 'selection-context'): check_stale_open_error()
+                if args.case in ('all', 'selection-race', 'selection-context'): check_selection_race()
                 assert wire.json.call_count == 0
                 assert not result['page_errors'] and not result['external_requests']
                 result.update(success=True,stage='verified',report_task_starts=sum(path == '/api/reports/start' for _,path in requests),
