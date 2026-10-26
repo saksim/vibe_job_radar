@@ -20,12 +20,21 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class AcquisitionStatusTests(unittest.TestCase):
     def test_builtin_availability_and_default_are_separate_from_verification(self):
-        for site in snapshot()['sites']:
-            self.assertTrue(site['definition_matches_recorded_evidence'])
+        sites = snapshot()['sites']
+        self.assertEqual({site['platform'] for site in sites}, {'boss', 'liepin', '51job'})
+        for site in sites:
             if site['platform'] == 'liepin':
+                self.assertTrue(site['definition_matches_recorded_evidence'])
                 self.assertTrue(all(row['evidence'] for row in site['backends']))
                 self.assertTrue(all(row['blocking_issues'] == [49,50,51,52,54]
                                     for row in site['backends']))
+            else:
+                # The independent site classes changed the recorded definition.
+                # A same-key adapter cannot inherit historical fixture proof.
+                self.assertFalse(site['definition_matches_recorded_evidence'])
+                self.assertTrue(all(not row['evidence'] for row in site['backends']))
+                self.assertEqual([row['verification_level'] for row in site['backends']],
+                                 ['implemented', 'blocked'])
             self.assertEqual(site['certification'], 'not_live_verified')
             bridge, native = site['backends']
             self.assertTrue(bridge['default'])

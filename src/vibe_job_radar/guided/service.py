@@ -429,6 +429,12 @@ class GuidedService:
                  'diagnostics_enabled': data.get('diagnostics', False), 'backend': mode,
                  'reuse_current_session': data.get('reuse_current_session', False), 'session_reused': False,
                  'persist_session': data.get('persist_session', False), 'saved_session_status': 'off'}
+        scope_policy = getattr(adapter, 'validate_search_scope', None)
+        if callable(scope_policy):
+            try:
+                scope_policy(state['search_url'], keyword, state['search_url'])
+            except CrawlError:
+                raise InputError('搜索列表地址中的关键词须与本次关键词相同，且只能出现一次；修改查询请另建任务。') from None
         if adapter.key == 'liepin':
             try:
                 search_conditions(adapter, state['search_url'], keyword)

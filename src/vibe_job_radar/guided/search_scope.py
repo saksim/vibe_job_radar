@@ -36,6 +36,11 @@ def conditions(adapter, url, keyword):
 
 
 def check_scope(state, adapter, url):
+    policy = getattr(adapter, 'validate_search_scope', None)
+    if callable(policy):
+        # New and old identifiable keyword searches share this read-only
+        # validation. Never rewrite a checkpoint or its execution binding.
+        policy(state['search_url'], state['keyword'], url)
     if state.get('query_scope_version') != 1:
         return None
     wanted, _ = conditions(adapter, state['search_url'], state['keyword'])
