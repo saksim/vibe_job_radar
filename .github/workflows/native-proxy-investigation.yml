@@ -1,0 +1,46 @@
+name: isolated-native-proxy-investigation
+on:
+  push:
+    branches: [codex/native-proxy-investigation-0203]
+permissions:
+  contents: read
+jobs:
+  one-windows-edge-headless-observation:
+    if: github.run_attempt == 1
+    runs-on: windows-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Require unchanged product at the exact failed source
+        shell: pwsh
+        run: |
+          $base = 'ecf075c0d4ff1fcfc7171e5923ca78a2cd381633'
+          $parents = @(git rev-list --parents -n 1 HEAD) -split ' '
+          if ($LASTEXITCODE -ne 0 -or $parents.Count -ne 2 -or $parents[1] -ne $base) {
+            throw 'Diagnostic commit must have exactly the failed feature as its single parent.'
+          }
+          $actual = @(git diff --name-only $base HEAD | Sort-Object)
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot read diagnostic diff.' }
+          $expected = @('.github/workflows/native-proxy-investigation.yml', 'scripts/investigate_native_proxy_once.py')
+          if (@(Compare-Object $actual $expected).Count -ne 0) {
+            throw 'Only the two new diagnostic files may differ from the failed feature.'
+          }
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install the original native browser dependencies
+        run: python -m pip install "playwright>=1.48,<2" "packaging>=24.2" "cryptography>=43" "quickjs-ng==0.17.0.1" "pyspnego==0.12.4"
+      - name: Observe the original authenticated proxy suite once
+        timeout-minutes: 3
+        run: python -B scripts/investigate_native_proxy_once.py --controlled --channel msedge
+      - name: Preserve original failure and isolated counters
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: isolated-native-proxy-investigation
+          retention-days: 7
+          path: |
+            browser-acceptance/native-proxy-auth/
+            browser-acceptance/native-proxy-investigation/
