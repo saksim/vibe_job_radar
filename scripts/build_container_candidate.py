@@ -6,11 +6,72 @@ import os
 from pathlib import Path
 import platform
 import re
-from container_release import (BASE, VERSION, archive_config, command, digest_file, git_source, load,
+import subprocess
+from container_release import (BASE, VERSION, archive_config, digest_file, git_source, load,
     pinned_base, require, save, validate_candidate, validate_loaded_image)
 from run_container_smoke import smoke
 
 ROOT = Path(__file__).resolve().parents[1]
+
+_OUTPUT_SCAN_LIMIT = 65536
+_ERROR_SIGNALS = {
+    "unknown_flag_message": ("unknown flag", "unknown shorthand flag"),
+    "daemon_connection_message": ("cannot connect to the docker daemon",),
+    "connection_refused_message": ("connection refused",),
+    "network_unreachable_message": ("network is unreachable", "no route to host"),
+    "dns_lookup_message": ("no such host", "temporary failure in name resolution"),
+    "certificate_message": ("x509:", "certificate verify failed"),
+    "registry_denial_message": ("unauthorized:", "denied:",),
+    "registry_rate_limit_message": ("toomanyrequests",),
+    "disk_space_message": ("no space left on device",),
+    "platform_manifest_message": ("no matching manifest",),
+    "network_timeout_message": ("i/o timeout", "tls handshake timeout"),
+}
+
+
+def _output_summary(value):
+    # Keep lengths and a fixed vocabulary, never command output or extracted values.
+    if not isinstance(value, (str, bytes)):
+        return {"available": False, "length": None, "unit": None,
+                "scan_complete": False, "observed_signals": []}
+    bounded = value[-_OUTPUT_SCAN_LIMIT:]
+    if isinstance(bounded, bytes):
+        bounded = bounded.decode("utf-8", errors="replace")
+    bounded = bounded.lower()
+    return {"available": True, "length": len(value),
+            "unit": "bytes" if isinstance(value, bytes) else "characters",
+            "scan_complete": len(value) <= _OUTPUT_SCAN_LIMIT,
+            "observed_signals": [name for name, phrases in _ERROR_SIGNALS.items()
+                                 if any(phrase in bounded for phrase in phrases)]}
+
+
+def _record_command_failure(out, identity, stage, outcome, exit_code, stdout, stderr):
+    try:
+        save(out / "failure.json", {**identity, "schema_version": 1,
+             "status": "container_candidate_failed", "diagnostic_only": True,
+             "root_cause": "unknown", "stage": stage, "outcome": outcome,
+             "exit_code": exit_code, "stdout": _output_summary(stdout),
+             "stderr": _output_summary(stderr)})
+    except Exception:
+        # Diagnostics must never replace the original command failure.
+        pass
+
+
+def _candidate_command(out, identity, stage, args, *, cwd=None, timeout=600):
+    try:
+        result = subprocess.run(args, cwd=cwd, env=None, input=None,
+                                capture_output=True, text=True, encoding="utf-8", timeout=timeout)
+    except subprocess.TimeoutExpired as error:
+        _record_command_failure(out, identity, stage, "timeout", None, error.stdout, error.stderr)
+        raise
+    except OSError:
+        _record_command_failure(out, identity, stage, "spawn_error", None, None, None)
+        raise
+    if result.returncode != 0:
+        _record_command_failure(out, identity, stage, "nonzero_exit", result.returncode,
+                                result.stdout, result.stderr)
+    require(result.returncode == 0, "Command failed: " + Path(args[0]).name)
+    return result.stdout
 
 
 def build(out, architecture, repository, base):
@@ -29,13 +90,16 @@ def build(out, architecture, repository, base):
     require(run_id > 0 and attempt == 1, "Only an original candidate run is eligible")
     out.mkdir(parents=True)
     tag = "vibe-radar-candidate:" + revision + "-" + architecture
-    command(["docker", "build", "--provenance=false", "--platform", "linux/" + architecture,
+    failure_identity = {"version": version, "source_revision": revision, "source_tree": tree,
+        "source_payload_sha256": source_digest, "base_image": base, "architecture": architecture,
+        "candidate_run": run_id, "candidate_attempt": attempt}
+    _candidate_command(out, failure_identity, "build", ["docker", "build", "--provenance=false", "--platform", "linux/" + architecture,
         "--build-arg", "PYTHON_BASE=" + base, "--build-arg", "RADAR_REVISION=" + revision,
         "--build-arg", "RADAR_VERSION=" + version, "--build-arg", "RADAR_SOURCE=https://github.com/" + repository,
         "--tag", tag, "."], cwd=ROOT, timeout=600)
-    info = json.loads(command(["docker", "image", "inspect", tag]))[0]
+    info = json.loads(_candidate_command(out, failure_identity, "inspect", ["docker", "image", "inspect", tag]))[0]
     archive = out / "image.tar"
-    command(["docker", "save", "--output", str(archive), tag], timeout=120)
+    _candidate_command(out, failure_identity, "save", ["docker", "save", "--output", str(archive), tag], timeout=120)
     config_digest, config = archive_config(archive, tag)
     identity = {"schema_version": 1, "repository": repository, "version": version,
         "source_revision": revision, "source_tree": tree, "source_payload_sha256": source_digest,
