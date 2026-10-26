@@ -23,6 +23,48 @@ from vibe_job_radar.pac import PacSnapshot
 from vibe_job_radar import system_pac, wpad_native, pac_url_worker
 from vibe_job_radar.workspace import Workspace
 from test_system_pac import SourceServer
+from native_guard_evidence import install_guard_observer, guard_transport_facts
+from native_handshake_evidence import HandshakeTrace, handshake_facts, observed_send, observed_message
+
+
+class ObservedPacBackend(NativeBackend):
+    """Only shared passive CI observations; production behavior stays inherited."""
+    def __init__(self, *args, **kwargs):
+        try:
+            self._handshake_trace = HandshakeTrace()
+        except Exception:
+            self._handshake_trace = None
+        super().__init__(*args, **kwargs)
+        try:
+            self._guard_evidence = install_guard_observer(self.tunnel, self._handshake_trace)
+        except Exception:
+            self._guard_evidence = None
+
+    def _send(self, session, method, params=None, callback=None):
+        return observed_send(self, super()._send, session, method, params, callback)
+
+    def _received(self, event):
+        try:
+            observed_message(self, json.loads(event['message']))
+        except Exception:
+            pass
+        return super()._received(event)
+
+
+def unavailable_refusal(protocol, dns_helpers):
+    # Missing observations are not successful zero traffic.
+    return {'protocol': protocol, 'dns_helpers': dns_helpers, 'capture_failed': True,
+            'guard_transport': {'available': False, 'interval': None, 'complete': False,
+                                'overflow': False, 'operations': None, 'replies': None},
+            'handshake_trace': {'available': False, 'complete': False, 'overflow': False, 'events': None}}
+
+
+def refusal_observation_complete(observation):
+    """Both passive snapshots must be present and complete to qualify a case."""
+    return observation.get('capture_failed') is False and all(
+        isinstance(facts, dict) and facts.get('available') is True
+        and facts.get('complete') is True and facts.get('overflow') is False
+        for facts in (observation.get('guard_transport'), observation.get('handshake_trace')))
 
 
 def main():
@@ -86,7 +128,7 @@ def main():
                             policy=(workspace.network_policy() if args.system or args.wpad or args.portable_domain else
                                 NetworkPolicy('explicit_workspace',pac=PacSnapshot(script,lambda:True),pac_id='fixture'))
                             with use_policy(policy):
-                                return NativeBackend(adapter(),RateLedger(root/(keyword+name+('-dns' if dns_scope else '')+'.sqlite'),
+                                return ObservedPacBackend(adapter(),RateLedger(root/(keyword+name+('-dns' if dns_scope else '')+'.sqlite'),
                                     Limits(page_interval=0,request_interval=0)),threading.Event(),lambda *_:None,
                                     headless=not args.headed,channel=args.channel or ('msedge' if os.name=='nt' else None))
                         def exercise():
@@ -116,17 +158,27 @@ def main():
                                 finally:
                                     # Keep bounded counts/fixed codes before close. No raw
                                     # browser messages, URLs, credentials or response bodies.
-                                    result['refusal_observation']={
-                                        'protocol':keyword,'dns_helpers':dns_scope,
-                                        'code':refusal_code,'controller_code':backend.error,
-                                        'tunnel_code':backend.tunnel.last_error,
-                                        'retained_auth_attempts':len(backend._auth_attempts),
-                                        'tunnel_connections':backend.tunnel.connections,
-                                        'proxy_dials':len(fixture.dials)-before,
-                                        'proxy_connects':len(fixture.connects)-before_connects,
-                                        'target_requests':len(source.requests)-delivered}
-                                    checkpoint(keyword+'-refusal-observed')
-                                    backend.close()
+                                    try:
+                                        try:
+                                            result['refusal_observation']={
+                                                'protocol':keyword,'dns_helpers':dns_scope,
+                                                'code':refusal_code,'controller_code':backend.error,
+                                                'tunnel_code':backend.tunnel.last_error,
+                                                'retained_auth_attempts':len(backend._auth_attempts),
+                                                'tunnel_connections':backend.tunnel.connections,
+                                                'proxy_dials':len(fixture.dials)-before,
+                                                'proxy_connects':len(fixture.connects)-before_connects,
+                                                'target_requests':len(source.requests)-delivered,
+                                                'capture_failed':False,
+                                                'guard_transport':guard_transport_facts(backend),
+                                                'handshake_trace':handshake_facts(backend)}
+                                            result['refusal_observation']['capture_failed'] = not refusal_observation_complete(
+                                                result['refusal_observation'])
+                                            checkpoint(keyword+'-refusal-observed')
+                                        except Exception:
+                                            result['refusal_observation']=unavailable_refusal(keyword,dns_scope)
+                                    finally:
+                                        backend.close()
                                 assert len(source.requests)==delivered
                                 assert len(fixture.dials)>before
                                 assert all(address==fixture.proxy.server_address for address in fixture.dials)
@@ -134,6 +186,10 @@ def main():
                                 downloads=len(pac_server.requests)-before_sources
                                 assert downloads==(2 if args.system or args.wpad else 0),downloads
                                 assert discovery.call_count-before_discovery==(2 if args.wpad else 0)
+                                # Keep original business failures primary. Missing required
+                                # refusal facts cannot qualify an otherwise passing case.
+                                if not refusal_observation_complete(result['refusal_observation']):
+                                    raise AssertionError('required PAC refusal observation unavailable')
                                 result['checks'].append(dict(protocol=keyword,browser_version=version,portable_domain=args.portable_domain,dns_helpers=dns_scope,
                                     canonical_root_enforced=args.portable_domain,
                                     original_list_and_full_artificial_detail=True,refused_target_requests=0,
@@ -144,7 +200,15 @@ def main():
                 finally:source.close()
         result['success']=True
     finally:
-        pac_server.close();checkpoint('finished' if result['success'] else 'failed')
+        try:
+            pac_server.close()
+        finally:
+            original_error=sys.exc_info()[0] is not None
+            try:
+                checkpoint('finished' if result['success'] else 'failed')
+            except Exception:
+                if not original_error:
+                    raise
 
 
 if __name__=='__main__':main()

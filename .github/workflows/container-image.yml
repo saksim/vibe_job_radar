@@ -75,3 +75,4 @@ jobs:
           path: |
             .verify/container-${{ matrix.architecture }}/manifest.json
             .verify/container-${{ matrix.architecture }}/smoke.json
+            .verify/container-${{ matrix.architecture }}/failure.json

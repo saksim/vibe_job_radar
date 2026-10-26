@@ -205,8 +205,10 @@ class Registry:
 
 def builtins() -> Registry:
     from .liepin import LiepinAdapter
+    from .boss import BossAdapter
+    from .job51 import Job51Adapter
     return Registry([
-        DOMAdapter('boss', 'BOSS直聘', ('zhipin.com',),
+        BossAdapter('boss', 'BOSS直聘', ('zhipin.com',),
                    'https://www.zhipin.com/web/geek/job', 'query', r'^/job_detail/[^/]+\.html$',
                    'https://www.zhipin.com/web/user/', ('www.zhipin.com',),
                    ('zhipin.com', 'zhipin.cn')),
@@ -223,8 +225,8 @@ def builtins() -> Registry:
                        'li.ant-pagination-next:not(.ant-pagination-disabled):not([aria-disabled="true"]) > '
                        'button.ant-pagination-item-link',
                        *DOMAdapter.next_selectors), version='3'),
-        DOMAdapter('51job', '前程无忧', ('51job.com',),
-                   'https://we.51job.com/pc/search', 'keyword', r'(?:/[^/]+/\d+\.html$|^/pc/jobdetail)',
+        Job51Adapter('51job', '前程无忧', ('51job.com',),
+                   'https://we.51job.com/pc/search', 'keyword', r'(?:/[^/]+/\d+\.html$|^/pc/jobdetail$)',
                    'https://login.51job.com/', ('login.51job.com',),
                    ('51job.com', '51jobcdn.com')),
     ])
