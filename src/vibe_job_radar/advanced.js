@@ -212,7 +212,31 @@ const reportTasks = window.createReportTasks({request:reportRequest,
 $("generate").onclick=()=>act(()=>reportTasks.start({kind:"evidence",run_id:$("source-run").value,expected_revision:profile.revision}));
 if(token)void reportTasks.observe();
 $("export-evidence").onclick=()=>act(()=>download("/api/evidence/export","personal-evidence.zip"));
-async function refreshCollections(){const result=await api("/api/collection/list");options($("collect-history"),Object.fromEntries(result.runs.map(s=>[s.id,`${s.updated_at} · ${s.mode} · ${s.status} · ${s.id.slice(0,8)}`])),activeCollection);}
+async function refreshCollections(current=null){
+  const result=await api("/api/collection/list");
+  if(current&&!current())return;
+  options($("collect-history"),Object.fromEntries(result.runs.map(s=>[s.id,`${s.updated_at} · ${s.mode} · ${s.status} · ${s.id.slice(0,8)}`])),activeCollection);
+  $("collection-history-state").textContent="";
+}
+function observeCollectionHistory(ident){
+  const selection=$("collect-history").value;
+  const current=()=>activeCollection===ident&&$("collect-history").value===selection;
+  return refreshCollections(current).catch(error=>{
+    if(current())$("collection-history-state").textContent=`任务列表读取失败：${error.message}。批次 ${ident.slice(0,8)} 的执行状态请查看下方结果，可手动刷新任务列表。`;
+  });
+}
+async function createCategoryAndContinue(path,plan){
+  let saved=null;
+  await collectAct(async()=>{
+    const result=await api(path,{id:plan.id,fingerprint:plan.fingerprint,consent:true});
+    collectionGuide?.selectMode(result.task.mode);showCollection(result.task);
+    saved={id:result.task.id,created:result.created===true};
+  });
+  if(!saved)return;
+  // This read cannot accept or reject execution, and never replays a command.
+  void observeCollectionHistory(saved.id);
+  if(saved.created)await continueCollection(saved.id);
+}
 function showCollection(s){
   const button=(label,fn)=>{const b=text("button",label);b.type="button";b.disabled=locked("collection");b.addEventListener("click",()=>collectAct(fn));return b;};
   activeCollection=s.id;
@@ -287,15 +311,7 @@ function showCollection(s){
       for(const item of plan.items)next.append(text("p",`名单第 ${item.position} 项：${item.title||"无法确认的卡片（会保留失败）"} ${item.url}`));
       next.append(text("p","沿用原用途与许可范围："+plan.rights_note));
       const launch=text("button","确认采集这批职位");launch.type="button";
-      launch.onclick=async()=>{
-        let created=false;
-        await collectAct(async()=>{
-          const result=await api("/api/collection/category_next_start",{id:plan.id,fingerprint:plan.fingerprint,consent:true});
-          collectionGuide?.selectMode(result.task.mode);showCollection(result.task);
-          await refreshCollections();created=result.created;
-        });
-        if(created)await continueCollection();
-      };
+      launch.onclick=()=>createCategoryAndContinue("/api/collection/category_next_start",plan);
       next.append(launch);
     }));
     const pageBox=text("div","");pageBox.className="guide-box";root.append(pageBox);
@@ -312,14 +328,7 @@ function showCollection(s){
       }
       pageBox.append(text("p","沿用原用途与许可范围："+plan.rights_note));
       const launch=text("button",`确认读取第 ${plan.next_page} 页并采集最多 ${plan.selection_limit} 条`);launch.type="button";
-      launch.onclick=async()=>{
-        let created=false;
-        await collectAct(async()=>{
-          const result=await api("/api/collection/category_page_start",{id:plan.id,fingerprint:plan.fingerprint,consent:true});
-          collectionGuide?.selectMode(result.task.mode);showCollection(result.task);await refreshCollections();created=result.created;
-        });
-        if(created)await continueCollection();
-      };
+      launch.onclick=()=>createCategoryAndContinue("/api/collection/category_page_start",plan);
       pageBox.append(launch);
     }));
   }
@@ -372,10 +381,11 @@ async function watchCollection(initial){
       current=await api("/api/collection/background/state");
     }
   }catch(error){backgroundKnown=false;$("collection-state").textContent=error.message+"；后台状态未知，请重新读取后再提交。";}
-  finally{collectionWatching=false;collecting=false;foreignCollection=false;try{await refreshCollections();}catch(error){$("collection-state").textContent=error.message;}finally{updateButtons();}}
+  finally{collectionWatching=false;collecting=false;foreignCollection=false;try{await observeCollectionHistory(current.task?.id||activeCollection);}finally{updateButtons();}}
 }
-async function continueCollection(){
+async function continueCollection(expectedId=activeCollection){
   if(locked("collection"))return;
+  if(activeCollection!==expectedId){note("所选任务已变化；刚保存的批次未在此页面继续，请重新查看后确认。");return;}
   const keyInput=$("collect-form").elements.api_key;
   if(collectionPhase==="feed"&&!keyInput.value.trim()&&!window.confirm("未填写数据源 Token。只有提供方明确允许无需 Token 访问时，才确认无 Token 继续；否则点取消，先填 Token。")){
     note("已取消继续；未发出采集请求，未消耗任务预算。请补填数据源 Token。");
@@ -383,7 +393,7 @@ async function continueCollection(){
   }
   collecting=true;updateButtons();
   try{
-    const request={id:activeCollection,consent:true};
+    const request={id:expectedId,consent:true};
     if((collectionMode==="search"&&collectionPhase==="search")||collectionPhase==="feed")request.api_key=keyInput.value;
     const started=await api("/api/collection/background/start",request);
     // Acknowledgement transfers this batch's credential to the worker. Keep no
