@@ -121,6 +121,26 @@ def capture_case(*, refusal_dials=False, fault=None):
         stack.enter_context(patch.object(pac.pac_url_worker, 'available', return_value=True))
         if fault == 'snapshot':
             stack.enter_context(patch.object(pac, 'guard_transport_facts', side_effect=RuntimeError(SECRET)))
+        if fault == 'guard_missing':
+            stack.enter_context(patch.object(pac, 'install_guard_observer', return_value=None))
+        if fault and fault.startswith(('guard_', 'handshake_')) and fault != 'guard_missing':
+            guard = fault.startswith('guard_')
+            function = 'guard_transport_facts' if guard else 'handshake_facts'
+            original = getattr(pac, function)
+            def incomplete_facts(backend):
+                observer = backend._guard_evidence if guard else backend._handshake_trace
+                if fault.endswith('_unavailable'):
+                    # Exercise the actual nonblocking snapshot's busy-lock branch.
+                    with observer._lock:
+                        return original(backend)
+                if guard:
+                    observer._incomplete = True
+                else:
+                    observer._complete = False
+                if fault.endswith('_overflow'):
+                    observer._overflow = True
+                return original(backend)
+            stack.enter_context(patch.object(pac, function, side_effect=incomplete_facts))
         error = None
         try:
             pac.main()
@@ -176,3 +196,30 @@ class NativePacCaptureTests(unittest.TestCase):
                 self.assertEqual(len(writes), 0 if fault == 'snapshot' else 1)
                 self.assertNotIn(SECRET, raw)
                 self.check_cleanup(events)
+
+
+    def test_missing_or_incomplete_snapshots_cannot_qualify(self):
+        faults = ('guard_missing', 'guard_unavailable', 'guard_incomplete', 'guard_overflow',
+                  'handshake_unavailable', 'handshake_incomplete', 'handshake_overflow')
+        for fault in faults:
+            for dials in (False, True):
+                with self.subTest(fault=fault, dials=dials):
+                    error, result, raw, events, writes = capture_case(refusal_dials=dials, fault=fault)
+                    self.assertIs(error[0], AssertionError)
+                    if dials:
+                        self.assertEqual(error[1], 'required PAC refusal observation unavailable')
+                    else:
+                        self.assertEqual(error[2], 'assert len(fixture.dials)>before')
+                    self.assertFalse(result['success'])
+                    self.assertEqual(result['checks'], [])
+                    observation = result['refusal_observation']
+                    self.assertTrue(observation['capture_failed'])
+                    affected = observation['guard_transport' if fault.startswith('guard_') else 'handshake_trace']
+                    self.assertFalse(affected['complete'])
+                    if fault in {'guard_missing', 'guard_unavailable', 'handshake_unavailable'}:
+                        self.assertFalse(affected['available'])
+                    if fault.endswith('_overflow'):
+                        self.assertTrue(affected['overflow'])
+                    self.assertNotIn(SECRET, raw)
+                    self.assertEqual(writes, [])
+                    self.check_cleanup(events)

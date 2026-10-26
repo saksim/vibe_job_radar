@@ -59,6 +59,14 @@ def unavailable_refusal(protocol, dns_helpers):
             'handshake_trace': {'available': False, 'complete': False, 'overflow': False, 'events': None}}
 
 
+def refusal_observation_complete(observation):
+    """Both passive snapshots must be present and complete to qualify a case."""
+    return observation.get('capture_failed') is False and all(
+        isinstance(facts, dict) and facts.get('available') is True
+        and facts.get('complete') is True and facts.get('overflow') is False
+        for facts in (observation.get('guard_transport'), observation.get('handshake_trace')))
+
+
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('--controlled',action='store_true')
     parser.add_argument('--headed',action='store_true')
@@ -164,6 +172,8 @@ def main():
                                                 'capture_failed':False,
                                                 'guard_transport':guard_transport_facts(backend),
                                                 'handshake_trace':handshake_facts(backend)}
+                                            result['refusal_observation']['capture_failed'] = not refusal_observation_complete(
+                                                result['refusal_observation'])
                                             checkpoint(keyword+'-refusal-observed')
                                         except Exception:
                                             result['refusal_observation']=unavailable_refusal(keyword,dns_scope)
@@ -178,7 +188,7 @@ def main():
                                 assert discovery.call_count-before_discovery==(2 if args.wpad else 0)
                                 # Keep original business failures primary. Missing required
                                 # refusal facts cannot qualify an otherwise passing case.
-                                if result['refusal_observation'].get('capture_failed') is not False:
+                                if not refusal_observation_complete(result['refusal_observation']):
                                     raise AssertionError('required PAC refusal observation unavailable')
                                 result['checks'].append(dict(protocol=keyword,browser_version=version,portable_domain=args.portable_domain,dns_helpers=dns_scope,
                                     canonical_root_enforced=args.portable_domain,
