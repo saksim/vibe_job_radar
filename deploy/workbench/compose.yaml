@@ -1,7 +1,7 @@
 name: vibe-radar-workbench
 services:
   workbench:
-    image: ${RADAR_IMAGE:-ghcr.io/saksim/vibe_job_radar:0.20.2}
+    image: ${RADAR_IMAGE:-ghcr.io/saksim/vibe_job_radar:0.20.3}
     command:
       - --workspace
       - /data

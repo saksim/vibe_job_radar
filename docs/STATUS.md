@@ -1,6 +1,6 @@
 # 当前交付与待验收
 
-本页按 **2026-10-26 已正式发布的 0.20.2** 整理。发行提交为 `870eabb2160c63db49bbafd4d0f53f575fdd3db8`；后续变化以[正式 Releases](https://github.com/saksim/vibe_job_radar/releases)和[总控 #57](https://github.com/saksim/vibe_job_radar/issues/57)为准。本文档整理不新增软件版本，也不将历史记录改写成当前验收。
+本页按 **2026-10-26 已正式发布的 0.20.2** 整理。发行提交为 `870eabb2160c63db49bbafd4d0f53f575fdd3db8`；后续变化以[正式 Releases](https://github.com/saksim/vibe_job_radar/releases)和[总控 #57](https://github.com/saksim/vibe_job_radar/issues/57)为准。下方保留这个已发布快照；新一轮 [0.20.3 变更](RELEASE_0_20_3.md)包含文档整理、两站新批次去重和原生连接关闭修复，正式完成状态以对应 Tag 和总控回执为准，不继承 0.20.2 的验收数字。
 
 ## 已发布
 
@@ -13,7 +13,7 @@
 
 三个 Tag 来自同一产品版本。普通桌面用户无需另装 Python 包；Docker 也不包含招聘平台登录浏览器。
 
-0.20.2 修复了分站关键词范围保护、51job 详情路径边界及已接收连接的关闭遗漏，并完善失败诊断。报告、个人证据、公开来源、有限后台任务、桌面、CLI、团队和原更新链路保留。具体变化见[本版说明](RELEASE_0_20_2.md)，模块职责见[架构](ARCHITECTURE.md)。
+0.20.2 修复了分站关键词范围保护、51job 详情路径边界及已接收连接的关闭遗漏，并完善失败诊断。报告、个人证据、公开来源、有限后台任务、桌面、CLI、团队和原更新链路保留。具体变化见[本版说明](releases/RELEASE_0_20_2.md)，模块职责见[架构](ARCHITECTURE.md)。
 
 ## 已有证据能证明什么
 

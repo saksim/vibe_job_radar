@@ -64,7 +64,7 @@ docker compose ps
 
 默认仅发布宿主机 `127.0.0.1:8080`，可在该主机浏览器访问 `http://localhost:8080/login`。不要用 `127.0.0.1` 替换已配置为 `localhost` 的浏览器地址，两者是不同来源。新命名卷从镜像中的 `/data` 初始化权限；若换用已有卷或 bind mount，部署者需预先保证整个数据目录由 UID/GID 10001 读写。
 
-正式镜像名称为 `ghcr.io/saksim/vibe_job_radar`；Compose 默认选定 `0.20.2`，不要求部署者下载源码重新构建镜像。版本标签在发布器中拒绝覆盖；真正由内容固定的地址是 `ghcr.io/saksim/vibe_job_radar@sha256:<本次正式多架构 index digest>`，可将发行记录中的准确地址填入 `RADAR_IMAGE`。`latest` 会随后续完成匿名验收的版本移动，不用于固定一次部署。
+正式镜像名称为 `ghcr.io/saksim/vibe_job_radar`；Compose 默认选定 `0.20.3`，不要求部署者下载源码重新构建镜像。版本标签在发布器中拒绝覆盖；真正由内容固定的地址是 `ghcr.io/saksim/vibe_job_radar@sha256:<本次正式多架构 index digest>`，可将发行记录中的准确地址填入 `RADAR_IMAGE`。`latest` 会随后续完成匿名验收的版本移动，不用于固定一次部署。
 
 正式 manifest 同时列出 `linux/amd64` 和 `linux/arm64`，Docker 根据主机架构选择镜像。两个架构分别由原生 runner 构建、实际启动和验证，不把 QEMU 构建或架构标记当作原生运行验收。Dockerfile 从发行源码安装 `.[service]`；候选 CI 先解析一次官方 Python 基础镜像 index digest，再给两平台提供同一个固定基础输入。
 

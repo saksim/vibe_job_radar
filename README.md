@@ -2,14 +2,14 @@
 
 把真实岗位 JD 整理成可追溯的要求，再结合本人项目、附件和实际指标，形成能力描述与待补证清单。默认研究方向为垂直领域算法、时间序列算法和架构师。
 
-当前正式版本：**0.20.2**。查看[本版变化](docs/RELEASE_0_20_2.md)、[当前交付与限制](docs/STATUS.md)或[完整文档目录](docs/README.md)。
+本页对应版本：**0.20.3**；正式发行以 [Releases](https://github.com/saksim/vibe_job_radar/releases) 为准。查看[本版变化](docs/RELEASE_0_20_3.md)、[当前交付与限制](docs/STATUS.md)或[完整文档目录](docs/README.md)。
 
 ## 选择适合你的启动方式
 
 | 你要怎么用 | 下载或指南 | 需要准备什么 |
 | --- | --- | --- |
-| Windows 桌面 | [Windows 正式包](https://github.com/saksim/vibe_job_radar/releases/tag/v0.20.2) · [启动说明](docs/WINDOWS_PORTABLE.md) | Windows x64；包内带 Python 和采集浏览器 |
-| Linux / macOS 桌面 | [桌面正式包](https://github.com/saksim/vibe_job_radar/releases/tag/desktop-v0.20.2) · [启动说明](docs/POSIX_DISTRIBUTION.md) | Linux x64 或 macOS arm64；系统库与签名限制见说明 |
+| Windows 桌面 | [Windows 正式包](https://github.com/saksim/vibe_job_radar/releases/tag/v0.20.3) · [启动说明](docs/WINDOWS_PORTABLE.md) | Windows x64；包内带 Python 和采集浏览器 |
+| Linux / macOS 桌面 | [桌面正式包](https://github.com/saksim/vibe_job_radar/releases/tag/desktop-v0.20.3) · [启动说明](docs/POSIX_DISTRIBUTION.md) | Linux x64 或 macOS arm64；系统库与签名限制见说明 |
 | 服务器运行，浏览器访问 | [Docker 部署](docs/DOCKER.md) | 一个拥有者、一个持久工作区；远程访问需 HTTPS |
 | 自行管理 Python 环境或使用 CLI | [Python 高级安装](docs/PYTHON_DISTRIBUTION.md) | Python 3.10+；按所用能力安装可选依赖 |
 

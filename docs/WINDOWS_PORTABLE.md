@@ -8,7 +8,7 @@
 
 ## 下载正式版本并运行
 
-普通用户从 [v0.20.2 正式Release](https://github.com/saksim/vibe_job_radar/releases/tag/v0.20.2) 下载Windows x64 ZIP和校验表；其他版本见 [Releases](https://github.com/saksim/vibe_job_radar/releases)。用户可在首页[检查并准备升级](UPDATES.md)，不需要从Actions寻找临时候选，也不需要另装Python包。
+普通用户从 [v0.20.3 正式Release](https://github.com/saksim/vibe_job_radar/releases/tag/v0.20.3) 下载Windows x64 ZIP和校验表；其他版本见 [Releases](https://github.com/saksim/vibe_job_radar/releases)。用户可在首页[检查并准备升级](UPDATES.md)，不需要从Actions寻找临时候选，也不需要另装Python包。
 
 1. 按同一Release中的 `manifest.json` 和 `SHA256SUMS.txt` 核对ZIP文件名与SHA-256，可用 PowerShell `Get-FileHash -Algorithm SHA256 "下载文件路径.zip"`。摘要只核对文件一致性，不是发行签名。
 2. 将里面的 `VibeJobRadar` 整个目录解压到新目录，再双击 `VibeJobRadar.exe`。保留 `_internal`、`browsers` 及其他随包文件，不在 ZIP 内运行，也不只复制 exe。程序文件夹完整路径建议不超过110个UTF-16单元（常用中英文字符各一个），避免Windows深层目录限制；不要求修改系统长路径设置。无需安装 Python 或改动原 Anaconda 环境。

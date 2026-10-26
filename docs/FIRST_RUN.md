@@ -1,6 +1,6 @@
 # 从零开始：先打开，再找岗位
 
-先选择一种适合自己的运行方式，再完成第一份报告。当前正式版本为 **0.20.2**；下载入口见 [GitHub Releases](https://github.com/saksim/vibe_job_radar/releases)，已交付能力和仍需现场验证的范围见[当前状态](STATUS.md)。
+先选择一种适合自己的运行方式，再完成第一份报告。本页对应 **0.20.3**；仅从已经发布的正式 Release 下载，下载入口见 [GitHub Releases](https://github.com/saksim/vibe_job_radar/releases)，已交付能力和仍需现场验证的范围见[当前状态](STATUS.md)。
 
 ## 1. 下载与启动
 
@@ -10,7 +10,7 @@
 | Python环境：源码或wheel | 已有Python 3.10+，愿意自行维护环境和可选组件 | 源码使用下方命令；wheel按[Python安装说明](PYTHON_DISTRIBUTION.md)安装后运行 `vibe-radar-ui` |
 | Docker服务器工作台 | 希望服务运行在服务器上，自己通过浏览器远程访问 | 按[Docker部署说明](DOCKER.md)配置密码、来源地址和数据卷，再拉取正式镜像启动 |
 
-三个正式Release属于同一产品版本：`v0.20.2` 提供Windows包，`desktop-v0.20.2` 提供Linux/macOS包，`python-v0.20.2` 提供wheel和源码分发包。普通桌面用户下载自己平台的程序包即可，无需再安装Python包。Docker使用 `ghcr.io/saksim/vibe_job_radar:0.20.2`，具体固定摘要和部署步骤见Docker说明。
+三个正式Release属于同一产品版本：`v0.20.3` 提供Windows包，`desktop-v0.20.3` 提供Linux/macOS包，`python-v0.20.3` 提供wheel和源码分发包。普通桌面用户下载自己平台的程序包即可，无需再安装Python包。Docker使用 `ghcr.io/saksim/vibe_job_radar:0.20.3`，具体固定摘要和部署步骤见Docker说明。
 
 **完整桌面包。** 下载对应正式Release的程序归档和校验表，按平台指南核对摘要。Windows完整解压 `VibeJobRadar` 目录后双击其中的 `VibeJobRadar.exe`，保留 `_internal`、`browsers` 等随包文件，不只复制exe。Linux/macOS用系统 `tar -xzf` 解压并保留符号链接、可执行权限，在程序目录运行 `./VibeJobRadar`。这些包自带Python和Chromium；Linux仍需系统浏览器库，其他系统版本和架构的范围见平台指南。当前Windows包未签名、macOS包未签名或公证，按平台提示处理，不绕过系统安全设置。
 

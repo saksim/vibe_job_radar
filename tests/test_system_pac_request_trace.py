@@ -158,7 +158,7 @@ class TraceTests(unittest.TestCase):
         exec(compile(module,'<original-system-PAC-count-control>','exec'),namespace)
         result={'checks':[]}
         with patch('system_pac_acceptance.configured_source',configured),patch('system_pac_acceptance.verify_app',ui),patch('system_pac_request_trace.FixtureRequestTrace',FailedSnapshot):
-            with self.assertRaisesRegex(AssertionError,'cached worker implicitly downloaded PAC'):
+            with self.assertRaisesRegex(AssertionError,'unexpected PAC-source request count'):
                 namespace['check'](SimpleNamespace(proc=SimpleNamespace(pid=os.getpid())),result,None,Path('.'),None,{})
         self.assertEqual(cleaned,[True]);self.assertEqual(len(fixture.requests),2)
         self.assertEqual(result['system_pac_source_request_counts'],{'before_ui_check':0,'after_ui_check':1,'after_cached_worker':2})
