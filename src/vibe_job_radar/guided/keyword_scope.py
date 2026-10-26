@@ -9,6 +9,9 @@ from .contracts import CrawlError
 
 
 class KeywordSearchScope:
+    def _keyword_search_paths(self):
+        return (urlsplit(self.search_base).path.rstrip('/'),)
+
     def validate_search_scope(self, expected_url, keyword, observed_url):
         expected = urlsplit(self.accept_url(expected_url))
         base = urlsplit(self.search_base)
@@ -24,9 +27,11 @@ class KeywordSearchScope:
         expected_keywords = keywords(expected)
         # Explicit manual lists and a bare entry have no known URL keyword
         # contract. Do not replace their existing DOM path with a guessed one.
-        if route(expected) != route(base) or not expected_keywords:
+        if (route(expected)[:3] != route(base)[:3]
+                or expected.path.rstrip('/') not in self._keyword_search_paths()
+                or not expected_keywords):
             return
         actual = urlsplit(self.accept_url(observed_url))
-        if (expected_keywords != [keyword] or route(actual) != route(base)
+        if (expected_keywords != [keyword] or route(actual) != route(expected)
                 or keywords(actual) != [keyword]):
             raise CrawlError('search_scope_changed')
