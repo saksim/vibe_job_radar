@@ -1,188 +1,78 @@
 # Vibe Job Radar｜招聘要求与个人证据工作台
 
-当前代码版本 **0.20.2**：BOSS／51job 的可识别关键词搜索在翻页时校验原任务范围，51job 详情入口精确识别；原生隧道从连接接收起管理其关闭，PAC 拒绝验收复用已有守卫和握手观察。保留手工列表、旧任务、桌面、CLI、团队服务与原报告链路；[发行说明](docs/RELEASE_0_20_2.md)、[Docker 部署](docs/DOCKER.md)、[当前架构](docs/ARCHITECTURE.md)、[剩余18项及环境材料条件](docs/ISSUE_SCOPE_0_16_0.md)。正式 Tag、资产及镜像以[GitHub Releases](https://github.com/saksim/vibe_job_radar/releases)为准。
+把真实岗位 JD 整理成可追溯的要求，再结合本人项目、附件和实际指标，形成能力描述与待补证清单。默认研究方向为垂直领域算法、时间序列算法和架构师。
 
-0.15.3 [修复个人报告发布与证据历史完整性](docs/RELEASE_0_15_3.md)，实际缺陷配对 #445/#446；[剩余 18 项](docs/ISSUE_SCOPE_0_15_3.md)逐项列出未完功能、历史未知原因和最小验收条件。正式 Tag 与资产见 [Releases](https://github.com/saksim/vibe_job_radar/releases)。
+当前正式版本：**0.20.2**。查看[本版变化](docs/RELEASE_0_20_2.md)、[当前交付与限制](docs/STATUS.md)或[完整文档目录](docs/README.md)。
 
-0.15.0 增加[团队整组备份校验与恢复](docs/RELEASE_0_15_0.md)，修复 BOSS/51job 现有 DOM 路径的未展开正文与岗位身份防护。原24项按[本期范围](docs/ISSUE_SCOPE_0_15_0.md)收口，[待环境和材料](docs/PENDING_ACCEPTANCE_0_15_0.md)单列；既有功能保留，正式发布状态以 [Releases](https://github.com/saksim/vibe_job_radar/releases) 为准。
+## 选择适合你的启动方式
 
-0.14.2 修复[公共缓存临时断连与团队 PAC 搜索](docs/RELEASE_0_14_2.md)：临时代理/DNS/团队故障可使用明确标记的有效旧缓存，团队公开搜索恢复原报告链路，并减少无约束规则的无效数据库写入。既有硬失败、配额、取消、升级和签名接入功能保留。正式发布结果以 [Releases](https://github.com/saksim/vibe_job_radar/releases) 为准。
+| 你要怎么用 | 下载或指南 | 需要准备什么 |
+| --- | --- | --- |
+| Windows 桌面 | [Windows 正式包](https://github.com/saksim/vibe_job_radar/releases/tag/v0.20.2) · [启动说明](docs/WINDOWS_PORTABLE.md) | Windows x64；包内带 Python 和采集浏览器 |
+| Linux / macOS 桌面 | [桌面正式包](https://github.com/saksim/vibe_job_radar/releases/tag/desktop-v0.20.2) · [启动说明](docs/POSIX_DISTRIBUTION.md) | Linux x64 或 macOS arm64；系统库与签名限制见说明 |
+| 服务器运行，浏览器访问 | [Docker 部署](docs/DOCKER.md) | 一个拥有者、一个持久工作区；远程访问需 HTTPS |
+| 自行管理 Python 环境或使用 CLI | [Python 高级安装](docs/PYTHON_DISTRIBUTION.md) | Python 3.10+；按所用能力安装可选依赖 |
 
-0.14.0 增加 [Windows发行者签名接入与签名版升级核验](docs/PUBLISHER_SIGNING.md)，按实际证据显示签名状态；缺少凭据时保留 unsigned。0.13.0 的 Linux/macOS 自动升级与原有功能继续保留。本轮 [24项Issue逐项核查](docs/OPEN_ISSUES_2026_10_18.md) 列明外部环境和材料条件；正式Tag/实际验证见 [Releases](https://github.com/saksim/vibe_job_radar/releases) 和 [0.14.0说明](docs/RELEASE_0_14_0.md)。
+**普通桌面用户不需要另装 Python 包。** Python 包是同一产品的另一种安装形式，供开发、自动化和自行维护运行环境使用，并没有额外的一套业务功能。三个 Release 名称对应安装包类型，版本号和源码一致。
 
-0.12.0 增加 [Linux/macOS 系统密钥库与团队凭据迁移](docs/SYSTEM_CREDENTIALS.md)：加密保存已有代理认证，支持独立进程恢复和明确迁移，保留 Windows DPAPI、自动升级与全部原功能。正式 Tag/Release 状态以 [Releases](https://github.com/saksim/vibe_job_radar/releases) 为准。
+桌面包仍为 unsigned / unnotarized，具体系统限制见对应安装说明。Docker 镜像提供单人服务器工作台，支持导入、公开来源、分析、证据和报告；不包含招聘平台登录浏览器，也不接管访问者电脑上的 Chrome、Edge 或 Cookie。
 
-0.11.0 增加 [Linux x64 / macOS arm64 完整程序包](docs/POSIX_DISTRIBUTION.md)：自带 Python 和 Chromium，贯通原工作台、PAC/NTLM 组件与原报告；按准确主干产物发布独立 desktop Tag，Windows 自动升级和 Python 包继续保留。正式发布状态以对应 Release 和 Tag 为准。
+第一次使用，按[从零开始](docs/FIRST_RUN.md)操作；源码目录也提供可离线打开的 [START_HERE.html](START_HERE.html)。
 
-0.10.0 增加[明确选择的 NTLMv2 本机代理认证](docs/NTLMV2_PROXY.md)：覆盖工作台、CLI、HTTP、请求桥及原生浏览器，保留 Basic/Digest/SOCKS/PAC 和自动升级。正式发布状态以对应 Release 和 Tag 为准。
+## 完成第一份岗位研究
 
-0.9.0 增加[跨平台域名 PAC](docs/PORTABLE_DOMAIN_PAC.md)：只传根地址和域名，HTTP、请求桥与原生浏览器共用路线，DNS 助手另行选择；保留全部已有网络模式和升级功能。
+1. **取得真实完整 JD。** 已有获准处理的材料可粘贴或导入，也可明确选择公开来源或采集入口。用“运行合成演示”熟悉界面时，演示结果始终标为合成数据。
+2. **生成并核对原报告。** 检查岗位正文、逐条原文引用、纳入数量和排除原因。只有摘要、岗位不匹配或没有正向 AI 编程要求时，结果会说明限制。
+3. **加入本人的证据。** 点击“用我的证据继续”，在同一报告中填写实际项目、负责范围、附件和可核对指标，再生成个人报告。
+4. **保留缺口。** 没有证据的数字保持待填；样本频次不是市场占比，映射覆盖率不是胜任度或录用概率。
 
-0.8.0 增加[显式 HTTP Digest 本机代理认证](docs/HTTP_DIGEST_PROXY.md)，覆盖三个工作台、CLI 与 Windows 加密保存/重启，保留已有 Basic、SOCKS5 和自动升级。
+完整步骤见[操作手册](docs/WORKFLOWS.md)与[证据及报告规则](docs/EVIDENCE_CONTRACT.md)。
 
-0.6.0 增加[工作台内本机代理凭据配置与 Windows 加密保存](docs/WORKSPACE_PROXY_CREDENTIALS.md)，支持重启恢复、明确修改与清除，保留已有网络与升级功能。
+## 数据获取有哪些选择
 
-0.5.1 补齐更新检查中断后的会话恢复与明确网络错误（[补丁说明](docs/RELEASE_0_5_1.md)）；0.5.0 增加[独立授权的 PAC DNS 助手](docs/FULL_URL_PAC.md)和[Windows 备份、就绪确认、自动重启升级](docs/UPDATES.md)，保留原手动下载、网络模式、采集与报告功能。正式发行使用标准版本 Tag 和公开 Release，保持 dev → release → main 晋升。解决内容、验证与剩余条件见[0.5.0发行说明](docs/RELEASE_0_5_0.md)，可下载版本见[Releases](https://github.com/saksim/vibe_job_radar/releases)。Windows包仍未签名；0.4.1及更早版本首次取得新升级器需手动启动新版。
+| 入口 | 适用范围 |
+| --- | --- |
+| 粘贴 / 导入 JD | 处理自己已有权使用的完整材料；无需搜索 Key |
+| [猎聘公开分类](docs/LIEPIN_PUBLIC_CATEGORY.md) | 明确选择架构师或算法工程师固定分类，每批 1～5 项，可分别确认下一批或相邻页；不执行自定义关键词或地区检索 |
+| [固定公开目录](docs/PUBLIC_SOURCES.md) | Anthropic、Cloudflare、Cursor 的指定公开目录；关键词与地区在本机筛选，不能替代全市场搜索 |
+| [浏览器采集向导](docs/GUIDED_COLLECTION.md) | 按平台、关键词和实际访问范围正常操作；登录、资源及页面兼容仍需逐站验收 |
+| [高级 URL / Search / JSON](docs/COLLECTION_FORM_CASES.md) | 已有 URL、自己的 Brave Key 或获授权的数据接口；不共享向导中的浏览器会话 |
 
-0.3.0 增加[报告内独立质量复核](docs/QUALITY_REVIEW.md)、[来源更新历史](docs/SOURCE_HISTORY.md)和可选[团队协作服务](docs/TEAM_SERVICE.md)：在原报告上标注 JD、核对重复岗位；查看目录更新与失败；为已登记设备提供共享配额、成员权限和版本同步。原采集、个人材料、报告和CLI继续保留。具体变化、验证与剩余条件见 [0.3.0 发行说明](docs/RELEASE_0_3_0.md)。
+**BOSS、猎聘、51job 的正常账号到完整 JD 和报告链路尚未全部通过实站认证。** 某次取得卡片、单个正文或受控测试通过，都不代表三站自动取数已经完成。当前能力见[能力矩阵](docs/ACQUISITION_CAPABILITIES.md)，逐次真实观察见[取数证据](docs/CURRENT_ACQUISITION_EVIDENCE.md)。
 
-非登录工程的关闭依据、剩余现场条件及测试收敛方式见[当前收口清单](docs/NON_LOGIN_CONVERGENCE.md)；历史失败保留，工程完成与真人/实站认证分别记录。
+来源许可、robots、请求频次、共享额度和冷却继续生效；失败不会退还已消耗额度。验证码、访问拒绝、网络或页面结构变化会明确停止，不编造正文或采集结果。
 
-软件提供的流程见[交付清单](docs/DELIVERY_STATUS.md)，已保存的实站观察、逐次成败和仍需人工验收的条件统一见[取数证据](docs/CURRENT_ACQUISITION_EVIDENCE.md)。[GAP 审计](docs/PROJECT_GAP_AUDIT_2026_09_26.md)和[历史目标追溯](docs/PROJECT_GOAL_TRACE_2026_09_26.md)保留2026年9月26日的核查原文，后续处理记录见[Issue #210](https://github.com/saksim/vibe_job_radar/issues/210)。历史关键词列表不等于登录后完整正文；较早文档中的主干提交和采样数量只属于当时记录。按某个PR或基线编写的实施说明保留该阶段的“本分支/待验收”措辞；当前合并状态与验收以总线Issue、能力矩阵和准确提交的证据为准。
+## 后台执行、数据和更新
 
-候选交接、包来源和升级回退的历史材料见[固定候选交接清单](docs/MAIN_HANDOFF_REVIEW.md)。其中PR220、81项PR索引及旧包均有固定核查日期；当前源码与程序包按各自提交核验，旧到期工件不作为当前下载入口。
+已接受的有限采集批次与报告任务由后端执行。关闭或刷新工作台网页后可重新打开查看；**应用或服务器进程仍须运行**。暂停、退出及不确定中断保留原状态，进程重启后不会自动重放请求。固定公开目录另有明确启用的[每日计划](docs/PUBLIC_DAILY_SCHEDULE.md)和[独立进程](docs/PUBLIC_WORKER.md)。
 
-本次#115补齐[独立公开计划进程](docs/PUBLIC_WORKER.md)：沿用已确认的计划、所有权、配额和原报告，无需保持网页服务运行。另按#118增加[Cursor固定公开目录](docs/PUBLIC_SOURCES.md)，各自新增范围以准确提交验收为准，当前已合并功能与历史组合候选分别记录。
+桌面工作区默认保存在用户主目录的 `.vibe-job-radar`；Docker 工作区保存在服务器持久卷。升级前停止任务和程序，备份整个工作区，保留原报告与旧版本。详见[版本与升级](docs/UPDATES.md)、[工作区兼容及回退](docs/WORKSPACE_COMPATIBILITY.md)。
 
-另按#131加入[有限公开查询待办](docs/PUBLIC_QUERY_QUEUE.md)：最多5条一次性查询，逐条明确同意后由工作台或独立进程顺序执行，沿用原任务、缓存、共享额度和报告；跨重启保留未开始项，执行结果不确定时暂停而不重放。实际Windows登录与24小时运行仍需独立验收。
+[团队设备服务](docs/TEAM_SERVICE.md)提供可选的设备权限、共享配额和公开来源同步；它与单人服务器工作台是不同的服务边界，不等于多人私人工作区已经交付。
 
-本分支按#192补充[回归失败的源码位置](docs/TEST_FAILURE_LOCATION.md)：长断言不再遮住失败代码行，原线程栈、结果与时限保持；该诊断补充不代表历史等待根因已解决。
+## 从源码启动
 
-另补#124的[计划完成回执](docs/PUBLIC_TASK_OUTCOMES.md)：计划查询完成后再手动查询，仍能核对原计划报告；单项完成不代表真实Windows登录或24小时长跑验收。
+需要 Python 3.10+。在完整解压后的源码目录执行：
 
-内部核查既有报告的质量时，可使用[独立标注与评估](docs/QUALITY_REVIEW.md)。原预测、助手草稿与真人确认分别保留，只有明确完成的适用标注进入质量指标。
-
-## 先完成一次目标岗位研究
-
-本分支另按#177补充[明确使用AI的长句要求](docs/EXPLICIT_AI_APPLICATION.md)，覆盖带模型知识说明的代码生成/评审能力。它保留原文和否定语义，重新分析生成独立报告，旧报告和个人复核不改写；当前增量的验收结果以对应PR为准。
-
-#181继续补充[明确借助语言模型审查代码](docs/MODEL_CODE_REVIEW.md)的使用语境，保留产品开发、普通模型知识和不同条款的边界。每次重算独立保存原文与规则配置，当前提交的验证结果以对应PR为准。
-
-这个项目要解决的是：**目标岗位真实 JD → 逐条 AI 编程要求 → 通用能力与分岗位补充 → 本人证据 → 可量化描述与缺口**。默认研究方向为垂直领域算法、时间序列算法和架构师；不是通用爬虫或自动生成虚构履历的工具。
-
-打开本地工作台后，先确定方向、平台和检索词，进入平台采集。原生登录、确认访问范围并取得正文后，从结果直接查看**本批研究结论**；再点**用我的证据继续**，同一份报告会自动带入原文复核和个人证据中心，不必重新选择报告或手写 JSON。已有获准处理的真实 JD，也可从首页粘贴/导入后分析。
-
-新报告会在[各方向样本覆盖](docs/ROLE_SAMPLE_COVERAGE.md)中分开显示完整正文、含AI编程证据的岗位数和待复核要求，便于判断哪些方向还缺样本。旧报告未记录的计数保持未知。
-
-研究架构师或算法方向时，可直接点击首页的**进入猎聘架构师公开分类采集**或**进入猎聘算法工程师公开分类采集**：无需账号或搜索 Key，核对用途和范围后自动取得一批正文，结束后可继续同一名单的下一批，或明确选择平台已提供的相邻页。算法是宽分类，报告继续按原垂直领域算法和时间序列规则筛选，不匹配的完整正文也会保存。这是固定公开分类，每批1～5项，连续页范围最多前5页，不执行首页所填关键词或地区检索；打开入口不会自动联网或勾选确认。范围见[公开分类说明](docs/LIEPIN_PUBLIC_CATEGORY.md)。
-
-**没有目标岗位完整正文就不算研究完成。** 正文零纳入、岗位不匹配、只有摘要或尚无已接收 AI 编程证据时，结果说明原因，不用固定案例、普通算法技能或旧报告冒充成功。单个岗位的要求不概括成跨岗位通用底座；待补证不代表本人没有能力。
-
-本分支保留#107的[英文要求与产品提及边界](docs/ENGLISH_OBLIGATION_BOUNDARIES.md)，另按#164修复[编号中文条目的排版续行](docs/NUMBERED_ITEM_WRAPS.md)：完整引用保留原换行和位置，新的编号、标题和明确正负要求仍分开，带【】的已知公司/福利标题也会识别。规则版本为`rules-0.2.6`；旧报告保持原样，新分析需重新核对原文和个人映射。
-
-高级站点HTTP现与同一工作区的浏览器向导使用[原持久限额与冷却](docs/ADVANCED_SHARED_RATE.md)：创建新任务或重启不增加访问额度，缓存和本机预览不重复计量。较长等待或限额用完会保留已取得正文并说明后续操作。
-
-### 数据获取范围必须明确
-
-BOSS、猎聘、51job 的浏览器采集仍需逐站现场验收，不能因入口存在就宣称三站已可用。手工导入只作为已有材料入口和正常兜底，不替代目标平台自动取数验收。
-
-已实现的流程与尚未认证的范围列在[能力矩阵](docs/ACQUISITION_CAPABILITIES.md)。同一能力快照进入采集页、适配注册表和新报告；受控测试、正常账号实测与默认启用分别记录。升级/回退须核对[已验证的工作区范围](docs/WORKSPACE_COMPATIBILITY.md)。
-
-首页可选择 **Anthropic Greenhouse**、**Cloudflare Greenhouse** 和 **Cursor Ashby** 公开目录，免 Key、无需产品服务器。每次只获取用户所选公司，关键词、地区在本机筛选；缓存和变化记录隔离，请求额度仍共用。Cursor仅纳入公开列出的岗位，保留二级地区和来源remote标志。它可用于“真实来源→分析→证据”流程，但不是全市场搜索，不能替代中国招聘平台或时间序列/电力算法岗位研究。范围与实际观察见[固定公开来源](docs/PUBLIC_SOURCES.md)。
-
-提供默认关闭的[公开查询24小时计划](docs/PUBLIC_DAILY_SCHEDULE.md)：首页明确确认固定查询后首次24小时执行，工作台或[独立后台进程](docs/PUBLIC_WORKER.md)需保持运行；关闭网页仍执行，重启最多补一次到期查询，异常会暂停。独立入口沿用原同意和配额，不启动网页服务器或采集浏览器。Windows便携版可按#120明确选择[登录后启动工作台或独立进程](docs/WINDOWS_LOGIN_STARTUP.md)，默认关闭且不自动改变已有登记。结果进入原报告；不自动翻页、不代表三站连续采集或全天服务。
-
-公开目录支持[按服务器版本确认未变化](docs/PUBLIC_CONDITIONAL_REFRESH.md)：304复用原完整正文并保留采集时间，另记确认时间；新的200正文仍完整校验和比较变化，失败显示过期缓存。每次校验仍遵守原额度，不增加请求频次。
-
-### 本地优先与网络支持
-
-登录态、简历、本人证据和私人报告默认留本地，可选[团队服务](docs/TEAM_SERVICE.md)提供设备权限、集中配额、公开来源增量及部署配置；实际主机与域名尚未准备，未公开上线。已合并的匿名本机 HTTP/SOCKS5 静态策略和明确同意的 198.18/15 加密解析保留；PR76已合入[显式本机代理认证](docs/LOCAL_PROXY_AUTH.md)，高级采集与CLI也已由PR66接入工作区策略。#109增加默认关闭的[Windows本地PAC导入](docs/WINDOWS_DOMAIN_PAC.md)，#135另接入[确认后使用系统已配置PAC地址](docs/WINDOWS_SYSTEM_PAC.md)，每个新会话读取一次并冻结，默认与状态读取不下载；按域名保留明确的原始选路，失败不推进至直连。另有默认关闭的[Windows WPAD发现与来源确认](docs/WINDOWS_WPAD.md)，发现许可与脚本信任分别确认；当前提交的真实DNS和便携程序验收须核对CI证据。其他剩余网络范围见 [网络状态](docs/NETWORK_COMPATIBILITY_STATUS.md)。不要关闭 TLS 校验或删除配额库来制造成功。
-
-需要按 HTTPS 路径或查询参数选路时，可另行确认[完整网址 PAC](docs/FULL_URL_PAC.md)。它使用单独的可选组件和许可，适用于 HTTP 与浏览器请求桥；原生浏览器入口会在打开窗口和预留登录次数前拒绝。原 Windows 域名 PAC、系统 PAC 和 WPAD 范围保持。
-
-可单独选择[公共域名加密解析](docs/PUBLIC_DNS.md)：目标域名不先依赖本机 DNS，解析沿原选路线，目标仍须通过公网地址和 TLS 校验。默认关闭、单独同意；原有仅修复映射地址的授权不会自动扩大。
-
-主干已合入[工作区网页代理偏好](docs/WORKSPACE_PROXY_SETTINGS.md)：三个工作台入口可保存匿名本机HTTP/SOCKS5入口，DNS与代理共享修订号，其他工作区不受影响。已有应用专用代理/凭据冲突时停止；保存不联网测试，更换后需停止并重开采集会话。首次保存代理写入v2网络偏好，旧源码会明确拒绝，回退需先备份并恢复原v1偏好。本次 #83/#84 增加[明确指定的宿主机代理](docs/VM_HOST_PROXY.md)，使用独立模式和许可；不把来宾loopback当宿主机，不猜网关或扫描入口，实际虚拟化产品环境仍待实测。
-
-跨平台 Python 安装包的构建、独立安装验证与分发范围见 [Python 发行说明](docs/PYTHON_DISTRIBUTION.md)。它需要已有 Python，Windows 便携与自动升级的发布资产保持原契约。
-
-当前项目提供 Python 3.10+ 源码和 [Windows x64 便携包](docs/WINDOWS_PORTABLE.md)的构建与实际 exe 验收，包含 Python/Chromium。公开稳定版本须通过准确提交的完整 CI 并在 Release 中提供8项资产；升级入口支持手动准备或明确确认后的备份与自动重启，Windows包仍未签名。源码用户在 Windows 可双击 `start_windows.bat`，其他系统使用原启动入口。新增的 `research_brief.md` 便于带走本批结论；底层完整原文、复核队列和历史报告保留。
-
-Windows便携包可在首页明确选择[登录后打开工作台](docs/WINDOWS_LOGIN_STARTUP.md)，默认关闭，只登记当前用户和当前工作区。原每日计划仍独立确认；移动或升级程序前关闭旧登记，再从新包启用。实际登录时机由Windows管理，不是全天服务保证。
-
-详细的主线范围与验收见 [首份岗位研究流程](docs/MAINLINE_WORKFLOW.md)。后续研发从已同步main的dev开始；功能PR进入dev，再按 [dev → release → main](docs/BRANCH_PROMOTION.md) 晋升。待审PR不作为已发行功能。
-
-## 已经打开过工作台
-
-先停止旧终端并备份工作区，完整解压新版本源码，进入新目录，沿用已成功的解释器启动。例如：
-
-```bash
-/d/code_environment/anaconda_all_css/py312/python.exe scripts/start_workbench.py
+```powershell
+# Windows，也可双击 start_windows.bat
+py -3 scripts/start_workbench.py
 ```
 
-不需要更换 Anaconda 环境。打开本次终端给出的完整地址，从首页进入 `/guided` 新手向导。只刷新旧网页不会更新运行中的代码。完整更新与首次安装说明见 [FIRST_RUN.md](docs/FIRST_RUN.md)，或双击源码中的 [START_HERE.html](START_HERE.html)。
-
-## 想让程序自己找岗位
-
-想先取得实际正文，可从首页主动选择“进入猎聘架构师公开分类采集”或“进入猎聘算法工程师公开分类采集”，核对用途和每批1～5项后确认。该路径已有完整正文与报告证据，无需账号或搜索 Key，不使用自定义关键词/地区，详见[按按钮取数指南](docs/GUIDED_COLLECTION.md)。它是可选入口，不切换默认或在失败后自动回退。
-
-需要关键词搜索或正常登录时，使用浏览器向导：检查采集浏览器，选择平台、关键词、1页/5条和实际访问范围，点击“打开搜索并读取岗位”，按需在程序弹出的独立浏览器正常登录，再读取列表、勾选采集。猎聘2026年10月10日已在原工作台正常搜索“架构师”，得到42张卡并生成一份机电架构师完整正文报告；该岗位的研究范围仍待确认。另一次“软件架构师”搜索返回42卡，所选详情最初失败；PR287开发候选修正英文分节后，恢复原任务取得3030字符完整正文并生成同任务报告。该次没有登录；随后PR290实际main的独立查询又验证了正常相邻两页，42+42卡、84个不同实体，在预设两页上限停止。实站和各次合并验收分别记录，见[逐次实测](docs/CURRENT_ACQUISITION_EVIDENCE.md)。此前所选职位关闭、页面清空等[历史失败](docs/NATIVE_CLOSED_DETAIL.md)均保留。三站的正常账号到相关完整正文和报告仍未完成现场认证，按钮流程不代替实际结果。
-
-报告中可点击“查看本报告的岗位原文”，逐条展开当时保存的正文或摘要；即使 AI 编程要求为0，也能核对完整 JD。“用我的证据继续”仍带入同一报告，个人证据页同样可读原文。这里只读取经清单校验的原报告快照，不重新取数、生成要求或修改本人证据；来源损坏或岗位不属于该报告时会明确停止。
-
-程序负责汇总列表观察到的链接、打开详情、保存最终地址和独立正文、生成本批报告。你不必填写 API endpoint、分页游标、选择器，也不必逐条复制详情 URL。没有稳定链接或结构不兼容的页面需要逐站维护，不会编造结果。
-
-**猎聘新增一次正常密码表单提交，当前通过受控测试，尚未完成真实账号验收。** 第 3 步可在本机明确授权填写并提交一次，账号密码不会写入任务、报告或会话文件；协议、验证码和短信验证由你在平台页面完成，原查询或所选完整岗位可读后自动接续。其他平台继续使用人工登录。真实账号与所选全文接续仍待验证，详见[密码登录范围](docs/LIEPIN_PASSWORD_LOGIN.md)及[已有实测记录](docs/CURRENT_ACQUISITION_EVIDENCE.md)。默认退出服务不保存 Cookie；第 2 步明确勾选“在此工作区本机保留”后可尝试恢复本站 Cookie，再通过正常页面继续取数。Windows 使用当前用户 DPAPI，Linux/macOS 使用仅所有者权限且不加密；不保存密码、localStorage 或 IndexedDB，不保证账号仍有效。使用与清除方法见 [本机会话恢复](docs/SAVED_SESSION_D04.md)。三站均为 `not_live_verified`，没有真实账号与样本验收不能宣称实站成功。
-
-## 不需要浏览器采集，也能使用
-
-本地粘贴、导入和规则分析不需要任何 Key 或额外运行依赖。先点击“运行合成演示”认识报告，再粘贴你有权处理的真实完整 JD，保存并分析。下载 `requirements_zh.csv` 核对逐条原文。
-
-原 `/advanced` 保留 URL、Brave Search API 和授权 JSON 数据源路线，并提供[猎聘公开分类](docs/LIEPIN_PUBLIC_CATEGORY.md)：无需 Key，自动读取主列表前1～5个职位并生成本批报告，可分别预览本页下一批和平台相邻页。该分类不含自定义关键词或地区筛选。已有链接走 URL；想用搜索服务找链接，需要自己的 Brave Key；没有数据供应方就不选 JSON 接口。见 [逐格填写案例](docs/COLLECTION_FORM_CASES.md)。旧 HTTP 路线不共享新向导的浏览器会话。
-
-公开分类正文因共享等待或额度停止时，可[从原名单保存恢复任务](docs/PUBLIC_CATEGORY_RECOVERY.md)。成功正文与旧报告保留，核对剩余岗位后再继续；执行时仍检查同一账本，不能提前绕过等待。
-
-分类页因网络错误停止、尚未取得名单时，可[显式保存同页重试](docs/CATEGORY_PAGE_RETRY.md)：核对原链接、页号与最多5条范围后保存暂停任务，原失败和配额保留。每页最多三次显式重试，网络恢复后才由用户继续。
-
-公开分类的当前小批由[本机后台完成](docs/CATEGORY_BACKGROUND.md)：关闭或刷新网页仍可继续，需保持工作台应用运行。暂停保存当前请求后停止，退出应用和重启不会自动续跑；原页面和CLI不能抢占正在执行的批次。
-
-高级页同时提供原文复核、个人项目、附件和指标、精确要求映射、个人报告与证据包。没有本人证据的数字保持待填，能力覆盖率不是胜任度或录用概率。
-
-## 强制频次与运行边界
-
-新向导默认页面导航至少15秒、60次/小时、200次/滚动24小时；经桥接的HTTP请求至少0.5秒、600次/小时、3000次/滚动24小时。同一工作区和站点的任务共享持久化配额，失败不退回，限流触发冷却，界面不能提高上限。
-
-浏览器向导和高级页分类、搜索、URL、授权 JSON 源的已接受有限批次由后端执行，关闭工作台网页仍继续；应用须保持运行，暂停/停止控制任务，退出后须明确继续。普通分析和个人证据报告也有独立后台任务，重新打开页面只观察结果，进程中断后不会自动重放。固定公开目录另有可选的[每日计划](docs/PUBLIC_DAILY_SCHEDULE.md)及[Windows便携包登录启动](docs/WINDOWS_LOGIN_STARTUP.md)，不自动登录三站或安排分类定时采集，不保证无人登录全天运行。
-
-浏览器请求保留公网DNS/IP绑定、TLS和域名边界。已接入的公开查询和浏览器路径在用户阅读隐私说明并明确同意后，可修复系统解析全部落入 198.18/15 的情况；解析商可看到域名和出口。其他私网/混合回答仍拒绝，不关闭安全检查。验证码、robots拒绝、资源域名或页面结构变化仍可能中止采集。
-
-## 使用说明与开发契约
-
-| 目标 | 文档 |
-|---|---|
-| 安装、更新、启动和第一份结果 | [零基础指南](docs/FIRST_RUN.md) |
-| 不整理URL，按按钮找岗位 | [浏览器采集向导](docs/GUIDED_COLLECTION.md) |
-| 原有URL/Search/JSON表单 | [字段来源和填写案例](docs/COLLECTION_FORM_CASES.md) |
-| 采集和本人证据操作 | [操作手册](docs/WORKFLOWS.md) |
-| 已实现和未认证的边界 | [采集能力](docs/ACQUISITION_CAPABILITIES.md) |
-| Pythonic 插件与接口 | [插件契约](docs/BROWSER_PLUGIN_CONTRACT.md) |
-| 升级和源码合并说明 | [0.2.0 说明](docs/RELEASE_0_2_0.md) |
-
-## 启动与验收
-
-Windows可双击 `start_windows.bat` 或执行 `py -3 scripts/start_workbench.py`；macOS/Linux执行 `python3 scripts/start_workbench.py`。Python需3.10+。默认数据保存在用户主目录 `.vibe-job-radar`，停止服务后备份整个目录，升级时不要清空。
-
-```bash
-python scripts/run_tests.py --report acceptance/results.json
-python scripts/start_workbench.py --doctor
-python scripts/run_demo.py
-# 已安装可选浏览器依赖后，运行受控双浏览器测试
-python scripts/run_guided_browser.py
+```sh
+# Linux / macOS
+python3 scripts/start_workbench.py
 ```
 
-安装CLI是可选项：`python -m pip install -e .`。Playwright只在启用浏览器功能时需要，可在向导里安装。自动测试使用人工职位与模拟上游，不能替代真实招聘网站认证；以对应提交的CI为准。
+保持终端运行，打开终端给出的完整本机地址。已有 Anaconda 环境可以继续使用；只刷新旧网页不会更新正在运行的代码。浏览器组件、离线导入和故障处理见[首次启动指南](docs/FIRST_RUN.md)与[浏览器安装诊断](docs/BROWSER_SETUP.md)。
 
-旧CLI文档完整保留在 [README_CLI.md](README_CLI.md)。服务仅监听本机，不适用于公网多人部署。升级新增的 `browser_fetch` 来源不保证旧版本认识，回退时恢复对应的完整工作区备份。
+## 深入阅读
 
-### 已装Playwright仍提示浏览器未就绪？
+- [文档总目录](docs/README.md)：按安装、使用、网络、开发和历史查找。
+- [当前交付与待验收](docs/STATUS.md)：已发布内容、未完成范围及需要的环境材料。
+- [架构与模块边界](docs/ARCHITECTURE.md)：页面、应用服务、任务和数据的职责。
+- [开发与发版晋升](docs/BRANCH_PROMOTION.md)：功能进入 dev，再经 release 晋升 main。
+- [维护者源码验收](docs/SOURCE_QUALIFICATION.md)：按改动范围验证，原始失败如实保留。
+- [历次发行说明](docs/releases/README.md) · [历史审计与实施记录](docs/archive/README.md)。
 
-先读[浏览器安装与启动修复](docs/BROWSER_SETUP.md)。`pip install Chromium`装的是同名Python包；浏览器本体要通过当前Python的`-m playwright install chromium`下载。新手页可点“检查浏览器（不采集）”，区分包、可执行文件与真实空白页启动；安装失败阶段和脱敏输出直接可见。
-
-
-### 维护者：源码绑定验收
-
-构建候选前运行 `python scripts/verify_candidate.py`，再运行 `python scripts/build_candidate.py`。只有与当前源码一致且四项本地检查全部通过的证据才能构建；这不是普通用户查询岗位的前置步骤，也不证明实际 VPN/招聘站点认证。详见 [源码验收说明](docs/SOURCE_QUALIFICATION.md) 与 [当前交付清单](docs/DELIVERY_STATUS.md)。
-
-真实取数验收可先登记范围，再用[本机观测账本](docs/LIVE_ACCEPTANCE_LEDGER.md)离线核对原任务、原报告和入库记录。工具保留失败与未完整项，不能代替现场30条/3日期、完整尝试分母、用户审核或自动认证。
-
-### 原生浏览器实验（D02 / #48）
-
-新建任务可显式选择原生实验并确认范围，旧HTTP桥仍默认。页面HTTP/TLS由浏览器完成，经过只透明转发加密字节的本机公网目标CONNECT守卫；不是Python重发页面。猎聘已包含经审查的只读搜索、筛选初始化、必要资源及用户明确发起的密码登录请求控制；真实账号到完整JD和原报告仍待实站验收。BOSS/51job未启用native，未知路径与操作仍停止；不能把开关出现当成三站取数成功。详见[实现与限制](docs/NATIVE_BROWSER_D02.md)。
-
-报告分析重新打开当前版本的职位库时，本分支移除重复版本写锁；原数据库等待与写入语义保持，范围和首次失败记录见[并发报告读取](docs/STORE_READ_OPEN.md)。
-
-## 服务器浏览器工作台与 Docker
-
-新增单拥有者远程工作台入口，复用原有公开采集、导入、分析、证据、质量复核与报告服务。桌面入口和团队设备服务保留。服务器通过独立登录会话访问一个私人工作区，材料保存在服务器；不提供多人数据隔离或远程接管招聘平台登录浏览器。
-
-部署配置见 [Docker 工作台说明](docs/DOCKER.md)，模块边界见 [架构说明](docs/ARCHITECTURE.md)。普通 Compose 直接拉取正式 `ghcr.io/saksim/vibe_job_radar` 镜像，保留独立本地构建覆盖配置。0.18.0 已完成双原生架构公开拉取验收；新版本以其正式发行记录、固定摘要和匿名启动证明为准。真实服务器的域名、HTTPS、出口及备份恢复仍须在目标环境验收。
+历史文档保留当时的提交、测试和限制；其中“当前”“本分支”“待合并”只属于记录时点，不作为现版本下载或操作入口。
