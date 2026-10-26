@@ -1,10 +1,13 @@
 """Actual PAC import/check/rollback UI; native evaluator only on Windows."""
+from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
 import sys
 import tempfile
 import threading
+import time
+from urllib.parse import urlsplit
 from unittest.mock import patch
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -12,8 +15,103 @@ sys.path.insert(0,str(ROOT/'src'))
 from vibe_job_radar import pac_native, pac_url_worker
 from vibe_job_radar.workbench import LocalServer
 from vibe_job_radar.workspace import Workspace
+from run_tests import failure_threads
 
 SCRIPT=b'function FindProxyForURL(url,host){return "SOCKS5 127.0.0.1:1080; DIRECT";}'
+
+
+class PacUiObservation:
+    """Bounded passive facts for this probe's existing state requests."""
+    LIMIT = 64
+
+    def __init__(self, page, origin):
+        self.page, self.origin = page, urlsplit(origin)
+        self.events, self.pending = [], {}
+        self.sequence = self.errors = 0
+        self.available = self.complete = True
+        self.overflow = False
+        self.started = time.monotonic()
+        for name in ('request', 'response', 'requestfinished', 'requestfailed'):
+            try:
+                page.on(name, lambda item, kind=name: self.record(kind, item))
+            except Exception:
+                self.available = self.complete = False
+                self.errors += 1
+
+    def record(self, kind, item):
+        try:
+            request = item.request if kind == 'response' else item
+            target = urlsplit(request.url)
+            if (target.scheme, target.netloc, target.path) != (
+                    self.origin.scheme, self.origin.netloc, '/api/network/state'):
+                return
+            if request.method != 'GET':
+                return
+            if kind == 'request':
+                if len(self.pending) >= 16:
+                    self.complete, self.overflow = False, True
+                    return
+                self.sequence += 1
+                # Retain the bounded wrapper object until its terminal event.
+                self.pending[request] = self.sequence
+            sequence = self.pending.get(request)
+            if sequence is None:
+                self.complete = False
+            row = {'event': kind, 'sequence': sequence,
+                   'elapsed_ms': max(0, round((time.monotonic()-self.started)*1000, 3))}
+            if kind == 'response':
+                status = item.status
+                valid = type(status) is int and 100 <= status <= 599
+                row['status'] = status if valid else None
+                if not valid:
+                    self.complete = False
+            if kind in ('requestfinished', 'requestfailed'):
+                self.pending.pop(request, None)
+            if len(self.events) < self.LIMIT:
+                self.events.append(row)
+            else:
+                self.complete, self.overflow = False, True
+        except Exception:
+            self.complete = False
+            self.errors = min(self.errors+1, self.LIMIT)
+
+    def snapshot(self):
+        value = {'available': self.available, 'complete': self.complete,
+                 'scope': 'passive_state_lifecycle_and_bounded_thread_locations',
+                 'overflow': self.overflow, 'observer_errors': self.errors,
+                 'events': [dict(row) for row in self.events], 'pending': len(self.pending),
+                 'threads': None, 'dom_collected': False,
+                 'dom_reason': 'original_assertion_aria_only'}
+        try:
+            # Existing bounded code locations: no locals, source lines or values.
+            value['threads'] = failure_threads()
+            if value['threads']['threads_omitted'] or any(
+                    item['frames_truncated'] for item in value['threads']['threads']):
+                value['complete'] = False
+        except Exception:
+            value['thread_capture_failed'] = True
+            value['complete'] = False
+        try:
+            # Playwright's page.url is cached frame metadata, not a DOM round trip.
+            value['page'] = {'/': 'home', '/guided': 'guided', '/advanced': 'advanced'}.get(
+                urlsplit(self.page.url).path, 'other')
+        except Exception:
+            value['page_capture_failed'] = True
+            value['complete'] = False
+        return value
+
+
+@contextmanager
+def observe_expand_failure(observer, result):
+    try:
+        yield
+    except BaseException:
+        try:
+            result['expand_failure'] = observer.snapshot()
+        except BaseException:
+            result['expand_failure'] = {
+                'available': False, 'complete': False, 'capture_failed': True}
+        raise
 
 
 def main():
@@ -47,9 +145,12 @@ def main():
                         else:result['external_requests'].append(request.request.url);request.abort()
                     context.route('**/*',route)
                     page=context.new_page();page.on('pageerror',lambda e:result['page_errors'].append(str(e)))
+                    try:observer=PacUiObservation(page,server.origin)
+                    except Exception:observer=None
                     def expand():
-                        expect(page.locator('#save-workspace-pac')).to_be_enabled()
-                        page.locator('#network-preferences summary').click()
+                        with observe_expand_failure(observer,result):
+                            expect(page.locator('#save-workspace-pac')).to_be_enabled()
+                            page.locator('#network-preferences summary').click()
                     def file(body=SCRIPT,name='可信.pac'):
                         page.locator('#workspace-pac-file').set_input_files({'name':name,'mimeType':'application/x-ns-proxy-autoconfig','buffer':body})
                     def save():

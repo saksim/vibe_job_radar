@@ -1,19 +1,21 @@
 # 当前取数能力与验证范围
 
-文案核对日期 2026-10-10。本源码的流程与历史受控证据分别记录；准确提交的候选、主干和程序包资格见对应PR。本表由 acquisition_status.py 生成，同一份数据进入适配注册表、采集页与新报告的 software_acquisition_capabilities。修改后执行 python scripts/check_acquisition_status.py --write 并核对证据；自动测试检查文字表格未与程序脱节。
+文案核对日期 2026-10-25。本源码的流程与历史受控证据分别记录；准确提交的候选、主干和程序包资格见对应PR。本表由 acquisition_status.py 生成，同一份数据进入适配注册表、采集页与新报告的 software_acquisition_capabilities。修改后执行 python scripts/check_acquisition_status.py --write 并核对证据；自动测试检查文字表格未与程序脱节。
 
 猎聘原生实验已在本机 Chrome 分别完成匿名关键词搜索、585/3030字符完整JD与各自报告，以及相邻两页共84个不同职位卡片的观察；真实账号、会话恢复、人工质量和整体样本验收仍未完成。公开分类历史采样覆盖四个真实日期；较早第二日、第三日记录仍保留各自分母，不能用最新累计数改写旧报告。见[已有取数证据](CURRENT_ACQUISITION_EVIDENCE.md)。这些观察不认证默认浏览器桥、其他环境或其他平台。
 
 <!-- acquisition-status:start -->
 | 平台 / 适配版本 | 后端 / 默认 | 实现 | 最近记录的受控验证 | 实站 / 剩余跟踪 |
 |---|---|---|---|---|
-| BOSS直聘 / 1 | bridge / 默认 | implemented | [2026-09-18 人工夹具](https://github.com/saksim/vibe_job_radar/actions/runs/35358529040) | not_verified；[#55](https://github.com/saksim/vibe_job_radar/issues/55) |
+| BOSS直聘 / 1 | bridge / 默认 | implemented | 无匹配记录 | not_verified；[#55](https://github.com/saksim/vibe_job_radar/issues/55) |
 | BOSS直聘 / 1 | native / 不可用 | blocked | 无匹配记录 | not_verified；[#55](https://github.com/saksim/vibe_job_radar/issues/55) |
 | 猎聘 / 3 | bridge / 默认 | implemented | [2026-10-10 人工夹具](https://github.com/saksim/vibe_job_radar/actions/runs/38051204590) | not_verified；[#49](https://github.com/saksim/vibe_job_radar/issues/49) / [#50](https://github.com/saksim/vibe_job_radar/issues/50) / [#51](https://github.com/saksim/vibe_job_radar/issues/51) / [#52](https://github.com/saksim/vibe_job_radar/issues/52) / [#54](https://github.com/saksim/vibe_job_radar/issues/54) |
 | 猎聘 / 3 | native / 显式实验 | implemented | [2026-10-10 人工夹具](https://github.com/saksim/vibe_job_radar/actions/runs/38051204635) | not_verified；[#49](https://github.com/saksim/vibe_job_radar/issues/49) / [#50](https://github.com/saksim/vibe_job_radar/issues/50) / [#51](https://github.com/saksim/vibe_job_radar/issues/51) / [#52](https://github.com/saksim/vibe_job_radar/issues/52) / [#54](https://github.com/saksim/vibe_job_radar/issues/54) |
-| 前程无忧 / 1 | bridge / 默认 | implemented | [2026-09-18 人工夹具](https://github.com/saksim/vibe_job_radar/actions/runs/35358529040) | not_verified；[#56](https://github.com/saksim/vibe_job_radar/issues/56) |
+| 前程无忧 / 1 | bridge / 默认 | implemented | 无匹配记录 | not_verified；[#56](https://github.com/saksim/vibe_job_radar/issues/56) |
 | 前程无忧 / 1 | native / 不可用 | blocked | 无匹配记录 | not_verified；[#56](https://github.com/saksim/vibe_job_radar/issues/56) |
 <!-- acquisition-status:end -->
+
+BOSS/51job 的独立适配定义及详情 URL 边界已调整，因此当前表显示“无匹配记录”；旧受控记录仍绑定原定义、日期和源码，不能转给同名的新适配器。默认浏览器桥仍可选择，原生契约仍不可用；本轮关键词范围和 URL 边界测试不构成本站实站或新版受控浏览器认证。
 
 猎聘分页选择器改变后，旧定义证据仍留在原日期和源码。当前定义新增独立的2026-10-10受控记录，绑定PR290实际main `448fa17e7ea9`：浏览器控件22项与六种原生环境各32项通过。控件测试中的原生方法使用Playwright页面，不是完整原生CDP/网络测试；原生TLS夹具另行验证。见[分页记录](LIEPIN_NORMAL_PAGINATION.md)。
 

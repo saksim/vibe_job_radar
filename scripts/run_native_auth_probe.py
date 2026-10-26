@@ -18,7 +18,7 @@ import run_native_browser_acceptance as acceptance
 from vibe_job_radar.guided.native_tunnel import NativeTunnel
 from native_failure_evidence import loading_failure, fatal_failure
 from native_guard_evidence import install_guard_observer, guard_transport_facts
-from native_handshake_evidence import HandshakeTrace, handshake_facts, record_handshake
+from native_handshake_evidence import HandshakeTrace, handshake_facts, observed_send, observed_message
 
 COMMANDS = frozenset({
     'Network.enable', 'Network.setUserAgentOverride', 'Network.setCacheDisabled',
@@ -124,20 +124,17 @@ class ObservedBackend(acceptance.NativeBackend):
     def _send(self, session, method, params=None, callback=None):
         key = method if method in COMMANDS else 'other'
         self.probe['sent'][key] += 1
-        record_handshake(self, key + '.sent')
         def acknowledged(result):
             self.probe['acknowledged'][key] += 1
-            record_handshake(self, key + '.acknowledged')
             if callback:
                 callback(result)
-        return super()._send(session, method, params, acknowledged)
+        return observed_send(self, super()._send, session, method, params, acknowledged)
 
     def _received(self, event):
         try:
             message = json.loads(event['message'])
             method = message.get('method')
-            if method in EVENTS:
-                record_handshake(self, method + '.event')
+            observed_message(self, message)
             loading_failure(self, event, message)
             if method in EVENTS:
                 self.probe['events'][method] += 1
