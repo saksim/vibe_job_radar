@@ -67,3 +67,24 @@ def record_handshake(backend, name):
             trace.record(name)
     except Exception:
         pass
+
+
+def observed_send(backend, operation, session, method, params=None, callback=None):
+    """Keep original command/callback semantics and record fixed handshake names."""
+    key = method if isinstance(method, str) and method in COMMANDS else "other"
+    record_handshake(backend, key + ".sent")
+    def acknowledged(result):
+        record_handshake(backend, key + ".acknowledged")
+        if callback:
+            callback(result)
+    return operation(session, method, params, acknowledged)
+
+
+def observed_message(backend, message):
+    """Observe an already decoded message without retaining parameters or IDs."""
+    try:
+        method = message.get("method")
+        if isinstance(method, str) and method in EVENTS:
+            record_handshake(backend, method + ".event")
+    except Exception:
+        pass

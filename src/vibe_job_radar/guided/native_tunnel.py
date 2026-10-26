@@ -53,16 +53,30 @@ class NativeTunnel:
             def handle_error(self, *_):
                 pass  # Never print request headers or credential-bearing errors.
             def process_request(self, request, address):
-                if not owner._slots.acquire(blocking=False):
-                    request.close(); return
+                # Own an accepted socket before its worker can be descheduled.
+                # Admission and close's socket snapshot share this same lock.
+                with owner._lock:
+                    if (owner._closed or owner._stop.is_set()
+                            or not owner._slots.acquire(blocking=False)):
+                        request.close(); return
+                    owner._sockets.add(request)
                 try:
                     super().process_request(request, address)
                 except Exception:
-                    owner._slots.release(); raise
+                    try:
+                        request.close()
+                    except OSError:
+                        pass
+                    with owner._lock:
+                        owner._sockets.discard(request)
+                    owner._slots.release()
+                    raise
             def process_request_thread(self, request, address):
                 try:
                     super().process_request_thread(request, address)
                 finally:
+                    with owner._lock:
+                        owner._sockets.discard(request)
                     owner._slots.release()
         self.server = Server(('127.0.0.1', 0), Handler)
         self.endpoint = f'http://127.0.0.1:{self.server.server_address[1]}'
@@ -148,9 +162,13 @@ class NativeTunnel:
 
     def _handle(self, client):
         upstream = None
-        with self._lock:
-            self._sockets.add(client)
         try:
+            with self._lock:
+                if self._closed or self._stop.is_set():
+                    return
+                # Retain direct-call compatibility; real accepted sockets were
+                # already registered before their worker was started.
+                self._sockets.add(client)
             client.settimeout(3)
             raw = bytearray()
             deadline = time.monotonic()+3
@@ -211,10 +229,12 @@ class NativeTunnel:
         finally:
             for sock in (upstream,client):
                 if sock is not None:
-                    with self._lock:
-                        self._sockets.discard(sock)
+                    # Keep the socket owned while close is in progress; a
+                    # concurrent guard close must still include it.
                     try: sock.close()
                     except OSError: pass
+                    with self._lock:
+                        self._sockets.discard(sock)
 
     def close(self):
         with self._lock:
