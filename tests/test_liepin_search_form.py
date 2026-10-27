@@ -211,7 +211,9 @@ class SearchFormTests(unittest.TestCase):
         b = self.backend
         b.contract = Mock()
         b._load_robots = Mock()
-        b.observations = Mock(return_value=[])
+        # The mocked page and response observer must expose the same response;
+        # production snapshot() obtains its business data from observations().
+        b.observations = Mock(side_effect=lambda: snapshot().business if b.page.url == SEARCH else ())
         self.body.count.return_value = 1
         self.field.is_enabled.return_value = True
         self.field.get_attribute.return_value = None
@@ -251,6 +253,7 @@ class SearchFormTests(unittest.TestCase):
             with self.subTest(unusable=unusable):
                 self.setUp()
                 b = self.prepare_entry()
+                b.observations.side_effect = None
                 b.observations.return_value = (response,)
                 if unusable in ('absent', 'duplicate'):
                     self.field.count.return_value = 0 if unusable == 'absent' else 2

@@ -12,14 +12,18 @@ footer{margin-top:30px;color:#536a83}@media(max-width:650px){main{margin:0;paddi
 </style></head><body><main>
 <p class="notice">这是操作指南，不是正在运行的工作台。本页不会执行命令、读取账户或自动联网。请在文件管理器中运行启动器，并保留终端窗口。</p>
 <h1>从零开始：先打开，再找岗位</h1>
-<p>本文描述随本源码交付的功能；已合并范围、候选包及尚待现场验证的事项见<a href="docs/DELIVERY_STATUS.md">交付清单</a>。下载完整源码或对应提交的<a href="docs/WINDOWS_PORTABLE.md">Windows便携候选</a>，同为0.2.0不代表文件和验收结果相同。源码需要Python 3.10或更新版本；便携候选包含运行依赖，仍不是正式发行。</p>
+<p>先选择一种适合自己的运行方式，再完成第一份报告。本页对应 <strong>0.20.3</strong>；仅从已经发布的正式 Release 下载，下载入口见 <a href="https://github.com/saksim/vibe_job_radar/releases">GitHub Releases</a>，已交付能力和仍需现场验证的范围见<a href="docs/STATUS.md">当前状态</a>。</p>
 <h2>1. 下载与启动</h2>
-<p>在GitHub仓库页选择本次版本的代码，点击Code → Download ZIP，将ZIP完整解压。不要只下载一个脚本，不要在压缩包里直接运行。解压后的目录应同时有scripts、src和start_windows.bat。</p>
-<p>已安装Python的Windows用户可双击start_windows.bat；没有Python时，先从Python官方安装程序安装3.10或更新版本。Windows终端可执行 <code>py -3 --version</code> 核对。macOS/Linux可执行 <code>python3 --version</code> 核对。</p>
-<p>你已用Anaconda启动成功时，完全不必重装。停止旧终端，再进入新源码目录，执行原来的命令：</p>
+<div class="scroll"><table><thead><tr><th>使用方式</th><th>适合谁</th><th>启动入口</th></tr></thead><tbody><tr><td>完整桌面程序包</td><td>希望在自己的电脑上使用工作台和采集浏览器，不准备Python环境</td><td>Windows x64选<a href="docs/WINDOWS_PORTABLE.md">Windows便携包</a>；Linux x64、macOS arm64选<a href="docs/POSIX_DISTRIBUTION.md">对应平台包</a></td></tr><tr><td>Python环境：源码或wheel</td><td>已有Python 3.10+，愿意自行维护环境和可选组件</td><td>源码使用下方命令；wheel按<a href="docs/PYTHON_DISTRIBUTION.md">Python安装说明</a>安装后运行 <code>vibe-radar-ui</code></td></tr><tr><td>Docker服务器工作台</td><td>希望服务运行在服务器上，自己通过浏览器远程访问</td><td>按<a href="docs/DOCKER.md">Docker部署说明</a>配置密码、来源地址和数据卷，再拉取正式镜像启动</td></tr></tbody></table></div>
+<p>三个正式Release属于同一产品版本：<code>v0.20.3</code> 提供Windows包，<code>desktop-v0.20.3</code> 提供Linux/macOS包，<code>python-v0.20.3</code> 提供wheel和源码分发包。普通桌面用户下载自己平台的程序包即可，无需再安装Python包。Docker使用 <code>ghcr.io/saksim/vibe_job_radar:0.20.3</code>，具体固定摘要和部署步骤见Docker说明。</p>
+<p><strong>完整桌面包。</strong> 下载对应正式Release的程序归档和校验表，按平台指南核对摘要。Windows完整解压 <code>VibeJobRadar</code> 目录后双击其中的 <code>VibeJobRadar.exe</code>，保留 <code>_internal</code>、<code>browsers</code> 等随包文件，不只复制exe。Linux/macOS用系统 <code>tar -xzf</code> 解压并保留符号链接、可执行权限，在程序目录运行 <code>./VibeJobRadar</code>。这些包自带Python和Chromium；Linux仍需系统浏览器库，其他系统版本和架构的范围见平台指南。当前Windows包未签名、macOS包未签名或公证，按平台提示处理，不绕过系统安全设置。</p>
+<p><strong>已有Python，使用源码。</strong> 在GitHub选择本次正式Tag对应的代码，点击Code → Download ZIP并完整解压。不要只下载一个脚本，不要在压缩包里直接运行；源码目录应同时有scripts、src和start_windows.bat。Windows可用 <code>py -3 --version</code>、macOS/Linux可用 <code>python3 --version</code> 核对Python 3.10+。</p>
+<p>Windows在源码目录双击 <code>start_windows.bat</code> 或运行 <code>py -3 scripts/start_workbench.py</code>；macOS/Linux运行 <code>python3 scripts/start_workbench.py</code>。Windows可在文件夹地址栏输入cmd并回车打开当前目录的终端。</p>
+<p>已有Anaconda且启动成功时可继续使用原解释器，无须重装。先停止旧终端，再进入新源码目录。下面仅是一个已有环境在Git Bash中的路径示例，请换成自己的实际解释器：</p>
 <pre><code>/d/code_environment/anaconda_all_css/py312/python.exe scripts/start_workbench.py</code></pre>
-<p>其他Windows环境在源码目录运行 <code>py -3 scripts/start_workbench.py</code>；macOS/Linux运行 <code>python3 scripts/start_workbench.py</code>。Windows可在文件夹地址栏输入cmd并回车打开当前目录的终端。Git Bash用户右键空白处打开Git Bash后使用上面的Anaconda命令。</p>
-<p>浏览器自动打开时保持终端不关闭。没有自动打开，则复制终端中完整的127.0.0.1地址，包含#token后的部分。端口每次可能变化，旧书签未必可用；地址不要发给别人。工作台页面与采集浏览器是两个不同窗口。</p>
+<p>wheel不包含Python解释器、Chromium或可选SDK，需要自行按功能安装依赖；只做文本导入、分析和报告不需要浏览器组件。wheel与源码都不会自动替换已有Python环境。</p>
+<p>桌面包、源码和wheel启动本机工作台后，应保持终端不关闭。没有自动打开浏览器时，复制终端中完整的127.0.0.1地址，包含#token后的部分。端口每次可能变化，旧书签未必可用；地址不要发给别人。工作台页面与采集浏览器是两个不同窗口。</p>
+<p>Docker入口是单拥有者、单工作区的服务器服务：通过配置的地址和密码登录，材料保存在服务器的完整 <code>/data</code> 卷中。它支持导入、公开HTTP采集、证据和报告，不提供招聘平台采集浏览器、桌面自动升级或多人私人工作区隔离。下面的 <code>/guided</code> 浏览器操作只适用于桌面入口；远程部署按Docker说明配置HTTPS，不把本机工作台端口直接公开。</p>
 <h2>2. 最简单的第一份结果：无账号、无API</h2>
 <p>点击“运行合成演示”，它是程序合成的测试数据，不是真实招聘。看懂结果后，在基础页粘贴一份你有权处理的真实完整JD，填写实际标题、平台、来源与使用范围，点击“保存到真实数据库”，再选岗位并点击“分析真实数据并生成报告”。</p>
 <p>下载requirements_zh.csv核对逐条原文；descriptions.md是模板，没有本人证据的数字应保持待填，不是程序已经证明你满足了岗位。演示库与真实库隔离。只拿到片段就标记摘要，不要为了有结果谎报为完整正文。</p>
@@ -39,9 +43,10 @@ footer{margin-top:30px;color:#536a83}@media(max-width:650px){main{margin:0;paddi
 <p>没证据时保存草稿；批准原文不等于自动满足岗位。离线测试不能冒充生产成绩，文件哈希只能证明字节一致。详细说明见<a href="docs/WORKFLOWS.md">采集与证据操作</a>。</p>
 <h2>6. 等待、停止、更新和数据保留</h2>
 <p>/guided的新任务由后端线程执行，关闭工作台网页不会取消已经确认的批次；暂停或停止按钮会停止后续动作，关闭终端退出程序。默认不保存登录Cookie；第2步明确选择<a href="docs/SAVED_SESSION_D04.md">在本机保留</a>后，下次任务可尝试恢复。停止浏览器不删除已保存快照；需用“清除此平台保存的会话并关闭采集浏览器”撤销。恢复不代表账号有效，密码不保存。</p>
-<p>/advanced的公开分类当前小批也在后台执行，可关闭网页，退出应用后保留检查点并等待明确继续；其他高级HTTP路线仍由网页驱动。固定公开目录另有可选<a href="docs/PUBLIC_DAILY_SCHEDULE.md">每24小时查询计划</a>，Windows便携候选另有<a href="docs/WINDOWS_LOGIN_STARTUP.md">登录后启动</a>。它们不自动登录三站、不安排分类定时采集，也不是无人登录全天服务。</p>
-<p>默认目录在用户主目录下.vibe-job-radar，基础页显示完整路径。保持同一工作区，重启或升级可以继续读取原数据；不同目录相互隔离。先停止服务，再备份整个目录，包括数据库、reports、guided、imports及个人证据。升级代码不等于删除数据，别用“清空工作区”来更新程序。</p>
-<p>0.2.0新增browser_fetch来源类型，旧版本不保证认识新记录；回退时恢复对应的完整备份。不要同时运行两份工作台操作同一任务。不要将本机端口开放公网。</p>
+<p>/advanced的公开分类、URL、Search和授权JSON源都由后台执行当前已明确确认的有限批次。关闭或刷新网页不会停止已接受的任务；应用或服务器进程须保持运行。暂停会在当前请求结束后停止后续请求，退出应用后保留检查点；重开页面只观察状态，继续须重新确认，搜索Key或数据源Token按需要重新提供，不自动重放不确定请求。</p>
+<p>普通分析、合成演示和个人证据报告也由后台任务生成。关闭网页后可重新打开查看任务和已发布报告；进程中断不自动重做，也不要在报告生成时升级程序。固定公开目录另有可选<a href="docs/PUBLIC_DAILY_SCHEDULE.md">每24小时查询计划</a>，Windows便携包另有<a href="docs/WINDOWS_LOGIN_STARTUP.md">登录后启动</a>。它们不自动登录三站、不安排分类定时采集，也不是无人登录全天服务。</p>
+<p>本机入口默认目录在用户主目录下.vibe-job-radar，基础页显示完整路径；Docker使用服务器上的完整 <code>/data</code> 卷。保持同一工作区，重启或升级可以继续读取原数据；不同目录相互隔离。先停止任务和服务，再备份整个工作区，包括数据库、reports、guided、imports、配额、计划及个人证据。升级代码不等于删除数据，别用“清空工作区”来更新程序。</p>
+<p>升级和回退按<a href="docs/WORKSPACE_COMPATIBILITY.md">工作区兼容说明</a>核对格式与完整备份，旧程序不保证认识新版数据。不要同时运行两份工作台操作同一任务，不要通过删除配额或旧记录来绕过限制。桌面本机端口不开放公网；Docker远程访问使用其独立登录入口和HTTPS配置。</p>
 <h2>7. 看错误，而不是反复点开始</h2>
 <div class="scroll"><table><thead><tr><th>现象</th><th>下一步</th></tr></thead><tbody><tr><td>找不到Python</td><td>检查安装/版本；已经能打开页面的人不需要再安装Python</td></tr><tr><td>页面没有新手向导入口</td><td>停止旧进程，确认完整新源码目录，重新启动，不是只刷新网页</td></tr><tr><td>缺令牌或403</td><td>从本次终端的完整地址重新进入，不要把127.0.0.1改成别的主机名</td></tr><tr><td>non_public_address或198.18开头</td><td>向导里点网络检查，核查代理Fake-IP/DNS。不是网站登录错误，不删除公网检查</td></tr><tr><td>0条卡片</td><td>在采集浏览器手动打开正确列表再读取；仍为空可能是适配不兼容</td></tr><tr><td>native_page_cleared / 搜索页转空白</td><td>保留本次失败原因并停止；已有搜索成功记录不代表每次访问都成功，页面清空不是零岗位或密码错误</td></tr><tr><td>robots拒绝或403/429</td><td>停止并核对访问条件/冷却，不加预算、不换身份反复访问</td></tr><tr><td>安装失败</td><td>核查下载网络、磁盘与Python权限；本地粘贴分析仍可用</td></tr><tr><td>报告为空</td><td>看正文数、岗位匹配和条目失败原因；不代表市场没有需求</td></tr></tbody></table></div>
 <p>页面默认15秒导航间隔与共享配额，显示等候不是卡死。网络检查用于定位当前网络策略及失败阶段，不能修复全部环境问题；登录只处理身份，不会解决页面结构或访问规则。全部操作和剩余边界见<a href="docs/GUIDED_COLLECTION.md">浏览器采集按钮指南</a>。</p>
