@@ -2,7 +2,7 @@
 
 0.13.0 程序包含[系统密钥库组件](SYSTEM_CREDENTIALS.md)，可加密保存已有本机代理凭据，并明确迁移团队设备凭据。Linux 仍需现有 Secret Service 默认密钥库，macOS 需默认钥匙串授权；缺失或锁定时停止新请求，不自动创建库或退回明文。
 
-从 [desktop-vVERSION](https://github.com/saksim/vibe_job_radar/releases/tag/desktop-vVERSION) 选择与系统一致的 tar.gz。Linux x64 在 Ubuntu 22.04 x64 构建，macOS arm64 在 macOS 15 arm64 构建；其他发行版、系统版本、架构和个人干净设备尚未认证。需保留完整目录、符号链接和可执行权限。
+从 [正式 Release 列表](https://github.com/saksim/vibe_job_radar/releases) 选择所需版本的 `desktop-vVERSION` 和与系统一致的 tar.gz；仓库文档中的 `VERSION` 表示所选版本号，正式包附带的安装说明会填入该版本。Linux x64 在 Ubuntu 22.04 x64 构建，macOS arm64 在 macOS 15 arm64 构建；其他发行版、系统版本、架构和个人干净设备尚未认证。需保留完整目录、符号链接和可执行权限。
 
 程序内含 Python、Playwright、Chromium、PAC 和 NTLMv2 组件，不需要另装 Python。Linux 仍依赖系统浏览器库；缺少库时按诊断处理，或选择系统上已安装的兼容浏览器。macOS 包没有发布者签名或公证；遇到系统阻止时保留诊断，不能把 CI 成功当成 Gatekeeper 已验收，不建议绕过系统安全设置。
 

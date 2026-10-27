@@ -1,27 +1,29 @@
-# Windows x64 便携候选包
+# Windows x64 便携程序包
 
 0.14.0 支持[发行者签名接入和升级核验](PUBLISHER_SIGNING.md)。是否已签名以对应Release与实际文件核验为准；当前无凭据时仍为unsigned，保留全部原构建资格。下面较早候选说明按原范围保留。
 
 0.5.0新增明确确认后的[自动升级](UPDATES.md)：验证新包、退出并备份、确认新版就绪后提交入口，保留原程序和手动升级。现有0.5.0启动登记由原入口转发，不改写注册表。0.4.1及更早版本首次使用仍需手动启动新包；以下候选构建说明与历史验证不等于所有版本的现场升级认证。
 
-关联 #91 / #30 H6 / #3 / #57。本分支增加包含 Python、项目资源、Playwright、配套 Chromium 和 truststore 的独立候选包；0.4.0提供标准稳定Tag发行和显式检查/下载准备，0.5.0增加确认后的备份与自动重启；签名及其他系统仍未完成。构建成功不能替代三站实站登录与完整 JD 验收。
+关联 #91 / #30 H6 / #3 / #57。程序包包含 Python、项目资源、Playwright、配套 Chromium 和 truststore；支持正式Tag发行、显式检查/下载准备，以及确认后的备份与自动重启。Linux/macOS另有[完整平台包](POSIX_DISTRIBUTION.md)，Windows签名状态按对应发行核验。构建成功不能替代三站实站登录与完整 JD 验收。
 
-## 使用已验证的候选
+## 下载正式版本并运行
 
-维护者可通过[发行准备与公开](PORTABLE_RELEASE.md)复用已通过准确main CI的候选，保存版本、校验值、来源与升级说明。默认预发行草稿保留；显式稳定发行在8资产逐项核对后公开标准Tag和Release。用户可在首页[检查并准备升级](UPDATES.md)；原CI下载和源码启动继续可用，准备发行不重新构建或重复测试。
+普通用户从 [v0.20.3 正式Release](https://github.com/saksim/vibe_job_radar/releases/tag/v0.20.3) 下载Windows x64 ZIP和校验表；其他版本见 [Releases](https://github.com/saksim/vibe_job_radar/releases)。用户可在首页[检查并准备升级](UPDATES.md)，不需要从Actions寻找临时候选，也不需要另装Python包。
 
-在对应提交的 `windows-portable-candidate` 工作流中核对 `build-and-run-executable` 成功，下载 `windows-x64-portable-candidate` 及 `windows-portable-evidence`。这是保留 7 天的 CI 候选产物，尚非 GitHub Release；失败运行不会上传新的候选 ZIP。
-
-1. 按 evidence 中 `manifest.json` 的文件名和 SHA-256 核对 ZIP，可用 PowerShell `Get-FileHash -Algorithm SHA256 "候选文件路径.zip"`。摘要只核对文件一致性，不是发行签名。
+1. 按同一Release中的 `manifest.json` 和 `SHA256SUMS.txt` 核对ZIP文件名与SHA-256，可用 PowerShell `Get-FileHash -Algorithm SHA256 "下载文件路径.zip"`。摘要只核对文件一致性，不是发行签名。
 2. 将里面的 `VibeJobRadar` 整个目录解压到新目录，再双击 `VibeJobRadar.exe`。保留 `_internal`、`browsers` 及其他随包文件，不在 ZIP 内运行，也不只复制 exe。程序文件夹完整路径建议不超过110个UTF-16单元（常用中英文字符各一个），避免Windows深层目录限制；不要求修改系统长路径设置。无需安装 Python 或改动原 Anaconda 环境。
 3. 浏览器打开本机工作台；默认仍使用用户目录 `.vibe-job-radar`。从向导点击“检查浏览器（不采集）”，真实空白页检查通过后再创建任务。也可明确选择、检查已经安装的 Edge；不会自动安装 Edge 或接管日常浏览器。
-4. 组件缺失或需更新时，停止任务和每日计划、关闭所有同工作区服务并备份整个工作区，再完整解压已验证的新候选到另一个目录。候选不会自己执行 pip、覆盖正在运行的组件或自动更新。
+4. 手动更新时，停止任务和每日计划、关闭所有同工作区服务并备份整个工作区，再完整解压已验证的新包到另一个目录。程序不自行执行pip或静默替换组件；用户明确确认后可使用原自动升级流程完成备份与重启。
 
-命令行支持原有 `--workspace "D:\岗位研究"`、`--doctor`、`--no-browser` 等工作台参数。工作区属于用户，不放入程序包；多实例互斥仅适用于具备任务所有权修复的版本，旧源码不能与候选同时操作同一工作区。
+命令行支持原有 `--workspace "D:\岗位研究"`、`--doctor`、`--no-browser` 等工作台参数。工作区属于用户，不放入程序包；多实例互斥仅适用于具备任务所有权修复的版本，旧源码不能与新版程序同时操作同一工作区。
 
 升级与回退沿用[工作区兼容说明](WORKSPACE_COMPATIBILITY.md)以及[网络偏好 v2 回退要求](WORKSPACE_PROXY_SETTINGS.md)。从便携包切回源码时仍需满足源码自己的环境依赖；更换启动形式不会转换或清空原数据。关闭程序期间每日计划不运行。首页可明确选择[Windows登录启动](WINDOWS_LOGIN_STARTUP.md)，默认关闭、不创建常驻服务；移动/升级/回退前先关闭旧登记，再从新包重新启用。
 
 ## 维护者构建与证据
+
+维护者可通过[发行准备与公开](PORTABLE_RELEASE.md)复用已通过准确main CI的候选，保存版本、校验值、来源与升级说明。默认预发行草稿保留；显式稳定发行在8资产逐项核对后公开标准Tag和Release，准备发行不重新构建或重复测试。
+
+在对应提交的 `windows-portable-candidate` 工作流中核对 `build-and-run-executable` 成功，下载 `windows-x64-portable-candidate` 及 `windows-portable-evidence`。这是保留7天的CI候选产物，尚非GitHub Release；失败运行不会上传新的候选ZIP。维护者按evidence中的 `manifest.json` 核对候选；普通用户使用上面的正式发行入口。
 
 工作流使用独立 Windows x64 runner 上的官方 CPython 3.12。固定 PyInstaller 6.22.3、Playwright 1.63.0、packaging 26.0、truststore 0.10.4、quickjs-ng 0.17.0.1；其余实际构建环境包版本写入 `PORTABLE.json`，不宣称全部传递依赖锁定或字节可重现。Python、项目及随包主要依赖许可证放入 `licenses/`，Chromium/驱动原目录的许可文件保留。
 
@@ -54,4 +56,4 @@
 
 ## 当前限制
 
-候选未签名，尚未覆盖个人设备的全部系统策略和安全软件。它解决运行环境准备与正确诊断，既不改变正常认证流程，也不放宽 robots、访问节奏、网络或站点约束。三站现有卡点继续在 #49/#50/#54/#55/#56/#63 跟踪；实际稳定Tag公开与升级入口按#356验收；签名、其他系统与个人设备现场条件仍独立跟踪。当前 head 的实际构建结果以对应 PR / CI 记录为准，源码测试通过不等于 exe 验收完成。
+当前正式Windows包仍未签名，尚未覆盖个人设备的全部系统策略和安全软件。它解决运行环境准备与正确诊断，既不改变正常认证流程，也不放宽 robots、访问节奏、网络或站点约束。三站现有卡点继续在 #49/#50/#54/#55/#56/#63 跟踪；实际稳定Tag公开与升级入口按#356验收；签名和个人设备现场条件仍独立跟踪，Linux/macOS范围见其[平台指南](POSIX_DISTRIBUTION.md)。当前 head 的实际构建结果以对应 PR / CI 记录为准，源码测试通过不等于 exe 验收完成。

@@ -1,5 +1,7 @@
 # Vibe Job Radar｜招聘要求雷达与可举证描述生成器
 
+> **0.1.0 历史 CLI 手册。** 以下保留当时的命令、示例和验收范围，不是当前安装入口。现版本安装见 [Python 高级安装](docs/PYTHON_DISTRIBUTION.md)，当前操作见[文档目录](docs/README.md)。旧版本包名、计数和“尚未实现”只描述当时状态；具体命令以所用版本的 `--help` 为准。
+
 **版本：0.1.0 · Python 3.10+ · 核心零第三方运行依赖 · 中文 CLI/CSV/HTML 报告。**
 
 把“招聘平台上的岗位文本”变成“逐条、可追溯的要求”，再变成“通用能力底座 + 分岗位补充 + 可度量成果表达 + 缺口清单”。
@@ -220,4 +222,4 @@ src/vibe_job_radar/
   cli.py            # plan/discover/ingest/fetch/analyze
 ```
 
-架构和验收边界见 `docs/ARCHITECTURE.md`，证据规范见 `docs/EVIDENCE_CONTRACT.md`，本次已执行与未执行验证见 `docs/ACCEPTANCE_REPORT.md`。真实网站访问规则可能变化；任何新平台或规则变更，都需补原文样本、反例与回归测试。
+架构和验收边界见 `docs/ARCHITECTURE.md`，证据规范见 `docs/EVIDENCE_CONTRACT.md`，本次已执行与未执行验证见 `docs/archive/acceptance/0.1.0/ACCEPTANCE_REPORT.md`。真实网站访问规则可能变化；任何新平台或规则变更，都需补原文样本、反例与回归测试。

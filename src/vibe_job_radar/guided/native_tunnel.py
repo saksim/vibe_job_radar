@@ -35,6 +35,9 @@ class NativeTunnel:
         self._proxy_auth_lock = threading.Lock()
         self._proxy_auth_error = None
         self._sockets = set()
+        self._pending_requests = set()
+        self._requests_done = threading.Condition(self._lock)
+        self._close_complete = threading.Event()
         self._closed = False
         self._slots = threading.BoundedSemaphore(16)
         self.last_error = ''
@@ -60,6 +63,7 @@ class NativeTunnel:
                             or not owner._slots.acquire(blocking=False)):
                         request.close(); return
                     owner._sockets.add(request)
+                    owner._pending_requests.add(request)
                 try:
                     super().process_request(request, address)
                 except Exception:
@@ -67,17 +71,16 @@ class NativeTunnel:
                         request.close()
                     except OSError:
                         pass
-                    with owner._lock:
-                        owner._sockets.discard(request)
-                    owner._slots.release()
+                    try:
+                        owner._finish_request(request)
+                    except Exception:
+                        pass  # Keep the startup error; unfinished cleanup stays pending.
                     raise
             def process_request_thread(self, request, address):
                 try:
                     super().process_request_thread(request, address)
                 finally:
-                    with owner._lock:
-                        owner._sockets.discard(request)
-                    owner._slots.release()
+                    owner._finish_request(request)
         self.server = Server(('127.0.0.1', 0), Handler)
         self.endpoint = f'http://127.0.0.1:{self.server.server_address[1]}'
         try:
@@ -236,28 +239,61 @@ class NativeTunnel:
                     with self._lock:
                         self._sockets.discard(sock)
 
+    def _finish_request(self, request):
+        # Called after socketserver has closed the accepted request, or after
+        # startup failure has closed it. Completion includes the handler slot.
+        with self._requests_done:
+            self._slots.release()
+            self._sockets.discard(request)
+            self._pending_requests.discard(request)
+            self._requests_done.notify_all()
+
     def close(self):
         with self._lock:
-            if self._closed:
-                return
+            repeated = self._closed
             self._closed = True
+        if repeated:
+            if not self._close_complete.wait(2):
+                raise RuntimeError('native_tunnel_cleanup_incomplete')
+            with self._lock:
+                pending = bool(self._pending_requests)
+            if pending or self.thread.is_alive():
+                raise RuntimeError('native_tunnel_cleanup_incomplete')
+            return
         self._stop.set()
-        with self._lock:
-            sockets = tuple(self._sockets)
-        for sock in sockets:
-            try: sock.shutdown(socket.SHUT_RDWR)
-            except OSError: pass
-            try: sock.close()
-            except OSError: pass
-        errors = []
-        # Closing is already marked above: a later close cannot recover a
-        # skipped listener or join. Attempt each independent owned resource
-        # now, and retain the first error rather than hiding it with a later one.
-        for operation in (self.server.shutdown, self.server.server_close,
-                          lambda: self.thread.join(timeout=2)):
+        try:
+            with self._lock:
+                sockets = tuple(self._sockets)
+            for sock in sockets:
+                try: sock.shutdown(socket.SHUT_RDWR)
+                except OSError: pass
+                try: sock.close()
+                except OSError: pass
+            errors = []
+            # Attempt each owned resource; an earlier cleanup error remains
+            # primary even when a handler also fails to finish in time.
+            for operation in (self.server.shutdown, self.server.server_close):
+                try:
+                    operation()
+                except Exception as error:
+                    errors.append(error)
+            deadline = time.monotonic() + 2
             try:
-                operation()
+                self.thread.join(timeout=2)
             except Exception as error:
                 errors.append(error)
-        if errors:
-            raise errors[0]
+            # Reuse the original join budget, not another timeout per worker.
+            # An in-flight open may outlive closed client/listener sockets.
+            with self._requests_done:
+                while self._pending_requests:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    self._requests_done.wait(remaining)
+                pending = bool(self._pending_requests)
+            if pending or self.thread.is_alive():
+                errors.append(RuntimeError('native_tunnel_cleanup_incomplete'))
+            if errors:
+                raise errors[0]
+        finally:
+            self._close_complete.set()
