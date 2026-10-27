@@ -966,6 +966,16 @@ class NativeBackend(PlaywrightBackend):
                                              if not o.context.get('entry_bootstrap'))
                     if ready(observations):
                         return
+                if (self.adapter.key == 'liepin'
+                        and urlsplit(self.adapter.accept_url(self.page.url)).path.rstrip('/')
+                        == urlsplit(self.adapter.search_base).path.rstrip('/')):
+                    # This native listing requires its own business response.
+                    # Repeatedly copying/rendering the entire DOM cannot supply
+                    # it, and recommendations must not substitute for it. Keep
+                    # the challenge checks and the original response deadline;
+                    # detail pages and other adapters still use their DOM path.
+                    self.page.wait_for_timeout(100)
+                    continue
                 snap=self.snapshot()
                 try:
                     if self.adapter.cards(snap):

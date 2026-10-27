@@ -1,5 +1,7 @@
 # 自动采集与证据中心：实际操作及验收边界
 
+> 本手册保留高级 HTTP 路线的字段、数据源、游标和预算细节。早期“页面 step 驱动”的实施说明只描述当时版本；当前已确认批次由后台推进，生命周期见[现用操作手册](WORKFLOWS.md)。浏览器登录属于另一条向导路线，不共享本手册 HTTP 请求的会话。
+
 本指南描述合并后的 main 能力；采集执行与证据界面来自 PR #6。首次使用先读 [零基础操作指南](FIRST_RUN.md)，当前能力与后续路线见 [采集能力说明](ACQUISITION_CAPABILITIES.md)。启动方式不变：Windows 双击 `start_windows.bat`；macOS/Linux 在源码目录运行 `python3 scripts/start_workbench.py`。从基础工作台进入新增入口，不需手写 JSON。
 
 ## 一、自动取数不是单个万能爬虫

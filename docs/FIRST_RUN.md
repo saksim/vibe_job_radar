@@ -1,22 +1,34 @@
 # 从零开始：先打开，再找岗位
 
-本文描述随本源码交付的功能；已合并范围、候选包及尚待现场验证的事项见[交付清单](DELIVERY_STATUS.md)。下载完整源码或对应提交的[Windows便携候选](WINDOWS_PORTABLE.md)，同为0.2.0不代表文件和验收结果相同。源码需要Python 3.10或更新版本；便携候选包含运行依赖，仍不是正式发行。
+先选择一种适合自己的运行方式，再完成第一份报告。本页对应 **0.20.3**；仅从已经发布的正式 Release 下载，下载入口见 [GitHub Releases](https://github.com/saksim/vibe_job_radar/releases)，已交付能力和仍需现场验证的范围见[当前状态](STATUS.md)。
 
 ## 1. 下载与启动
 
-在GitHub仓库页选择本次版本的代码，点击Code → Download ZIP，将ZIP完整解压。不要只下载一个脚本，不要在压缩包里直接运行。解压后的目录应同时有scripts、src和start_windows.bat。
+| 使用方式 | 适合谁 | 启动入口 |
+|---|---|---|
+| 完整桌面程序包 | 希望在自己的电脑上使用工作台和采集浏览器，不准备Python环境 | Windows x64选[Windows便携包](WINDOWS_PORTABLE.md)；Linux x64、macOS arm64选[对应平台包](POSIX_DISTRIBUTION.md) |
+| Python环境：源码或wheel | 已有Python 3.10+，愿意自行维护环境和可选组件 | 源码使用下方命令；wheel按[Python安装说明](PYTHON_DISTRIBUTION.md)安装后运行 `vibe-radar-ui` |
+| Docker服务器工作台 | 希望服务运行在服务器上，自己通过浏览器远程访问 | 按[Docker部署说明](DOCKER.md)配置密码、来源地址和数据卷，再拉取正式镜像启动 |
 
-已安装Python的Windows用户可双击start_windows.bat；没有Python时，先从Python官方安装程序安装3.10或更新版本。Windows终端可执行 `py -3 --version` 核对。macOS/Linux可执行 `python3 --version` 核对。
+三个正式Release属于同一产品版本：`v0.20.3` 提供Windows包，`desktop-v0.20.3` 提供Linux/macOS包，`python-v0.20.3` 提供wheel和源码分发包。普通桌面用户下载自己平台的程序包即可，无需再安装Python包。Docker使用 `ghcr.io/saksim/vibe_job_radar:0.20.3`，具体固定摘要和部署步骤见Docker说明。
 
-你已用Anaconda启动成功时，完全不必重装。停止旧终端，再进入新源码目录，执行原来的命令：
+**完整桌面包。** 下载对应正式Release的程序归档和校验表，按平台指南核对摘要。Windows完整解压 `VibeJobRadar` 目录后双击其中的 `VibeJobRadar.exe`，保留 `_internal`、`browsers` 等随包文件，不只复制exe。Linux/macOS用系统 `tar -xzf` 解压并保留符号链接、可执行权限，在程序目录运行 `./VibeJobRadar`。这些包自带Python和Chromium；Linux仍需系统浏览器库，其他系统版本和架构的范围见平台指南。当前Windows包未签名、macOS包未签名或公证，按平台提示处理，不绕过系统安全设置。
+
+**已有Python，使用源码。** 在GitHub选择本次正式Tag对应的代码，点击Code → Download ZIP并完整解压。不要只下载一个脚本，不要在压缩包里直接运行；源码目录应同时有scripts、src和start_windows.bat。Windows可用 `py -3 --version`、macOS/Linux可用 `python3 --version` 核对Python 3.10+。
+
+Windows在源码目录双击 `start_windows.bat` 或运行 `py -3 scripts/start_workbench.py`；macOS/Linux运行 `python3 scripts/start_workbench.py`。Windows可在文件夹地址栏输入cmd并回车打开当前目录的终端。
+
+已有Anaconda且启动成功时可继续使用原解释器，无须重装。先停止旧终端，再进入新源码目录。下面仅是一个已有环境在Git Bash中的路径示例，请换成自己的实际解释器：
 
 ```bash
 /d/code_environment/anaconda_all_css/py312/python.exe scripts/start_workbench.py
 ```
 
-其他Windows环境在源码目录运行 `py -3 scripts/start_workbench.py`；macOS/Linux运行 `python3 scripts/start_workbench.py`。Windows可在文件夹地址栏输入cmd并回车打开当前目录的终端。Git Bash用户右键空白处打开Git Bash后使用上面的Anaconda命令。
+wheel不包含Python解释器、Chromium或可选SDK，需要自行按功能安装依赖；只做文本导入、分析和报告不需要浏览器组件。wheel与源码都不会自动替换已有Python环境。
 
-浏览器自动打开时保持终端不关闭。没有自动打开，则复制终端中完整的127.0.0.1地址，包含#token后的部分。端口每次可能变化，旧书签未必可用；地址不要发给别人。工作台页面与采集浏览器是两个不同窗口。
+桌面包、源码和wheel启动本机工作台后，应保持终端不关闭。没有自动打开浏览器时，复制终端中完整的127.0.0.1地址，包含#token后的部分。端口每次可能变化，旧书签未必可用；地址不要发给别人。工作台页面与采集浏览器是两个不同窗口。
+
+Docker入口是单拥有者、单工作区的服务器服务：通过配置的地址和密码登录，材料保存在服务器的完整 `/data` 卷中。它支持导入、公开HTTP采集、证据和报告，不提供招聘平台采集浏览器、桌面自动升级或多人私人工作区隔离。下面的 `/guided` 浏览器操作只适用于桌面入口；远程部署按Docker说明配置HTTPS，不把本机工作台端口直接公开。
 
 ## 2. 最简单的第一份结果：无账号、无API
 
@@ -62,11 +74,13 @@
 
 /guided的新任务由后端线程执行，关闭工作台网页不会取消已经确认的批次；暂停或停止按钮会停止后续动作，关闭终端退出程序。默认不保存登录Cookie；第2步明确选择[在本机保留](SAVED_SESSION_D04.md)后，下次任务可尝试恢复。停止浏览器不删除已保存快照；需用“清除此平台保存的会话并关闭采集浏览器”撤销。恢复不代表账号有效，密码不保存。
 
-/advanced的公开分类当前小批也在后台执行，可关闭网页，退出应用后保留检查点并等待明确继续；其他高级HTTP路线仍由网页驱动。固定公开目录另有可选[每24小时查询计划](PUBLIC_DAILY_SCHEDULE.md)，Windows便携候选另有[登录后启动](WINDOWS_LOGIN_STARTUP.md)。它们不自动登录三站、不安排分类定时采集，也不是无人登录全天服务。
+/advanced的公开分类、URL、Search和授权JSON源都由后台执行当前已明确确认的有限批次。关闭或刷新网页不会停止已接受的任务；应用或服务器进程须保持运行。暂停会在当前请求结束后停止后续请求，退出应用后保留检查点；重开页面只观察状态，继续须重新确认，搜索Key或数据源Token按需要重新提供，不自动重放不确定请求。
 
-默认目录在用户主目录下.vibe-job-radar，基础页显示完整路径。保持同一工作区，重启或升级可以继续读取原数据；不同目录相互隔离。先停止服务，再备份整个目录，包括数据库、reports、guided、imports及个人证据。升级代码不等于删除数据，别用“清空工作区”来更新程序。
+普通分析、合成演示和个人证据报告也由后台任务生成。关闭网页后可重新打开查看任务和已发布报告；进程中断不自动重做，也不要在报告生成时升级程序。固定公开目录另有可选[每24小时查询计划](PUBLIC_DAILY_SCHEDULE.md)，Windows便携包另有[登录后启动](WINDOWS_LOGIN_STARTUP.md)。它们不自动登录三站、不安排分类定时采集，也不是无人登录全天服务。
 
-0.2.0新增browser_fetch来源类型，旧版本不保证认识新记录；回退时恢复对应的完整备份。不要同时运行两份工作台操作同一任务。不要将本机端口开放公网。
+本机入口默认目录在用户主目录下.vibe-job-radar，基础页显示完整路径；Docker使用服务器上的完整 `/data` 卷。保持同一工作区，重启或升级可以继续读取原数据；不同目录相互隔离。先停止任务和服务，再备份整个工作区，包括数据库、reports、guided、imports、配额、计划及个人证据。升级代码不等于删除数据，别用“清空工作区”来更新程序。
+
+升级和回退按[工作区兼容说明](WORKSPACE_COMPATIBILITY.md)核对格式与完整备份，旧程序不保证认识新版数据。不要同时运行两份工作台操作同一任务，不要通过删除配额或旧记录来绕过限制。桌面本机端口不开放公网；Docker远程访问使用其独立登录入口和HTTPS配置。
 
 ## 7. 看错误，而不是反复点开始
 

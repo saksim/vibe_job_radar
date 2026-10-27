@@ -6,7 +6,7 @@
 
 0.6.0 增加[工作区代理凭据](WORKSPACE_PROXY_CREDENTIALS.md)：三个网页入口可选择本机HTTP/SOCKS5认证，Windows当前用户加密保存、重启恢复和明确清除；更新检查也会明确提示缺失/不可解密的凭据。现有环境方式、匿名代理、PAC、目标地址/TLS与额度保持；代理DNS、其他认证和真实企业网络继续开放。
 
-0.5.0 本轮补上 #23/N6 的[独立授权 PAC DNS 助手](FULL_URL_PAC.md)：系统IPv4解析、可解析判断、网段匹配和本机地址，具备每次16名称限制、隔离期限与撤销。原完整网址许可仍无DNS；真实企业分区DNS、其他认证和代理端DNS继续开放。详见[本轮发行说明](RELEASE_0_5_0.md)。
+0.5.0 本轮补上 #23/N6 的[独立授权 PAC DNS 助手](FULL_URL_PAC.md)：系统IPv4解析、可解析判断、网段匹配和本机地址，具备每次16名称限制、隔离期限与撤销。原完整网址许可仍无DNS；真实企业分区DNS、其他认证和代理端DNS继续开放。详见[本轮发行说明](releases/RELEASE_0_5_0.md)。
 
 下列网络沿革以 2026-09-27 的 main@97b71e55932e89c789ab9a5c59f2631a3c63d21a 为原核对基线（含PR66/67/69/70/71/72/74/76/80/82/230/231/233/234）；调度和程序包范围已按2026-10-09的后续合并更新。生产 Linux 服务器后置，普通用户本机获取不要求先部署本产品服务。源码合并、CI、特定来源实测与所有 VPN 产品兼容是不同结论。
 
@@ -46,4 +46,4 @@ PR33对应head已完成668项本地及七组合CI、受控Chromium、真实公�
 
 原 PR29 的源码绑定验收已由 PR34 合并。PR69 已连同PR90的核心跨实例所有权及一致快照修复合入，公开计划和独立进程已在后续整合；它不增加来源访问权限或网络覆盖。PR67 的 Windows 拒绝响应修复已合入，合入后主干首次17项检查通过。后续提交须单独验证，不能继承这些 head 的绿灯。
 
-实现细节见 [SOCKS整合](SOCKS_POLICY_INTEGRATION.md)、[Fake-IP解析](FAKE_IP_RESOLUTION.md)、[Fake-IP复审](FAKE_IP_REVIEW_2026_09_16.md)。原22项与H类进度见 [完整交付清单](DELIVERY_STATUS.md)。
+实现细节见 [SOCKS整合](SOCKS_POLICY_INTEGRATION.md)、[Fake-IP解析](FAKE_IP_RESOLUTION.md)、[Fake-IP复审](archive/audits/FAKE_IP_REVIEW_2026_09_16.md)。原22项与H类进度见 [完整交付清单](archive/implementation/DELIVERY_LOG_2026_10_09.md)。

@@ -875,7 +875,7 @@ def verify(bundle,report_path,*,browser_choice='bundled',verify_login_startup=Fa
                                 system_pac_config_id=fixture.source.config_id,request_trace=request_trace)
                             counts['after_cached_worker']=len(fixture.requests)
                             result['stage']='configured_system_pac_request_count'
-                            if len(fixture.requests)!=1:raise AssertionError('cached worker implicitly downloaded PAC')
+                            if len(fixture.requests)!=1:raise AssertionError('unexpected PAC-source request count')
                             result['stage']='configured_system_pac_restore'
                             request_trace.stage('restore')
                     finally:

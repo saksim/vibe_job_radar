@@ -78,7 +78,8 @@ class NativeTunnelLifecycleTests(unittest.TestCase):
                     patch.object(socket.socket, 'recv', observe_recv):
                 client = socket.create_connection(guard.server.server_address, 2)
                 self.assertTrue(entered.wait(2))
-                guard.close()
+                with self.assertRaisesRegex(RuntimeError, '^native_tunnel_cleanup_incomplete$'):
+                    guard.close()
                 # This assertion precedes releasing the worker: eventual
                 # cleanup after scheduling does not satisfy close ownership.
                 self.assertFalse(release.is_set())
@@ -126,6 +127,7 @@ class NativeTunnelLifecycleTests(unittest.TestCase):
             self.assertEqual(request.fileno(), -1)
             with guard._lock:
                 self.assertNotIn(wrapped, guard._sockets)
+                self.assertNotIn(wrapped, guard._pending_requests)
             for _ in range(16):
                 slot = guard._slots.acquire(blocking=False)
                 acquired.append(slot)
