@@ -491,7 +491,16 @@ class NativeBackend(PlaywrightBackend):
                 if record and record['role'] != 'asset' and not self.cancelled.is_set() and not self.error:
                     err = data.get('errorText','')
                     code = native_transport_failure(err, self.tunnel.last_error) or 'network_error'
-                    self._fatal(code)
+                    # Bind the first stop to this request before it is lost.
+                    # Response headers alone are not a completed response body.
+                    with observe(getattr(self, '_diagnostics', None), 'http_request', actor='browser',
+                            url=record.get('url', ''), method=record.get('method', ''),
+                            resource=record.get('resource', 'unknown'), impact='required_by_backend'):
+                        notify(getattr(self, '_diagnostics', None), 'mark', code=code,
+                               status=record.get('status'), native_rule=record.get('operation'),
+                               native_stage='response_headers' if record.get('status') is not None else 'before_response',
+                               native_failure=data)
+                        self._fatal(code)
         except Exception:
             self._fatal('native_protocol_error')
 
@@ -619,7 +628,7 @@ class NativeBackend(PlaywrightBackend):
             self.__dict__.setdefault('_latest_business', {})[operation] = self._business_sequence
             self._observations = deque((o for o in self._observations if o.operation != operation), maxlen=20)
         self._requests[key]={'context': context, 'epoch':self._epoch,'operation':operation,'role':role,'size':0,
-                             'url':url,'status':None, 'json':False}
+                             'url':url,'status':None, 'json':False, 'method':r['method'], 'resource':kind.lower()}
         self.native_counts[role] += 1
         self._send(session,'Fetch.continueRequest',{'requestId':event['requestId']})
 
@@ -655,7 +664,7 @@ class NativeBackend(PlaywrightBackend):
         if '_request_pacer' not in self.__dict__:
             self._request_pacer = NativeRequestPacer(self)
         record = {'context': context, 'epoch':self._epoch,'operation':operation,'role':role,'size':0,
-                  'url':url,'status':None, 'json':False}
+                  'url':url,'status':None, 'json':False, 'method':r['method'], 'resource':kind.lower()}
         self._request_pacer.submit(PausedRequest(session, event['requestId'], key, 'https://'+p.netloc,
             record, role == 'business' and r['method'] != 'OPTIONS', not robots and rule.authentication))
 
@@ -762,6 +771,12 @@ class NativeBackend(PlaywrightBackend):
     def _finished(self, session, event):
         key=(session,event['requestId']); record=self._requests.pop(key,None)
         self._hops.pop(key,None)
+        if record and record['role'] != 'asset' and not self._halted and not self.cancelled.is_set():
+            with observe(getattr(self, '_diagnostics', None), 'http_request', actor='browser',
+                    url=record.get('url', ''), method=record.get('method', ''),
+                    resource=record.get('resource', 'unknown'), impact='required_by_backend'):
+                notify(getattr(self, '_diagnostics', None), 'mark', status=record.get('status'),
+                       native_rule=record.get('operation'), native_stage='body_complete')
         if (not record or record['role']!='business' or not record['json']
                 or record['epoch']!=self._epoch or record['status']!=200 or self._halted):
             return

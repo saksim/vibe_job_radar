@@ -229,11 +229,18 @@ class DiagnosticTrace:
                 raise
             return frame
 
-    def mark(self, *, code=None, status=None, navigation_reason=None, native_reason=None, native_rule=None):
+    def mark(self, *, code=None, status=None, navigation_reason=None, native_reason=None, native_rule=None,
+             native_stage=None, native_failure=None):
         with self._lock:
             if not self._frames:
                 return
             frame = self._frames[-1]
+            if native_stage is not None:
+                frame['native_stage'] = (native_stage if isinstance(native_stage, str)
+                    and native_stage in {'before_response', 'response_headers', 'body_complete'} else 'unknown')
+            if native_failure is not None:
+                from .native_errors import loading_failure_details
+                frame['native_failure'] = loading_failure_details(native_failure)
             if native_reason is not None:
                 frame['native_reason'] = (native_reason if isinstance(native_reason, str)
                     and native_reason in NATIVE_REASONS else 'unknown')
