@@ -1,9 +1,10 @@
-"""Observed human-login dependencies for the bridge browser only.
+"""Reviewed human-login dependencies for explicit manual login.
 
 The publisher submits SMS/QR requests and renders its verification widget. We
 never construct these requests, solve challenges or record their bodies. See
 docs/LIEPIN_MANUAL_LOGIN.md for public-source evidence and scope.
-The native backend's separate frame policy and checkpoint contract are unchanged.
+Default native checkpoints remain unchanged; a separate, explicit native human
+login contract combines these rules with owned-frame request accounting.
 """
 from urllib.parse import urlsplit
 import re
@@ -72,6 +73,20 @@ def _contract():
 
 
 CONTRACT = _contract()
+
+
+def native_human_contract(adapter):
+    """Explicit per-task opt-in; existing native checkpoints keep their contract."""
+    from .native_policy import contract_for
+    if not applies(adapter):
+        raise CrawlError('native_operation_unreviewed')
+    base = contract_for(adapter)
+    additions = tuple(r for r in CONTRACT.rules if r.key != 'liepin_security_config')
+    login_page = NativeRule('liepin_manual_login_page', 'www.liepin.com', r'/login',
+                            resources=('Document',), role='document', authentication=True)
+    return NativeContract('liepin_native_human_login_v1',
+        tuple(dict.fromkeys((*base.hosts, *CONTRACT.hosts))),
+        (*base.rules, login_page, *additions), bootstrap_only=False, ignored_rules=base.ignored_rules)
 
 
 def applies(adapter):

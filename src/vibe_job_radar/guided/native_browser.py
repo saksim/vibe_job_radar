@@ -77,8 +77,16 @@ class NativeControl(PinnedTransport):
 
 class NativeBackend(PlaywrightBackend):
     def __init__(self, adapter, ledger, cancelled, progress=lambda *_: None, *,
-                 headless=False, executable_path=None, channel=None, storage_state=None):
+                 headless=False, executable_path=None, channel=None, storage_state=None, human_login=False):
         self.contract = contract_for(adapter)
+        self.human_login = human_login is True
+        if self.human_login:
+            if channel not in {'msedge', 'chrome'}:
+                raise CrawlError('native_surface_unsupported')
+            from .liepin_login_policy import native_human_contract
+            from .native_login_frames import LoginFrames
+            self.contract = native_human_contract(adapter)
+            self._login_frames = LoginFrames(self)
         self.tunnel = self._cdp = None
         self._sessions, self._pending, self._requests, self._hops = {}, {}, {}, {}
         self._command = self._epoch = 0
@@ -252,10 +260,10 @@ class NativeBackend(PlaywrightBackend):
         session = 'page:' + target
         self._page_sessions[session] = client
         self._bound_pages[page] = session
-        for method in ('Page.frameNavigated', 'Page.navigatedWithinDocument',
+        for method in ('Page.frameNavigated', 'Page.navigatedWithinDocument', 'Page.frameAttached', 'Page.frameDetached',
                        'Fetch.requestPaused', 'Fetch.authRequired',
                        'Network.dataReceived', 'Network.loadingFinished',
-                       'Network.loadingFailed', 'Target.attachedToTarget'):
+                       'Network.loadingFailed', 'Target.attachedToTarget', 'Target.detachedFromTarget'):
             client.on(method, lambda data, name=method: self._received({
                 'sessionId':session, 'message':json.dumps({'method':name, 'params':data})}))
         page.on('close', lambda *_: self._detached({'sessionId':session}))
@@ -401,6 +409,8 @@ class NativeBackend(PlaywrightBackend):
 
     def _detached(self, event):
         session = event['sessionId']
+        if frames := self.__dict__.get('_login_frames'):
+            frames.retire(session)
         if pacer := self.__dict__.get('_request_pacer'):
             pacer.retire(session)
         self._sessions.pop(session, None)
@@ -459,15 +469,22 @@ class NativeBackend(PlaywrightBackend):
                         entry[1](message.get('result', {}))
                 return
             method, data = message.get('method'), message.get('params', {})
+            frames = self.__dict__.get('_login_frames')
             if method in {'Page.frameNavigated', 'Page.navigatedWithinDocument'}:
                 documents = self.__dict__.setdefault('_page_documents', {})
                 observed = observe_document(documents.get(session), self._sessions[session], method, data)
                 if observed is not None:
                     documents[session] = observed
+            elif method == 'Page.frameAttached' and frames:
+                frames.attached_frame(session, data)
+            elif method == 'Page.frameDetached' and frames:
+                frames.detached_frame(session, data)
+            elif method == 'Target.detachedFromTarget' and frames:
+                frames.detached_target(data)
             elif method == 'Target.attachedToTarget':
                 if self._browser_chrome_ui(data['targetInfo']):
                     self._send(session, 'Target.detachFromTarget', {'sessionId': data['sessionId']})
-                else:
+                elif not (frames and frames.attach_target(session, data)):
                     # Dedicated/shared workers and OOPIFs remain unsupported.
                     self._reject_target(data['targetInfo']['targetId'])
             elif method == 'Fetch.requestPaused':
@@ -505,6 +522,9 @@ class NativeBackend(PlaywrightBackend):
             self._fatal('native_protocol_error')
 
     def _fatal(self, code, error=None):
+        from .manual_login_progress import current
+        if tracker := current(self):
+            tracker.stop('needs_attention')
         if not self.error:
             self.error = code
             self.wait_error = error if isinstance(error,(RateLimit,TransientReadFailure)) else None
@@ -592,14 +612,16 @@ class NativeBackend(PlaywrightBackend):
             return self._request_paused_direct(session, event)
         r=event['request']; url=r['url']; kind=event.get('resourceType','Other')
         p, _ = self.contract.target(url)
-        if event.get('frameId') and event['frameId'] != self._sessions.get(session):
+        if not self.__dict__.get('_login_frames') and event.get('frameId') and event['frameId'] != self._sessions.get(session):
             raise CrawlError('native_surface_unsupported')
         robots = self._loading_robots and url == self._robots_url and kind == 'Document' and r['method']=='GET'
         if robots:
             role, operation='robots','robots'
         else:
-            rule=self.contract.match(url,r['method'],kind,authentication=self.auth_mode)
+            rule=self.contract.match(url,r['method'],kind,authentication=self.auth_mode,headers=r.get('headers', {}))
             rule.validate_headers(r['method'], r.get('headers', {}))
+            if frames := self.__dict__.get('_login_frames'):
+                frames.request(session, event, rule)
             role,operation=rule.role,rule.key
             if self._unresolved_dependency(session, event, rule, 'https://' + p.netloc):
                 return
@@ -607,7 +629,7 @@ class NativeBackend(PlaywrightBackend):
                 self.wire.ensure_robots(url)
         if len(r.get('postData','').encode('utf-8')) > 1_000_000:
             raise CrawlError('request_too_large')
-        if kind == 'Document' and not robots:
+        if kind == 'Document' and not robots and operation != 'captcha_frame':
             if self._pagination_page is not None:
                 self._pagination_page=None
             else:
@@ -630,19 +652,24 @@ class NativeBackend(PlaywrightBackend):
         self._requests[key]={'context': context, 'epoch':self._epoch,'operation':operation,'role':role,'size':0,
                              'url':url,'status':None, 'json':False, 'method':r['method'], 'resource':kind.lower()}
         self.native_counts[role] += 1
+        from .manual_login_progress import current
+        if tracker := current(self):
+            tracker.requested(key, url, r['method'])
         self._send(session,'Fetch.continueRequest',{'requestId':event['requestId']})
 
     def _request_paused_direct(self, session, event):
         r=event['request']; url=r['url']; kind=event.get('resourceType','Other')
         p, _ = self.contract.target(url)
-        if event.get('frameId') and event['frameId'] != self._sessions.get(session):
+        if not self.__dict__.get('_login_frames') and event.get('frameId') and event['frameId'] != self._sessions.get(session):
             raise CrawlError('native_surface_unsupported')
         robots = self._loading_robots and url == self._robots_url and kind == 'Document' and r['method']=='GET'
         if robots:
             role, operation='robots','robots'
         else:
-            rule=self.contract.match(url,r['method'],kind,authentication=self.auth_mode)
+            rule=self.contract.match(url,r['method'],kind,authentication=self.auth_mode,headers=r.get('headers', {}))
             rule.validate_headers(r['method'], r.get('headers', {}))
+            if frames := self.__dict__.get('_login_frames'):
+                frames.request(session, event, rule)
             role,operation=rule.role,rule.key
             if self._unresolved_dependency(session, event, rule, 'https://' + p.netloc):
                 return
@@ -650,7 +677,7 @@ class NativeBackend(PlaywrightBackend):
                 self.wire.ensure_robots(url)
         if len(r.get('postData','').encode('utf-8')) > 1_000_000:
             raise CrawlError('request_too_large')
-        if kind == 'Document' and not robots:
+        if kind == 'Document' and not robots and operation != 'captcha_frame':
             if self._pagination_page is not None:
                 self._pagination_page=None
             else:
@@ -685,6 +712,9 @@ class NativeBackend(PlaywrightBackend):
         record = item.record
         self._requests[item.key] = record
         self.native_counts[record['role']] += 1
+        from .manual_login_progress import current
+        if tracker := current(self):
+            tracker.requested(item.key, record['url'], record.get('method'))
         from .cdp_connection import InterceptionGone
         try:
             self._send(item.session,'Fetch.continueRequest',{'requestId':item.request_id})
@@ -771,6 +801,9 @@ class NativeBackend(PlaywrightBackend):
     def _finished(self, session, event):
         key=(session,event['requestId']); record=self._requests.pop(key,None)
         self._hops.pop(key,None)
+        from .manual_login_progress import current
+        if record and (tracker := current(self)):
+            tracker.received(key, record.get('status'))
         if record and record['role'] != 'asset' and not self._halted and not self.cancelled.is_set():
             with observe(getattr(self, '_diagnostics', None), 'http_request', actor='browser',
                     url=record.get('url', ''), method=record.get('method', ''),
@@ -835,6 +868,9 @@ class NativeBackend(PlaywrightBackend):
 
     def open_search(self, url, *, keyword, authentication=False):
         entry = self.search_entry_url(url, keyword=keyword)
+        if authentication and getattr(self, 'human_login', False) and entry == self.adapter.search_base:
+            from urllib.parse import urlencode
+            return self.open('https://www.liepin.com/login?' + urlencode({'backUrl': entry}), authentication=True)
         if entry == url:
             return self.open(url, authentication=authentication)
         opened = self.open(entry, authentication=authentication)
@@ -1048,6 +1084,11 @@ class NativeBackend(PlaywrightBackend):
 
     def close(self):
         self._closing=True
+        from .manual_login_progress import current
+        if tracker := current(self):
+            tracker.stop()
+        if frames := self.__dict__.get('_login_frames'):
+            frames.clear()
         errors = []
         def attempt(operation):
             try:

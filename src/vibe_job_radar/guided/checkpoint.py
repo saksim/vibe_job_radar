@@ -63,6 +63,9 @@ def decode(path, ident):
             raise ValueError()
         if state.get('backend', 'bridge') not in {'bridge', 'native'}:
             raise ValueError()
+        if (type(state.get('human_login', False)) is not bool
+                or state.get('human_login') and state.get('backend') != 'native'):
+            raise ValueError()
         if state.get('identity_strategy', LEGACY) not in {LEGACY, ENTITY_V1}:
             raise ValueError()
         binding = state.get('execution_binding')
@@ -93,7 +96,14 @@ def binding(state, adapter):
     if 'query_scope_version' in state:
         query['query_scope_version'] = state['query_scope_version']
     mode = state.get('backend', 'bridge')
-    backend = _digest(asdict(contract_for(adapter))) if mode == 'native' else 'bridge:v1'
+    contract = None
+    if mode == 'native':
+        if state.get('human_login') is True:
+            from .liepin_login_policy import native_human_contract
+            contract = native_human_contract(adapter)
+        else:
+            contract = contract_for(adapter)
+    backend = _digest(asdict(contract)) if contract is not None else 'bridge:v1'
     if mode == 'native' and adapter.key == 'liepin':
         from .liepin_search import LIST_READER_VERSION
         backend += ':' + LIST_READER_VERSION

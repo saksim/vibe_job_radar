@@ -124,7 +124,7 @@ class NativeContract:
         return any(r.host == p.hostname and method in r.methods and resource in r.resources
                    and re.fullmatch(r.path, path) for r in self.ignored_rules)
 
-    def match(self, url, method, resource, *, authentication=False):
+    def match(self, url, method, resource, *, authentication=False, headers=None):
         p, path = self.target(url)
         candidates = [r for r in self.rules if r.host == p.hostname and re.fullmatch(r.path, path)]
         if not candidates:
@@ -137,6 +137,13 @@ class NativeContract:
             if not eligible:
                 raise NativeOperationRejected(reason, candidates[0].key if len(candidates) == 1 else '')
             candidates = eligible
+        if headers is not None:
+            origin = {k.lower(): v for k, v in headers.items()}.get('origin')
+            # Explicit human login can originate from the reviewed www or
+            # two-factor page. Header validation below still refuses unknowns.
+            matching = [r for r in candidates if r.cors_origin == origin]
+            if matching:
+                return matching[0]
         return candidates[0]
 
     @property
