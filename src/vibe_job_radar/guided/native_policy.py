@@ -14,6 +14,13 @@ from ..network import USER_AGENT
 from ..robots_rules import RobotsRules, RobotsError
 
 
+class NativeOperationRejected(CrawlError):
+    """Keep the public error stable; attach only code-owned diagnostic labels."""
+    def __init__(self, reason, rule=''):
+        self.native_reason, self.native_rule = reason, rule
+        super().__init__('native_operation_unreviewed')
+
+
 @dataclass(frozen=True)
 class NativeRule:
     key: str
@@ -57,12 +64,15 @@ class NativeRule:
             return
         values = {k.lower(): v for k, v in headers.items()}
         if values.get('origin') != self.cors_origin:
-            raise CrawlError('native_operation_unreviewed')
+            raise NativeOperationRejected('origin_mismatch', self.key)
         if method == 'OPTIONS':
             requested = {h.strip().lower() for h in values.get('access-control-request-headers', '').split(',') if h.strip()}
-            if (values.get('access-control-request-method') != self.cors_method
-                    or not requested or not requested <= set(self.cors_headers)):
-                raise CrawlError('native_operation_unreviewed')
+            if values.get('access-control-request-method') != self.cors_method:
+                raise NativeOperationRejected('preflight_method_mismatch', self.key)
+            if not requested:
+                raise NativeOperationRejected('preflight_headers_missing', self.key)
+            if not requested <= set(self.cors_headers):
+                raise NativeOperationRejected('preflight_headers_unreviewed', self.key)
 
 
 @dataclass(frozen=True)
@@ -116,11 +126,18 @@ class NativeContract:
 
     def match(self, url, method, resource, *, authentication=False):
         p, path = self.target(url)
-        for rule in self.rules:
-            if (rule.host == p.hostname and method in rule.methods and resource in rule.resources
-                    and (not rule.authentication or authentication) and re.fullmatch(rule.path, path)):
-                return rule
-        raise CrawlError('native_operation_unreviewed')
+        candidates = [r for r in self.rules if r.host == p.hostname and re.fullmatch(r.path, path)]
+        if not candidates:
+            raise NativeOperationRejected('operation_unmatched')
+        for reason, accepts in (
+                ('method_unreviewed', lambda r: method in r.methods),
+                ('resource_unreviewed', lambda r: resource in r.resources),
+                ('authentication_required', lambda r: not r.authentication or authentication)):
+            eligible = [r for r in candidates if accepts(r)]
+            if not eligible:
+                raise NativeOperationRejected(reason, candidates[0].key if len(candidates) == 1 else '')
+            candidates = eligible
+        return candidates[0]
 
     @property
     def rule_origins(self):
@@ -150,7 +167,7 @@ def liepin_bootstrap():
     region = 'api-dok.liepin.com'
     security = 'dalisi4api.tongdao.cn'
     region_path = r'/api/com\.liepin\.bd\.p\.v4\.get-all-dq'
-    return NativeContract('liepin_search_login_v5', (host, api, cdn, image, passport, manifest, region, security), (
+    return NativeContract('liepin_search_login_v6', (host, api, cdn, image, passport, manifest, region, security), (
         NativeRule('liepin_navigation', host, r'(?:/|/zhaopin/|/job/[^/]+\.(?:shtml|html)|/a/[0-9]+\.shtml|/lptjob/[0-9]+)',
                    resources=('Document',), role='document'),
         NativeRule('liepin_same_host_assets', host, r'.+\.(?:js|css|png|jpg|jpeg|gif|webp|svg|ico|woff2?|ttf)',
@@ -191,6 +208,13 @@ def liepin_bootstrap():
         NativeRule('liepin_regions', region, region_path, cors_method='GET', **cors),
         NativeRule('liepin_regions_preflight', region, region_path, methods=('OPTIONS',),
                    resources=('Preflight', 'Other', 'Fetch', 'XHR'), cors_method='GET', **cors),
+        # Public city component reads names/parents for selected city codes.
+        # This POST is a finite read dependency, never a source of job results.
+        # Evidence and first rejection are recorded in LIEPIN_REGION_LOOKUP.md.
+        NativeRule('liepin_region_lookup', region, r'/api/com\.liepin\.bd\.v3\.batch-lookup-dq',
+                   methods=('POST',), **cors),
+        NativeRule('liepin_region_lookup_preflight', region, r'/api/com\.liepin\.bd\.v3\.batch-lookup-dq',
+                   methods=('OPTIONS',), resources=('Preflight', 'Other', 'Fetch', 'XHR'), **cors),
         # The published login container reads its display configuration before
         # authentication. It neither creates/polls a QR code nor submits an
         # account. Keep the native reply out of job observations and retain

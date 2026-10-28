@@ -66,7 +66,7 @@ class ManualLoginPolicyTests(unittest.TestCase):
 
     def test_native_checkpoint_contract_is_not_silently_expanded(self):
         contract = contract_for(builtins().get('liepin'))
-        self.assertEqual(contract.key, 'liepin_search_login_v5')
+        self.assertEqual(contract.key, 'liepin_search_login_v6')
         with self.assertRaises(CrawlError):
             contract.match(SMS, 'POST', 'XHR', authentication=True)
 

@@ -552,7 +552,9 @@ class NativeBackend(PlaywrightBackend):
                     self._request_paused(session,event)
             except Exception as exc:
                 code = getattr(exc,'code','native_protocol_error')
-                notify(getattr(self,'_diagnostics',None),'mark',code=code)
+                notify(getattr(self,'_diagnostics',None),'mark',code=code,
+                       native_reason=getattr(exc, 'native_reason', None),
+                       native_rule=getattr(exc, 'native_rule', None))
                 self.native_counts['blocked'] += 1
                 # An unknown business request must not become a silent empty list.
                 # Unknown optional assets are reported without poisoning the task.

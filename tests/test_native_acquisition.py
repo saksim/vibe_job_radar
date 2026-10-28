@@ -51,7 +51,8 @@ class NativePolicyTests(unittest.TestCase):
         self.assertFalse(c.bootstrap_only)
         self.assertEqual({r.key for r in c.rules if r.role=='business'},
                          {'liepin_security_config', 'liepin_search', 'liepin_search_preflight', 'liepin_search_filters', 'liepin_filters_preflight',
-                          'liepin_regions', 'liepin_regions_preflight', 'liepin_search_suggest', 'liepin_suggest_preflight'})
+                          'liepin_regions', 'liepin_regions_preflight', 'liepin_region_lookup',
+                          'liepin_region_lookup_preflight', 'liepin_search_suggest', 'liepin_suggest_preflight'})
         self.assertEqual({r.key:r.authentication for r in c.rules if r.role == 'login'},
                          {'liepin_password_login':True, 'liepin_login_preflight':True,
                           'liepin_login_ui_config':False, 'liepin_login_ui_preflight':False})
