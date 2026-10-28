@@ -75,7 +75,8 @@ CONTRACT = _contract()
 
 
 def applies(adapter):
-    return adapter.key == 'liepin' and adapter.login_url == 'https://www.liepin.com/'
+    return (getattr(adapter, 'key', None) == 'liepin'
+            and getattr(adapter, 'login_url', None) == 'https://www.liepin.com/')
 
 
 def configure_transport(adapter, wire):
