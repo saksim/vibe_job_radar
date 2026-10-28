@@ -14,6 +14,7 @@ from urllib.parse import parse_qsl, urlsplit
 
 from .contracts import CrawlError, PageSnapshotChanged
 from .acquisition_results import FINISHED_DETAIL_STATUSES
+from .login_surface import MANUAL_LOGIN_CODES
 
 
 def matching_list_signature(adapter, expected_url, page, *, scope=None):
@@ -230,10 +231,24 @@ class LoginReturnManager:
                         adapter, watch.detail_target.expected_url, page)
                     surface = 'detail'
             except CrawlError as exc:
+                if exc.code in MANUAL_LOGIN_CODES:
+                    watch.signature = watch.surface = None
+                    # Reading the page can yield to pause/stop or a newer action.
+                    # Keep the original deadline and report only a fixed code;
+                    # never retain form text, phone numbers or challenge tokens.
+                    with service._lock:
+                        if (self._watches.get(ident) is watch and not service._busy
+                                and not service._cancel.is_set() and not service._shutdown.is_set()
+                                and service._backends.get(ident) is watch.backend):
+                            latest = service._load(ident)
+                            if (latest.get('status') == 'waiting_manual'
+                                    and latest.get('code') != exc.code):
+                                service._save(latest, code=exc.code)
+                    continue
                 # A navigation between DOM reads invalidates the observation,
                 # not the explicitly armed wait. Keep its original deadline and
                 # require two fresh stable reads; do not issue a request/retry.
-                if isinstance(exc, PageSnapshotChanged) or exc.code in {'manual_required', 'not_job_list', 'wrong_platform', 'invalid_url',
+                if isinstance(exc, PageSnapshotChanged) or exc.code in {'not_job_list', 'wrong_platform', 'invalid_url',
                                 'not_job_url', 'job_identity_mismatch', 'structure_changed',
                                 'jd_incomplete', 'invalid_job_data', 'credential_url'}:
                     watch.signature = watch.surface = None

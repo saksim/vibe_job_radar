@@ -51,15 +51,12 @@ class ChromeBackendTests(unittest.TestCase):
         self.assertEqual(backend.startup_report['network_backend'], 'native')
         self.assertEqual(backend.tunnel.connections, 0)
 
-    def test_native_edge_and_bundled_keep_the_original_sdk_launch(self):
-        for channel in [None,'msedge']:
-            with self.subTest(channel=channel), patch('vibe_job_radar.guided.cdp_browser.CDPBrowser') as direct:
-                backend=object.__new__(NativeBackend);backend.runtime=self.runtime
-                options={'headless':True,'proxy':{'server':'http://127.0.0.1:1'}}
-                if channel:options['channel']=channel
-                self.runtime.chromium.launch.reset_mock()
-                backend._launch_browser(options)
-                self.runtime.chromium.launch.assert_called_once_with(**options);direct.assert_not_called()
+    def test_native_bundled_keeps_the_original_sdk_launch(self):
+        with patch('vibe_job_radar.guided.cdp_browser.CDPBrowser') as direct:
+            backend=object.__new__(NativeBackend);backend.runtime=self.runtime
+            options={'headless':True,'proxy':{'server':'http://127.0.0.1:1'}}
+            backend._launch_browser(options)
+            self.runtime.chromium.launch.assert_called_once_with(**options);direct.assert_not_called()
 
     def test_native_missing_chrome_never_retries_sdk_or_other_channel(self):
         with patch('vibe_job_radar.guided.cdp_browser.chrome_executable', side_effect=FileNotFoundError('missing')):

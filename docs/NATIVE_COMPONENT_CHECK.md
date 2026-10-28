@@ -1,6 +1,8 @@
 # 实际进程中的原生组件检查
 
-`VibeJobRadar.exe --native-browser-check` 在该 exe 自身进程中构造生产 `NativeBackend`，默认检查包内完整 Chromium 与原 SDK 控制路径；显式 `--native-browser-channel chrome` 检查本机 Chrome 与当前生产 CDP 管道。便携资格要求这两种模式都通过。源码启动器也支持同一选项，但输出明确标为 `source`，不能作为 exe 已验证的证据。
+`VibeJobRadar.exe --native-browser-check` 在该 exe 自身进程中构造生产 `NativeBackend`，默认检查包内完整 Chromium 与原 SDK 控制路径；显式 `--native-browser-channel chrome` 或 `msedge` 检查所选本机浏览器与应用自有 CDP 管道。便携资格仍要求 bundled 与 Chrome 两种模式通过，本轮不扩展构建矩阵。源码启动器也支持同一选项，但输出明确标为 `source`，不能作为 exe 已验证的证据。
+
+2026-10-28，#531 将明确选择的 Edge 原生模式接入既有精简 CDP 实现。Edge 现在同样要求 `minimal_controller: true` 以及 profile 删除、清理无错误和桥进程退出；缺少任何一项均不能通过。默认 HTTP 桥、配套 Chromium 和已保存任务的后端选择不变，不在失败后自动切换。开发验证须在应用的正常用户上下文执行；本次同版本/同参数对照中，命令执行隔离环境在 `Page.enable` 前后出现 `0x80000003`，正常用户上下文的组件检查通过。这个执行环境区别不等于关闭浏览器自身沙箱，也不解释其他历史原生崩溃。
 
 检查使用临时目录和全新浏览器，只读空白页上的固定计算结果，然后发起一个固定虚构 `.invalid` 请求，验证生产控制器本地拒绝。该主机不在人工契约或 CONNECT 主机白名单中，在解析/外连前即拒绝；契约没有任何允许网站操作。检查不读取用户网络设置、工作区、账号、Cookie或已有浏览器，不调用招聘入口、登录、搜索、robots或正文。通过条件还包括零外连、原生控制器已安装到该页面，以及自己的进程和临时 profile 均清理完成。
 

@@ -110,9 +110,10 @@ class NativeBackend(PlaywrightBackend):
                 'args': [*options['args'], '--proxy-bypass-list=<-loopback>', '--block-new-web-contents']}
 
     def _launch_browser(self, options):
-        # The installed Chrome native experiment uses this control layer.
-        # Keep the established bundled/Edge path explicit; no launch fallback.
-        if options.get('channel') != 'chrome':
+        # Explicit installed-browser native modes share the owned CDP control
+        # path. No global Runtime/console subscription, identity override or
+        # launch fallback. The HTTP bridge and bundled mode remain separate.
+        if options.get('channel') not in {'chrome', 'msedge'}:
             return super()._launch_browser(options)
         from .cdp_browser import CDPBrowser, edge_executable, chrome_executable
         options = dict(options)

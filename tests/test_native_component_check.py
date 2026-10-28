@@ -33,7 +33,7 @@ class NativeComponentCheckTests(unittest.TestCase):
         self.browser.cleanup_failed = False
         self.browser.process.poll.return_value = 0
         def factory(*args, **kwargs):
-            self.browser.minimal_events = kwargs.get('channel') == 'chrome'
+            self.browser.minimal_events = kwargs.get('channel') in {'chrome', 'msedge'}
             return self.backend
         self.factory.side_effect = factory
 
@@ -53,6 +53,26 @@ class NativeComponentCheckTests(unittest.TestCase):
         self.assertTrue(check_native_browser(channel='bundled')['success'])
         self.assertEqual(self.factory.call_args.kwargs, {'headless':True})
         self.factory.assert_called_once()
+
+    def test_edge_requires_minimal_controller_and_owned_cleanup_proof(self):
+        row = check_native_browser(channel='msedge')
+        self.assertTrue(row['success'])
+        self.assertEqual(row['controller'], 'minimal_cdp')
+        self.assertTrue(row['minimal_controller'])
+        for field in ('profile_removed', 'profile_cleanup_ok', 'bridge_exited'):
+            self.assertIs(row['cleanup'][field], True)
+        self.factory.assert_called_once()
+
+    def test_edge_cannot_pass_with_wrong_controller_or_leftover_owned_profile(self):
+        self.factory.side_effect = None
+        self.browser.minimal_events = False
+        self.assertFalse(check_native_browser(channel='msedge')['success'])
+        self.page.evaluate.assert_not_called()
+        self.browser.minimal_events = True
+        self.browser.profile.exists.return_value = True
+        row = check_native_browser(channel='msedge')
+        self.assertFalse(row['success'])
+        self.assertFalse(row['cleanup']['profile_removed'])
 
     def test_a_still_connected_browser_cannot_be_called_ready(self):
         self.backend.close.side_effect = lambda: None
