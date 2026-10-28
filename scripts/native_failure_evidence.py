@@ -6,25 +6,12 @@ connection state. A broken observer must not replace the original outcome.
 """
 from __future__ import annotations
 
-from vibe_job_radar.guided.native_errors import native_failure_code
+from vibe_job_radar.guided.native_errors import loading_failure_details
 from vibe_job_radar.guided.native_policy import liepin_bootstrap
 from native_proxy_evidence import CODES
 from native_guard_evidence import guard_transport_facts
 from native_handshake_evidence import handshake_facts
 
-NET_ERRORS = frozenset({
-    'ERR_FAILED', 'ERR_ABORTED', 'ERR_EMPTY_RESPONSE', 'ERR_CONNECTION_CLOSED',
-    'ERR_CONNECTION_RESET', 'ERR_CONNECTION_REFUSED', 'ERR_CONNECTION_ABORTED',
-    'ERR_CONNECTION_TIMED_OUT', 'ERR_TIMED_OUT', 'ERR_NETWORK_CHANGED',
-    'ERR_INTERNET_DISCONNECTED', 'ERR_PROXY_CONNECTION_FAILED',
-    'ERR_TUNNEL_CONNECTION_FAILED', 'ERR_PROXY_AUTH_REQUESTED',
-    'ERR_INVALID_AUTH_CREDENTIALS', 'ERR_NAME_NOT_RESOLVED',
-    'ERR_BLOCKED_BY_CLIENT', 'ERR_BLOCKED_BY_RESPONSE',
-    'ERR_BLOCKED_BY_ADMINISTRATOR', 'ERR_CERT_AUTHORITY_INVALID',
-    'ERR_CERT_COMMON_NAME_INVALID', 'ERR_CERT_DATE_INVALID',
-    'ERR_SSL_PROTOCOL_ERROR', 'ERR_HTTP2_PROTOCOL_ERROR',
-    'ERR_CONTENT_LENGTH_MISMATCH', 'ERR_INCOMPLETE_CHUNKED_ENCODING',
-})
 ROLES = frozenset({'document', 'business', 'asset', 'robots', 'login'})
 RESOURCE_TYPES = frozenset({'Document', 'Stylesheet', 'Image', 'Media', 'Font',
     'Script', 'TextTrack', 'XHR', 'Fetch', 'Prefetch', 'EventSource',
@@ -32,27 +19,6 @@ RESOURCE_TYPES = frozenset({'Document', 'Stylesheet', 'Image', 'Media', 'Font',
     'Preflight', 'Other'})
 OPERATIONS = frozenset({'robots', 'search', 'detail', 'asset', 'page', 'jobs'} |
     {rule.key for rule in liepin_bootstrap().rules})
-BLOCKED_REASONS = frozenset({'other', 'csp', 'mixed-content', 'origin',
-    'inspector', 'subresource-filter', 'content-type',
-    'coep-frame-resource-needs-coep-header',
-    'coop-sandboxed-iframe-cannot-navigate-to-coop-page',
-    'corp-not-same-origin', 'corp-not-same-origin-after-defaulted-to-same-origin-by-coep',
-    'corp-not-same-site', 'sri-message-signature-mismatch'})
-CORS_ERRORS = frozenset({'DisallowedByMode', 'InvalidResponse', 'WildcardOriginNotAllowed',
-    'MissingAllowOriginHeader', 'MultipleAllowOriginValues', 'InvalidAllowOriginValue',
-    'AllowOriginMismatch', 'InvalidAllowCredentials', 'CorsDisabledScheme',
-    'PreflightInvalidStatus', 'PreflightDisallowedRedirect',
-    'PreflightWildcardOriginNotAllowed', 'PreflightMissingAllowOriginHeader',
-    'PreflightMultipleAllowOriginValues', 'PreflightInvalidAllowOriginValue',
-    'PreflightAllowOriginMismatch', 'PreflightInvalidAllowCredentials',
-    'PreflightMissingAllowExternal', 'PreflightInvalidAllowExternal',
-    'InvalidAllowMethodsPreflightResponse', 'InvalidAllowHeadersPreflightResponse',
-    'MethodDisallowedByPreflightResponse', 'HeaderDisallowedByPreflightResponse',
-    'RedirectContainsCredentials', 'InsecurePrivateNetwork', 'InvalidPrivateNetworkAccess',
-    'UnexpectedPrivateNetworkAccess', 'PreflightMissingAllowPrivateNetwork',
-    'PreflightInvalidAllowPrivateNetwork', 'PreflightMissingPrivateNetworkAccessId',
-    'PreflightMissingPrivateNetworkAccessName', 'PrivateNetworkAccessPermissionUnavailable',
-    'PrivateNetworkAccessPermissionDenied', 'LocalNetworkAccessPermissionDenied'})
 STOP_CODES = CODES | {'http_401', 'http_403', 'http_429', 'native_protocol_error',
     'native_operation_unreviewed', 'native_policy_changed', 'robots_denied',
     'native_business_response_invalid', 'native_observation_limit',
@@ -103,19 +69,12 @@ def loading_failure(backend, event, message):
         session = event.get('sessionId')
         record = backend._requests.get((session, data.get('requestId')))
         request = record or {}
-        raw = data.get('errorText', '')
-        token = raw.removeprefix('net::') if isinstance(raw, str) else ''
         context = request.get('context', {})
         sequence = context.get('sequence')
-        cors = data.get('corsErrorStatus')
         row = {
             'index': backend.probe.get('loading_failure_count', 0) + 1,
-            'browser_error': fixed(token, NET_ERRORS),
-            'browser_failure_code': native_failure_code(raw) if isinstance(raw, str) else '',
+            **loading_failure_details(data),
             'resource_type': fixed(data.get('type'), RESOURCE_TYPES),
-            'canceled': data.get('canceled') if type(data.get('canceled')) is bool else None,
-            'blocked_reason': fixed(data.get('blockedReason'), BLOCKED_REASONS),
-            'cors_error': fixed(cors.get('corsError'), CORS_ERRORS) if isinstance(cors, dict) else None,
             'owned_session': session in backend._sessions,
             'request_observed': record is not None,
             'role': fixed(request.get('role'), ROLES),
