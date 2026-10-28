@@ -1,5 +1,23 @@
 # 猎聘短信登录、人工验证和原任务接续（候选）
 
+## 本轮固定范围与兼容性进展（2026-10-28，#531 / #263）
+
+在最新 dev/main `b9eb424`（v0.20.3）上继续；此前已完成的候选保存为 `6f3917c`，本轮不重复开发短信交接、会话库或报告引擎。新增范围限于兼容性入口、必要组件检查和可复用离线复现。#532/#49/#533 的真实登录、JD/报告和复用验收仍待后续；#534 未启用。交付目标为 dev，未向 release/main 发布。
+
+- 原 `Page.enable/browser_closed` 对照进一步发现：执行隔离环境中 Edge 以 `0x80000003` 退出；相同应用代码、Edge 版本和启动参数在正常用户上下文完成固定页读取和清理。未改动浏览器沙箱、系统防护、身份或站点脚本，不把该结果归因为旧 Chrome/DLP 故障。
+- 同一正常用户上下文、同一原样脚本和离线网络条件下：精简 CDP 有界面观察 60.235 秒保持可见，脚本已加载且 `navigator.webdriver` 为 true；Playwright 对照观察约 2.375 秒后发生 `scriptInitiated` 跳白。二者清理均通过。没有把网络失败改造成成功配置。
+- 因此，明确选择 `msedge + native` 时复用已有的应用自有 CDP 控制层，保留原生网络规则/robots/额度和隔离。默认 HTTP 桥、bundled 模式、原现场任务后端保持，不自动改道。Edge 的组件检查同时要求正确控制器、固定页、未许可请求本地拒绝、零外连，以及浏览器/profile/tunnel 完整清理。
+- 新增 3 项控制方式测试首次 2 项失败，修正后相关 72 项回归通过；真实 Edge 生产 NativeBackend 有界面组件检查通过。原生 HTTPS/完整报告夹具留给现有 CI，不向个人机器安装测试 CA，也不新增测试矩阵。
+- 一次匿名实站检查沿用原工作区网络策略和共享配额，到达搜索入口后进入观察；停止时页面没有跳白，但 `api-dok.liepin.com` 的 OPTIONS 请求触发 `native_operation_unreviewed`。没有完成完整 60 秒稳定门槛、没有提交原关键词，不记为实站搜索通过。未触发人工登录/短信，未读取保存 Cookie、未取得 JD/报告；原任务文件逐字节保持，自有窗口/profile/tunnel 清理通过。下一步先核对具体缺失操作及必要资源，仍在 #531 跟踪；本轮不放宽规则或追加实站重试。
+
+公开脚本需由操作者显式提供，哈希固定为下文记录值；复现入口不下载脚本、不登录、不访问实站，不覆盖已有证据：
+
+```powershell
+python scripts/verify_liepin_page_compatibility.py --security-script <已保存的公开脚本> --controller minimal_cdp --headed --output <新的结果文件>
+```
+
+`--controller playwright` 为相同夹具对照，`--without-script` 为不加载脚本的对照。每项观察窗口固定 60 秒，跳白/启动失败可提前结束并保留失败；原始首次失败和旧离线结果不回填为成功。完整实站可用性以本轮 Issue/PR 的独立结果为准。
+
 关联 [#50](https://github.com/saksim/vibe_job_radar/issues/50) 与 [#49](https://github.com/saksim/vibe_job_radar/issues/49)。本轮基于 v0.20.3，属于候选改动，尚未完成真实账号到完整 JD、报告与重启复用的验收，不能当作正式版本已支持的承诺。
 
 ## 使用流程

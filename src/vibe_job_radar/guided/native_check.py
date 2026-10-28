@@ -54,14 +54,15 @@ def check_native_browser(*, channel=None, headless=True):
     channel = validate_choice(channel or 'bundled')
     if channel == 'bundled':
         channel = None
+    minimal = channel in {'chrome', 'msedge'}
     result = dict(success=False, code='native_check_failed', stage='launch',
         browser_channel=channel or 'bundled', browser_version='', launch_tested=False, process_exit_hex='',
         runtime=description()['kind'], minimal_controller=False,
         blank_page_check=False, request_guard_check=False, external_connections=None,
         cleanup_verified=False, live_sites_certified=False,
-        controller=('minimal_cdp' if channel == 'chrome' else 'playwright_public_cdp'),
+        controller=('minimal_cdp' if minimal else 'playwright_public_cdp'),
         cleanup={'attempted':False, 'close_returned':False, 'close_error_type':'',
-                 **cleanup_snapshot(None, None, minimal=channel == 'chrome')})
+                 **cleanup_snapshot(None, None, minimal=minimal)})
     backend = browser = tunnel = None
     try:
         # The contract has no request rule. A different synthetic hostname is
@@ -83,7 +84,7 @@ def check_native_browser(*, channel=None, headless=True):
                 result['stage'] = 'blank_page'
                 result['minimal_controller'] = getattr(browser, 'minimal_events', False) is True
                 result['controller'] = 'minimal_cdp' if result['minimal_controller'] else 'playwright_public_cdp'
-                if result['minimal_controller'] != (channel == 'chrome'):
+                if result['minimal_controller'] != minimal:
                     raise RuntimeError('unexpected native control mode')
                 observed = backend.page.evaluate('() => ({url: location.href, value: 21 * 2})')
                 result['blank_page_check'] = (observed == {'url':'about:blank', 'value':42}
@@ -118,7 +119,7 @@ def check_native_browser(*, channel=None, headless=True):
                         raise
                     finally:
                         cleanup = result['cleanup']
-                        cleanup.update(cleanup_snapshot(browser, tunnel, minimal=channel == 'chrome'))
+                        cleanup.update(cleanup_snapshot(browser, tunnel, minimal=minimal))
                         result['cleanup_verified'] = (cleanup['close_error_type'] == ''
                             and all(value is True for key, value in cleanup.items() if key != 'close_error_type'))
             if not result['cleanup_verified']:
