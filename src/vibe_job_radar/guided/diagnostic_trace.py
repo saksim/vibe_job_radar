@@ -28,6 +28,17 @@ RESOURCES = frozenset({'document', 'stylesheet', 'script', 'image', 'media', 'fo
     'xhr', 'fetch', 'preflight', 'websocket', 'other', 'unknown'})
 NAVIGATION_REASONS = frozenset({'formSubmissionGet', 'formSubmissionPost', 'httpHeaderRefresh',
     'metaTagRefresh', 'scriptInitiated', 'anchorClick', 'reload', 'pageBlockInterstitial'})
+# Diagnostic labels only; these sets never authorize a request. Unknown rule
+# identifiers may contain private fixture/adapter data and must not survive.
+NATIVE_REASONS = frozenset({'operation_unmatched', 'method_unreviewed', 'resource_unreviewed',
+    'authentication_required', 'origin_mismatch', 'preflight_method_mismatch',
+    'preflight_headers_missing', 'preflight_headers_unreviewed'})
+NATIVE_RULES = frozenset({'liepin_navigation', 'liepin_same_host_assets', 'liepin_static_assets',
+    'liepin_ui_manifest', 'liepin_ui_manifest_script', 'liepin_static_images', 'liepin_security_config',
+    'liepin_search', 'liepin_search_preflight', 'liepin_search_filters', 'liepin_filters_preflight',
+    'liepin_search_suggest', 'liepin_suggest_preflight', 'liepin_regions', 'liepin_regions_preflight',
+    'liepin_region_lookup', 'liepin_region_lookup_preflight',
+    'liepin_login_ui_config', 'liepin_login_ui_preflight', 'liepin_password_login', 'liepin_login_preflight'})
 CODES = frozenset('''operation_error network_error dns_error non_public_address
     workspace_proxy_environment_conflict
     pac_unavailable pac_invalid_script pac_invalid_result pac_timeout pac_busy
@@ -103,6 +114,11 @@ LOGIN_PATHS = frozenset('/api/com.liepin.passport.' + suffix for suffix in (
     'account.verify-two-factor-sms-code', 'account.tel-sms-login',
     'captcha.get-smart-captcha', 'captcha.send-sms',
     'qr.get-qrcode', 'qr.get-mini-qrcode', 'qr.ack'))
+# Fixed names in the publisher's public city component (hash in the issue).
+# Showing an operation in a diagnostic does not add it to the access contract.
+PUBLIC_READ_PATHS = {'api-dok.liepin.com': frozenset('/api/' + name for name in (
+    'com.liepin.bd.p.v4.get-all-dq', 'com.liepin.bd.p.suggest-dq',
+    'com.liepin.bd.v3.batch-lookup-dq'))}
 QUERY_NAMES = frozenset({'q', 'query', 'keyword', 'key', 'page', 'pageSize',
     'currentPage', 'jobId', 'city', 'industry', 'offset', 'limit'})
 
@@ -120,7 +136,8 @@ def safe_target(url):
         result['host'] = host
         parts = parsed.path.split('/')[1:17]
         result['path_template'] = '/' + '/'.join(p if p in PATH_PARTS else ':segment' for p in parts)
-        if host == 'api-passport.liepin.com' and parsed.path in LOGIN_PATHS:
+        if ((host == 'api-passport.liepin.com' and parsed.path in LOGIN_PATHS)
+                or parsed.path in PUBLIC_READ_PATHS.get(host, ())):
             result['path_template'] = parsed.path
         if len(parsed.path.split('/')) > 17:
             result['path_template'] += '/:truncated'
@@ -212,11 +229,17 @@ class DiagnosticTrace:
                 raise
             return frame
 
-    def mark(self, *, code=None, status=None, navigation_reason=None):
+    def mark(self, *, code=None, status=None, navigation_reason=None, native_reason=None, native_rule=None):
         with self._lock:
             if not self._frames:
                 return
             frame = self._frames[-1]
+            if native_reason is not None:
+                frame['native_reason'] = (native_reason if isinstance(native_reason, str)
+                    and native_reason in NATIVE_REASONS else 'unknown')
+            if native_rule is not None:
+                frame['native_rule'] = (native_rule if isinstance(native_rule, str)
+                    and native_rule in NATIVE_RULES else 'unknown')
             if navigation_reason is not None:
                 frame['navigation_reason'] = (navigation_reason if isinstance(navigation_reason, str)
                     and navigation_reason in NAVIGATION_REASONS else 'unknown')
@@ -251,7 +274,9 @@ class DiagnosticTrace:
     def finish(self, frame, error=None):
         with self._lock:
             if error is not None:
-                self.mark(code=getattr(error, 'code', 'operation_error'))
+                self.mark(code=getattr(error, 'code', 'operation_error'),
+                          native_reason=getattr(error, 'native_reason', None),
+                          native_rule=getattr(error, 'native_rule', None))
             code = frame['code']
             outcome = 'waiting' if code in WAITS else 'failure' if code else 'completed'
             try:

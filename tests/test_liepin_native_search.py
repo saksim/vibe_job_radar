@@ -243,11 +243,29 @@ class NativeSearchContractTests(unittest.TestCase):
         for method, path, kind in [('POST', url, 'XHR'), ('GET', url, 'Document'),
                                   ('GET', url+'/extra', 'XHR'),
                                   ('GET', url.replace('v4.get-all-dq','suggest-dq'), 'XHR'),
-                                  ('POST', url.replace('p.v4.get-all-dq','v3.batch-lookup-dq'), 'XHR')]:
+                                  ('GET', url.replace('p.v4.get-all-dq','v3.batch-lookup-dq'), 'XHR')]:
             with self.subTest(method=method, path=path, kind=kind), self.assertRaises(CrawlError):
                 self.contract.match(path, method, kind)
         with self.assertRaises(CrawlError):
             self.contract.match(API,'OPTIONS','XHR').validate_headers('OPTIONS', headers)
+
+    def test_city_code_lookup_is_exact_read_post_with_post_only_preflight(self):
+        url = 'https://api-dok.liepin.com/api/com.liepin.bd.v3.batch-lookup-dq'
+        self.assertEqual(self.contract.match(url, 'POST', 'XHR').key, 'liepin_region_lookup')
+        headers = {'Origin': 'https://www.liepin.com', 'Access-Control-Request-Method': 'POST',
+                   'Access-Control-Request-Headers': 'content-type,x-client-type,x-fscp-std-info'}
+        rule = self.contract.match(url, 'OPTIONS', 'XHR')
+        self.assertEqual(rule.key, 'liepin_region_lookup_preflight')
+        rule.validate_headers('OPTIONS', headers)
+        for change in ({'Access-Control-Request-Method': 'GET'}, {'Origin': 'https://other.test'},
+                       {'Access-Control-Request-Headers': 'authorization'}):
+            with self.subTest(change=change), self.assertRaises(CrawlError):
+                rule.validate_headers('OPTIONS', {**headers, **change})
+        for target, method, kind in ((url, 'GET', 'XHR'), (url, 'POST', 'Document'),
+                                    (url + '/extra', 'POST', 'XHR'),
+                                    (url.replace('v3.batch-lookup-dq', 'p.suggest-dq'), 'POST', 'XHR')):
+            with self.subTest(target=target, method=method, kind=kind), self.assertRaises(CrawlError):
+                self.contract.match(target, method, kind)
 
     def test_exact_cors_preflight(self):
         rule = self.contract.match(API,'OPTIONS','Preflight')

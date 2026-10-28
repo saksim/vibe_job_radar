@@ -39,7 +39,7 @@ def _contract():
                 methods=('POST', 'OPTIONS'), resources=('XHR', 'Fetch', 'Other', 'Preflight'),
                 role='login', authentication=True, cors_origin=origin, cors_headers=_HEADERS))
     rules.extend((
-        # Same required dependency as liepin_search_login_v5. A failed DNS
+        # Same required dependency as the native contract. A failed DNS
         # lookup is delivered to the publisher's existing failure handler;
         # no configuration or successful response is invented.
         NativeRule('liepin_security_config', SECURITY_CONFIG, r'/static/cfg/v2\.json',

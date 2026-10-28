@@ -1,6 +1,6 @@
 # 当前取数能力与验证范围
 
-文案核对日期 2026-10-25。本源码的流程与历史受控证据分别记录；准确提交的候选、主干和程序包资格见对应PR。本表由 acquisition_status.py 生成，同一份数据进入适配注册表、采集页与新报告的 software_acquisition_capabilities。修改后执行 python scripts/check_acquisition_status.py --write 并核对证据；自动测试检查文字表格未与程序脱节。
+文案核对日期 2026-10-28。本源码的流程与历史受控证据分别记录；准确提交的候选、主干和程序包资格见对应PR。本表由 acquisition_status.py 生成，同一份数据进入适配注册表、采集页与新报告的 software_acquisition_capabilities。修改后执行 python scripts/check_acquisition_status.py --write 并核对证据；自动测试检查文字表格未与程序脱节。
 
 猎聘原生实验已在本机 Chrome 分别完成匿名关键词搜索、585/3030字符完整JD与各自报告，以及相邻两页共84个不同职位卡片的观察；真实账号、会话恢复、人工质量和整体样本验收仍未完成。公开分类历史采样覆盖四个真实日期；较早第二日、第三日记录仍保留各自分母，不能用最新累计数改写旧报告。见[已有取数证据](CURRENT_ACQUISITION_EVIDENCE.md)。这些观察不认证默认浏览器桥、其他环境或其他平台。
 
@@ -10,16 +10,18 @@
 | BOSS直聘 / 1 | bridge / 默认 | implemented | 无匹配记录 | not_verified；[#55](https://github.com/saksim/vibe_job_radar/issues/55) |
 | BOSS直聘 / 1 | native / 不可用 | blocked | 无匹配记录 | not_verified；[#55](https://github.com/saksim/vibe_job_radar/issues/55) |
 | 猎聘 / 3 | bridge / 默认 | implemented | [2026-10-10 人工夹具](https://github.com/saksim/vibe_job_radar/actions/runs/38051204590) | not_verified；[#49](https://github.com/saksim/vibe_job_radar/issues/49) / [#50](https://github.com/saksim/vibe_job_radar/issues/50) / [#51](https://github.com/saksim/vibe_job_radar/issues/51) / [#52](https://github.com/saksim/vibe_job_radar/issues/52) / [#54](https://github.com/saksim/vibe_job_radar/issues/54) |
-| 猎聘 / 3 | native / 显式实验 | implemented | [2026-10-10 人工夹具](https://github.com/saksim/vibe_job_radar/actions/runs/38051204635) | not_verified；[#49](https://github.com/saksim/vibe_job_radar/issues/49) / [#50](https://github.com/saksim/vibe_job_radar/issues/50) / [#51](https://github.com/saksim/vibe_job_radar/issues/51) / [#52](https://github.com/saksim/vibe_job_radar/issues/52) / [#54](https://github.com/saksim/vibe_job_radar/issues/54) |
+| 猎聘 / 3 | native / 显式实验 | implemented | [2026-10-28 人工夹具](https://github.com/saksim/vibe_job_radar/actions/runs/40701371563/job/122861785384) | not_verified；[#49](https://github.com/saksim/vibe_job_radar/issues/49) / [#50](https://github.com/saksim/vibe_job_radar/issues/50) / [#51](https://github.com/saksim/vibe_job_radar/issues/51) / [#52](https://github.com/saksim/vibe_job_radar/issues/52) / [#54](https://github.com/saksim/vibe_job_radar/issues/54) |
 | 前程无忧 / 1 | bridge / 默认 | implemented | 无匹配记录 | not_verified；[#56](https://github.com/saksim/vibe_job_radar/issues/56) |
 | 前程无忧 / 1 | native / 不可用 | blocked | 无匹配记录 | not_verified；[#56](https://github.com/saksim/vibe_job_radar/issues/56) |
 <!-- acquisition-status:end -->
 
 BOSS/51job 的独立适配定义及详情 URL 边界已调整，因此当前表显示“无匹配记录”；旧受控记录仍绑定原定义、日期和源码，不能转给同名的新适配器。默认浏览器桥仍可选择，原生契约仍不可用；本轮关键词范围和 URL 边界测试不构成本站实站或新版受控浏览器认证。
 
-猎聘分页选择器改变后，旧定义证据仍留在原日期和源码。当前定义新增独立的2026-10-10受控记录，绑定PR290实际main `448fa17e7ea9`：浏览器控件22项与六种原生环境各32项通过。控件测试中的原生方法使用Playwright页面，不是完整原生CDP/网络测试；原生TLS夹具另行验证。见[分页记录](LIEPIN_NORMAL_PAGINATION.md)。
+猎聘分页选择器改变后，旧定义证据仍留在原日期和源码。分页定义的2026-10-10受控记录绑定PR290实际main `448fa17e7ea9`：浏览器控件22项与六种原生环境各32项通过。控件测试中的原生方法使用Playwright页面，不是完整原生CDP/网络测试；原生TLS夹具另行验证。见[分页记录](LIEPIN_NORMAL_PAGINATION.md)。
 
-表中的受控验证记录分别绑定历史源码 `cde1e1c`（2026-09-18）、猎聘旧定义 `0d85f554`（2026-09-23）或当前定义 `448fa17e7ea9`（2026-10-10）、适配定义与访问契约，保留对应 CI、日期、浏览器/OS、网络和人工页面范围。它不证明修改后的全部代码、当前用户环境或真实平台。定义变化会撤下匹配的受控记录，不能只沿用同名平台的旧成功。报告中的软件快照不改变某条岗位的来源方式或证据等级；真实正文仍以逐条原文、采集时间和来源链判断。
+2026-10-28 的原生 v6 契约新增城市编码读取，不能沿用 v5 的匹配证据。它单独绑定源码 `b5e3718` 和已成功的 [Chromium/Linux 无头检查](https://github.com/saksim/vibe_job_radar/actions/runs/40701371563/job/122861785384)：六个人工 TLS 主机、真实原生后端与猎聘适配34项，含新增依赖成功及预检拒绝路径。这里只记录该检查已完成的环境和范围，不把同一 PR 的其他检查或实站认证算作通过；默认桥的分页证据及 v5 历史证据保留。本机实站仍在匿名观察阶段遇到网络失败，见[本轮记录](LIEPIN_REGION_LOOKUP.md)。
+
+表中的受控验证记录分别绑定历史源码 `cde1e1c`（2026-09-18）、猎聘旧定义 `0d85f554`（2026-09-23）、分页定义 `448fa17e7ea9`（2026-10-10）及 v6 契约 `b5e3718`（2026-10-28）、适配定义与访问契约，保留对应 CI、日期、浏览器/OS、网络和人工页面范围。它不证明修改后的全部代码、当前用户环境或真实平台。定义变化会撤下匹配的受控记录，不能只沿用同名平台的旧成功。报告中的软件快照不改变某条岗位的来源方式或证据等级；真实正文仍以逐条原文、采集时间和来源链判断。
 
 `implemented` 表示有实现；`controlled_verified` 表示注明范围的人工环境曾验过；`pilot_verified` 应有单独实际环境证据；`live_verified` 应达到对应站点样本、日期和恢复要求；`blocked` 表示条件受阻。**当前三站均没有 pilot/live 认证。** 后端是否允许选择、是否默认和是否实站成功分别记录，选择默认浏览器桥不代表网站已能抓取。
 

@@ -32,6 +32,8 @@ LIEPIN_EVIDENCE_HEAD = '0d85f554818779f9445ad8e3d618a26a118910b7'
 LIEPIN_PAGER_DEFINITION = '3840b65f9416c54cee0560912ae5b57dc3d93429085d00e4a45a46bc26d74815'
 LIEPIN_PAGER_NATIVE_DEFINITION = 'cda90b91d6bdfcc6e4d9cab15eaf8390c783d50ec9fed7c5f009128a956ffa36'
 LIEPIN_PAGER_EVIDENCE_HEAD = '448fa17e7ea9fc2f647dab99b74324004dd54dae'
+# v6 has its own observed fixture result; v5 keeps its dated proof above.
+LIEPIN_LOOKUP_NATIVE_DEFINITION = '1c3d22340b38d4f6711a86574759d98e6d3eb2c50bf04cbf3715a93db29a19de'
 
 
 def _digest(value):
@@ -59,6 +61,15 @@ def _pager_evidence(backend):
     return evidence
 
 
+def _lookup_evidence():
+    return [{'level':'controlled_verified', 'date':'2026-10-28',
+        'source_revision':'b5e371882e3b79415b55646ee7b4b75ed77900b5',
+        'scope':'六个人工 TLS 主机、真实原生后端与猎聘适配34项；含城市编码读取及预检拒绝；未认证账号或实站',
+        'browser_os':['Chromium / Linux（无头）'],
+        'network':'本机 TLS 夹具；不代表用户 VPN/TUN',
+        'url':REPO+'/actions/runs/40701371563/job/122861785384'}]
+
+
 def describe_adapter(adapter):
     from .guided.native_policy import contract_for
     from .guided.contracts import CrawlError
@@ -75,6 +86,8 @@ def describe_adapter(adapter):
         contract = contract_for(adapter)
     except CrawlError:
         contract = None
+    lookup_liepin = (pager_liepin and contract is not None
+                     and _digest(asdict(contract)) == LIEPIN_LOOKUP_NATIVE_DEFINITION)
     issue = {'boss':55, 'liepin':54, '51job':56}.get(adapter.key, 9)
     rows = []
     for backend in ('bridge','native'):
@@ -82,10 +95,10 @@ def describe_adapter(adapter):
         expected_native = (LIEPIN_PAGER_NATIVE_DEFINITION if pager_liepin else
                            LIEPIN_NATIVE_DEFINITION if updated_liepin else NATIVE_DEFINITION)
         matched = known and (backend == 'bridge' or contract is not None
-                             and _digest(asdict(contract)) == expected_native)
+                             and (_digest(asdict(contract)) == expected_native or lookup_liepin))
         evidence = []
         if matched and pager_liepin:
-            evidence = _pager_evidence(backend)
+            evidence = _lookup_evidence() if backend == 'native' and lookup_liepin else _pager_evidence(backend)
         elif matched:
             # Shared backend fixtures are not dedicated live-site certification.
             evidence = [{'level':'controlled_verified', 'date':'2026-09-23' if updated_liepin else EVIDENCE_DATE,
@@ -101,6 +114,8 @@ def describe_adapter(adapter):
             message = '尚无本站原生访问契约，不能选择该模式。'
         elif not known:
             message = '当前适配定义没有匹配的已记录验收；需单独验证，实站未认证。'
+        elif backend == 'native' and lookup_liepin:
+            message = '原生模式仍须显式选择；当前依赖的受控验证已记录，真实页面稳定、登录与任务接续仍待验收。'
         elif pager_liepin:
             message = ('浏览器桥已有当前定义的受控验证；真实账号、搜索和完整 JD 链路仍待实站验收。'
                        if backend == 'bridge' else
@@ -130,7 +145,7 @@ def snapshot(registry=None):
     if registry is None:
         from .guided.adapters import builtins
         registry = builtins()
-    return {'schema_version':1, 'catalog_revision':'2026-10-10', 'main_baseline':BASELINE,
+    return {'schema_version':1, 'catalog_revision':'2026-10-28', 'main_baseline':BASELINE,
         'scope':'软件能力及历史受控证据；不证明本报告岗位的获取方式、真实登录或市场覆盖',
         'sites':[site['acquisition'] for site in registry.describe()]}
 

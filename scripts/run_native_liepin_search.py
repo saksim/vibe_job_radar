@@ -37,11 +37,12 @@ REGION_HOST = 'regions.' + HOST
 SECURITY_HOST = 'security.' + HOST
 SECURITY_PATH = '/static/cfg/v2.json'
 REGION_PATH = '/api/com.liepin.bd.p.v4.get-all-dq'
+LOOKUP_PATH = '/api/com.liepin.bd.v3.batch-lookup-dq'
 SUGGEST_PATH = '/api/com.liepin.searchfront4c.pc-search-suggest-list'
 CONFIG_PATH = '/api/com.liepin.pupa.get-pc-login-scan-config'
 HOTWORDS_PATH = '/api/com.liepin.searchfront4c.pc-hot-search-word-list'
 TLOG_PATH = '/statisticPlatform/standardTLog.json'
-DEPENDENCY_PATHS = (REGION_PATH, SUGGEST_PATH, CONFIG_PATH)
+DEPENDENCY_PATHS = (REGION_PATH, LOOKUP_PATH, SUGGEST_PATH, CONFIG_PATH)
 PATH = '/api/com.liepin.searchfront4c.pc-search-job'
 ASSET = '/fe-www-pc/v6/js/search-fixture.js'
 
@@ -161,6 +162,10 @@ fetch('https://""" + API_HOST + PATH + """', {
                 else: self.send('', status=403 if owner.deny_cors else 204)
             def do_POST(self):
                 self.record()
+                if urlsplit(self.path).path == LOOKUP_PATH:
+                    self.rfile.read(int(self.headers.get('Content-Length', '0')))
+                    self.send(json.dumps({'flag':1,'data':{'dqs':{'010':{'name':'合成地区'}}}}), 'application/json')
+                    return
                 if urlsplit(self.path).path == CONFIG_PATH:
                     self.rfile.read(int(self.headers.get('Content-Length', '0')))
                     self.send(json.dumps({'flag':1,'data':{'graySwitch':True}}), 'application/json')
@@ -193,6 +198,7 @@ fetch('https://""" + API_HOST + PATH + """', {
 
 def dependency_script():
     endpoints = {'region':'https://'+REGION_HOST+REGION_PATH,
+                 'lookup':'https://'+REGION_HOST+LOOKUP_PATH,
                  'suggest':'https://'+API_HOST+SUGGEST_PATH,
                  'config':'https://'+API_HOST+CONFIG_PATH,
                  'hotwords':'https://'+API_HOST+HOTWORDS_PATH,
@@ -204,10 +210,11 @@ def dependency_script():
     fetch(endpoints.hotwords, {headers:{'X-Client-Type':'web'}}).catch(() => null),
     fetch(endpoints.tlog, {method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}).catch(() => null)
   ]);
-  for (const name of ['region','suggest','config']) {
+  for (const name of ['region','lookup','suggest','config']) {
     const response = await fetch(endpoints[name], {
-      method:name==='config' ? 'POST' : 'GET',credentials:'include',
-      headers:{'X-Client-Type':'web'}
+      method:['lookup','config'].includes(name) ? 'POST' : 'GET',credentials:'include',
+      headers:name==='lookup' ? {'X-Client-Type':'web','Content-Type':'application/json'} : {'X-Client-Type':'web'},
+      ...(name==='lookup' ? {body:JSON.stringify({lang:'zh',dqCodes:'010',parentDepth:1,from:'component'})} : {})
     });
     if (!response.ok) throw new Error('dependency refused');
     await response.json();
@@ -225,12 +232,14 @@ def dependency_script():
 
 def verify_dependency_chain(root, server, local, factory, wait, query, result):
     sequence=[('OPTIONS',REGION_PATH),('GET',REGION_PATH),
+              ('OPTIONS',LOOKUP_PATH),('POST',LOOKUP_PATH),
               ('OPTIONS',SUGGEST_PATH),('GET',SUGGEST_PATH),
               ('OPTIONS',CONFIG_PATH),('POST',CONFIG_PATH),
               ('OPTIONS',PATH),('POST',PATH)]
     result['dependency_results']=[]
     try:
         for label, denied in [('allowed',None),('region-refused',REGION_PATH),
+                              ('lookup-refused',LOOKUP_PATH),
                               ('suggest-refused',SUGGEST_PATH),('config-refused',CONFIG_PATH)]:
             server.dependency_mode=True;server.denied_dependency=denied
             before=len(server.requests)
@@ -247,8 +256,10 @@ def verify_dependency_chain(root, server, local, factory, wait, query, result):
                     assert task['status']=='ready' and len(task['cards'])==1,task.get('code')
                     assert actual==sequence,actual
                     native=service._backends[task['id']]
-                    assert native.native_counts['business']==6 and native.native_counts['login']==2
+                    assert native.native_counts['business']==8 and native.native_counts['login']==2
                     assert all(o.operation!='liepin_login_ui_config' for o in native._observations)
+                    lookups=[o for o in native._observations if o.operation=='liepin_region_lookup']
+                    assert len(lookups)==1 and not local.native_ready(lookups)
                     blocked=[e for e in service.diagnostics({'id':task['id']})['events'] if e['code']=='native_optional_request_blocked']
                     assert len(blocked)==2
                     service.action({'id':task['id'],'action':'collect','selected':[task['cards'][0]['id']]})
@@ -260,7 +271,7 @@ def verify_dependency_chain(root, server, local, factory, wait, query, result):
                     assert task['authentication']=='not_checked'
                     result['dependency_results'].append({'case':label,'required_sequence':actual,'optional_requests_forwarded':0,
                         'full_body_preserved':True,'report_full_text_job_groups':1,'login_attempts':0,'authentication':'not_checked'})
-                    result['checks'].append('exact native region and suggestion GET/preflights plus login display POST precede current search/full JD/report; TLog and same-host hotwords stay local; no password action')
+                    result['checks'].append('exact native region GET, city-code lookup POST and suggestion GET/preflights plus login display POST precede current search/full JD/report; city lookup cannot supply job results; optional requests stay local')
                 else:
                     stop=sequence.index(('OPTIONS',denied))+1
                     assert task['code']=='http_403' and task['status']!='ready',task.get('code')
