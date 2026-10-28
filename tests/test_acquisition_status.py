@@ -83,7 +83,13 @@ class AcquisitionStatusTests(unittest.TestCase):
         self.assertFalse(new['live_verified'])
         # Current proof is separately dated and tied to the reviewed pager
         # definition. It cannot rewrite the two historical records above.
-        current = describe_adapter(builtins().get('liepin'))['backends']
+        current_adapter = builtins().get('liepin')
+        contract = contract_for(current_adapter)
+        old_contract = replace(contract, key='liepin_search_login_v5', rules=tuple(
+            rule for rule in contract.rules if rule.key not in
+            {'liepin_region_lookup', 'liepin_region_lookup_preflight'}))
+        with patch('vibe_job_radar.guided.native_policy.contract_for', return_value=old_contract):
+            current = describe_adapter(current_adapter)['backends']
         for row in current:
             for proof in row['evidence']:
                 self.assertEqual(proof['source_revision'],'448fa17e7ea9fc2f647dab99b74324004dd54dae')
@@ -97,6 +103,17 @@ class AcquisitionStatusTests(unittest.TestCase):
                          'https://github.com/saksim/vibe_job_radar/actions/runs/38051204635')
         self.assertIn('Chrome / Windows（有头与无头）',current[1]['evidence'][0]['browser_os'])
         self.assertIn('不含原生 CDP/网络',current[1]['evidence'][1]['scope'])
+        # The expanded contract must cite its own successful job, not v5 proof
+        # or the unrelated failures in the same PR's first offline suite.
+        latest = describe_adapter(current_adapter)['backends']
+        self.assertEqual(latest[0]['evidence'], current[0]['evidence'])
+        self.assertEqual(len(latest[1]['evidence']), 1)
+        proof = latest[1]['evidence'][0]
+        self.assertEqual(proof['source_revision'], 'b5e371882e3b79415b55646ee7b4b75ed77900b5')
+        self.assertEqual(proof['date'], '2026-10-28')
+        self.assertTrue(proof['url'].endswith('/job/122861785384'))
+        self.assertEqual(proof['browser_os'], ['Chromium / Linux（无头）'])
+        self.assertFalse(latest[1]['live_verified'])
         # Expanding the reviewed hosts again cannot keep either proof.
         other=describe_adapter(replace(after,resource_domains=(*after.resource_domains,'unreviewed.test')))
         self.assertTrue(all(not row['evidence'] for row in other['backends']))
