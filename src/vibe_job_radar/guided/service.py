@@ -336,6 +336,10 @@ class GuidedService:
                 if not foreign and item['status'] in {'queued', 'running'} and item['id'] != self._active:
                     item.update(status='interrupted', code='interrupted', message=MESSAGES['interrupted'])
                 item['browser_open'] = item['id'] in self._backends
+                # A saved stage is historical after a close/restart. It must
+                # not disable the user's next explicit login indefinitely.
+                if not item['browser_open'] and item.get('manual_login', {}).get('active') is True:
+                    item['manual_login'] = {**item['manual_login'], 'active':False, 'stage':'cancelled'}
                 item['owned_elsewhere']=foreign
                 item['automatic_resume_available'] = (item.get('auto_resume') is True
                                                       and item['browser_open']
@@ -461,15 +465,23 @@ class GuidedService:
         state = self._load(ident)
         if 'cookie' in data or (action != 'login_password' and any(k in data for k in ('username','password','credential_consent'))):
             raise InputError('本向导不接收账号密码；请在平台原生浏览器页面登录。')
-        if any(k in data for k in ('backend', 'native_consent', 'native_contract', 'persist_session', 'storage_state', 'auto_collect')):
+        if (any(k in data for k in ('backend', 'native_contract', 'persist_session', 'storage_state', 'auto_collect'))
+                or 'native_consent' in data and action != 'login_native'):
             raise InputError('任务后端不可中途更换；新任务仍共享原配额。')
-        permitted = {'search', 'login', 'login_password', 'capture', 'more', 'collect', 'pause', 'stop', 'resume', 'forget_session'}
+        permitted = {'search', 'login', 'login_native', 'login_password', 'capture', 'more', 'collect', 'pause', 'stop', 'resume', 'forget_session'}
         if action not in permitted:
             raise InputError('未知操作。')
         if action == 'forget_session' and data.get('confirm') is not True:
             raise InputError('清除该平台保存的会话需要明确确认。')
-        if 'auto_continue' in data and (action != 'login' or type(data['auto_continue']) is not bool):
+        if 'auto_continue' in data and (action not in {'login', 'login_native'} or type(data['auto_continue']) is not bool):
             raise InputError('自动接续只用于本次登录，必须明确勾选。')
+        if action == 'login_native':
+            if data.get('native_consent') is not True or set(data) - {'id', 'action', 'native_consent', 'auto_continue'}:
+                raise InputError('请明确选择在本任务使用原生浏览器进行人工登录。')
+            if state.get('status') not in {'waiting_manual', 'paused', 'interrupted', 'ready'}:
+                raise InputError('请先暂停当前动作；已结束的任务保留原报告。')
+            from .native_login_handoff import validate
+            validate(state, self.registry.get(state['platform']), self._selected_browser)
         if action in {'pause','stop'}:
             with self._lock:
                 self._login_return.disarm(ident)
@@ -516,13 +528,19 @@ class GuidedService:
                 if isinstance(secret, LoginCredentials):
                     secret.clear()
                 raise InputError('当前动作尚未结束，请先暂停或等待。')
+            if (action in {'login', 'login_password'} and ident in self._backends
+                    and state.get('status') == 'waiting_manual'
+                    and state.get('manual_login', {}).get('active') is True):
+                if isinstance(secret, LoginCredentials):
+                    secret.clear()
+                return {'id': ident, 'message': '登录窗口已打开，请在该窗口完成本次操作；没有重复发送登录请求。'}
             self._login_return.disarm(ident)
-            if action == 'login':
+            if action in {'login', 'login_native'}:
                 state['auto_continue_after_login'] = data.get('auto_continue', False)
             elif action == 'login_password':
                 state['auto_continue_after_login'] = True
             state['login_continuation'] = 'off'
-            self._save(state, 'opening' if action in {'search','login','login_password'} else state['code'],
+            self._save(state, 'opening' if action in {'search','login','login_native','login_password'} else state['code'],
                        status='queued', auto_resume=False, next_allowed_at=None)
             self._submit(action, ident, secret)
         return {'id': ident, 'queued': True}
@@ -852,6 +870,8 @@ class GuidedService:
                     self._save(current, code, wait_seconds=seconds)
             factory = self.native_factory if native else self.factory
             options = {'channel': self._selected_browser} if self._selected_browser != 'bundled' else {}
+            if native and state.get('human_login') is True:
+                options['human_login'] = True
             lease = None
             try:
                 if state.get('persist_session'):
@@ -1252,6 +1272,21 @@ class GuidedService:
 
     @traced('task', 'service', state_index=1)
     def _run(self, action, state, secret):
+        if action == 'login_native':
+            from .native_login_handoff import prepare
+            adapter = self.registry.get(state['platform'])
+            # Read-only preflight avoids replacing an existing window/binding
+            # when this workspace cannot open another login. reserve() below
+            # remains the atomic authority; no new quota or refund is granted.
+            if not self.ledger.login_availability(adapter.key)['available']:
+                raise CrawlError('login_rate_limited')
+            changed = prepare(state, adapter, self._selected_browser)
+            self._login_return.disarm(state['id'])
+            # A failed close keeps the original binding and task content.
+            self._close_backend(state['id'])
+            state.clear(); state.update(changed)
+            self._save(state)
+            action = 'login'
         if action == 'forget_session':
             self._forget_session(state)
             return
@@ -1322,6 +1357,12 @@ class GuidedService:
         if action in {'login', 'login_password'}:
             # Save intent before open(): the native page itself can ask for
             # manual assistance and raise, but the original task must survive.
+            starter = getattr(backend, 'start_manual_login', None)
+            if callable(starter):
+                starter()
+            from .manual_login_progress import current as login_progress
+            if tracker := login_progress(backend):
+                state['manual_login'] = tracker.snapshot()
             watching = self._login_return.arm(state, backend)
             self._save(state, authentication='manual_pending',
                        login_continuation='watching' if watching else 'off')
@@ -1333,23 +1374,34 @@ class GuidedService:
             inline_login = (watching and adapter.key == 'liepin'
                             and adapter.login_url == 'https://www.liepin.com/')
             url = target.expected_url if target else (state['search_url'] if inline_login else adapter.login_url)
+            from .login_surface import MANUAL_LOGIN_CODES
             try:
-                if inline_login and not target and callable(getattr(backend, 'open_search', None)):
-                    backend.open_search(url, keyword=state['keyword'], authentication=True)
+                try:
+                    if inline_login and not target and callable(getattr(backend, 'open_search', None)):
+                        backend.open_search(url, keyword=state['keyword'], authentication=True)
+                    else:
+                        backend.open(url, authentication=True)
+                except CrawlError as exc:
+                    if action != 'login_password' or exc.code not in MANUAL_LOGIN_CODES:
+                        raise
+                if action == 'login_password':
+                    if not isinstance(secret, LoginCredentials):
+                        raise CrawlError('login_form_changed')
+                    login_code = backend.password_login(secret)
+                    if login_code not in {'login_agreement_required', 'login_password_submitted'}:
+                        raise CrawlError('login_form_changed')
                 else:
-                    backend.open(url, authentication=True)
-            except CrawlError as exc:
-                from .login_surface import MANUAL_LOGIN_CODES
-                if action != 'login_password' or exc.code not in MANUAL_LOGIN_CODES:
-                    raise
-            if action == 'login_password':
-                if not isinstance(secret, LoginCredentials):
-                    raise CrawlError('login_form_changed')
-                login_code = backend.password_login(secret)
-                if login_code not in {'login_agreement_required', 'login_password_submitted'}:
-                    raise CrawlError('login_form_changed')
-            else:
-                login_code = 'manual_detail_open' if target else 'manual_browser_open'
+                    login_code = 'manual_detail_open' if target else 'manual_browser_open'
+            except Exception as exc:
+                if not isinstance(exc, CrawlError) or exc.code not in MANUAL_LOGIN_CODES:
+                    # A navigation/form action can fail without setting
+                    # backend.error. An unusable open tab is not a pending
+                    # login and must not lock out a later explicit attempt.
+                    self._login_return.disarm(state['id'])
+                    if tracker := login_progress(backend):
+                        tracker.stop('cancelled' if getattr(exc, 'code', None) == 'paused' else 'needs_attention')
+                        self._save(state, manual_login=tracker.snapshot(), login_continuation='needs_attention')
+                raise
             self._save(state, login_code, status='waiting_manual', authentication='manual_pending')
         elif action == 'resume_returned_search':
             from .liepin_form import matching_search_entry_signature, submit_search
@@ -1496,6 +1548,26 @@ class GuidedService:
                     self._login_return.disarm(ident)
                     self._save(state, code, login_continuation='needs_attention',
                                auto_resume=False, next_allowed_at=None)
+            finally:
+                self._update_manual_login(ident, backend)
+
+    def _update_manual_login(self, ident, backend):
+        from .manual_login_progress import current
+        if current(backend) is None:
+            return
+        try:
+            progress = backend.manual_login_status()
+        except Exception:
+            return  # Optional feedback cannot stop or resume the user's task.
+        with self._lock:
+            if (self._busy or self._shutdown.is_set() or self._backends.get(ident) is not backend):
+                return
+            try:
+                state = self._load(ident)
+                if state.get('manual_login') != progress:
+                    self._save(state, manual_login=progress)
+            except (InputError, OSError):
+                return
 
     def _worker(self):
         try:self._work_loop()

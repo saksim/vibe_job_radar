@@ -19,7 +19,7 @@ DOCUMENT_SANDBOX = "sandbox allow-scripts allow-same-origin allow-forms; frame-s
 ROBOTS_SANDBOX = "sandbox; default-src 'none'; base-uri 'none'; form-action 'none'"
 
 
-def document_response_params(event: dict, *, enabled: bool, robots: bool = False) -> dict:
+def document_response_params(event: dict, *, enabled: bool, robots: bool = False, login_frame=False) -> dict:
     """Build continueResponse parameters, with one extra restriction if needed.
 
     Called only after the normal status, redirect, size and accounting checks.
@@ -35,7 +35,9 @@ def document_response_params(event: dict, *, enabled: bool, robots: bool = False
                   responsePhrase=event.get('responseStatusText', ''),
                   responseHeaders=[dict(h) for h in event.get('responseHeaders', [])] + [
                       {'name': 'Content-Security-Policy',
-                       'value': ROBOTS_SANDBOX if robots else DOCUMENT_SANDBOX}])
+                       'value': ROBOTS_SANDBOX if robots else (DOCUMENT_SANDBOX.replace(
+                           "frame-src 'none'", 'frame-src https://turing.captcha.qcloud.com/template/')
+                           if login_frame else DOCUMENT_SANDBOX)}])
     return params
 
 
@@ -46,7 +48,9 @@ def continue_document_response(backend, session: str, event: dict, *, robots: bo
     Supplying the unchanged decoded body makes the browser parse all headers
     together. Other responses keep the normal native continuation.
     """
-    params = document_response_params(event, enabled=True, robots=robots)
+    from .native_login_frames import document_frame_source
+    params = document_response_params(event, enabled=True, robots=robots,
+        login_frame=bool(document_frame_source(backend, session, event)))
     if 'responseHeaders' not in params or event['responseStatusCode'] in {204, 205}:
         backend._send(session, 'Fetch.continueResponse', {'requestId': event['requestId']})
         return

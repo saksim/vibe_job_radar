@@ -24,6 +24,29 @@ from .browser_health import (BrowserStartupError, HEALTH_MESSAGES, environment_r
 
 
 class PlaywrightBackend:
+    def start_manual_login(self):
+        from .manual_login_progress import ManualLoginProgress
+        if self.adapter.key == 'liepin':
+            self._manual_login_progress = ManualLoginProgress()
+            self._manual_login_progress.start()
+
+    def manual_login_status(self):
+        from .manual_login_progress import current
+        tracker = current(self)
+        if tracker is None:
+            return None
+        if tracker.active and self.cancelled.is_set():
+            tracker.stop()
+        elif tracker.active and (not self.page or self.page.is_closed()):
+            tracker.stop('needs_attention')
+        elif tracker.active and self.error:
+            from .login_surface import MANUAL_LOGIN_CODES
+            if self.error not in MANUAL_LOGIN_CODES:
+                tracker.stop('needs_attention')
+        if tracker.active:
+            tracker.inspect_surface(self.page)
+        return tracker.snapshot()
+
     def __init__(self, adapter, ledger, cancelled, progress=lambda *_: None, *,
                  headless=False, executable_path=None, transport_factory=PinnedTransport, channel=None, storage_state=None):
         if channel not in (None, 'msedge', 'chrome') or (channel and executable_path):
@@ -264,8 +287,14 @@ class PlaywrightBackend:
                 prepared = self._bridge_search.prepare(request)
             if login_rule is not None and login_rule.role == 'business':
                 self.wire.ensure_robots(url)
+            from .manual_login_progress import current
+            tracker = current(self)
+            if tracker:
+                tracker.requested(id(request), url, method)
             result = self.wire.fetch(url, method, request.all_headers(), request.post_data_buffer,
                                      required=login_rule is not None or kind in {'document', 'xhr', 'fetch'})
+            if tracker:
+                tracker.received(id(request), result.status)
             notify(getattr(self, '_diagnostics', None), 'mark', status=result.status)
             self._cookies(url, result.cookies)
             if 300 <= result.status < 400:
@@ -511,6 +540,9 @@ class PlaywrightBackend:
             # Never leak a SPA/no-navigation credit to an unrelated later visit.
             self._pagination_page = None
     def collection_mode(self):
+        from .manual_login_progress import current
+        if tracker := current(self):
+            tracker.stop('returned')
         self.auth_mode = False
         # Reading an existing DOM must not erase a failed required request.
         # A fresh explicit open() starts a new checked navigation. Retain the
@@ -543,6 +575,9 @@ class PlaywrightBackend:
 
     def close(self):
         self._bridge_closing = True
+        from .manual_login_progress import current
+        if tracker := current(self):
+            tracker.stop()
         errors = []
         def attempt(operation):
             try:

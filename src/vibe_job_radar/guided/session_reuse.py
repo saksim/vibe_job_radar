@@ -27,6 +27,7 @@ def reuse_current_session(service, state):
         previous = service._load(previous_id)
         if (previous.get('platform') != state['platform']
                 or previous.get('backend', 'bridge') != state.get('backend', 'bridge')
+                or previous.get('human_login', False) != state.get('human_login', False)
                 or bool(previous.get('persist_session')) != bool(state.get('persist_session'))):
             raise CrawlError('session_reuse_incompatible')
         if (previous.get('status') not in {'ready', 'completed'}
