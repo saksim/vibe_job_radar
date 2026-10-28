@@ -107,6 +107,9 @@ MESSAGES = {
     'no_matching_jobs': '搜索业务响应已明确返回零条岗位。本次无需为零结果重新登录；可调整检索条件。',
     'liepin_search_query_mismatch': '搜索请求与当前关键词或筛选条件不一致，未将其他查询的岗位混入本批。',
     'manual_required': '需要你操作采集浏览器：完成登录/验证或打开搜索结果，然后回这里读取当前列表。',
+    'login_sms_required': '请在猎聘采集窗口完成手机号和短信验证。验证码只在平台页面填写；原任务和已取得正文保留。启用自动接续时，验证后会继续原任务。',
+    'login_scan_required': '请在猎聘采集窗口按平台提示扫码并确认登录。原任务保留。启用自动接续时，验证后会继续原任务。',
+    'login_captcha_required': '请在猎聘采集窗口手动完成图形或滑块验证。程序不会代解或重复提交。启用自动接续时，验证后会继续原任务。',
     'manual_browser_open': '已打开平台登录页面。请在采集浏览器正常登录；完成后点击“登录完成，继续原任务”，无需重新填写检索条件。',
     'collecting': '正在按强制频次依次打开选中岗位，真实详情链接会自动保留。',
     'completed': '本批次已结束。请查看每条结果和报告；有报告不等于所有岗位均采集成功。',
@@ -179,7 +182,7 @@ MESSAGES.update({
     'native_operation_unreviewed': '页面需要尚未核实的业务请求或依赖。请预览脱敏诊断；不是搜索结果为空，需继续维护站点适配。',
     'native_surface_unsupported': '当前原生实验暂不支持此框架或后台执行面，已停止该请求。',
     'native_protocol_error': '浏览器原生拦截协议未完成，已停止；未回退至其他后端。',
-    'native_page_cleared': '平台页面已跳转到空白，读取已停止。请先确认平台在本机的正常访问方式，再继续原任务。',
+    'native_page_cleared': '采集页已跳转到空白，原任务保留，自动接续已停止。暂勿重复登录或收码；可导出诊断，先排查页面跳转原因。',
     'native_proxy_auth_failed': '应用专用本机连接校验失败；没有使用账号密码或绕过所选代理。',
     'native_policy_changed': '网络偏好已变更，原生会话已停止。请明确继续以建立使用新偏好的会话；配额保持。',
     'native_observation_limit': '原生业务响应或观察队列超过上限，已保留已有结果并停止。',
@@ -1336,7 +1339,8 @@ class GuidedService:
                 else:
                     backend.open(url, authentication=True)
             except CrawlError as exc:
-                if action != 'login_password' or exc.code != 'manual_required':
+                from .login_surface import MANUAL_LOGIN_CODES
+                if action != 'login_password' or exc.code not in MANUAL_LOGIN_CODES:
                     raise
             if action == 'login_password':
                 if not isinstance(secret, LoginCredentials):

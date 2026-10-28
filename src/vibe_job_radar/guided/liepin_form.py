@@ -46,7 +46,10 @@ def matching_search_entry_signature(backend, state, snapshot):
     Existing results, explicit/frozen filters and selected JDs keep their own
     return paths. Account UI availability is not authentication certification.
     """
-    if (state.get('platform') != 'liepin' or state.get('backend') != 'native'
+    supported_backend = (state.get('backend') == 'native'
+        or state.get('backend', 'bridge') == 'bridge'
+        and getattr(backend, 'bridge_search_enabled', False) is True)
+    if (state.get('platform') != 'liepin' or not supported_backend
             or state.get('query_scope_version') != 1
             or state.get('auto_continue_after_login') is not True
             or state.get('authentication') != 'manual_pending'

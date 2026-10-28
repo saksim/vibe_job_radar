@@ -7,8 +7,9 @@ import stat
 from pathlib import Path
 import json
 import re
+import time
 from http.cookies import SimpleCookie
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import urlencode, urljoin, urlsplit
 
 from ..utils import domain_matches
 from ..network_policy import current_policy
@@ -30,6 +31,8 @@ class PlaywrightBackend:
         portable_bundled = is_portable() and channel is None
         self.adapter, self.cancelled = adapter, cancelled
         self.wire = transport_factory(adapter, ledger, cancelled, progress)
+        from .liepin_login_policy import configure_transport
+        configure_transport(adapter, self.wire)
         # Capture the workspace snapshot here, on the owner context, not in the
         # first route callback: Playwright's dispatcher need not inherit ContextVars.
         # Injected offline/startup-only transports may not expose this capability.
@@ -133,11 +136,18 @@ class PlaywrightBackend:
         return options
 
     def _configure_context(self):
+        from .liepin_login_policy import applies
+        if applies(self.adapter):
+            from .bridge_search import BridgeSearch
+            self._bridge_search = BridgeSearch(self)
+            self.bridge_search_enabled = True
         self.context.route('**/*', self._route)
         self.context.route_web_socket('**/*', lambda ws: ws.close())
         self.context.on('page', self._bind_page)
 
     def _bind_page(self, page):
+        if getattr(self, 'bridge_search_enabled', False) is True:
+            self._bridge_search.bind(page)
         page.on('download', lambda download: download.cancel())
         page.on('dialog', lambda dialog: dialog.dismiss())
         page.on('close', lambda *_: self._restore_open_page())
@@ -194,22 +204,37 @@ class PlaywrightBackend:
     @traced('route', 'browser', route=True)
     def _route(self, route):
         request = route.request
+        login_rule = None
+        business_rule = None
+        liepin_bridge = False
         try:
             if self.cancelled.is_set():
                 notify(getattr(self, '_diagnostics', None), 'mark', code='paused')
                 route.abort('blockedbyclient')
                 return  # Idle polling must not poison the next explicit action.
-            if self.error == 'read_transient_failure':
+            if self.error in {'read_transient_failure', 'native_page_cleared'}:
                 raise self.wait_error or CrawlError(self.error)
             url, kind, method = request.url, request.resource_type, request.method
             p = urlsplit(url)
+            from . import liepin_login_policy
+            liepin_bridge = liepin_login_policy.applies(self.adapter)
+            if liepin_bridge:
+                from .native_policy import contract_for
+                resource = {'xhr': 'XHR', 'fetch': 'Fetch', 'preflight': 'Preflight'}.get(kind, kind.title())
+                if contract_for(self.adapter).ignored_request(url, method, resource):
+                    route.abort('blockedbyclient')
+                    return  # Same abort-only optional dependencies as native.
+                login_rule = liepin_login_policy.match(url, method, kind,
+                    authentication=self.auth_mode, headers=request.all_headers())
             if not self.wire.allowed_resource(url):
                 if p.hostname:
                     self.resource_denials.add(p.hostname)
                 raise CrawlError('resource_domain_blocked')
             if method not in {'GET', 'HEAD', 'POST', 'OPTIONS'}:
                 raise CrawlError('method_blocked')
-            if (self.adapter.key == 'liepin' and self.adapter.login_url == 'https://www.liepin.com/'
+            if login_rule is not None:
+                pass  # The supplemental human-login rule already checked headers.
+            elif (self.adapter.key == 'liepin' and self.adapter.login_url == 'https://www.liepin.com/'
                     and method in {'POST', 'OPTIONS'}):
                 # Use the same exact, observed operations as the native backend;
                 # adding a login host must not grant every write on that host.
@@ -217,17 +242,30 @@ class PlaywrightBackend:
                 rule = contract_for(self.adapter).match(url, method,
                     {'xhr': 'XHR', 'fetch': 'Fetch'}.get(kind, 'Other'), authentication=self.auth_mode)
                 rule.validate_headers(method, request.all_headers())
+                business_rule = rule
             elif method == 'POST' and (not self.auth_mode or p.hostname not in self.adapter.login_hosts):
                 raise CrawlError('write_not_allowed')
             if kind == 'document':
-                self.adapter.accept_url(url) if not self.auth_mode else self._auth_navigation(url)
-                self._reserve_document_page(request)
+                if login_rule is not None and liepin_login_policy.is_captcha(url):
+                    liepin_login_policy.require_widget_frame(request)
+                    # A widget subframe is not another results/detail page.
+                    # Its HTTP request still consumes the shared request budget.
+                else:
+                    self.adapter.accept_url(url) if not self.auth_mode else self._auth_navigation(url)
+                    self._reserve_document_page(request)
                 if not self.auth_mode:
                     self.wire.ensure_robots(url)
             # Reject credentials crossing a redirect: browser redirects are replaced
             # by a new, checked navigation; XHR redirects fail closed.
+            prepared = None
+            if (getattr(self, 'bridge_search_enabled', False) is True and business_rule is not None
+                    and business_rule.key == 'liepin_search' and method == 'POST'):
+                self.wire.ensure_robots(url)
+                prepared = self._bridge_search.prepare(request)
+            if login_rule is not None and login_rule.role == 'business':
+                self.wire.ensure_robots(url)
             result = self.wire.fetch(url, method, request.all_headers(), request.post_data_buffer,
-                                     required=kind in {'document', 'xhr', 'fetch'})
+                                     required=login_rule is not None or kind in {'document', 'xhr', 'fetch'})
             notify(getattr(self, '_diagnostics', None), 'mark', status=result.status)
             self._cookies(url, result.cookies)
             if 300 <= result.status < 400:
@@ -249,14 +287,29 @@ class PlaywrightBackend:
                     result.headers.get('retry-after', ''),
                     main=bool(getattr(request, 'frame', None) is not None
                               and request.frame == getattr(self.page, 'main_frame', None)))
+            if prepared is not None:
+                self._bridge_search.complete(prepared, result)
             filtered = {k: v for k, v in result.headers.items() if k not in {
                 'content-length', 'content-encoding', 'transfer-encoding', 'connection',
                 'set-cookie', 'alt-svc', 'report-to', 'nel'}}
             route.fulfill(status=result.status, headers=filtered, body=result.body)
         except CrawlError as exc:
             notify(getattr(self, '_diagnostics', None), 'mark', code=exc.code)
-            if (request.resource_type not in {'document', 'xhr', 'fetch'}
-                    and exc.code in {'http_401', 'http_403'}):
+            if (login_rule is not None and login_rule.handles_dns_failure
+                    and exc.code == 'encrypted_dns_name_not_found'):
+                # Only this observed dependency handles a fresh lookup failure.
+                # Let the unchanged publisher script handle rejection; do not
+                # retry, supply JSON, or turn other DNS/TLS/HTTP failures soft.
+                route.abort('namenotresolved')
+                return
+            # A failed decorative image must not cancel an otherwise usable
+            # human login. Captcha dependencies have a rule and remain required;
+            # scripts, DNS, TLS and address checks retain their existing failures.
+            optional_login_image = (liepin_bridge and self.auth_mode
+                and request.resource_type == 'image' and exc.code == 'network_error')
+            if (login_rule is None and (optional_login_image or (
+                    request.resource_type not in {'document', 'xhr', 'fetch'}
+                    and exc.code in {'http_401', 'http_403'}))):
                 self.resource_denials.add('optional_' + exc.code)
                 route.abort('blockedbyclient')
                 return
@@ -292,7 +345,50 @@ class PlaywrightBackend:
                 or not any(domain_matches(p.hostname, d) for d in self.adapter.domains)):
             raise CrawlError('login_origin_changed')
 
-    def _settle(self):
+    def _check_error(self):
+        if self.cancelled.is_set():
+            raise CrawlError('paused')
+        if self.error:
+            raise getattr(self, 'wait_error', None) or CrawlError(self.error)
+
+    def document_identity(self):
+        if getattr(self, 'bridge_search_enabled', False) is not True:
+            raise CrawlError('native_surface_unsupported')
+        return self._bridge_search.identity()
+
+    def open_search(self, url, *, keyword, authentication=False):
+        if (getattr(self, 'bridge_search_enabled', False) is not True
+                or self.adapter.accept_url(url) != self.adapter.search_url(keyword)):
+            return self.open(url, authentication=authentication)
+        if authentication:
+            # The current official search header links to this standalone
+            # first-party form. Its return URL is fixed to the search entry;
+            # the original keyword stays in the task until login completes.
+            return self.open('https://www.liepin.com/login?' + urlencode({
+                'backUrl': self.adapter.search_base}), authentication=True)
+        self.open(self.adapter.search_base)
+        from .liepin_form import submit_search
+        return submit_search(self, keyword)
+
+    def _settle(self, *, search=False):
+        if getattr(self, 'bridge_search_enabled', False) is True and (search or (
+                not self.auth_mode and self.page.url == self.adapter.search_base)):
+            from .liepin_form import search_entry_ready
+            deadline = time.monotonic() + 15
+            while time.monotonic() < deadline:
+                self._check_error()
+                try:
+                    if not search and search_entry_ready(self):
+                        return
+                    if search:
+                        self.adapter.cards(self.snapshot())
+                        return
+                except CrawlError as exc:
+                    if exc.code != 'page_not_ready':
+                        raise
+                self.page.wait_for_timeout(250)
+            self._check_error()
+            raise CrawlError('page_not_ready')
         # Bounded dynamic wait; no blind unbounded scrolling or fixed success claim.
         for _ in range(12):
             if self.cancelled.is_set():
@@ -309,6 +405,8 @@ class PlaywrightBackend:
         self.auth_mode, self.error, self.redirects = authentication, None, 0
         self.wait_error = None
         self.adapter.accept_url(url)
+        if getattr(self, 'bridge_search_enabled', False) is True:
+            self._bridge_search.reset()
         self.wire.blocked.clear()  # a new explicit navigation still obeys durable cooldown
         try:
             self.page.goto(url, wait_until='domcontentloaded', timeout=90000)
@@ -325,6 +423,11 @@ class PlaywrightBackend:
         if not self.page or self.page.is_closed():
             raise CrawlError('browser_closed')
         url = self.page.url
+        if self.adapter.key == 'liepin' and getattr(self, 'auth_mode', False):
+            from .login_surface import liepin_manual_step
+            step = liepin_manual_step(self.page, url)
+            if step:
+                raise CrawlError(step)
         self.adapter.accept_url(url)
         text = self.page.locator('body').inner_text(timeout=5000)
         if self.adapter.challenged(text, url):
@@ -347,6 +450,9 @@ class PlaywrightBackend:
             raise CrawlError('manual_required')
         if self.page.url != url:
             raise PageSnapshotChanged()
+        if getattr(self, 'bridge_search_enabled', False) is True:
+            return PageSnapshot(url, content, visible_text=text, rendered_html=rendered,
+                business=self._bridge_search.observations(), business_required=True)
         return PageSnapshot(url, content, visible_text=text, rendered_html=rendered)
 
     def _visible(self, selectors, scope=None):
@@ -364,8 +470,26 @@ class PlaywrightBackend:
 
     def _before_pagination_click(self) -> None:
         """Backend state transition after permission/quota checks, before clicking."""
+        if getattr(self, 'bridge_search_enabled', False) is True:
+            self._bridge_search.reset()
 
     def ensure_page_access(self, url: str) -> None:
+        if getattr(self, 'bridge_search_enabled', False) is True:
+            identity = self.document_identity()
+            document = identity[-1]
+            if document.url != url:
+                raise PageSnapshotChanged()
+            base = self.adapter.search_base
+            current, entry = urlsplit(self.adapter.accept_url(url)), urlsplit(base)
+            checked = (base if document.document_url == base
+                       and (current.scheme, current.netloc, current.path) ==
+                           (entry.scheme, entry.netloc, entry.path) else url)
+            # A history update does not fetch a document. Actual query-bearing
+            # navigations still pass _route's independent robots check.
+            self.wire.ensure_robots(checked)
+            if self.document_identity() != identity:
+                raise PageSnapshotChanged()
+            return
         self.wire.ensure_robots(url)
 
     @traced('pagination', 'browser')
@@ -400,7 +524,14 @@ class PlaywrightBackend:
         self._restore_open_page()
         # Keeps a visible browser responsive while waiting for manual assistance.
         if self.page and not self.page.is_closed():
-            self.page.wait_for_timeout(50)
+            try:
+                self.page.wait_for_timeout(50)
+            except Exception:
+                # A later browser callback failure must not conceal the
+                # already recorded required network failure as operation_error.
+                if self.error:
+                    raise getattr(self, 'wait_error', None) or CrawlError(self.error)
+                raise
 
     def export_session_cookies(self):
         # Browser-owned context only; no hidden pages, HTTP, DOM or form fields.
@@ -411,6 +542,7 @@ class PlaywrightBackend:
         return bool(self.browser and self.browser.is_connected() and self.page and not self.page.is_closed())
 
     def close(self):
+        self._bridge_closing = True
         errors = []
         def attempt(operation):
             try:

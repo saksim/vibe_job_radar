@@ -54,6 +54,8 @@ jobs:
         run: python scripts/run_browser_policy_binding.py --channel chrome
       - name: Verify original password and SMS-entry forms in Chrome bridge
         run: python scripts/verify_password_form.py --channel chrome
+      - name: Verify manual SMS handoff, original task and saved-session return
+        run: python scripts/verify_liepin_sms_login.py --channel chrome
       - name: Verify the same original forms in Chrome native input
         run: python scripts/verify_password_form.py --channel chrome --native
       - name: Verify authenticated Cookie restart through actual Chrome and both local proxy protocols
@@ -69,3 +71,4 @@ jobs:
             browser-acceptance/browser-choice-chrome-native/
             browser-acceptance/policy-binding-chrome/
             browser-acceptance/proxy-auth/
+            browser-acceptance/liepin-sms-login/

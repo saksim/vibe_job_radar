@@ -26,6 +26,8 @@ STAGES = frozenset({'task', 'browser_session', 'listing', 'list_parse', 'collect
     'route', 'http_request', 'robots', 'navigation', 'login', 'pagination', 'unknown'})
 RESOURCES = frozenset({'document', 'stylesheet', 'script', 'image', 'media', 'font',
     'xhr', 'fetch', 'preflight', 'websocket', 'other', 'unknown'})
+NAVIGATION_REASONS = frozenset({'formSubmissionGet', 'formSubmissionPost', 'httpHeaderRefresh',
+    'metaTagRefresh', 'scriptInitiated', 'anchorClick', 'reload', 'pageBlockInterstitial'})
 CODES = frozenset('''operation_error network_error dns_error non_public_address
     workspace_proxy_environment_conflict
     pac_unavailable pac_invalid_script pac_invalid_result pac_timeout pac_busy
@@ -38,6 +40,7 @@ CODES = frozenset('''operation_error network_error dns_error non_public_address
     robots_denied robots_unavailable resource_domain_blocked write_not_allowed native_optional_request_blocked
     method_blocked redirect_requires_attention login_origin_changed invalid_url
     wrong_platform credential_url not_job_url not_job_list manual_required
+    login_sms_required login_scan_required login_captcha_required
     login_entry_unavailable login_password_tab_unavailable login_password_form_unavailable
     login_form_changed login_credentials_rejected login_agreement_required login_password_submitted job_unavailable invalid_page_observation
     structure_changed invalid_job_data response_too_large request_too_large
@@ -97,8 +100,9 @@ PATH_PARTS = frozenset({'robots.txt', 'web', 'geek', 'job', 'job_detail', 'user'
 LOGIN_PATHS = frozenset('/api/com.liepin.passport.' + suffix for suffix in (
     'account.account-pwd-login', 'account.check-login', 'account.v2.check-login',
     'account.get-category', 'account.send-two-factor-sms-code',
-    'account.verify-two-factor-sms-code', 'captcha.get-smart-captcha',
-    'qr.get-qrcode', 'qr.ack'))
+    'account.verify-two-factor-sms-code', 'account.tel-sms-login',
+    'captcha.get-smart-captcha', 'captcha.send-sms',
+    'qr.get-qrcode', 'qr.get-mini-qrcode', 'qr.ack'))
 QUERY_NAMES = frozenset({'q', 'query', 'keyword', 'key', 'page', 'pageSize',
     'currentPage', 'jobId', 'city', 'industry', 'offset', 'limit'})
 
@@ -136,7 +140,8 @@ def runtime_metadata():
         version = None
     hashes = {}
     for name in ('diagnostic_trace.py', 'browser.py', 'transport.py', 'service.py',
-                 'native_browser.py', 'native_policy.py', 'native_tunnel.py'):
+                 'native_browser.py', 'native_policy.py', 'native_tunnel.py',
+                 'bridge_search.py', 'liepin_login_policy.py', 'login_surface.py', 'login_return.py'):
         try:
             hashes[name] = hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
         except OSError:
@@ -207,11 +212,14 @@ class DiagnosticTrace:
                 raise
             return frame
 
-    def mark(self, *, code=None, status=None):
+    def mark(self, *, code=None, status=None, navigation_reason=None):
         with self._lock:
             if not self._frames:
                 return
             frame = self._frames[-1]
+            if navigation_reason is not None:
+                frame['navigation_reason'] = (navigation_reason if isinstance(navigation_reason, str)
+                    and navigation_reason in NAVIGATION_REASONS else 'unknown')
             if type(status) is int and 100 <= status <= 599:
                 frame['status'] = status
             if code is not None:

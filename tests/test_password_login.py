@@ -138,6 +138,20 @@ class PasswordServiceTests(unittest.TestCase):
         self.assertNotIn(USERNAME, public); self.assertNotIn(PASSWORD, public)
         backend.password_login.assert_called_once()
 
+    def test_sms_dialog_on_open_still_allows_existing_password_tab_flow(self):
+        self.action()
+        secret = self.service._submit.call_args.args[2]
+        backend = MemoryBackend()
+        backend.open = Mock(side_effect=CrawlError('login_sms_required'))
+        backend.password_login = Mock(side_effect=lambda value: (value.clear(), 'login_agreement_required')[1])
+        self.service._backends[self.ident] = backend
+        state = self.service._load(self.ident)
+        self.service._run('login_password', state, secret)
+        backend.password_login.assert_called_once()
+        self.assertEqual(state['status'], 'waiting_manual')
+        self.assertEqual(state['login_continuation'], 'watching')
+        self.assertEqual(secret.password, '')
+
     def test_opted_in_manual_login_also_preserves_query(self):
         self.service.action({'id': self.ident, 'action': 'login', 'auto_continue': True})
         state = self.service._load(self.ident)
