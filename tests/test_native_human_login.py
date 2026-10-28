@@ -280,6 +280,33 @@ class OriginalTaskHandoffTests(unittest.TestCase):
         self.assertEqual(viewed['manual_login']['stage'], 'cancelled')
         self.assertTrue(self.s._load(self.ident)['manual_login']['active'])
 
+    def test_failed_initial_navigation_without_backend_error_releases_login_guard(self):
+        class FailedNavigation(HandoffBackend):
+            def open(self, url, **kwargs):
+                self.page = Mock(url='about:blank')
+                self.page.is_closed.return_value = False
+                raise CrawlError('page_not_ready')
+        self.factory.side_effect = FailedNavigation
+        self.state['auto_continue_after_login'] = True
+        with self.assertRaises(CrawlError): self.s._run('login_native', self.state, None)
+        backend = self.s._backends[self.ident]
+        self.assertIsNone(backend.error)
+        self.assertFalse(self.state['manual_login']['active'])
+        self.assertNotIn(self.ident, self.s._login_return._watches)
+        self.s._save(self.state, 'page_not_ready', status='waiting_manual')
+        self.s._submit.reset_mock()
+        self.s.action({'id':self.ident,'action':'login'})
+        self.s._submit.assert_called_once_with('login', self.ident, None)
+
+    def test_normal_sms_handoff_keeps_waiting_instead_of_cancelling(self):
+        class ManualGate(HandoffBackend):
+            def open(self, url, **kwargs): raise CrawlError('login_sms_required')
+        self.factory.side_effect = ManualGate
+        self.state['auto_continue_after_login'] = True
+        with self.assertRaises(CrawlError): self.s._run('login_native', self.state, None)
+        self.assertTrue(self.state['manual_login']['active'])
+        self.assertIn(self.ident, self.s._login_return._watches)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -1374,23 +1374,34 @@ class GuidedService:
             inline_login = (watching and adapter.key == 'liepin'
                             and adapter.login_url == 'https://www.liepin.com/')
             url = target.expected_url if target else (state['search_url'] if inline_login else adapter.login_url)
+            from .login_surface import MANUAL_LOGIN_CODES
             try:
-                if inline_login and not target and callable(getattr(backend, 'open_search', None)):
-                    backend.open_search(url, keyword=state['keyword'], authentication=True)
+                try:
+                    if inline_login and not target and callable(getattr(backend, 'open_search', None)):
+                        backend.open_search(url, keyword=state['keyword'], authentication=True)
+                    else:
+                        backend.open(url, authentication=True)
+                except CrawlError as exc:
+                    if action != 'login_password' or exc.code not in MANUAL_LOGIN_CODES:
+                        raise
+                if action == 'login_password':
+                    if not isinstance(secret, LoginCredentials):
+                        raise CrawlError('login_form_changed')
+                    login_code = backend.password_login(secret)
+                    if login_code not in {'login_agreement_required', 'login_password_submitted'}:
+                        raise CrawlError('login_form_changed')
                 else:
-                    backend.open(url, authentication=True)
-            except CrawlError as exc:
-                from .login_surface import MANUAL_LOGIN_CODES
-                if action != 'login_password' or exc.code not in MANUAL_LOGIN_CODES:
-                    raise
-            if action == 'login_password':
-                if not isinstance(secret, LoginCredentials):
-                    raise CrawlError('login_form_changed')
-                login_code = backend.password_login(secret)
-                if login_code not in {'login_agreement_required', 'login_password_submitted'}:
-                    raise CrawlError('login_form_changed')
-            else:
-                login_code = 'manual_detail_open' if target else 'manual_browser_open'
+                    login_code = 'manual_detail_open' if target else 'manual_browser_open'
+            except Exception as exc:
+                if not isinstance(exc, CrawlError) or exc.code not in MANUAL_LOGIN_CODES:
+                    # A navigation/form action can fail without setting
+                    # backend.error. An unusable open tab is not a pending
+                    # login and must not lock out a later explicit attempt.
+                    self._login_return.disarm(state['id'])
+                    if tracker := login_progress(backend):
+                        tracker.stop('cancelled' if getattr(exc, 'code', None) == 'paused' else 'needs_attention')
+                        self._save(state, manual_login=tracker.snapshot(), login_continuation='needs_attention')
+                raise
             self._save(state, login_code, status='waiting_manual', authentication='manual_pending')
         elif action == 'resume_returned_search':
             from .liepin_form import matching_search_entry_signature, submit_search
