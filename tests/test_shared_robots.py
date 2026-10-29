@@ -57,9 +57,9 @@ class SharedRobotsTests(unittest.TestCase):
             with self.assertRaisesRegex(FetchError,'robots_denied'):fetcher.fetch(ORIGIN+path)
         self.assertEqual(fake.public_get.call_count,1)
 
-    def test_html_empty_bad_encoding_or_ambiguous_rule_stops_and_stays_cached(self):
+    def test_html_bad_encoding_or_ambiguous_rule_stops_and_stays_cached(self):
         for body,mime in ((b'<html><div id="app"></div></html>','text/plain'),
-                         (b'User-agent: *\nAllow: /','text/html'),(b'', 'text/plain'),
+                         (b'User-agent: *\nAllow: /','text/html'),(b'', 'text/html'),
                          (b'\xff', 'text/plain'),(b'not a robots file', 'text/plain'),
                          (b'User-agent: *\nDisallow: ?query=*','text/plain')):
             with self.subTest(body=body,mime=mime):
@@ -67,6 +67,17 @@ class SharedRobotsTests(unittest.TestCase):
                 for _ in range(2):
                     with self.assertRaisesRegex(FetchError,'robots_unavailable'):fetcher.fetch(ORIGIN+'/job')
                 self.assertEqual(fake.public_get.call_count,1)
+
+    def test_successful_empty_or_comment_only_file_has_no_rules_and_is_cached(self):
+        for body, mime in ((b'', 'text/plain'), (b'', ''), (b'\xef\xbb\xbf', 'text/plain'),
+                           (b' \t\r\n# no groups\n', 'text/plain')):
+            with self.subTest(body=body, mime=mime):
+                self.assertTrue(NativeRobots(200, mime, body).allowed(ORIGIN+'/job'))
+                fake = transport(body, mime=mime, pages=2)
+                fetcher = SiteFetcher({'jobs.fixture.test'}, fake)
+                self.assertEqual(fetcher.fetch(ORIGIN+'/job').status, 200)
+                self.assertEqual(fetcher.fetch(ORIGIN+'/job').status, 200)
+                self.assertEqual(fake.public_get.call_count, 3)  # One robots read.
 
     def test_http_missing_file_policy_does_not_expand_with_shared_parser(self):
         for status in (404,410,401,403,429,500,503):

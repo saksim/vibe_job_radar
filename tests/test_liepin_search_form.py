@@ -122,6 +122,28 @@ class SearchFormTests(unittest.TestCase):
         self.backend.open.assert_called_once_with(ADAPTER.search_base, authentication=False)
         submit.assert_called_once_with(self.backend,'时间序列')
 
+    def test_human_login_uses_allowed_entry_without_changing_the_original_search(self):
+        from vibe_job_radar.robots_rules import RobotsRules
+        rules = RobotsRules(200, 'text/plain', b'User-agent: *\nDisallow: /*?*',
+                            user_agent='VibeJobRadar')
+        opened = []
+        def checked_open(url, **_):
+            if not rules.allowed(url):
+                raise CrawlError('robots_denied')
+            opened.append(url)
+            return snapshot()
+        self.backend.human_login = True
+        self.backend.open = Mock(side_effect=checked_open)
+        with patch('vibe_job_radar.guided.liepin_form.submit_search') as submit:
+            self.backend.open_search(SEARCH, keyword='时间序列', authentication=True)
+            # Explicit filters keep their normal refusal, never silently
+            # becoming a different allowed search or authentication target.
+            with self.assertRaisesRegex(CrawlError, 'robots_denied'):
+                self.backend.open_search(SEARCH+'&city=010', keyword='时间序列', authentication=True)
+        self.assertEqual(opened, ['https://www.liepin.com/login'])
+        self.assertEqual(self.backend.search_entry_url(SEARCH, keyword='时间序列'), ADAPTER.search_base)
+        submit.assert_not_called()
+
     def test_explicit_filters_are_not_silently_removed_to_fit_keyword_form(self):
         self.backend.open = Mock()
         with patch('vibe_job_radar.guided.liepin_form.submit_search') as submit:

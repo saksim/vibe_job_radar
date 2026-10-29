@@ -52,7 +52,13 @@ class RobotsRules:
             # Do not interpret an error document as publisher rules. In the
             # native browser it is delivered with scripts/resources disabled.
             return
-        if (status != 200 or content_type.split(';')[0].strip().lower() != 'text/plain'
+        # RFC 9309 permits zero groups. A successful zero-byte response has
+        # no rules even when the server omits Content-Type (as observed on the
+        # captcha origin). Error statuses and explicit HTML remain unavailable.
+        mime = content_type.split(';')[0].strip().lower()
+        if status == 200 and body == b'' and mime in {'', 'text/plain'}:
+            return
+        if (status != 200 or mime != 'text/plain'
                 or len(body) > 512 * 1024):
             raise RobotsError('robots_unavailable')
         try:
@@ -61,6 +67,9 @@ class RobotsRules:
             raise RobotsError('robots_unavailable') from exc
         if re.search(r'<\s*(?:!doctype|html|script|body)\b', text, re.I):
             raise RobotsError('robots_unavailable')
+        if all(not line.split('#', 1)[0].strip(' \t')
+               for line in text.replace('\r\n', '\n').replace('\r', '\n').split('\n')):
+            return  # Empty lines/comments are also a valid zero-group file.
         groups, agents, entries = [], [], []
         for raw in text.splitlines():
             line = raw.split('#', 1)[0].strip()

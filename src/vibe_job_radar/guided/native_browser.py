@@ -869,8 +869,10 @@ class NativeBackend(PlaywrightBackend):
     def open_search(self, url, *, keyword, authentication=False):
         entry = self.search_entry_url(url, keyword=keyword)
         if authentication and getattr(self, 'human_login', False) and entry == self.adapter.search_base:
-            from urllib.parse import urlencode
-            return self.open('https://www.liepin.com/login?' + urlencode({'backUrl': entry}), authentication=True)
+            # The publisher disallows query-bearing documents. Use its plain
+            # login entry; the task, not a return URL, retains the original
+            # search. All subsequent documents still pass their robots gate.
+            return self.open('https://www.liepin.com/login', authentication=True)
         if entry == url:
             return self.open(url, authentication=authentication)
         opened = self.open(entry, authentication=authentication)
@@ -950,7 +952,20 @@ class NativeBackend(PlaywrightBackend):
                 if response is None:
                     raise CrawlError('robots_unavailable')
                 raw=response.body()
-                self.wire.install_robots(origin,response.status,response.header_value('content-type') or '',raw)
+                try:
+                    self.wire.install_robots(origin,response.status,response.header_value('content-type') or '',raw)
+                except CrawlError as exc:
+                    from .liepin_login_policy import conditional_two_factor_origin
+                    if (exc.code != 'robots_unavailable' or response.status != 200
+                            or not getattr(self, 'human_login', False) or not self.auth_mode
+                            or not conditional_two_factor_origin(self.contract, origin)):
+                        raise
+                    # A soft-404/invalid robots body for the unused two-factor
+                    # page must not preempt the primary login page. No policy
+                    # is installed: an actual request to that origin still
+                    # fails ensure_robots(), before pacing or network release.
+                    notify(getattr(self, '_diagnostics', None), 'note',
+                           code='robots_unavailable')
             except CrawlError:
                 raise
             except Exception as exc:

@@ -98,3 +98,24 @@ class BrowserRobotsStatusTests(unittest.TestCase):
         with self.assertRaises(RateLimit) as raised:
             self.ledger.reserve('liepin', 'request', origin=API)
         self.assertEqual(raised.exception.wait, 30)
+
+    def test_empty_success_is_valid_for_both_backends_but_not_an_empty_error(self):
+        from vibe_job_radar.guided.diagnostic_trace import DiagnosticTrace, observe, observe_robots
+        for mime in ('', 'text/plain'):
+            with self.subTest(mime=mime):
+                self.native.install_robots(API, 200, mime, b'')
+                self.native.ensure_robots(SEARCH)
+                response = WireResponse(200, {'content-type':mime}, b'')
+                self.bridge.robots.clear()
+                with patch.object(self.bridge, 'fetch', return_value=response) as fetch:
+                    self.bridge.ensure_robots(SEARCH)
+                    self.bridge.ensure_robots(SEARCH)
+                fetch.assert_called_once_with(API+'/robots.txt')
+                trace = DiagnosticTrace('a'*32, 'liepin')
+                with observe(trace, 'robots'):
+                    observe_robots(trace, response)
+                self.assertIn('robots_empty_document', [e['code'] for e in trace.events])
+                self.assertEqual(trace.observer_errors, 0)
+        for status, mime in ((403,''), (429,''), (503,''), (200,'text/html'), (200,'application/json')):
+            with self.subTest(status=status, mime=mime), self.assertRaises(CrawlError):
+                NativeRobots(status, mime, b'')
