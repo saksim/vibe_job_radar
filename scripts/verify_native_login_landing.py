@@ -113,7 +113,20 @@ def main():
                 main_document_preserved=b.page.url==MAIN,
                 login_submissions=b._manual_login_progress.submits,
                 account_documents_delivered=b.delivered.count(ROOT))
-            claim(b,ticket); b.collection_mode(); b.open(ENTRY)
+            claim(b,ticket); b.collection_mode()
+            before = b.delivered.count(LOGIN)
+            # The old login document can issue another preflight while the
+            # task departs. It must be canceled, never admitted or fatal.
+            b.page.evaluate("void fetch("+json.dumps(LOGIN)+",{method:'POST',headers:{'Content-Type':'application/json','X-Client-Type':'web'},body:'{}'}).catch(()=>{})")
+            deadline=time.monotonic()+5
+            while time.monotonic()<deadline:
+                b.page.wait_for_timeout(50)
+                cancelled=[e for e in b._diagnostics.snapshot()['events']
+                           if e.get('code')=='login_departure_request_cancelled']
+                if cancelled or b.error: break
+            result['late_login_cancelled']=bool(cancelled)
+            assert cancelled and b.delivered.count(LOGIN)==before and not b.error
+            b.open(ENTRY)
             deadline=time.monotonic()+5
             while HEADER not in b.delivered and time.monotonic()<deadline:
                 b.page.wait_for_timeout(50)

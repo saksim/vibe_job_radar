@@ -68,4 +68,39 @@ def claim(backend, ticket):
     if peek(backend) is not ticket:
         raise CrawlError('login_return_changed')
     backend._login_landing = None
+    backend._departing_login = ticket
     ticket.tracker.stop('returned')
+
+
+def departing_request(backend, session, event):
+    """Cancel an owned old login request, without granting authentication.
+
+    The login document survives Aborted until the new task document commits.
+    During that interval its scripts/user controls may submit another request.
+    It must not reach the network or poison the unrelated task navigation.
+    """
+    ticket = backend.__dict__.get('_departing_login')
+    request = event['request']
+    if (not isinstance(ticket, LandingTicket) or backend.auth_mode
+            or not getattr(backend, 'human_login', False) or not backend._direct_cdp
+            or backend.cancelled.is_set() or backend.error or backend._halted or backend._closing
+            or not getattr(backend, 'policy_check', lambda: True)()
+            or backend._epoch not in (ticket.epoch, ticket.epoch + 1)
+            or current(backend) is not ticket.tracker or ticket.tracker.active
+            or ticket.tracker.stage != 'returned' or ticket.tracker.sequence != ticket.sequence
+            or ticket.tracker.clock() >= ticket.tracker.deadline
+            or request.get('method') not in {'OPTIONS', 'POST'}
+            or event.get('resourceType') not in {'XHR', 'Fetch', 'Preflight'}
+            or session != ticket.identity[0] or event.get('frameId') != ticket.identity[-1].frame):
+        return False
+    if backend.document_identity() != ticket.identity:
+        return False  # New documents/frames retain the normal failure policy.
+    try:
+        rule = backend.contract.match(request['url'], request['method'], event['resourceType'],
+                                      authentication=True, headers=request.get('headers', {}))
+        rule.validate_headers(request['method'], request.get('headers', {}))
+    except CrawlError:
+        return False
+    return (rule.authentication and rule.role == 'login'
+            and rule.host in {'api-passport.liepin.com', 'api-security-liepin.liepin.com'}
+            and rule.cors_origin == 'https://www.liepin.com')

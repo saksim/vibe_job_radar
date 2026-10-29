@@ -571,7 +571,14 @@ class NativeBackend(PlaywrightBackend):
                 if self._halted:
                     raise self.wait_error or CrawlError(self.error or 'site_stopped')
                 if not response:
-                    from .login_landing import offer
+                    from .login_landing import offer, departing_request
+                    if departing_request(self, session, event):
+                        self.native_counts['blocked'] += 1
+                        self._send(session, 'Fetch.failRequest',
+                                   {'requestId': event['requestId'], 'errorReason': 'Aborted'})
+                        notify(getattr(self, '_diagnostics', None), 'mark',
+                               code='login_departure_request_cancelled')
+                        return
                     if offer(self, session, event):
                         # No account-page request, synthetic reply or modified
                         # publisher script. The owner may resume only its task.

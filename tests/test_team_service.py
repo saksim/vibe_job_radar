@@ -792,6 +792,18 @@ class TeamTests(unittest.TestCase):
         self.assertEqual(resource['limits']['requests_day'],24)
         self.assertEqual(resource['usage']['request']['day'],2)
 
+    def test_local_login_defaults_do_not_relax_existing_team_caps(self):
+        resource=next(r for r in self.store.state(self.tokens['alice'])['resources'] if r['id']=='account')
+        self.assertIsNone(resource['limits']['logins_day'])
+        self.assertEqual(resource['limits']['login_interval'],0)
+        self.store.resource('group','account','liepin',['https://www.liepin.com'],
+                            limits=Limits(login_interval=300,logins_day=3))
+        for values in (Limits(), Limits(login_interval=300), Limits(logins_day=3)):
+            with self.assertRaisesRegex(TeamError,'team_limits_cannot_relax'):
+                self.store.resource('group','account','liepin',['https://www.liepin.com'],limits=values)
+        self.store.resource('group','account','liepin',['https://www.liepin.com'],
+                            limits=Limits(login_interval=301,logins_day=2))
+
     def test_failed_device_export_rolls_back_and_allows_same_device_id(self):
         output=self.root/'retry-device.json'
         for destination in [self.root/'missing/retry-device.json',output]:
