@@ -52,6 +52,14 @@ class LandingBackend(ControlledBackend):
             body = b'User-agent: *\nDisallow: /\n' if host=='c.liepin.com' else b'User-agent: *\nAllow: /\n'
             self.wire.install_robots('https://'+host,200,'text/plain',body)
 
+    def fixture_content(self, url, method):
+        if url == MAIN: return self.login_html, 'text/html'
+        if url == ENTRY: return SEARCH, 'text/html'
+        if url in (LOGIN, FLAG, HEADER, MAINTENANCE):
+            return '{"fixture":true,"data":{"intercepted":false}}', 'application/json'
+        if urlsplit(url).path == '/favicon.ico': return '', 'image/x-icon'
+        raise AssertionError('Unexpected controlled request')
+
     def _send(self, session, method, params=None, callback=None):
         key = (session, (params or {}).get('requestId'))
         reply = self.fixture_replies.get(key)
@@ -66,11 +74,7 @@ class LandingBackend(ControlledBackend):
             return NativeBackend._send(self,session,method,params,callback)
         event = self.fixture_requests.pop((session,params['requestId']))
         request = event['request']; url = request['url']
-        if url==MAIN: content,mime=self.login_html,'text/html'
-        elif url==ENTRY: content,mime=SEARCH,'text/html'
-        elif url in (LOGIN,FLAG,HEADER,MAINTENANCE): content,mime='{"fixture":true,"data":{"intercepted":false}}','application/json'
-        elif urlsplit(url).path=='/favicon.ico': content,mime='','image/x-icon'
-        else: raise AssertionError('Unexpected controlled request')
+        content, mime = self.fixture_content(url, request['method'])
         headers = [{'name':'Content-Type','value':mime},
             {'name':'Access-Control-Allow-Origin','value':'https://www.liepin.com'},
             {'name':'Access-Control-Allow-Headers','value':'content-type,x-client-type'},

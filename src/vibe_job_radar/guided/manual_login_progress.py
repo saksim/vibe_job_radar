@@ -16,6 +16,7 @@ class ManualLoginProgress:
         self.sequence = 0
         self.last_login_response = None
         self.return_offered = False
+        self.duplicate_cancellations = 0
 
     def start(self):
         self.active = True
@@ -25,6 +26,7 @@ class ManualLoginProgress:
         self.sequence = 0
         self.last_login_response = None
         self.return_offered = False
+        self.duplicate_cancellations = 0
 
     def stop(self, stage='cancelled'):
         self.active = False
@@ -104,7 +106,8 @@ class ManualLoginProgress:
         if self.active and self.clock() >= self.deadline:
             self.stop('timed_out')
         return {'active': self.active, 'stage': self.stage, 'sms_requests': self.sends,
-                'login_submissions': self.submits, 'http_status': self.status}
+                'login_submissions': self.submits, 'http_status': self.status,
+                'duplicate_cancellations': self.duplicate_cancellations}
 
 
 def current(backend):
