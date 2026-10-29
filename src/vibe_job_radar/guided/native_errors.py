@@ -88,12 +88,13 @@ def native_failure_code(error: object) -> str:
 def native_transport_failure(error: object, tunnel_error: str = '') -> str:
     """A generic Chromium tunnel failure must retain our actual upstream cause.
 
-    Certificate, browser-guard authentication and administrator errors are
-    independent diagnoses; a previous tunnel error cannot overwrite those.
+    Only explicit CONNECT/proxy failure can borrow the tunnel's last reason.
+    A response-body reset or unknown failure must not inherit an unrelated,
+    earlier DNS/proxy failure from another connection.
     Existing controller policy failures are preserved separately by _fatal.
     """
     code = native_failure_code(error)
-    if not code or code == 'local_proxy_connection_failed':
+    if code == 'local_proxy_connection_failed':
         return tunnel_error or code
     return code
 

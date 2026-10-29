@@ -151,7 +151,7 @@ class LoopbackProxy:
             # Never return raw configuration or arbitrary exception text.
             raise LocalProxyError('local_proxy_configuration_invalid') from exc
 
-    def open_tunnel(self, public_ip: str, timeout: float, source_address=None) -> socket.socket:
+    def open_tunnel(self, public_ip: str, timeout: float, source_address=None, *, socket_factory=None) -> socket.socket:
         try:
             address = ipaddress.ip_address(public_ip)
         except (ValueError, TypeError) as exc:
@@ -163,6 +163,8 @@ class LoopbackProxy:
         deadline = time.monotonic() + timeout
         proxy = _DeadlineHTTPConnection(self.host, self.port, deadline=deadline, timeout=timeout,
                                             source_address=source_address)
+        if socket_factory is not None:
+            proxy._create_connection = socket_factory
         proxy.set_debuglevel(0)  # Inherited stdlib debug output must not print secrets.
         # CONNECT only the verified numeric IP, never ask the proxy to resolve a
         # hostname differently. Original-host TLS is performed by the caller.

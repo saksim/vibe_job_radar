@@ -50,7 +50,7 @@ class LoopbackSocks5(LoopbackProxy):
         except (ValueError, TypeError, LocalProxyError) as exc:
             raise LocalProxyError('local_socks_configuration_invalid') from exc
 
-    def open_tunnel(self, public_ip: str, timeout: float, source_address=None) -> socket.socket:
+    def open_tunnel(self, public_ip: str, timeout: float, source_address=None, *, socket_factory=None) -> socket.socket:
         try:
             address = ipaddress.ip_address(public_ip)
         except (ValueError, TypeError) as exc:
@@ -84,7 +84,7 @@ class LoopbackSocks5(LoopbackProxy):
             return bytes(chunks)
 
         try:
-            sock = socket.create_connection((self.host, self.port), remaining(), source_address)
+            sock = (socket_factory or socket.create_connection)((self.host, self.port), remaining(), source_address)
             # Offer exactly the configured method. Credentials cannot silently
             # downgrade to anonymous if the peer selects a different method.
             expected = 2 if self.credentials is not None else 0

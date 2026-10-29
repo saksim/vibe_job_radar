@@ -56,9 +56,9 @@ class _ExplicitHost:
     def with_environment_credentials(self):
         raise LocalProxyError('vm_proxy_explicit_required')
 
-    def open_tunnel(self, public_ip, timeout, source_address=None):
+    def open_tunnel(self, public_ip, timeout, source_address=None, *, socket_factory=None):
         try:
-            return super().open_tunnel(public_ip, timeout, source_address)
+            return super().open_tunnel(public_ip, timeout, source_address, socket_factory=socket_factory)
         except LocalProxyError as exc:
             # Keep protocol/target refusals, but never call a host peer "local".
             code = {'local_proxy_connection_failed': 'vm_proxy_connection_failed',
