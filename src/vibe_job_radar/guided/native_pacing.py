@@ -106,6 +106,9 @@ class NativeRequestPacer:
                 b._send(item.session, 'Fetch.failRequest',
                         {'requestId': item.request_id, 'errorReason': 'Aborted'})
                 return
+            from .login_landing import cancel_transition_request
+            if cancel_transition_request(b, item.session, item.request_id, item.record, retire=self._pop):
+                return
             if time.monotonic() < item.due or not self._reserve(item):
                 return
             self._pop()  # Nested acknowledgment cannot continue this twice.

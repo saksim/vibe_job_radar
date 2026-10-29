@@ -715,7 +715,13 @@ class NativeBackend(PlaywrightBackend):
         if '_request_pacer' not in self.__dict__:
             self._request_pacer = NativeRequestPacer(self)
         record = {'context': context, 'epoch':self._epoch,'operation':operation,'role':role,'size':0,
-                  'url':url,'status':None, 'json':False, 'method':r['method'], 'resource':kind.lower()}
+                  'url':url,'status':None, 'json':False, 'method':r['method'], 'resource':kind.lower(),
+                  'login_frame':event.get('frameId')}
+        if not robots:
+            from .login_landing import observe_post_login, cancel_transition_request
+            observe_post_login(self, session, event, rule)
+            if cancel_transition_request(self, session, event['requestId'], record):
+                return
         self._request_pacer.submit(PausedRequest(session, event['requestId'], key, 'https://'+p.netloc,
             record, role == 'business' and r['method'] != 'OPTIONS', not robots and rule.authentication))
 
@@ -1009,6 +1015,7 @@ class NativeBackend(PlaywrightBackend):
         self.contract.match(url,'GET','Document',authentication=authentication)
         self.auth_mode=authentication; self.error=self.wait_error=None; self._halted=False
         self._login_landing = None
+        self._login_transition = None
         self._epoch+=1; self._observations.clear()
         self.__dict__.get('_latest_business', {}).clear(); self._observed_bytes=0
         self._load_robots()

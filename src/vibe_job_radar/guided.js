@@ -14,10 +14,12 @@ Object.assign(cardStatus,{read_transient_failure:'来源暂时不可用，等待
 async function api(path,data){const response=await fetch(path,{method:data===undefined?'GET':'POST',headers:{'X-Radar-Token':token,...(data===undefined?{}:{'Content-Type':'application/json'})},body:data===undefined?undefined:JSON.stringify(data),cache:'no-store'});const result=await response.json();if(!response.ok)throw Error(result.error||'操作失败');return result;}
 function note(text){$('busy').textContent=text;}
 const manualLoginNames={waiting_user:'等待你在采集窗口操作。',sms_requested:'已观察到平台的短信发送请求，正在等待响应。请勿连续点击获取验证码。',sms_response_received:'短信请求已有响应；这不代表短信已送达。收到后只在平台页面填写。',login_requested:'已观察到平台的登录提交，正在等待响应。请勿重复点击登录。',login_response_received:'登录请求已有响应，仍需核对平台页面和原任务是否可继续。',return_available:'已观察到官网返回个人首页；该页面未加载。已勾选自动接续时会检查原任务，否则请点登录后重新搜索。无需重发短信。',verification_required:'平台显示人工验证码，请在采集窗口完成。',code_rejected:'平台提示验证码错误或失效。本次结果未通过，请先核对页面提示，不要连续重发。',account_ui_visible:'平台已显示账号入口，正在核对原任务是否可继续。',request_failed:'请求未成功完成。请保留页面提示，停止重复收码。',result_unknown:'验证页面已变化，结果尚不明确。请核对采集窗口。',needs_attention:'本次页面或网络出现异常，自动接续已停止。请勿重复收码。',timed_out:'本次人工等待已结束，请核对平台页面后再明确继续。',cancelled:'本次人工交接已取消。',returned:'已接回原任务；后续结果见任务状态。'};
+manualLoginNames.post_login_pending='官网正在处理登录后的返回，请等待，不要重复登录或获取验证码；原任务仍待核验。';
 function renderManualLogin(){
  const p=current?.manual_login;
  const label=$('manual-login-progress');
  label.textContent=p?(manualLoginNames[p.stage]||'')+` 短信请求 ${p.sms_requests||0} 次，登录提交 ${p.login_submissions||0} 次。`:'';
+ if(p?.duplicate_cancellations)label.textContent+=` 返回处理期间已取消 ${p.duplicate_cancellations} 次重复登录或收码请求，未再次发送。`;
  if(p&&(p.sms_requests>1||p.login_submissions>1))label.textContent+=' 已观察到多次平台请求，短信可能对应不同次请求；请勿继续连点。';
  const allowed=current?.platform==='liepin'&&current.backend==='bridge'&&['waiting_manual','paused','interrupted','ready'].includes(current.status);
  $('native-login-handoff').hidden=!allowed;
