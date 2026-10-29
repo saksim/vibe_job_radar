@@ -53,6 +53,35 @@ class LoginStopDiagnosticsTests(unittest.TestCase):
         self.assertEqual(self.b._diagnostics.observer_errors, 1)
         self.assertNotIn(SECRET, json.dumps(self.b._diagnostics.snapshot()))
 
+    def test_public_post_login_name_identifies_stop_without_granting_access(self):
+        from vibe_job_radar.guided.adapters import builtins
+        from vibe_job_radar.guided.liepin_login_policy import native_human_contract
+        path = '/api/com.liepin.passport.account.auto-login-no-extension'
+        url = 'https://api-passport.liepin.com' + path
+        self.b.contract = native_human_contract(builtins().get('liepin'), version=2)
+        event = self.req(path=path, kind='Preflight', method='OPTIONS')
+        event['request']['url'] = url + '?token=' + SECRET
+        self.b._paused('session', event)
+        stop = self.b._diagnostics.snapshot()['first_backend_stop']
+        self.assertEqual(stop['path_template'], path)
+        self.assertEqual(stop['native_reason'], 'operation_unmatched')
+        self.assertEqual(self.b.error, 'native_operation_unreviewed')
+        self.b._send.assert_called_with('session', 'Fetch.failRequest',
+            {'requestId': event['requestId'], 'errorReason': 'BlockedByClient'})
+        self.assertNotIn(SECRET, json.dumps(self.b._diagnostics.snapshot()))
+        for target in (url + '/' + SECRET, url.replace('api-passport.', 'other.')):
+            self.assertNotEqual(safe_target(target)['path_template'], path)
+            self.assertNotIn(SECRET, json.dumps(safe_target(target)))
+        for authentication in (False, True):
+            with self.assertRaises(CrawlError):
+                self.b.contract.match(url, 'POST', 'XHR', authentication=authentication)
+
+    def test_root_path_is_not_confused_with_an_unknown_private_segment(self):
+        self.assertEqual(safe_target('https://c.liepin.com/')['path_template'], '/')
+        target = safe_target('https://c.liepin.com/' + SECRET + '/?token=' + SECRET)
+        self.assertEqual(target['path_template'], '/:segment/')
+        self.assertNotIn(SECRET, json.dumps(target))
+
     def test_stop_without_request_has_no_invented_url(self):
         self.b._fatal('native_protocol_error')
         stop = self.b._diagnostics.snapshot()['first_backend_stop']

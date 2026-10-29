@@ -18,10 +18,8 @@ class LandingTicket:
     epoch: int
 
 
-def _ready(backend, tracker):
+def _active_context(backend, tracker):
     return (tracker is not None and tracker.active and tracker.clock() < tracker.deadline
-            and tracker.last_login_response == tracker.sequence
-            and tracker.last_login_response is not None
             and getattr(backend, 'human_login', False) is True
             and getattr(backend, 'auth_mode', False) is True
             and getattr(backend, '_direct_cdp', False) is True
@@ -30,26 +28,53 @@ def _ready(backend, tracker):
             and getattr(backend, 'policy_check', lambda: True)())
 
 
-def offer(backend, session, event):
-    """Recognize only the SMS/password page's exact main-frame root return."""
+def _ready(backend, tracker):
+    return (_active_context(backend, tracker)
+            and tracker.last_login_response == tracker.sequence
+            and tracker.last_login_response is not None)
+
+
+def _owned_return(backend, session, event):
     request = event['request']
     tracker = current(backend)
     if (event.get('resourceType') != 'Document' or request.get('method') != 'GET'
             or request.get('url') != 'https://c.liepin.com/'
-            or not _ready(backend, tracker)):
-        return False
+            or not _active_context(backend, tracker)):
+        return None
     identity = backend.document_identity()
     document = identity[-1]
     if (session != identity[0] or event.get('frameId') != document.frame
             or document.url != 'https://www.liepin.com/login'
             or document.document_url != document.url):
+        return None
+    return tracker, identity
+
+
+def offer(backend, session, event):
+    """Recognize only the SMS/password page's exact main-frame root return."""
+    owned = _owned_return(backend, session, event)
+    if owned is None or not _ready(backend, owned[0]):
         return False
+    tracker, identity = owned
     if tracker.return_offered:
         return peek(backend) is not None  # Abort duplicates, never queue twice.
     backend._login_landing = LandingTicket(identity, tracker, tracker.sequence, backend._epoch)
     tracker.return_offered = True
     tracker.stage = 'return_available'
     return True
+
+
+def unverified_return(backend, session, event):
+    """Preserve an owned login page when its return cannot be consumed.
+
+    A newer submit or visible rejection invalidates the previous response.
+    Cancel this exact navigation rather than replacing the form with a browser
+    error page. It grants no ticket, account access or automatic continuation.
+    """
+    owned = _owned_return(backend, session, event)
+    return (owned is not None and owned[0].submits > 0
+            and (not _ready(backend, owned[0])
+                 or (owned[0].return_offered and peek(backend) is None)))
 
 
 def peek(backend):

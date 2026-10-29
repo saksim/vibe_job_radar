@@ -24,6 +24,7 @@ ROOT = 'https://c.liepin.com/'
 LOGIN = 'https://api-passport.liepin.com/api/com.liepin.passport.account.tel-sms-login'
 FLAG = 'https://api-c.liepin.com/api/com.liepin.cresume.resume-complete-flag'
 HEADER = 'https://api-c.liepin.com/api/com.liepin.usercx.pc.user.base-property'
+MAINTENANCE = 'https://api-passport.liepin.com/api/com.liepin.passport.account.auto-login-no-extension'
 HTML = '''<!doctype html><meta charset="utf-8"><body><h1>LOCAL FIXTURE ONLY</h1>
 <input data-nick="login-smscode"><button id="submit">Synthetic return</button>
 <script>document.querySelector('#submit').onclick=async()=>{
@@ -34,10 +35,13 @@ HTML = '''<!doctype html><meta charset="utf-8"><body><h1>LOCAL FIXTURE ONLY</h1>
 SEARCH = '''<!doctype html><meta charset="utf-8"><body><h1>LOCAL ORIGINAL SEARCH ENTRY</h1>
 <input type="text" placeholder="搜索职位、公司"><script>
 fetch('''+json.dumps(HEADER)+''',{method:'POST',headers:{'Content-Type':'application/json','X-Client-Type':'web'},body:'{}'});
+fetch('''+json.dumps(MAINTENANCE)+''',{method:'POST',headers:{'Content-Type':'application/json','X-Client-Type':'web'},body:'{}'});
 </script></body>'''
 
 
 class LandingBackend(ControlledBackend):
+    login_html = HTML
+
     def __init__(self, *args, **kwargs):
         self.fixture_replies = {}
         super().__init__(*args, **kwargs)
@@ -62,9 +66,9 @@ class LandingBackend(ControlledBackend):
             return NativeBackend._send(self,session,method,params,callback)
         event = self.fixture_requests.pop((session,params['requestId']))
         request = event['request']; url = request['url']
-        if url==MAIN: content,mime=HTML,'text/html'
+        if url==MAIN: content,mime=self.login_html,'text/html'
         elif url==ENTRY: content,mime=SEARCH,'text/html'
-        elif url in (LOGIN,FLAG,HEADER): content,mime='{"fixture":true,"data":{"intercepted":false}}','application/json'
+        elif url in (LOGIN,FLAG,HEADER,MAINTENANCE): content,mime='{"fixture":true,"data":{"intercepted":false}}','application/json'
         elif urlsplit(url).path=='/favicon.ico': content,mime='','image/x-icon'
         else: raise AssertionError('Unexpected controlled request')
         headers = [{'name':'Content-Type','value':mime},
@@ -128,12 +132,14 @@ def main():
             assert cancelled and b.delivered.count(LOGIN)==before and not b.error
             b.open(ENTRY)
             deadline=time.monotonic()+5
-            while HEADER not in b.delivered and time.monotonic()<deadline:
+            while not all(url in b.delivered for url in (HEADER,MAINTENANCE)) and time.monotonic()<deadline:
                 b.page.wait_for_timeout(50)
             result.update(original_entry_reached=b.page.url==ENTRY,
-                header_read_completed=HEADER in b.delivered,backend_error=b.error)
+                header_read_completed=HEADER in b.delivered,
+                session_maintenance_completed=MAINTENANCE in b.delivered,backend_error=b.error)
             assert result['main_document_preserved'] and result['original_entry_reached']
             assert result['header_read_completed'] and not b.error and ROOT not in b.delivered
+            assert result['session_maintenance_completed']
         except Exception as exc:
             result.update(exception=type(exc).__name__, backend_error=b.error,
                           error_code=getattr(exc, 'code', None),

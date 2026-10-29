@@ -10,7 +10,7 @@ from vibe_job_radar.guided.checkpoint import binding, ensure_compatible
 from vibe_job_radar.guided.contracts import CrawlError
 from vibe_job_radar.guided.diagnostic_trace import safe_target
 from vibe_job_radar.guided.liepin_login_policy import native_human_contract
-from vibe_job_radar.guided.login_landing import offer, peek, claim, departing_request
+from vibe_job_radar.guided.login_landing import offer, peek, claim, departing_request, unverified_return
 from vibe_job_radar.guided.manual_login_progress import ManualLoginProgress
 from vibe_job_radar.guided.native_browser import NativeBackend
 from vibe_job_radar.guided.native_login_handoff import upgrade_known_binding
@@ -24,6 +24,7 @@ MAIN = 'https://www.liepin.com/login'
 ROOT = 'https://c.liepin.com/'
 FLAG = 'https://api-c.liepin.com/api/com.liepin.cresume.resume-complete-flag'
 HEADER = 'https://api-c.liepin.com/api/com.liepin.usercx.pc.user.base-property'
+MAINTENANCE = 'https://api-passport.liepin.com/api/com.liepin.passport.account.auto-login-no-extension'
 
 
 def ready_backend(b=None):
@@ -51,6 +52,30 @@ def event(url=ROOT, *, frame='main', method='GET', resource='Document'):
 
 
 class PostLoginContractTests(unittest.TestCase):
+    def test_session_maintenance_has_exact_origin_method_and_non_job_role(self):
+        from vibe_job_radar.guided.native_policy import contract_for
+        contract = native_human_contract(ADAPTER)
+        headers = {'Origin':'https://www.liepin.com', 'Access-Control-Request-Method':'POST',
+                   'Access-Control-Request-Headers':'content-type,x-client-type'}
+        for auth in (False, True):
+            for method in ('POST', 'OPTIONS'):
+                rule = contract.match(MAINTENANCE, method, 'XHR', authentication=auth, headers=headers)
+                rule.validate_headers(method, headers)
+                self.assertEqual(rule.key, 'liepin_session_maintenance')
+                self.assertEqual(rule.role, 'login')
+        for url, method, kind in ((MAINTENANCE,'GET','XHR'), (MAINTENANCE,'POST','Document'),
+                (MAINTENANCE+'/extra','POST','XHR'), (MAINTENANCE.replace('auto-login-no-extension','logout'),'POST','XHR')):
+            with self.subTest(url=url,method=method,kind=kind), self.assertRaises(CrawlError):
+                contract.match(url, method, kind, authentication=True)
+        for change in ({'Origin':'https://c.liepin.com'}, {'Access-Control-Request-Method':'DELETE'},
+                       {'Access-Control-Request-Headers':'unreviewed'}):
+            with self.assertRaises(CrawlError):
+                contract.match(MAINTENANCE,'OPTIONS','XHR').validate_headers('OPTIONS',{**headers,**change})
+        for legacy in (contract_for(ADAPTER), native_human_contract(ADAPTER,version=1),
+                       native_human_contract(ADAPTER,version=2)):
+            with self.assertRaises(CrawlError):
+                legacy.match(MAINTENANCE,'POST','XHR',authentication=True)
+
     def test_exact_read_operations_and_preflights_do_not_become_job_data(self):
         contract = native_human_contract(ADAPTER)
         for url, method in ((FLAG,'GET'), (HEADER,'POST')):
@@ -84,6 +109,57 @@ class PostLoginContractTests(unittest.TestCase):
 
 
 class LandingTests(unittest.TestCase):
+    def test_rejected_or_superseded_response_cancels_root_without_return_ticket(self):
+        for state in ('pending', 'rejected', 'old_ticket'):
+            b = ready_backend(); p = b._manual_login_progress
+            if state == 'old_ticket':
+                self.assertTrue(offer(b, 'owned', event()))
+            p.requested('second', LOGIN, 'POST')
+            if state in ('rejected', 'old_ticket'):
+                p.received('second', 200)
+            if state == 'rejected':
+                body = Mock(count=Mock(return_value=1), inner_text=Mock(return_value='验证码错误或过期'))
+                b.page.locator = lambda selector: body if selector == 'body' else Mock(count=Mock(return_value=0))
+                p.inspect_surface(b.page)
+                self.assertEqual(p.stage, 'code_rejected')
+            self.assertIsNone(peek(b))
+            b._request_paused = Mock()
+            b._paused('owned', event())
+            self.assertEqual(b._send.call_args.args[2]['errorReason'], 'Aborted')
+            self.assertEqual(b.error, 'login_return_unverified')
+            self.assertTrue(b._halted)
+            self.assertFalse(p.active)
+            self.assertIsNone(peek(b))
+            b._request_paused.assert_not_called()
+            b.wire.ensure_robots.assert_not_called(); b.wire.reserve.assert_not_called()
+            self.assertEqual(p.submits, 2)
+
+    def test_unverified_cancellation_is_limited_to_owned_active_login_root(self):
+        for change in ('response', 'no_submit', 'cancel', 'expired', 'policy', 'halt', 'inactive',
+                       'normal_mode', 'page', 'session', 'frame', 'path', 'query', 'method', 'resource'):
+            b = ready_backend(); p = b._manual_login_progress
+            p.last_login_response = None
+            e = event(); session = 'owned'
+            if change == 'response': p.last_login_response = p.sequence
+            elif change == 'no_submit': p.submits = 0
+            elif change == 'cancel': b.cancelled.set()
+            elif change == 'expired': p.clock = lambda: 611
+            elif change == 'policy': b.policy_check = lambda: False
+            elif change == 'halt': b._halted = True
+            elif change == 'inactive': p.stop()
+            elif change == 'normal_mode': b.auth_mode = False
+            elif change == 'page':
+                identity = b.document_identity.return_value
+                b.document_identity.return_value = (*identity[:3], replace(identity[-1], url=ADAPTER.search_base))
+            elif change == 'session': session = 'foreign'
+            elif change == 'frame': e['frameId'] = 'child'
+            elif change == 'path': e['request']['url'] += 'login/two-factor'
+            elif change == 'query': e['request']['url'] += '?ticket=private'
+            elif change == 'method': e['request']['method'] = 'POST'
+            else: e['resourceType'] = 'XHR'
+            with self.subTest(change=change):
+                self.assertFalse(unverified_return(b, session, e))
+
     def departure(self):
         b=ready_backend(); offer(b,'owned',event()); claim(b,peek(b)); b.auth_mode=False
         e=event(LOGIN,method='OPTIONS',resource='XHR')
@@ -246,6 +322,24 @@ class OriginalTaskReturnTests(unittest.TestCase):
         self.assertEqual(self.state['outcome']['saved'],2)
         self.assertTrue(self.workspace.report(self.state['report_id']))
         ensure_compatible(self.state,ADAPTER)
+
+    def test_v2_upgrade_preserves_previous_migration_and_task_history(self):
+        state=deepcopy(self.state); state.update(backend='native',human_login=True)
+        state['execution_binding']=binding(state,ADAPTER,human_contract_version=2)
+        state['native_login_contract_upgrade']={'from_version':1,'to_version':2,
+            'previous_binding':binding(state,ADAPTER,human_contract_version=1)}
+        before=deepcopy(state)
+        self.assertTrue(upgrade_known_binding(state,ADAPTER))
+        ensure_compatible(state,ADAPTER)
+        upgrade=state['native_login_contract_upgrade']
+        self.assertEqual((upgrade['from_version'],upgrade['to_version']),(2,3))
+        self.assertEqual(upgrade['previous_binding'],before['execution_binding'])
+        self.assertEqual(upgrade['previous_upgrade'],before['native_login_contract_upgrade'])
+        for key in before:
+            if key not in {'execution_binding','native_login_contract_upgrade'}:
+                self.assertEqual(state[key],before[key])
+        updated=deepcopy(state)
+        self.assertFalse(upgrade_known_binding(state,ADAPTER)); self.assertEqual(state,updated)
 
     def test_legacy_explicit_password_login_still_submits_once(self):
         self.state.update(backend='native', human_login=True, auto_continue_after_login=True)

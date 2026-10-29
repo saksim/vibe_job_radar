@@ -35,7 +35,7 @@ def prepare(state, adapter, browser):
 
 
 def upgrade_known_binding(state, adapter):
-    """One known v1 -> v2 compatibility migration on an explicit task action.
+    """Upgrade an exact known v1/v2 binding on an explicit task action.
 
     Query, adapter, consent and all saved rows must still validate. Never
     accept an unversioned native task or rewrite an unknown/tampered binding.
@@ -47,10 +47,18 @@ def upgrade_known_binding(state, adapter):
     current = binding(state, adapter)
     if state.get('execution_binding') == current:
         return False
-    ensure_compatible(state, adapter, human_contract_version=1)
+    version = next((v for v in (1, 2) if state.get('execution_binding')
+                    == binding(state, adapter, human_contract_version=v)), None)
+    if version is None:
+        from .contracts import CrawlError
+        raise CrawlError('checkpoint_incompatible')
+    ensure_compatible(state, adapter, human_contract_version=version)
     previous = deepcopy(state['execution_binding'])
-    state['native_login_contract_upgrade'] = {
-        'from_version': 1, 'to_version': 2, 'at': utc_now(), 'previous_binding': previous,
+    upgrade = {
+        'from_version': version, 'to_version': 3, 'at': utc_now(), 'previous_binding': previous,
     }
+    if 'native_login_contract_upgrade' in state:
+        upgrade['previous_upgrade'] = deepcopy(state['native_login_contract_upgrade'])
+    state['native_login_contract_upgrade'] = upgrade
     state['execution_binding'] = current
     return True

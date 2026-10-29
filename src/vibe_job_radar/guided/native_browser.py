@@ -571,7 +571,7 @@ class NativeBackend(PlaywrightBackend):
                 if self._halted:
                     raise self.wait_error or CrawlError(self.error or 'site_stopped')
                 if not response:
-                    from .login_landing import offer, departing_request
+                    from .login_landing import offer, departing_request, unverified_return
                     if departing_request(self, session, event):
                         self.native_counts['blocked'] += 1
                         self._send(session, 'Fetch.failRequest',
@@ -586,6 +586,13 @@ class NativeBackend(PlaywrightBackend):
                         self._send(session, 'Fetch.failRequest',
                                    {'requestId': event['requestId'], 'errorReason': 'Aborted'})
                         notify(getattr(self, '_diagnostics', None), 'mark', code='login_return_pending')
+                        return
+                    if unverified_return(self, session, event):
+                        self.native_counts['blocked'] += 1
+                        self._send(session, 'Fetch.failRequest',
+                                   {'requestId': event['requestId'], 'errorReason': 'Aborted'})
+                        self._fatal('login_return_unverified')
+                        notify(getattr(self, '_diagnostics', None), 'mark', code='login_return_unverified')
                         return
                 if ignored:
                     notify(getattr(self,'_diagnostics',None),'mark',code='native_optional_request_blocked')

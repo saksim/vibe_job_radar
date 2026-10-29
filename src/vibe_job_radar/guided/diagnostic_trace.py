@@ -39,7 +39,7 @@ NATIVE_RULES = frozenset({'liepin_navigation', 'liepin_same_host_assets', 'liepi
     'liepin_search_suggest', 'liepin_suggest_preflight', 'liepin_regions', 'liepin_regions_preflight',
     'liepin_region_lookup', 'liepin_region_lookup_preflight',
     'liepin_login_ui_config', 'liepin_login_ui_preflight', 'liepin_password_login', 'liepin_login_preflight',
-    'liepin_login_resume_flag', 'liepin_account_header'})
+    'liepin_login_resume_flag', 'liepin_account_header', 'liepin_session_maintenance'})
 CODES = frozenset('''operation_error network_error dns_error non_public_address
     workspace_proxy_environment_conflict
     pac_unavailable pac_invalid_script pac_invalid_result pac_timeout pac_busy
@@ -75,7 +75,7 @@ CODES = frozenset('''operation_error network_error dns_error non_public_address
     vm_proxy_configuration_invalid vm_proxy_explicit_required vm_proxy_connection_failed vm_proxy_timeout
     local_socks_auth_unsupported local_socks_protocol_error local_socks_timeout
     local_socks_connection_failed local_socks_request_rejected local_socks_truncated_reply
-    robots_response_html robots_http_unavailable robots_encoding_invalid robots_file_absent robots_empty_document login_return_pending login_departure_request_cancelled
+    robots_response_html robots_http_unavailable robots_encoding_invalid robots_file_absent robots_empty_document login_return_pending login_return_unverified login_departure_request_cancelled
     robots_rules_observed robots_extensions_observed robots_no_rules_observed
     robots_inspection_truncated no_cards no_records native_administrator_blocked native_contract_unavailable
     native_contract_invalid native_operation_unreviewed native_surface_unsupported
@@ -111,6 +111,7 @@ PATH_PARTS = frozenset({'robots.txt', 'web', 'geek', 'job', 'job_detail', 'user'
 # diagnosis only. Inclusion here NEVER grants a request access.
 LOGIN_PATHS = frozenset('/api/com.liepin.passport.' + suffix for suffix in (
     'account.account-pwd-login', 'account.check-login', 'account.v2.check-login',
+    'account.auto-login-no-extension',
     'account.get-category', 'account.send-two-factor-sms-code',
     'account.verify-two-factor-sms-code', 'account.tel-sms-login',
     'captcha.get-smart-captcha', 'captcha.send-sms',
@@ -138,7 +139,7 @@ def safe_target(url):
             return result
         result['host'] = host
         parts = parsed.path.split('/')[1:17]
-        result['path_template'] = '/' + '/'.join(p if p in PATH_PARTS else ':segment' for p in parts)
+        result['path_template'] = '/' + '/'.join(p if not p or p in PATH_PARTS else ':segment' for p in parts)
         if ((host == 'api-passport.liepin.com' and parsed.path in LOGIN_PATHS)
                 or parsed.path in PUBLIC_READ_PATHS.get(host, ())):
             result['path_template'] = parsed.path
