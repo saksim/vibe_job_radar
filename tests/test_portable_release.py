@@ -64,6 +64,8 @@ class PortableReleaseTests(unittest.TestCase):
         path=self.root/'fixture.zip'
         with zipfile.ZipFile(path,'w') as z:
             z.writestr('VibeJobRadar/PORTABLE.json',json.dumps(self.meta))
+            if hasattr(self, 'source_manifest_payload'):
+                z.writestr('VibeJobRadar/SOURCE.json',json.dumps(self.source_manifest_payload))
             z.writestr('VibeJobRadar/portable-verification.json',json.dumps(self.proof))
             z.writestr('VibeJobRadar/VibeJobRadar.exe',b'authored data, not an executable')
         sha=self.mod.file_hash(path);dest=self.root/f'vibe-job-radar-0.2.0-{sha[:16]}-windows-x64.zip'
@@ -73,6 +75,27 @@ class PortableReleaseTests(unittest.TestCase):
                   'live_sites_certified':False,'platform':'windows-x64'}
         manifest.update({flag:True for flag in self.required_flags})
         return dest,manifest
+
+    def test_separate_source_manifest_keeps_complete_source_evidence_binding(self):
+        self.meta['source_manifest'] = 'SOURCE.json'
+        self.meta['source'] = {k:v for k,v in self.source.items() if k != 'files'}
+        self.source_manifest_payload = copy.deepcopy(self.source)
+        package, manifest = self.archive()
+        self.mod.validate_candidate(package, manifest, self.evidence, self.sha)
+
+    def test_separate_source_manifest_rejects_missing_changed_or_redirected_evidence(self):
+        for defect in ('missing', 'changed', 'summary', 'redirect'):
+            with self.subTest(defect=defect):
+                self.meta['source_manifest'] = 'SOURCE.json'
+                self.meta['source'] = {k:v for k,v in self.source.items() if k != 'files'}
+                self.source_manifest_payload = copy.deepcopy(self.source)
+                if defect == 'missing': del self.source_manifest_payload
+                if defect == 'changed': self.source_manifest_payload['files']['README.md'] = 'e'*64
+                if defect == 'summary': self.meta['source']['file_count'] = 2
+                if defect == 'redirect': self.meta['source_manifest'] = '../SOURCE.json'
+                package, manifest = self.archive()
+                with self.assertRaises(ValueError):
+                    self.mod.validate_candidate(package, manifest, self.evidence, self.sha)
 
     def test_reuse_candidate_keeps_bytes_unsigned_scope_and_rollback(self):
         qualified=self.mod.validate_runs(self.repo,self.run,self.runs)

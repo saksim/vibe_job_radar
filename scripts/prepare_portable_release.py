@@ -16,7 +16,7 @@ import zipfile
 
 from release_summary import validate_summary
 from release_artifacts import select_artifacts, download_artifact
-from build_windows_portable import native_components_valid
+from build_windows_portable import native_components_valid, PORTABLE_SOURCE_FILE
 from url_pac_acceptance import valid_evidence as valid_url_pac
 from domain_pac_acceptance import valid_evidence as valid_domain_pac
 from ntlm_proxy_acceptance import valid_evidence as valid_ntlm
@@ -165,7 +165,16 @@ def validate_candidate(candidate, manifest, source_evidence, sha):
         require(len(names) == len(set(names)), 'Duplicate archive entries')
         meta = zip_json(archive, 'VibeJobRadar/PORTABLE.json')
         proof = zip_json(archive, 'VibeJobRadar/portable-verification.json')
-    source = meta.get('source', {})
+        source = meta.get('source', {})
+        if 'source_manifest' in meta:
+            name = 'VibeJobRadar/' + PORTABLE_SOURCE_FILE
+            require(meta['source_manifest'] == PORTABLE_SOURCE_FILE and name in names,
+                    'Missing or invalid portable source manifest')
+            full_source = zip_json(archive, name)
+            require(isinstance(full_source, dict) and isinstance(full_source.get('files'), dict)
+                    and source == {k:v for k,v in full_source.items() if k != 'files'},
+                    'Portable source summary mismatch')
+            source = full_source
     require(source == source_evidence.get('source')
             and source.get('sha256') == manifest.get('source_sha256')
             and isinstance(source.get('sha256'), str) and HEX.fullmatch(source['sha256']),

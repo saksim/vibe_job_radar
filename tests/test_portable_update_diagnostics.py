@@ -136,3 +136,19 @@ class PortableUpdateDiagnosticsTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             write_portable_metadata(path, {'unsupported':float('nan')})
         self.assertEqual(path.read_bytes(), b'keep previous metadata')
+
+    def test_growing_source_manifest_keeps_legacy_reader_and_all_evidence(self):
+        source = {'algorithm':'sha256-file-manifest-v1', 'sha256':'a'*64, 'file_count':1000,
+            'files':{f'src/vibe_job_radar/subsystem/file_{n}.py':'b'*64 for n in range(1000)}}
+        value = {'source':source, 'runtime_source':{'raw_sha256':source['sha256']},
+            'dependency_licenses':['licenses/许可证.txt'], 'upgrade_protocol':1}
+        self.assertGreater(len(json.dumps(value, separators=(',', ':')).encode()), 100000)
+        path = self.root/'PORTABLE.json'
+        write_portable_metadata(path, value)
+        meta = read_json(path)  # The existing installed reader's 100000-byte limit.
+        self.assertEqual(meta['source_manifest'], 'SOURCE.json')
+        self.assertEqual(meta['source'], {k:v for k,v in source.items() if k != 'files'})
+        self.assertEqual(meta['runtime_source'], value['runtime_source'])
+        self.assertEqual(meta['dependency_licenses'], value['dependency_licenses'])
+        self.assertEqual(json.loads((self.root/'SOURCE.json').read_bytes()), source)
+        self.assertIs(value['source'], source)
