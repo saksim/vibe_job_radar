@@ -10,7 +10,7 @@ from vibe_job_radar.guided.checkpoint import binding, ensure_compatible
 from vibe_job_radar.guided.contracts import CrawlError
 from vibe_job_radar.guided.diagnostic_trace import safe_target
 from vibe_job_radar.guided.liepin_login_policy import native_human_contract
-from vibe_job_radar.guided.login_landing import offer, peek, claim, departing_request
+from vibe_job_radar.guided.login_landing import offer, peek, claim, departing_request, unverified_return
 from vibe_job_radar.guided.manual_login_progress import ManualLoginProgress
 from vibe_job_radar.guided.native_browser import NativeBackend
 from vibe_job_radar.guided.native_login_handoff import upgrade_known_binding
@@ -109,6 +109,54 @@ class PostLoginContractTests(unittest.TestCase):
 
 
 class LandingTests(unittest.TestCase):
+    def test_rejected_or_superseded_response_cancels_root_without_return_ticket(self):
+        for rejected in (False, True):
+            b = ready_backend(); p = b._manual_login_progress
+            p.requested('second', LOGIN, 'POST')
+            if rejected:
+                p.received('second', 200)
+                body = Mock(count=Mock(return_value=1), inner_text=Mock(return_value='验证码错误或过期'))
+                b.page.locator = lambda selector: body if selector == 'body' else Mock(count=Mock(return_value=0))
+                p.inspect_surface(b.page)
+                self.assertEqual(p.stage, 'code_rejected')
+            self.assertIsNone(p.last_login_response)
+            b._request_paused = Mock()
+            b._paused('owned', event())
+            self.assertEqual(b._send.call_args.args[2]['errorReason'], 'Aborted')
+            self.assertEqual(b.error, 'login_return_unverified')
+            self.assertTrue(b._halted)
+            self.assertFalse(p.active)
+            self.assertIsNone(peek(b))
+            b._request_paused.assert_not_called()
+            b.wire.ensure_robots.assert_not_called(); b.wire.reserve.assert_not_called()
+            self.assertEqual(p.submits, 2)
+
+    def test_unverified_cancellation_is_limited_to_owned_active_login_root(self):
+        for change in ('response', 'no_submit', 'cancel', 'expired', 'policy', 'halt', 'inactive',
+                       'normal_mode', 'page', 'session', 'frame', 'path', 'query', 'method', 'resource'):
+            b = ready_backend(); p = b._manual_login_progress
+            p.last_login_response = None
+            e = event(); session = 'owned'
+            if change == 'response': p.last_login_response = p.sequence
+            elif change == 'no_submit': p.submits = 0
+            elif change == 'cancel': b.cancelled.set()
+            elif change == 'expired': p.clock = lambda: 611
+            elif change == 'policy': b.policy_check = lambda: False
+            elif change == 'halt': b._halted = True
+            elif change == 'inactive': p.stop()
+            elif change == 'normal_mode': b.auth_mode = False
+            elif change == 'page':
+                identity = b.document_identity.return_value
+                b.document_identity.return_value = (*identity[:3], replace(identity[-1], url=ADAPTER.search_base))
+            elif change == 'session': session = 'foreign'
+            elif change == 'frame': e['frameId'] = 'child'
+            elif change == 'path': e['request']['url'] += 'login/two-factor'
+            elif change == 'query': e['request']['url'] += '?ticket=private'
+            elif change == 'method': e['request']['method'] = 'POST'
+            else: e['resourceType'] = 'XHR'
+            with self.subTest(change=change):
+                self.assertFalse(unverified_return(b, session, e))
+
     def departure(self):
         b=ready_backend(); offer(b,'owned',event()); claim(b,peek(b)); b.auth_mode=False
         e=event(LOGIN,method='OPTIONS',resource='XHR')

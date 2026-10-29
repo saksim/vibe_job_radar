@@ -40,6 +40,8 @@ fetch('''+json.dumps(MAINTENANCE)+''',{method:'POST',headers:{'Content-Type':'ap
 
 
 class LandingBackend(ControlledBackend):
+    login_html = HTML
+
     def __init__(self, *args, **kwargs):
         self.fixture_replies = {}
         super().__init__(*args, **kwargs)
@@ -64,7 +66,7 @@ class LandingBackend(ControlledBackend):
             return NativeBackend._send(self,session,method,params,callback)
         event = self.fixture_requests.pop((session,params['requestId']))
         request = event['request']; url = request['url']
-        if url==MAIN: content,mime=HTML,'text/html'
+        if url==MAIN: content,mime=self.login_html,'text/html'
         elif url==ENTRY: content,mime=SEARCH,'text/html'
         elif url in (LOGIN,FLAG,HEADER,MAINTENANCE): content,mime='{"fixture":true,"data":{"intercepted":false}}','application/json'
         elif urlsplit(url).path=='/favicon.ico': content,mime='','image/x-icon'
