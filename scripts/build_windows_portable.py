@@ -23,14 +23,29 @@ from windows_signing import sign_candidate
 from vibe_job_radar.publisher_signing import is_signed
 
 BUILD_VERSIONS={'pyinstaller':'6.22.3','playwright':'1.63.0','packaging':'26.0','truststore':'0.10.4','quickjs-ng':'0.17.0.1','pyspnego':'0.12.4','cryptography':'50.0.2','sspilib':'0.6.0','cffi':'2.1.1','pycparser':'3.11'}
+PORTABLE_SOURCE_FILE = 'SOURCE.json'
 
 
 def write_portable_metadata(path, value):
-    # Existing installed updaters enforce 100000 bytes. Preserve every field,
-    # including the complete source manifest and licenses, within that budget.
-    text = json.dumps(value, ensure_ascii=False, separators=(',', ':'), allow_nan=False) + '\n'
+    # Installed updaters read the source digest, not its growing per-file map.
+    # Preserve the complete map in the candidate without enlarging their budget.
+    def encode(data):
+        return json.dumps(data, ensure_ascii=False, separators=(',', ':'), allow_nan=False) + '\n'
+    text, source_text = encode(value), None
+    if len(text.encode('utf-8')) > 100000 and isinstance(value, dict):
+        source = value.get('source')
+        if isinstance(source, dict) and isinstance(source.get('files'), dict):
+            if 'source_manifest' in value:
+                raise ValueError('portable source manifest already declared')
+            source_text = encode(source)
+            if len(source_text.encode('utf-8')) > 8_000_000:
+                raise ValueError('portable source manifest exceeds qualification budget')
+            text = encode({**value, 'source':{k:v for k,v in source.items() if k != 'files'},
+                           'source_manifest':PORTABLE_SOURCE_FILE})
     if len(text.encode('utf-8')) > 100000:
         raise ValueError('portable metadata exceeds the installed updater budget')
+    if source_text is not None:
+        atomic_text(Path(path).with_name(PORTABLE_SOURCE_FILE), source_text)
     atomic_text(path, text)
 
 
