@@ -110,16 +110,19 @@ class PostLoginContractTests(unittest.TestCase):
 
 class LandingTests(unittest.TestCase):
     def test_rejected_or_superseded_response_cancels_root_without_return_ticket(self):
-        for rejected in (False, True):
+        for state in ('pending', 'rejected', 'old_ticket'):
             b = ready_backend(); p = b._manual_login_progress
+            if state == 'old_ticket':
+                self.assertTrue(offer(b, 'owned', event()))
             p.requested('second', LOGIN, 'POST')
-            if rejected:
+            if state in ('rejected', 'old_ticket'):
                 p.received('second', 200)
+            if state == 'rejected':
                 body = Mock(count=Mock(return_value=1), inner_text=Mock(return_value='验证码错误或过期'))
                 b.page.locator = lambda selector: body if selector == 'body' else Mock(count=Mock(return_value=0))
                 p.inspect_surface(b.page)
                 self.assertEqual(p.stage, 'code_rejected')
-            self.assertIsNone(p.last_login_response)
+            self.assertIsNone(peek(b))
             b._request_paused = Mock()
             b._paused('owned', event())
             self.assertEqual(b._send.call_args.args[2]['errorReason'], 'Aborted')

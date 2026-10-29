@@ -73,7 +73,8 @@ def unverified_return(backend, session, event):
     """
     owned = _owned_return(backend, session, event)
     return (owned is not None and owned[0].submits > 0
-            and not _ready(backend, owned[0]))
+            and (not _ready(backend, owned[0])
+                 or (owned[0].return_offered and peek(backend) is None)))
 
 
 def peek(backend):
