@@ -285,10 +285,18 @@ class TeamStore:
         bounds = asdict(baseline)
         values = asdict(limits or baseline)
         # Operators can make the original product limits stricter, never larger.
+        def looser(key, value, bound):
+            if key.endswith('interval'):
+                return value < bound
+            return bound is not None and (value is None or value > bound)
+
         for key, value in values.items():
-            if type(value) not in (int,float) or not math.isfinite(value) or value <= 0:
+            if key == 'logins_day' and value is None:
+                continue  # No default cap on opening a human-operated window.
+            if (type(value) not in (int,float) or not math.isfinite(value)
+                    or value < 0 or value == 0 and key != 'login_interval'):
                 raise TeamError('team_limits_invalid')
-            if key.endswith('interval') and value < bounds[key] or not key.endswith('interval') and value > bounds[key]:
+            if looser(key, value, bounds[key]):
                 raise TeamError('team_limits_invalid')
             if not key.endswith('interval') and type(value) is not int:
                 raise TeamError('team_limits_invalid')
@@ -299,7 +307,7 @@ class TeamStore:
                 if site != existing['site'] or origins != json.loads(existing['origins']):
                     raise TeamError('team_resource_binding_immutable',409)
                 for key, value in values.items():
-                    if key.endswith('interval') and value < old[key] or not key.endswith('interval') and value > old[key]:
+                    if looser(key, value, old[key]):
                         raise TeamError('team_limits_cannot_relax',409)
             conn.execute('INSERT INTO resources VALUES(?,?,?,?,?) ON CONFLICT(tenant,id) '
                          'DO UPDATE SET limits=excluded.limits', (tenant,resource,site,json.dumps(origins),json.dumps(values)))

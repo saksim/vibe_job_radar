@@ -10,7 +10,7 @@ from vibe_job_radar.guided.checkpoint import binding, ensure_compatible
 from vibe_job_radar.guided.contracts import CrawlError
 from vibe_job_radar.guided.diagnostic_trace import safe_target
 from vibe_job_radar.guided.liepin_login_policy import native_human_contract
-from vibe_job_radar.guided.login_landing import offer, peek, claim
+from vibe_job_radar.guided.login_landing import offer, peek, claim, departing_request
 from vibe_job_radar.guided.manual_login_progress import ManualLoginProgress
 from vibe_job_radar.guided.native_browser import NativeBackend
 from vibe_job_radar.guided.native_login_handoff import upgrade_known_binding
@@ -84,6 +84,43 @@ class PostLoginContractTests(unittest.TestCase):
 
 
 class LandingTests(unittest.TestCase):
+    def departure(self):
+        b=ready_backend(); offer(b,'owned',event()); claim(b,peek(b)); b.auth_mode=False
+        e=event(LOGIN,method='OPTIONS',resource='XHR')
+        e['request']['headers']={'Origin':'https://www.liepin.com',
+            'Access-Control-Request-Method':'POST','Access-Control-Request-Headers':'content-type,x-client-type'}
+        return b,e
+
+    def test_departing_login_requests_are_aborted_without_network_or_fatal_stop(self):
+        for epoch_delta in (0,1):
+            for method in ('OPTIONS','POST'):
+                b,e=self.departure(); b._epoch+=epoch_delta; e['request']['method']=method
+                b._request_paused=Mock()
+                b._paused('owned',e)
+                b._request_paused.assert_not_called(); b.wire.reserve.assert_not_called()
+                self.assertEqual(b._send.call_args.args[2]['errorReason'],'Aborted')
+                self.assertIsNone(b.error); self.assertFalse(b._halted)
+                self.assertEqual(b._manual_login_progress.submits,1)
+
+    def test_departure_does_not_mask_new_document_or_unreviewed_requests(self):
+        for change in ('page','epoch','tracker','cancel','error','origin','method','headers','frame','path','new_login','expiry'):
+            b,e=self.departure()
+            if change=='page':
+                identity=b.document_identity.return_value
+                b.document_identity.return_value=(*identity[:3],replace(identity[-1],sequence=2))
+            elif change=='epoch': b._epoch+=2
+            elif change=='tracker': b._manual_login_progress=ManualLoginProgress()
+            elif change=='cancel': b.cancelled.set()
+            elif change=='error': b.error='http_403'
+            elif change=='origin': e['request']['headers']['Origin']='https://c.liepin.com'
+            elif change=='method': e['request']['method']='DELETE'
+            elif change=='headers': e['request']['headers']['Access-Control-Request-Headers']='unknown'
+            elif change=='frame': e['frameId']='child'
+            elif change=='path': e['request']['url']=HEADER
+            elif change=='new_login': b._manual_login_progress.start()
+            else: b._manual_login_progress.clock=lambda:611
+            with self.subTest(change=change): self.assertFalse(departing_request(b,'owned',e))
+
     def test_return_aborts_account_navigation_and_is_consumed_only_once(self):
         b = ready_backend()
         b._request_paused = Mock()
