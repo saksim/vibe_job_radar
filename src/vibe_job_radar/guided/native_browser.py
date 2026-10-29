@@ -950,7 +950,20 @@ class NativeBackend(PlaywrightBackend):
                 if response is None:
                     raise CrawlError('robots_unavailable')
                 raw=response.body()
-                self.wire.install_robots(origin,response.status,response.header_value('content-type') or '',raw)
+                try:
+                    self.wire.install_robots(origin,response.status,response.header_value('content-type') or '',raw)
+                except CrawlError as exc:
+                    from .liepin_login_policy import conditional_two_factor_origin
+                    if (exc.code != 'robots_unavailable' or response.status != 200
+                            or not getattr(self, 'human_login', False) or not self.auth_mode
+                            or not conditional_two_factor_origin(self.contract, origin)):
+                        raise
+                    # A soft-404/invalid robots body for the unused two-factor
+                    # page must not preempt the primary login page. No policy
+                    # is installed: an actual request to that origin still
+                    # fails ensure_robots(), before pacing or network release.
+                    notify(getattr(self, '_diagnostics', None), 'note',
+                           code='robots_unavailable')
             except CrawlError:
                 raise
             except Exception as exc:

@@ -89,6 +89,18 @@ def native_human_contract(adapter):
         (*base.rules, login_page, *additions), bootstrap_only=False, ignored_rules=base.ignored_rules)
 
 
+def conditional_two_factor_origin(contract, origin):
+    """This document is needed only if the publisher asks for a second factor.
+
+    Do not change the request contract or grant access without robots rules.
+    If this origin acquires any other operation, it is no longer conditional.
+    """
+    return (contract.key == 'liepin_native_human_login_v1'
+            and origin == 'https://' + ACCOUNT
+            and tuple(r for r in contract.rules if r.host == ACCOUNT)
+            == tuple(r for r in CONTRACT.rules if r.host == ACCOUNT))
+
+
 def applies(adapter):
     return (getattr(adapter, 'key', None) == 'liepin'
             and getattr(adapter, 'login_url', None) == 'https://www.liepin.com/')

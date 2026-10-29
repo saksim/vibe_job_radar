@@ -1,5 +1,6 @@
 """Synthetic login handoff regressions: no accounts, SMS or publisher traffic."""
 from copy import deepcopy
+from dataclasses import replace
 import json
 from pathlib import Path
 import tempfile
@@ -67,6 +68,98 @@ class ContractTests(unittest.TestCase):
         self.assertIn("frame-src 'none'", default['responseHeaders'][-1]['value'])
         self.assertIn('frame-src https://turing.captcha.qcloud.com/template/', human['responseHeaders'][-1]['value'])
         self.assertIn("worker-src 'none'", human['responseHeaders'][-1]['value'])
+
+
+class ConditionalRobotsTests(unittest.TestCase):
+    ORIGIN = 'https://c.liepin.com'
+
+    def setUp(self):
+        import test_native_acquisition as fixtures
+        fixtures.NativeControllerTests.setUp(self)
+        self.b.adapter = self.b.wire.adapter = ADAPTER
+        self.b.contract = native_human_contract(ADAPTER)
+        self.b.human_login = self.b.auth_mode = True
+        for origin in self.b.contract.rule_origins:
+            if origin != self.ORIGIN:
+                self.b.wire.install_robots(origin, 404, 'text/html', b'Not Found')
+        self.main = self.b.page = Mock(url='https://www.liepin.com/login')
+        self.response = SimpleNamespace(status=200, header_value=lambda _: 'text/html',
+                                       body=lambda: b'<html>not a robots document</html>')
+        self.scratch = Mock()
+        self.scratch.goto.return_value = self.response
+        self.b._new_page = Mock(return_value=self.scratch)
+        self.b._close_owned_page = Mock()
+
+    def test_invalid_conditional_rules_do_not_preempt_main_but_still_block_two_factor(self):
+        self.b._settle = Mock()
+        self.b.snapshot = Mock(return_value='primary login page')
+        self.assertEqual(self.b.open(self.main.url, authentication=True), 'primary login page')
+        self.main.goto.assert_called_once()
+        self.assertIs(self.b.page, self.main)
+        self.b._close_owned_page.assert_called_once_with(self.scratch)
+        self.assertNotIn(self.ORIGIN, self.b.wire.rules)
+        self.assertEqual(self.b._diagnostics.observer_errors, 0)
+        event = {'requestId':'r', 'networkId':'n', 'frameId':'frame', 'resourceType':'Document',
+                 'request':{'url':self.ORIGIN+'/login/two-factor', 'method':'GET'}}
+        for direct in (False, True):
+            with self.subTest(direct=direct):
+                self.b._direct_cdp = direct
+                self.b.error = self.b.wait_error = None
+                self.b._halted = False
+                self.b._send.reset_mock()
+                with patch.object(self.b.wire, 'reserve') as reserve:
+                    self.b._paused('session', event)
+                self.assertEqual(self.b.error, 'robots_unavailable')
+                reserve.assert_not_called()
+                self.assertFalse(self.b._requests)
+                self.assertFalse(any(c.args[1] == 'Fetch.continueRequest'
+                                     for c in self.b._send.call_args_list))
+
+    def test_valid_allow_and_disallow_rules_keep_their_original_meaning(self):
+        for directive, allowed in (('Allow', True), ('Disallow', False)):
+            with self.subTest(directive=directive):
+                self.b.wire.rules.pop(self.ORIGIN, None)
+                self.response.header_value = lambda _: 'text/plain'
+                self.response.body = lambda: ('User-agent: *\n'+directive+': /\n').encode()
+                self.b._load_robots()
+                if allowed:
+                    self.b.wire.ensure_robots(self.ORIGIN+'/login/two-factor')
+                else:
+                    with self.assertRaisesRegex(CrawlError, 'robots_denied'):
+                        self.b.wire.ensure_robots(self.ORIGIN+'/login/two-factor')
+
+    def test_required_origin_and_changed_contract_remain_fatal(self):
+        original = self.b.contract
+        for origin in ('https://www.liepin.com', 'https://api-passport.liepin.com'):
+            with self.subTest(origin=origin):
+                self.b.wire.install_robots(self.ORIGIN, 404, '', b'')
+                self.b.wire.rules.pop(origin)
+                with self.assertRaisesRegex(CrawlError, 'robots_unavailable'):
+                    self.b._load_robots()
+                self.b.wire.install_robots(origin, 404, '', b'')
+        self.b.wire.rules.pop(self.ORIGIN)
+        from vibe_job_radar.guided.native_policy import NativeRule
+        self.b.contract = replace(original, rules=(*original.rules,
+            NativeRule('required_account_api', 'c.liepin.com', r'/api/required')))
+        with self.assertRaisesRegex(CrawlError, 'robots_unavailable'):
+            self.b._load_robots()
+
+    def test_http_refusals_and_transport_errors_are_not_deferred(self):
+        for status in (401, 403, 429, 500):
+            with self.subTest(status=status):
+                self.response.status = status
+                with self.assertRaisesRegex(CrawlError, 'robots_unavailable'):
+                    self.b._load_robots()
+        self.response.status = 200
+        for code in ('tls_verification_failed', 'encrypted_dns_unavailable', 'http_403', 'paused'):
+            with self.subTest(code=code):
+                self.scratch.goto.side_effect = CrawlError(code)
+                with self.assertRaisesRegex(CrawlError, code):
+                    self.b._load_robots()
+        self.scratch.goto.side_effect = None
+        self.b.human_login = False
+        with self.assertRaisesRegex(CrawlError, 'robots_unavailable'):
+            self.b._load_robots()
 
 
 class FrameOwnershipTests(unittest.TestCase):
