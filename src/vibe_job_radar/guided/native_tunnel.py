@@ -107,6 +107,20 @@ class NativeTunnel:
         return addresses
 
     def _open(self, host):
+        from .native_connect import connect
+        opened, result = set(), None
+
+        def own(sock):
+            opened.add(sock)
+            with self._lock:
+                if self._closed or self._stop.is_set() or self.cancelled.is_set():
+                    raise FetchError('paused')
+                self._sockets.add(sock)
+
+        def dial(address, budget, source_address=None):
+            return connect(address, budget, source_address, own=own,
+                stopped=lambda: self._stop.is_set() or self.cancelled.is_set())
+
         try:
             addresses = self.resolve_host(host)
             proxy = self.policy.for_host(host)
@@ -121,7 +135,9 @@ class NativeTunnel:
                 try:
                     # Target IP was validated before dialing and never re-resolved.
                     self.policy.ensure_active()
-                    return self._open_proxy(proxy, ip, budget) if proxy else socket.create_connection((ip,443), budget)
+                    result = (self._open_proxy(proxy, ip, budget, socket_factory=dial)
+                              if proxy else dial((ip,443), budget))
+                    return result
                 except LocalProxyError as exc:
                     raise FetchError(exc.code) from exc
                 except OSError as exc:
@@ -130,16 +146,27 @@ class NativeTunnel:
             raise TimeoutError()
         except LocalProxyError as exc:
             raise FetchError(exc.code) from exc
+        finally:
+            for sock in opened:
+                if sock is not result:
+                    try: sock.close()
+                    except OSError: pass
+                    with self._lock:
+                        self._sockets.discard(sock)
 
-    def _open_proxy(self, proxy, ip, budget):
+    def _open_proxy(self, proxy, ip, budget, *, socket_factory=None):
+        options = {'socket_factory': socket_factory} if socket_factory is not None else {}
         if proxy.credentials is None:
-            return proxy.open_tunnel(ip, budget)
+            return proxy.open_tunnel(ip, budget, **options)
         # Chromium may open several CONNECTs concurrently. Serialize an
         # authenticated handshake so a refused credential is never replayed by
         # another pending connection from the same owned browser session.
         deadline = time.monotonic() + budget
-        if not self._proxy_auth_lock.acquire(timeout=budget):
-            raise TimeoutError('proxy authentication deadline')
+        while not self._proxy_auth_lock.acquire(timeout=min(.05, max(0, deadline-time.monotonic()))):
+            if self._stop.is_set() or self.cancelled.is_set():
+                raise FetchError('paused')
+            if time.monotonic() >= deadline:
+                raise TimeoutError('proxy authentication deadline')
         try:
             if self._proxy_auth_error:
                 raise LocalProxyError(self._proxy_auth_error)
@@ -149,8 +176,10 @@ class NativeTunnel:
             if remaining <= 0:
                 raise TimeoutError()
             try:
-                return proxy.open_tunnel(ip, remaining)
+                return proxy.open_tunnel(ip, remaining, **options)
             except LocalProxyError as exc:
+                if self._stop.is_set() or self.cancelled.is_set():
+                    raise FetchError('paused') from None
                 # A truncated/invalid reply can mean credentials were sent but
                 # their result is unknown. Do not replay that handshake either.
                 self._proxy_auth_error = exc.code
@@ -224,11 +253,13 @@ class NativeTunnel:
                     peers[src].sendall(data)
                     idle = time.monotonic()
         except FetchError as exc:
-            self.last_error = exc.code
+            if not self._stop.is_set() and not self.cancelled.is_set():
+                self.last_error = exc.code
             try: self._reply(client,502)
             except OSError: pass
         except (OSError, ValueError, UnicodeError):
-            self.last_error = self.last_error or 'network_error'
+            if not self._stop.is_set() and not self.cancelled.is_set():
+                self.last_error = self.last_error or 'network_error'
         finally:
             for sock in (upstream,client):
                 if sock is not None:

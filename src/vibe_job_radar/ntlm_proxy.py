@@ -83,7 +83,7 @@ def _challenge(headers):
 class LoopbackNtlmProxy(LoopbackProxy):
     auth_scheme = 'ntlmv2'
 
-    def open_tunnel(self, public_ip, timeout, source_address=None):
+    def open_tunnel(self, public_ip, timeout, source_address=None, *, socket_factory=None):
         try:
             address = ipaddress.ip_address(public_ip)
         except (ValueError, TypeError):
@@ -115,7 +115,7 @@ class LoopbackNtlmProxy(LoopbackProxy):
 
         try:
             session = self.credentials.ntlm_session(deadline)
-            sock = socket.create_connection((self.host, self.port), remaining(), source_address)
+            sock = (socket_factory or socket.create_connection)((self.host, self.port), remaining(), source_address)
             send(session.first)
             status, headers, extra, http11 = _response(sock, remaining)
             if status != 407:

@@ -1137,21 +1137,37 @@ class NativeBackend(PlaywrightBackend):
         if frames := self.__dict__.get('_login_frames'):
             frames.clear()
         errors = []
-        def attempt(operation):
-            try:
-                operation()
-            except Exception as error:
-                errors.append(error)
+        def attempt(stage, operation, tunnel=None):
+            with observe(getattr(self, '_diagnostics', None), 'cleanup', actor='browser', operation='close'):
+                try:
+                    operation()
+                except Exception as error:
+                    errors.append(error)
+                    facts = {'stage':stage, 'error_type':type(error).__name__}
+                    # Fixed resource counts only. Diagnostic failure cannot
+                    # skip other cleanup or replace the original exception.
+                    try:
+                        if tunnel is not None:
+                            with tunnel._lock:
+                                facts.update(pending_handlers=len(tunnel._pending_requests),
+                                             open_sockets=len(tunnel._sockets),
+                                             listener_alive=tunnel.thread.is_alive())
+                    except Exception:
+                        pass
+                    known = (type(error) is RuntimeError
+                             and error.args == ('native_tunnel_cleanup_incomplete',))
+                    notify(getattr(self, '_diagnostics', None), 'mark', native_cleanup=facts,
+                           code='native_tunnel_cleanup_incomplete' if known else 'native_cleanup_failed')
 
         # Pacing, browser control and the tunnel have independent ownership.
         # A failure in one must not skip release of the others or retain the
         # stopped session's request/response bookkeeping.
         if pacer := self.__dict__.get('_request_pacer'):
-            attempt(pacer.close)
-        attempt(super().close)
+            attempt('pacing', pacer.close)
+        attempt('controller', super().close)
         if self.tunnel:
             tunnel, self.tunnel = self.tunnel, None
-            attempt(tunnel.close)
+            attempt('tunnel', tunnel.close, tunnel)
         self._sessions.clear(); self._pending.clear(); self._requests.clear(); self._hops.clear()
         self._observations.clear()
         self.__dict__.get('_latest_business', {}).clear(); self._auth_attempts.clear()

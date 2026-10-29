@@ -163,7 +163,7 @@ class TunnelTests(unittest.TestCase):
                 dial.assert_not_called()
     def test_validated_ip_is_not_resolved_again(self):
         addresses=[(socket.AF_INET,socket.SOCK_STREAM,6,'',('93.184.216.34',443))]
-        with patch('socket.getaddrinfo',return_value=addresses) as dns,patch('socket.create_connection',return_value=Mock()) as dial:
+        with patch('socket.getaddrinfo',return_value=addresses) as dns,patch('vibe_job_radar.guided.native_connect.connect',return_value=Mock()) as dial:
             self.guard._open(HOST)
             dns.assert_called_once();self.assertEqual(dial.call_args.args[0],('93.184.216.34',443))
     def test_selected_proxy_failure_has_no_direct_fallback(self):

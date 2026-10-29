@@ -52,6 +52,15 @@ class NativeFailureClassificationTests(TestCase):
             'params':{'requestId':'net-1','errorText':'net::ERR_TUNNEL_CONNECTION_FAILED'}})})
         self.assertEqual(self.b.error,'local_proxy_auth_failed')
 
+    def test_body_reset_does_not_inherit_an_earlier_connection_failure(self):
+        self.b._paused('session', self.helper.req())
+        self.b.tunnel.last_error = 'local_proxy_auth_failed'
+        self.b._received({'sessionId':'session','message':json.dumps({'method':'Network.loadingFailed',
+            'params':{'requestId':'net-1','errorText':'net::ERR_CONNECTION_RESET'}})})
+        self.assertEqual(self.b.error, 'network_error')
+        for error in ('net::ERR_FAILED', 'net::ERR_ABORTED', 'unknown failure'):
+            self.assertEqual(native_transport_failure(error, 'encrypted_dns_name_not_found'), '')
+
     def test_failed_response_preserves_browser_error_not_a_new_client_block(self):
         self.b._paused('session', self.helper.req())
         event = self.helper.req(responseErrorReason='Failed')

@@ -23,7 +23,7 @@ import uuid
 PLANNING_BASELINE = '108941f2e1bb64c032170aa2d178aa5a38e3b58d'
 STAGES = frozenset({'task', 'browser_session', 'listing', 'list_parse', 'collection',
     'detail_navigation', 'detail_identity', 'detail_parse', 'persist', 'report', 'network_policy',
-    'route', 'http_request', 'robots', 'navigation', 'login', 'pagination', 'unknown'})
+    'route', 'http_request', 'robots', 'navigation', 'login', 'pagination', 'cleanup', 'unknown'})
 RESOURCES = frozenset({'document', 'stylesheet', 'script', 'image', 'media', 'font',
     'xhr', 'fetch', 'preflight', 'websocket', 'other', 'unknown'})
 NAVIGATION_REASONS = frozenset({'formSubmissionGet', 'formSubmissionPost', 'httpHeaderRefresh',
@@ -41,6 +41,7 @@ NATIVE_RULES = frozenset({'liepin_navigation', 'liepin_same_host_assets', 'liepi
     'liepin_login_ui_config', 'liepin_login_ui_preflight', 'liepin_password_login', 'liepin_login_preflight',
     'liepin_login_resume_flag', 'liepin_account_header', 'liepin_session_maintenance'})
 CODES = frozenset('''operation_error network_error dns_error non_public_address
+    native_cleanup_failed native_tunnel_cleanup_incomplete
     workspace_proxy_environment_conflict
     pac_unavailable pac_invalid_script pac_invalid_result pac_timeout pac_busy
     pac_revoked pac_failed pac_cache_limit pac_file_invalid pac_dns_limit pac_dns_failed
@@ -235,11 +236,23 @@ class DiagnosticTrace:
             return frame
 
     def mark(self, *, code=None, status=None, navigation_reason=None, native_reason=None, native_rule=None,
-             native_stage=None, native_failure=None):
+             native_stage=None, native_failure=None, native_cleanup=None):
         with self._lock:
             if not self._frames:
                 return
             frame = self._frames[-1]
+            if isinstance(native_cleanup, dict):
+                frame['native_cleanup'] = {
+                    'stage': native_cleanup.get('stage') if native_cleanup.get('stage') in
+                        {'pacing', 'controller', 'tunnel'} else 'unknown',
+                    'error_type': native_cleanup.get('error_type') if native_cleanup.get('error_type') in
+                        {'RuntimeError', 'OSError', 'PermissionError', 'TimeoutError', 'CrawlError'} else 'unknown',
+                    **{name: value if type(value) is int and 0 <= value <= 128 else None
+                       for name in ('pending_handlers', 'open_sockets')
+                       for value in (native_cleanup.get(name),)},
+                    'listener_alive': native_cleanup.get('listener_alive') if
+                        type(native_cleanup.get('listener_alive')) is bool else None,
+                }
             if native_stage is not None:
                 frame['native_stage'] = (native_stage if isinstance(native_stage, str)
                     and native_stage in {'before_response', 'response_headers', 'body_complete'} else 'unknown')

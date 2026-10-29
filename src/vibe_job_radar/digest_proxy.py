@@ -18,7 +18,7 @@ _NAME = re.compile(rb"[!#$%&'*+\-.^_`|~0-9A-Za-z]+")
 class LoopbackDigestProxy(LoopbackProxy):
     auth_scheme = 'digest'
 
-    def open_tunnel(self, public_ip: str, timeout: float, source_address=None) -> socket.socket:
+    def open_tunnel(self, public_ip: str, timeout: float, source_address=None, *, socket_factory=None) -> socket.socket:
         try:
             address = ipaddress.ip_address(public_ip)
         except (ValueError, TypeError):
@@ -42,7 +42,7 @@ class LoopbackDigestProxy(LoopbackProxy):
 
         def exchange(authorization=None):
             nonlocal sock
-            sock = socket.create_connection((self.host, self.port), remaining(), source_address)
+            sock = (socket_factory or socket.create_connection)((self.host, self.port), remaining(), source_address)
             request = f'CONNECT {authority} HTTP/1.1\r\nHost: {authority}\r\n'
             if authorization is not None:
                 request += 'Proxy-Authorization: ' + authorization + '\r\n'
