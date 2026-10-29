@@ -24,6 +24,7 @@ MAIN = 'https://www.liepin.com/login'
 ROOT = 'https://c.liepin.com/'
 FLAG = 'https://api-c.liepin.com/api/com.liepin.cresume.resume-complete-flag'
 HEADER = 'https://api-c.liepin.com/api/com.liepin.usercx.pc.user.base-property'
+MAINTENANCE = 'https://api-passport.liepin.com/api/com.liepin.passport.account.auto-login-no-extension'
 
 
 def ready_backend(b=None):
@@ -51,6 +52,30 @@ def event(url=ROOT, *, frame='main', method='GET', resource='Document'):
 
 
 class PostLoginContractTests(unittest.TestCase):
+    def test_session_maintenance_has_exact_origin_method_and_non_job_role(self):
+        from vibe_job_radar.guided.native_policy import contract_for
+        contract = native_human_contract(ADAPTER)
+        headers = {'Origin':'https://www.liepin.com', 'Access-Control-Request-Method':'POST',
+                   'Access-Control-Request-Headers':'content-type,x-client-type'}
+        for auth in (False, True):
+            for method in ('POST', 'OPTIONS'):
+                rule = contract.match(MAINTENANCE, method, 'XHR', authentication=auth, headers=headers)
+                rule.validate_headers(method, headers)
+                self.assertEqual(rule.key, 'liepin_session_maintenance')
+                self.assertEqual(rule.role, 'login')
+        for url, method, kind in ((MAINTENANCE,'GET','XHR'), (MAINTENANCE,'POST','Document'),
+                (MAINTENANCE+'/extra','POST','XHR'), (MAINTENANCE.replace('auto-login-no-extension','logout'),'POST','XHR')):
+            with self.subTest(url=url,method=method,kind=kind), self.assertRaises(CrawlError):
+                contract.match(url, method, kind, authentication=True)
+        for change in ({'Origin':'https://c.liepin.com'}, {'Access-Control-Request-Method':'DELETE'},
+                       {'Access-Control-Request-Headers':'unreviewed'}):
+            with self.assertRaises(CrawlError):
+                contract.match(MAINTENANCE,'OPTIONS','XHR').validate_headers('OPTIONS',{**headers,**change})
+        for legacy in (contract_for(ADAPTER), native_human_contract(ADAPTER,version=1),
+                       native_human_contract(ADAPTER,version=2)):
+            with self.assertRaises(CrawlError):
+                legacy.match(MAINTENANCE,'POST','XHR',authentication=True)
+
     def test_exact_read_operations_and_preflights_do_not_become_job_data(self):
         contract = native_human_contract(ADAPTER)
         for url, method in ((FLAG,'GET'), (HEADER,'POST')):
@@ -246,6 +271,24 @@ class OriginalTaskReturnTests(unittest.TestCase):
         self.assertEqual(self.state['outcome']['saved'],2)
         self.assertTrue(self.workspace.report(self.state['report_id']))
         ensure_compatible(self.state,ADAPTER)
+
+    def test_v2_upgrade_preserves_previous_migration_and_task_history(self):
+        state=deepcopy(self.state); state.update(backend='native',human_login=True)
+        state['execution_binding']=binding(state,ADAPTER,human_contract_version=2)
+        state['native_login_contract_upgrade']={'from_version':1,'to_version':2,
+            'previous_binding':binding(state,ADAPTER,human_contract_version=1)}
+        before=deepcopy(state)
+        self.assertTrue(upgrade_known_binding(state,ADAPTER))
+        ensure_compatible(state,ADAPTER)
+        upgrade=state['native_login_contract_upgrade']
+        self.assertEqual((upgrade['from_version'],upgrade['to_version']),(2,3))
+        self.assertEqual(upgrade['previous_binding'],before['execution_binding'])
+        self.assertEqual(upgrade['previous_upgrade'],before['native_login_contract_upgrade'])
+        for key in before:
+            if key not in {'execution_binding','native_login_contract_upgrade'}:
+                self.assertEqual(state[key],before[key])
+        updated=deepcopy(state)
+        self.assertFalse(upgrade_known_binding(state,ADAPTER)); self.assertEqual(state,updated)
 
     def test_legacy_explicit_password_login_still_submits_once(self):
         self.state.update(backend='native', human_login=True, auto_continue_after_login=True)

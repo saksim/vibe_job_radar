@@ -90,7 +90,7 @@ def _digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
 
 
-def binding(state, adapter, *, human_contract_version=2):
+def binding(state, adapter, *, human_contract_version=3):
     query = {k: state.get(k) for k in ('platform', 'keyword', 'search_url', 'roles', 'max_pages',
              'max_jobs', 'auto_collect', 'identity_strategy', 'rights_note')}
     if 'query_scope_version' in state:
@@ -111,7 +111,7 @@ def binding(state, adapter, *, human_contract_version=2):
             'backend': mode + ':' + backend, 'query': _digest(query), 'consent': CONSENT_VERSION}
 
 
-def ensure_compatible(state, adapter, *, human_contract_version=2):
+def ensure_compatible(state, adapter, *, human_contract_version=3):
     saved = state.get('execution_binding')
     if saved is None and adapter.key == 'liepin' and state.get('backend') == 'native':
         # An unversioned native selection can also contain old hidden rows.

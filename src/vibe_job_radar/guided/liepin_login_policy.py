@@ -75,12 +75,12 @@ def _contract():
 CONTRACT = _contract()
 
 
-def native_human_contract(adapter, *, version=2):
+def native_human_contract(adapter, *, version=3):
     """Explicit per-task opt-in; existing native checkpoints keep their contract."""
     from .native_policy import contract_for
     if not applies(adapter):
         raise CrawlError('native_operation_unreviewed')
-    if version not in (1, 2):
+    if version not in (1, 2, 3):
         raise ValueError('unknown human login contract')
     base = contract_for(adapter)
     additions = tuple(r for r in CONTRACT.rules if r.key != 'liepin_security_config')
@@ -100,6 +100,14 @@ def native_human_contract(adapter, *, version=2):
                    methods=('POST', 'OPTIONS'), resources=('XHR', 'Fetch', 'Other', 'Preflight'),
                    role='login', cors_origin='https://www.liepin.com', cors_headers=_HEADERS),
     )
+    # The public shared header calls this after sign-in and on window focus.
+    # Chromium sends the existing session; this is not an SMS/password replay.
+    # Keep historical v1/v2 bindings byte-for-byte reproducible for migration.
+    if version >= 3:
+        post_login += (NativeRule('liepin_session_maintenance', PASSPORT,
+            r'/api/com\.liepin\.passport\.account\.auto-login-no-extension',
+            methods=('POST', 'OPTIONS'), resources=('XHR', 'Fetch', 'Other', 'Preflight'),
+            role='login', cors_origin='https://www.liepin.com', cors_headers=_HEADERS),)
     return NativeContract('liepin_native_human_login_v' + str(version),
         tuple(dict.fromkeys((*base.hosts, *CONTRACT.hosts))),
         (*base.rules, login_page, *additions, *post_login), bootstrap_only=False, ignored_rules=base.ignored_rules)
@@ -111,7 +119,8 @@ def conditional_two_factor_origin(contract, origin):
     Do not change the request contract or grant access without robots rules.
     If this origin acquires any other operation, it is no longer conditional.
     """
-    return (contract.key in {'liepin_native_human_login_v1', 'liepin_native_human_login_v2'}
+    return (contract.key in {'liepin_native_human_login_v1', 'liepin_native_human_login_v2',
+                            'liepin_native_human_login_v3'}
             and origin == 'https://' + ACCOUNT
             and tuple(r for r in contract.rules if r.host == ACCOUNT)
             == tuple(r for r in CONTRACT.rules if r.host == ACCOUNT))
