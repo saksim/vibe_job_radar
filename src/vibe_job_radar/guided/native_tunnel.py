@@ -292,14 +292,16 @@ class NativeTunnel:
                 raise RuntimeError('native_tunnel_cleanup_incomplete')
             return
         self._stop.set()
+        sockets = ()
         try:
             with self._lock:
                 sockets = tuple(self._sockets)
             for sock in sockets:
                 try: sock.shutdown(socket.SHUT_RDWR)
                 except OSError: pass
-                try: sock.close()
-                except OSError: pass
+            # Wake blocked I/O before releasing descriptors in another thread.
+            # Closing immediately can strand a timeout-mode poll on macOS;
+            # let its owning handler observe shutdown and finish first.
             errors = []
             # Attempt each owned resource; an earlier cleanup error remains
             # primary even when a handler also fails to finish in time.
@@ -327,4 +329,9 @@ class NativeTunnel:
             if errors:
                 raise errors[0]
         finally:
+            # Even an unscheduled/stuck handler cannot retain its descriptors
+            # after the original bounded wait or an earlier cleanup failure.
+            for sock in sockets:
+                try: sock.close()
+                except OSError: pass
             self._close_complete.set()
