@@ -117,7 +117,10 @@ def main():
                                 result['checks'].append({'protocol':protocol,'browser_version':version,
                                     'native_list_and_full_artificial_detail':True,'target_received_proxy_credentials':False,
                                     'rejected_auth_attempts':after-attempts,'rejected_target_requests':0})
-                        try:fixture.perform(exercise)
+                        try:
+                            from native_fixture_network import observed_native_proxy
+                            with observed_native_proxy(fixture.proxy.server_address, fixture.dials):
+                                fixture.perform(exercise)
                         finally:fixture.tearDown();fixture.doCleanups()
                 finally:source.close()
         result['success']=True

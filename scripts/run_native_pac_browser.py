@@ -195,7 +195,10 @@ def main():
                                     original_list_and_full_artificial_detail=True,refused_target_requests=0,
                                     direct_fallback=False,pac_return_preserved=True,system_source_downloads=downloads,
                                     wpad_fixture_discoveries=discovery.call_count-before_discovery,real_wpad_discovery=False))
-                        try:fixture.perform(exercise)
+                        try:
+                            from native_fixture_network import observed_native_proxy
+                            with observed_native_proxy(fixture.proxy.server_address, fixture.dials):
+                                fixture.perform(exercise)
                         finally:workspace.close_network();fixture.tearDown();fixture.doCleanups()
                 finally:source.close()
         result['success']=True
