@@ -78,9 +78,9 @@ class NativePolicyTests(unittest.TestCase):
         with self.assertRaises(ValueError):NativeContract('fixture',(HOST,),(NativeRule('data','other.test','/'),))
     def test_exact_host_only_no_wildcard_host(self):
         with self.assertRaises(ValueError):NativeContract('fixture',('*.test',),())
-    def test_html_non200_and_empty_fail_closed(self):
+    def test_html_non200_and_invalid_body_fail_closed(self):
         for status,mime,body in ((200,'text/html',b'User-agent: *'),(503,'text/plain',b''),
-                                (200,'text/plain',b''),(200,'text/plain',b'<html>')):
+                                (200,'text/plain',b'not a robots file'),(200,'text/plain',b'<html>')):
             with self.subTest(status=status,mime=mime),self.assertRaises(CrawlError):NativeRobots(status,mime,body)
     def test_robots_encoding_size(self):
         for b in (b'\xff',b'x'*524289):

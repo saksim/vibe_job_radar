@@ -869,8 +869,10 @@ class NativeBackend(PlaywrightBackend):
     def open_search(self, url, *, keyword, authentication=False):
         entry = self.search_entry_url(url, keyword=keyword)
         if authentication and getattr(self, 'human_login', False) and entry == self.adapter.search_base:
-            from urllib.parse import urlencode
-            return self.open('https://www.liepin.com/login?' + urlencode({'backUrl': entry}), authentication=True)
+            # The publisher disallows query-bearing documents. Use its plain
+            # login entry; the task, not a return URL, retains the original
+            # search. All subsequent documents still pass their robots gate.
+            return self.open('https://www.liepin.com/login', authentication=True)
         if entry == url:
             return self.open(url, authentication=authentication)
         opened = self.open(entry, authentication=authentication)

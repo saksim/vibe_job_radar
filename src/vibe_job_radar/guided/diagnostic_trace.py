@@ -74,7 +74,7 @@ CODES = frozenset('''operation_error network_error dns_error non_public_address
     vm_proxy_configuration_invalid vm_proxy_explicit_required vm_proxy_connection_failed vm_proxy_timeout
     local_socks_auth_unsupported local_socks_protocol_error local_socks_timeout
     local_socks_connection_failed local_socks_request_rejected local_socks_truncated_reply
-    robots_response_html robots_http_unavailable robots_encoding_invalid robots_file_absent
+    robots_response_html robots_http_unavailable robots_encoding_invalid robots_file_absent robots_empty_document
     robots_rules_observed robots_extensions_observed robots_no_rules_observed
     robots_inspection_truncated no_cards no_records native_administrator_blocked native_contract_unavailable
     native_contract_invalid native_operation_unreviewed native_surface_unsupported
@@ -401,6 +401,8 @@ def observe_robots(trace, result):
             code = 'robots_http_unavailable'
         elif 'html' in result.headers.get('content-type', '').lower():
             code = 'robots_response_html'
+        elif result.body == b'' and result.headers.get('content-type', '').split(';')[0].strip().lower() in {'', 'text/plain'}:
+            code = 'robots_empty_document'
         elif len(result.body) > 524288:
             code = 'robots_inspection_truncated'
         else:
