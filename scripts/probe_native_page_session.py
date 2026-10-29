@@ -15,6 +15,7 @@ from unittest.mock import patch
 from urllib.parse import urlsplit
 
 import run_native_browser_acceptance as fixture
+from native_fixture_network import mapped_native_connect
 from vibe_job_radar.guided.native_tunnel import NativeTunnel
 from vibe_job_radar.network_policy import NetworkPolicy
 
@@ -52,7 +53,7 @@ def main():
                         return real_dial(address,*a,**kw)
                     raise AssertionError('external connection attempted by controlled comparison')
                 try:
-                    with patch('socket.getaddrinfo',side_effect=dns), patch('socket.create_connection',side_effect=dial), sync_playwright() as p:
+                    with patch('socket.getaddrinfo',side_effect=dns), patch('socket.create_connection',side_effect=dial), mapped_native_connect(lambda: source.server.server_address), sync_playwright() as p:
                         browser = p.chromium.launch(headless=True, channel=args.channel,
                             proxy={'server':guard.endpoint})
                         try:

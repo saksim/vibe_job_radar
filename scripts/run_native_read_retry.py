@@ -9,6 +9,7 @@ import socket
 import tempfile
 import time
 from unittest.mock import patch
+from native_fixture_network import mapped_native_connect
 
 from run_native_browser_acceptance import (ROOT, Fixture, trust_fixture, HOST,
     adapter, NativeBackend, GuidedService, Registry, Workspace, RateLedger, Limits,
@@ -64,6 +65,7 @@ def main():
                     raise AssertionError('fixture attempted external connection')
                 stack.enter_context(patch('socket.getaddrinfo',side_effect=dns))
                 stack.enter_context(patch('socket.create_connection',side_effect=dial))
+                stack.enter_context(mapped_native_connect(lambda: fixture.server.server_address))
                 stack.enter_context(patch.object(NetworkPolicy,'capture',return_value=NetworkPolicy()))
                 def factory(a,l,c,p,**saved):
                     options={'headless':not args.headed}

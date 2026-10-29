@@ -28,6 +28,7 @@ import time
 from unittest.mock import patch
 from native_tls_fixture import NativeTLSFixtureServer
 from native_fixture_lifecycle import close_service
+from native_fixture_network import mapped_native_connect
 
 ROOT=Path(__file__).resolve().parents[1]
 sys.path[:0]=[str(ROOT/'src'),str(ROOT/'tests')]
@@ -239,7 +240,7 @@ def main():
                     return service.state()['jobs'][0]
                 # This harness deliberately maps only public symbols to its own
                 # local TLS fixture. Production has no loopback or CA override.
-                with patch('socket.getaddrinfo',side_effect=dns),patch('socket.create_connection',side_effect=dial),patch.object(NetworkPolicy,'capture',return_value=NetworkPolicy()):
+                with patch('socket.getaddrinfo',side_effect=dns),patch('socket.create_connection',side_effect=dial),mapped_native_connect(lambda: destination[0]),patch.object(NetworkPolicy,'capture',return_value=NetworkPolicy()):
                     workspace=Workspace(root/'workspace')
                     service=GuidedService(workspace,registry=Registry([adapter()]),
                         ledger=RateLedger(root/'service.sqlite',Limits(page_interval=0,request_interval=0)),native_backend_factory=factory)
