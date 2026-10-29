@@ -38,7 +38,8 @@ NATIVE_RULES = frozenset({'liepin_navigation', 'liepin_same_host_assets', 'liepi
     'liepin_search', 'liepin_search_preflight', 'liepin_search_filters', 'liepin_filters_preflight',
     'liepin_search_suggest', 'liepin_suggest_preflight', 'liepin_regions', 'liepin_regions_preflight',
     'liepin_region_lookup', 'liepin_region_lookup_preflight',
-    'liepin_login_ui_config', 'liepin_login_ui_preflight', 'liepin_password_login', 'liepin_login_preflight'})
+    'liepin_login_ui_config', 'liepin_login_ui_preflight', 'liepin_password_login', 'liepin_login_preflight',
+    'liepin_login_resume_flag', 'liepin_account_header'})
 CODES = frozenset('''operation_error network_error dns_error non_public_address
     workspace_proxy_environment_conflict
     pac_unavailable pac_invalid_script pac_invalid_result pac_timeout pac_busy
@@ -74,7 +75,7 @@ CODES = frozenset('''operation_error network_error dns_error non_public_address
     vm_proxy_configuration_invalid vm_proxy_explicit_required vm_proxy_connection_failed vm_proxy_timeout
     local_socks_auth_unsupported local_socks_protocol_error local_socks_timeout
     local_socks_connection_failed local_socks_request_rejected local_socks_truncated_reply
-    robots_response_html robots_http_unavailable robots_encoding_invalid robots_file_absent robots_empty_document
+    robots_response_html robots_http_unavailable robots_encoding_invalid robots_file_absent robots_empty_document login_return_pending
     robots_rules_observed robots_extensions_observed robots_no_rules_observed
     robots_inspection_truncated no_cards no_records native_administrator_blocked native_contract_unavailable
     native_contract_invalid native_operation_unreviewed native_surface_unsupported
@@ -118,7 +119,9 @@ LOGIN_PATHS = frozenset('/api/com.liepin.passport.' + suffix for suffix in (
 # Showing an operation in a diagnostic does not add it to the access contract.
 PUBLIC_READ_PATHS = {'api-dok.liepin.com': frozenset('/api/' + name for name in (
     'com.liepin.bd.p.v4.get-all-dq', 'com.liepin.bd.p.suggest-dq',
-    'com.liepin.bd.v3.batch-lookup-dq'))}
+    'com.liepin.bd.v3.batch-lookup-dq')),
+    'api-c.liepin.com': frozenset('/api/' + name for name in (
+        'com.liepin.cresume.resume-complete-flag', 'com.liepin.usercx.pc.user.base-property'))}
 QUERY_NAMES = frozenset({'q', 'query', 'keyword', 'key', 'page', 'pageSize',
     'currentPage', 'jobId', 'city', 'industry', 'offset', 'limit'})
 

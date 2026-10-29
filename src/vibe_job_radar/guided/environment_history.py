@@ -19,7 +19,7 @@ from . import attempt_history
 KEY = 'acquisition_environment_history'
 MAX_OBSERVATIONS = 200
 ACTIONS = {'search', 'capture', 'more', 'collect', 'resume', 'login', 'login_password',
-           'resume_returned_detail', 'resume_returned_search'}
+           'resume_returned_detail', 'resume_returned_search', 'resume_returned_login'}
 TRANSPORTS = {'unknown', 'system_route', 'loopback_http_proxy', 'loopback_socks5_proxy',
               'vm_host_http_proxy', 'vm_host_socks5_proxy', 'pac_by_host', 'pac_by_url', 'unavailable'}
 DNS = {'unknown', 'system', 'fake_ip_doh', 'public_doh'}

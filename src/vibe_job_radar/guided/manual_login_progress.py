@@ -14,6 +14,8 @@ class ManualLoginProgress:
         self.deadline = 0
         self.status = None
         self.sequence = 0
+        self.last_login_response = None
+        self.return_offered = False
 
     def start(self):
         self.active = True
@@ -21,10 +23,13 @@ class ManualLoginProgress:
         self.stage, self.sends, self.submits, self.status = 'waiting_user', 0, 0, None
         self.deadline = self.clock() + 600
         self.sequence = 0
+        self.last_login_response = None
+        self.return_offered = False
 
     def stop(self, stage='cancelled'):
         self.active = False
         self.pending.clear()
+        self.last_login_response = None
         self.stage = stage if stage in {'cancelled', 'needs_attention', 'returned', 'timed_out'} else 'needs_attention'
 
     @staticmethod
@@ -51,6 +56,7 @@ class ManualLoginProgress:
             self.stop('needs_attention')
             return
         self.sequence += 1
+        self.last_login_response = None
         self.pending[key] = (op, self.sequence)
         self.stage, self.status = op + '_requested', None
         if op == 'sms':
@@ -67,6 +73,8 @@ class ManualLoginProgress:
             return  # A late SMS response cannot overwrite a newer login submit.
         self.status = status if type(status) is int and 100 <= status <= 599 else None
         self.stage = 'request_failed' if self.status is not None and self.status >= 400 else op + '_response_received'
+        if op == 'login' and self.status == 200:
+            self.last_login_response = sequence
 
     def inspect_surface(self, page):
         if not self.active or self.clock() >= self.deadline or not page or page.is_closed():
@@ -76,6 +84,7 @@ class ManualLoginProgress:
             return
         if page.locator('iframe[src^="https://turing.captcha.qcloud.com/template/"]:visible').count():
             self.stage = 'verification_required'
+            self.last_login_response = None
             return
         # Existing publisher error wording only; never copy visible account
         # text, OTP fields or challenge tokens into state/diagnostics.
@@ -84,6 +93,7 @@ class ManualLoginProgress:
             text = body.inner_text(timeout=1000)
             if re.search(r'验证码(?:不正确|错误|已过期|已失效|无效|错误或过期|不正确或已过期)', text):
                 self.stage = 'code_rejected'
+                self.last_login_response = None
             elif (page.locator('#header-quick-menu-user-info:visible').count() == 1
                     and not page.locator('#header-quick-menu-login:visible').count()):
                 self.stage = 'account_ui_visible'

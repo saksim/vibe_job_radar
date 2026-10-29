@@ -445,6 +445,7 @@ class AuthenticatedProcessAndServiceTests(unittest.TestCase):
 
     def test_restore_failure_preserves_search_and_explicit_login_quota_order(self):
         service, state = self.service()
+        service.ledger.limits=replace(service.ledger.limits,login_interval=300,logins_day=3)
         first = policy(b'a' * 32)
         path, original = self.seed(service, state, first)
         wrong = policy(b'a' * 32, password=PASSWORD + '-changed')

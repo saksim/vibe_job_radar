@@ -570,6 +570,16 @@ class NativeBackend(PlaywrightBackend):
                     raise CrawlError('native_policy_changed')
                 if self._halted:
                     raise self.wait_error or CrawlError(self.error or 'site_stopped')
+                if not response:
+                    from .login_landing import offer
+                    if offer(self, session, event):
+                        # No account-page request, synthetic reply or modified
+                        # publisher script. The owner may resume only its task.
+                        self.native_counts['blocked'] += 1
+                        self._send(session, 'Fetch.failRequest',
+                                   {'requestId': event['requestId'], 'errorReason': 'Aborted'})
+                        notify(getattr(self, '_diagnostics', None), 'mark', code='login_return_pending')
+                        return
                 if ignored:
                     notify(getattr(self,'_diagnostics',None),'mark',code='native_optional_request_blocked')
                     self.native_counts['blocked'] += 1
@@ -984,6 +994,7 @@ class NativeBackend(PlaywrightBackend):
         self.adapter.accept_url(url)
         self.contract.match(url,'GET','Document',authentication=authentication)
         self.auth_mode=authentication; self.error=self.wait_error=None; self._halted=False
+        self._login_landing = None
         self._epoch+=1; self._observations.clear()
         self.__dict__.get('_latest_business', {}).clear(); self._observed_bytes=0
         self._load_robots()

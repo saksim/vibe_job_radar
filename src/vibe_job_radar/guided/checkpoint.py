@@ -90,7 +90,7 @@ def _digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
 
 
-def binding(state, adapter):
+def binding(state, adapter, *, human_contract_version=2):
     query = {k: state.get(k) for k in ('platform', 'keyword', 'search_url', 'roles', 'max_pages',
              'max_jobs', 'auto_collect', 'identity_strategy', 'rights_note')}
     if 'query_scope_version' in state:
@@ -100,7 +100,7 @@ def binding(state, adapter):
     if mode == 'native':
         if state.get('human_login') is True:
             from .liepin_login_policy import native_human_contract
-            contract = native_human_contract(adapter)
+            contract = native_human_contract(adapter, version=human_contract_version)
         else:
             contract = contract_for(adapter)
     backend = _digest(asdict(contract)) if contract is not None else 'bridge:v1'
@@ -111,13 +111,13 @@ def binding(state, adapter):
             'backend': mode + ':' + backend, 'query': _digest(query), 'consent': CONSENT_VERSION}
 
 
-def ensure_compatible(state, adapter):
+def ensure_compatible(state, adapter, *, human_contract_version=2):
     saved = state.get('execution_binding')
     if saved is None and adapter.key == 'liepin' and state.get('backend') == 'native':
         # An unversioned native selection can also contain old hidden rows.
         # Never rewrite it, submit a selected detail, or infer a migration.
         raise CrawlError('checkpoint_incompatible')
-    if saved is not None and saved != binding(state, adapter):
+    if saved is not None and saved != binding(state, adapter, human_contract_version=human_contract_version):
         raise CrawlError('checkpoint_incompatible')
     # Validate URLs through the current adapter even for an unversioned task.
     adapter.accept_url(state['search_url'])

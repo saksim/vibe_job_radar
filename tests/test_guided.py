@@ -130,6 +130,7 @@ class RateTests(unittest.TestCase):
         with self.assertRaises(RateLimit) as err:self.ledger.reserve('boss','page')
         self.assertEqual(err.exception.code,'clock_rollback')
     def test_login_attempt_limit_is_separate(self):
+        self.ledger=RateLedger(self.path,Limits(login_interval=300,logins_day=3),clock=lambda:self.now)
         self.ledger.reserve('boss','login')
         self.ledger.reserve('boss','request')
         with self.assertRaises(RateLimit):self.ledger.reserve('boss','login')

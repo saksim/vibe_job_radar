@@ -6,7 +6,7 @@ import sqlite3
 import tempfile
 import unittest
 from unittest.mock import Mock
-from vibe_job_radar.guided.rate import RateLedger, RateLimit
+from vibe_job_radar.guided.rate import RateLedger, RateLimit, Limits
 from vibe_job_radar.guided.service import GuidedService
 from vibe_job_radar.workspace import Workspace
 
@@ -15,7 +15,8 @@ class LoginAvailabilityTests(unittest.TestCase):
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
         self.now=100000.0
         self.path=Path(self.tmp.name)/'rates.sqlite'
-        self.ledger=RateLedger(self.path,clock=lambda:self.now)
+        self.limits=Limits(login_interval=300,logins_day=3)
+        self.ledger=RateLedger(self.path,self.limits,clock=lambda:self.now)
 
     def dump(self):
         with closing(sqlite3.connect(self.path)) as conn:
@@ -42,7 +43,7 @@ class LoginAvailabilityTests(unittest.TestCase):
         for stamp in (100000,100301,100602):
             self.now=stamp;self.ledger.reserve('liepin','login')
         self.now=100903
-        self.ledger=RateLedger(self.path,clock=lambda:self.now)
+        self.ledger=RateLedger(self.path,self.limits,clock=lambda:self.now)
         status=self.ledger.login_availability('liepin')
         self.assertEqual(status['reason'],'daily_limit')
         self.assertEqual(status['next_allowed_at'],186400)
@@ -67,7 +68,7 @@ class LoginAvailabilityTests(unittest.TestCase):
 
     def test_an_old_available_preview_does_not_authorize_a_later_request(self):
         self.assertTrue(self.ledger.login_availability('liepin')['available'])
-        other=RateLedger(self.path,clock=lambda:self.now);other.reserve('liepin','login')
+        other=RateLedger(self.path,self.limits,clock=lambda:self.now);other.reserve('liepin','login')
         self.assert_refusal_matches(self.ledger.login_availability('liepin'))
 
     def test_state_shows_budget_before_password_input_without_mutating_task(self):
@@ -85,3 +86,27 @@ class LoginAvailabilityTests(unittest.TestCase):
         self.assertEqual(self.dump(),before_ledger)
         self.assertNotIn('login_availability',json.loads(before_task))
         self.assertEqual(service._submit.call_count,1)
+
+    def test_default_reopen_ignores_old_open_count_without_resetting_history(self):
+        for stamp in (100000,100301,100602):
+            self.now=stamp;self.ledger.reserve('liepin','login')
+        before=self.dump()
+        self.ledger=RateLedger(self.path,clock=lambda:self.now)
+        self.assertTrue(self.ledger.login_availability('liepin')['available'])
+        self.assertEqual(self.dump(),before)
+        for _ in range(4):self.ledger.reserve('liepin','login')
+        self.assertEqual(self.ledger.summary('liepin')['login']['day'],7)
+        restarted=RateLedger(self.path,clock=lambda:self.now)
+        self.assertTrue(restarted.login_availability('liepin')['available'])
+
+    def test_unlimited_opening_still_enforces_shared_cooldown_clock_and_requests(self):
+        self.ledger=RateLedger(self.path,clock=lambda:self.now)
+        self.ledger.reserve('liepin','request')
+        with self.assertRaises(RateLimit):self.ledger.reserve('liepin','request')
+        self.ledger.reserve('liepin','page')
+        with self.assertRaises(RateLimit):self.ledger.reserve('liepin','page')
+        self.ledger.cool('liepin',900)
+        self.assert_refusal_matches(self.ledger.login_availability('liepin'))
+        self.now-=2
+        self.assertEqual(self.ledger.login_availability('liepin')['reason'],'clock_rollback')
+        self.assert_refusal_matches(self.ledger.login_availability('liepin'))

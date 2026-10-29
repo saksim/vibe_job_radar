@@ -32,3 +32,25 @@ def prepare(state, adapter, browser):
     changed.pop('session_source_task', None)
     changed['execution_binding'] = binding(changed, adapter)
     return changed
+
+
+def upgrade_known_binding(state, adapter):
+    """One known v1 -> v2 compatibility migration on an explicit task action.
+
+    Query, adapter, consent and all saved rows must still validate. Never
+    accept an unversioned native task or rewrite an unknown/tampered binding.
+    This does not create a browser, grant login quota or certify a session.
+    """
+    if (state.get('human_login') is not True or state.get('backend') != 'native'
+            or adapter.key != 'liepin'):
+        return False
+    current = binding(state, adapter)
+    if state.get('execution_binding') == current:
+        return False
+    ensure_compatible(state, adapter, human_contract_version=1)
+    previous = deepcopy(state['execution_binding'])
+    state['native_login_contract_upgrade'] = {
+        'from_version': 1, 'to_version': 2, 'at': utc_now(), 'previous_binding': previous,
+    }
+    state['execution_binding'] = current
+    return True
