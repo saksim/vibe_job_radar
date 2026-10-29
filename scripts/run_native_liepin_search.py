@@ -18,6 +18,7 @@ import tempfile
 import threading
 import time
 from unittest.mock import patch
+from native_fixture_network import mapped_native_connect
 from urllib.parse import parse_qs, urlencode, urlsplit
 from native_tls_fixture import NativeTLSFixtureServer
 
@@ -656,7 +657,6 @@ def main():
                 def factory(a,l,c,p,**saved):
                     with use_policy(NetworkPolicy()):
                         return NativeBackend(a,l,c,p,headless=not args.headed,channel=args.channel,executable_path=args.executable,**saved)
-                from native_fixture_network import mapped_native_connect
                 with patch('socket.getaddrinfo', side_effect=dns), patch('socket.create_connection', side_effect=dial), mapped_native_connect(lambda: server.server.server_address), patch.object(NetworkPolicy,'capture',return_value=NetworkPolicy()):
                     workspace = Workspace(root/'workspace')
                     service = GuidedService(workspace,registry=Registry([local]),

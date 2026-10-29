@@ -39,6 +39,8 @@ class NativeProxyEvidenceTests(unittest.TestCase):
             protocol = 'http'
             def setUp(self):
                 self.connects, self.authentication, self.greetings = [], [], []
+                self.proxy = SimpleNamespace(server_address=('127.0.0.1', 1))
+                self.dials = []
                 self.expected_proxy_auth = ''
             def perform(self, action):
                 state.fixture = self
@@ -92,6 +94,7 @@ class NativeProxyEvidenceTests(unittest.TestCase):
                  patch.dict(probe.os.environ, {'CI': 'true'}), \
                  patch.object(sys, 'argv', ['probe', '--controlled']), \
                  patch.object(socket, 'create_connection', side_effect=AssertionError('unexpected socket')), \
+                 patch.object(socket, 'socket', side_effect=AssertionError('unexpected native socket')), \
                  patch.object(subprocess, 'run', side_effect=AssertionError('unexpected subprocess')), \
                  patch.object(subprocess, 'Popen', side_effect=AssertionError('unexpected subprocess')), \
                  redirect_stdout(io.StringIO()):

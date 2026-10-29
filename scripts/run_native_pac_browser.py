@@ -8,6 +8,7 @@ import sys
 import tempfile
 import threading
 from unittest.mock import patch
+from native_fixture_network import observed_native_proxy
 
 ROOT=Path(__file__).resolve().parents[1]
 sys.path[:0]=[str(ROOT/'src'),str(ROOT/'tests')]
@@ -196,7 +197,6 @@ def main():
                                     direct_fallback=False,pac_return_preserved=True,system_source_downloads=downloads,
                                     wpad_fixture_discoveries=discovery.call_count-before_discovery,real_wpad_discovery=False))
                         try:
-                            from native_fixture_network import observed_native_proxy
                             with observed_native_proxy(fixture.proxy.server_address, fixture.dials):
                                 fixture.perform(exercise)
                         finally:workspace.close_network();fixture.tearDown();fixture.doCleanups()
