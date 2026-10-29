@@ -38,7 +38,7 @@ from .batch_identity import batch_cards, page_signature, strategy as identity_st
 from .checkpoint import decode as decode_checkpoint, binding as checkpoint_binding, ensure_compatible
 from .acquisition_results import FINISHED_DETAIL_STATUSES, analysis_by_record, audit_items
 from .search_scope import conditions as search_conditions, check_scope
-from .login_return import (LoginReturnManager, ReturnedDetail, ReturnedSearch,
+from .login_return import (LoginReturnManager, ReturnedDetail, ReturnedSearch, ReturnedLogin,
                            matching_detail_signature, pending_detail_target)
 from .session_reuse import reuse_current_session
 from .saved_session import SavedSession
@@ -1304,6 +1304,10 @@ class GuidedService:
             if action not in {'search', 'capture', 'collect', 'resume'}:
                 raise CrawlError('automatic_resume_unavailable')
         adapter = self.registry.get(state['platform'])
+        if ((secret is None and action in {'login', 'search', 'resume', 'capture', 'collect', 'more'})
+                or action == 'login_password' and isinstance(secret, LoginCredentials)):
+            from .native_login_handoff import upgrade_known_binding
+            upgrade_known_binding(state, adapter)
         ensure_compatible(state, adapter)
         if state.get('backend', 'bridge') == 'native':
             from ..loopback_proxy import LocalProxyError
@@ -1312,7 +1316,7 @@ class GuidedService:
             except LocalProxyError as exc:
                 raise CrawlError(exc.code) from exc
         self._selected_records(state)
-        resume_list = (action in {'resume', 'search', 'capture', 'resume_returned_search'}
+        resume_list = (action in {'resume', 'search', 'capture', 'resume_returned_search', 'resume_returned_login'}
                        and state['phase'] != 'collect'
                        and bool(state.get('pages_seen') or state.get('cursors_seen')))
         if resume_list:
@@ -1324,7 +1328,7 @@ class GuidedService:
                 self._save(state, wait_seconds=round(exc.wait, 1))
                 raise CrawlError('login_rate_limited') from exc
         previous_backend = self._backends.get(state['id'])
-        if action in {'resume_returned_detail', 'resume_returned_search'}:
+        if action in {'resume_returned_detail', 'resume_returned_search', 'resume_returned_login'}:
             # This internal action cannot be submitted by the HTTP/UI API. A
             # replaced browser must never inherit or replay another page's handoff.
             valid_target = (isinstance(secret, ReturnedDetail)
@@ -1333,7 +1337,10 @@ class GuidedService:
                 and action == 'resume_returned_search' and state.get('search_url') == secret.expected_url
                 and state.get('keyword') == secret.keyword
                 and isinstance(secret.signature, str) and bool(secret.signature))
-            if (not (valid_target or valid_search)
+            valid_login = (isinstance(secret, ReturnedLogin) and action == 'resume_returned_login'
+                and state.get('search_url') == secret.expected_url and state.get('keyword') == secret.keyword
+                and state.get('phase') == secret.phase and pending_detail_target(state) == secret.detail_target)
+            if (not (valid_target or valid_search or valid_login)
                     or self._backends.get(state['id']) is not secret.backend
                     or state.get('authentication') != 'manual_pending'):
                 raise CrawlError('login_return_changed')
@@ -1403,6 +1410,19 @@ class GuidedService:
                         self._save(state, manual_login=tracker.snapshot(), login_continuation='needs_attention')
                 raise
             self._save(state, login_code, status='waiting_manual', authentication='manual_pending')
+        elif action == 'resume_returned_login':
+            from .login_landing import claim
+            # Consume before navigation. An HTTP 200 plus the publisher's
+            # landing intent is not an account check; the original target must
+            # independently pass robots, query identity and full-content gates.
+            claim(backend, secret.ticket)
+            if hasattr(backend, 'collection_mode'):
+                backend.collection_mode()
+            if state['phase'] == 'collect':
+                self._collect(state, backend, adapter, environment_observation=environment_observation)
+            else:
+                self._gather(state, backend, adapter, navigate=True, resume=resume_list)
+            self._save(state, login_continuation='resumed_after_login')
         elif action == 'resume_returned_search':
             from .liepin_form import matching_search_entry_signature, submit_search
             if self._cancel.is_set():
@@ -1444,9 +1464,9 @@ class GuidedService:
             else:
                 self._gather(state,backend,adapter,navigate=action=='resume',resume=resume_list,
                              reuse_current=reuse_current_list)
-        if action in {'search', 'capture', 'resume', 'resume_returned_search'}:
+        if action in {'search', 'capture', 'resume', 'resume_returned_search', 'resume_returned_login'}:
             self._auto_collect_ready(state, backend, adapter, environment_observation=environment_observation)
-        if (pending_login and action in {'capture', 'search', 'resume', 'collect', 'resume_returned_detail', 'resume_returned_search'}
+        if (pending_login and action in {'capture', 'search', 'resume', 'collect', 'resume_returned_detail', 'resume_returned_search', 'resume_returned_login'}
                 and state['status'] in {'ready', 'completed'}):
             # This is task progress after a user action, not login certification.
             self._save(state, authentication='user_resumed')
@@ -1626,7 +1646,7 @@ class GuidedService:
                 else:
                     try:
                         current = self._load(ident)
-                        if action == 'resume_returned_detail':
+                        if action in {'resume_returned_detail', 'resume_returned_login'}:
                             state['login_continuation'] = 'needs_attention'
                         stopping = self._stop_ident == ident
                         if stopping:

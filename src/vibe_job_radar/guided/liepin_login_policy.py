@@ -75,18 +75,34 @@ def _contract():
 CONTRACT = _contract()
 
 
-def native_human_contract(adapter):
+def native_human_contract(adapter, *, version=2):
     """Explicit per-task opt-in; existing native checkpoints keep their contract."""
     from .native_policy import contract_for
     if not applies(adapter):
         raise CrawlError('native_operation_unreviewed')
+    if version not in (1, 2):
+        raise ValueError('unknown human login contract')
     base = contract_for(adapter)
     additions = tuple(r for r in CONTRACT.rules if r.key != 'liepin_security_config')
     login_page = NativeRule('liepin_manual_login_page', 'www.liepin.com', r'/login',
                             resources=('Document',), role='document', authentication=True)
-    return NativeContract('liepin_native_human_login_v1',
+    # Public common.2576e272.js: login calls resume-complete-flag with GET;
+    # the signed-in header reads base-property with POST and no input data.
+    # These replies belong to the publisher UI, never job observations.
+    post_login = () if version == 1 else (
+        NativeRule('liepin_login_resume_flag', 'api-c.liepin.com',
+                   r'/api/com\.liepin\.cresume\.resume-complete-flag',
+                   methods=('GET', 'OPTIONS'), resources=('XHR', 'Fetch', 'Other', 'Preflight'),
+                   role='login', authentication=True, cors_origin='https://www.liepin.com',
+                   cors_method='GET', cors_headers=_HEADERS),
+        NativeRule('liepin_account_header', 'api-c.liepin.com',
+                   r'/api/com\.liepin\.usercx\.pc\.user\.base-property',
+                   methods=('POST', 'OPTIONS'), resources=('XHR', 'Fetch', 'Other', 'Preflight'),
+                   role='login', cors_origin='https://www.liepin.com', cors_headers=_HEADERS),
+    )
+    return NativeContract('liepin_native_human_login_v' + str(version),
         tuple(dict.fromkeys((*base.hosts, *CONTRACT.hosts))),
-        (*base.rules, login_page, *additions), bootstrap_only=False, ignored_rules=base.ignored_rules)
+        (*base.rules, login_page, *additions, *post_login), bootstrap_only=False, ignored_rules=base.ignored_rules)
 
 
 def conditional_two_factor_origin(contract, origin):
@@ -95,7 +111,7 @@ def conditional_two_factor_origin(contract, origin):
     Do not change the request contract or grant access without robots rules.
     If this origin acquires any other operation, it is no longer conditional.
     """
-    return (contract.key == 'liepin_native_human_login_v1'
+    return (contract.key in {'liepin_native_human_login_v1', 'liepin_native_human_login_v2'}
             and origin == 'https://' + ACCOUNT
             and tuple(r for r in contract.rules if r.host == ACCOUNT)
             == tuple(r for r in CONTRACT.rules if r.host == ACCOUNT))

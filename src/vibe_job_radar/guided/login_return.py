@@ -84,6 +84,16 @@ class ReturnedSearch:
     backend: object = field(repr=False)
 
 
+@dataclass(frozen=True)
+class ReturnedLogin:
+    expected_url: str = field(repr=False)
+    keyword: str = field(repr=False)
+    phase: str
+    detail_target: DetailTarget | None
+    ticket: object = field(repr=False)
+    backend: object = field(repr=False)
+
+
 def pending_detail_target(state):
     """Only the next unfinished explicit selection can consume a returned JD.
 
@@ -204,6 +214,22 @@ class LoginReturnManager:
                     service._save(state, login_continuation='timed_out')
                     continue
             try:
+                from .login_landing import peek
+                ticket = peek(watch.backend)
+                if ticket is not None:
+                    with service._lock:
+                        if (self._watches.get(ident) is not watch or service._busy
+                                or service._cancel.is_set() or service._shutdown.is_set()
+                                or service._backends.get(ident) is not watch.backend
+                                or pending_detail_target(state) != watch.detail_target):
+                            self.disarm(ident)
+                            continue
+                        self.disarm(ident)
+                        service._save(state, status='queued', login_continuation='checking_return')
+                        service._submit('resume_returned_login', ident, ReturnedLogin(
+                            watch.expected_url, state['keyword'], state['phase'], watch.detail_target,
+                            ticket, watch.backend))
+                    return
                 # No service lock during DOM access: pause/stop can win while
                 # Playwright yields. Recheck ownership before submitting below.
                 page = watch.backend.snapshot()
