@@ -40,6 +40,18 @@ function actionControls(){
 async function act(fn){if(requesting)return;requesting=true;sticky='';actionControls();try{await fn();await refresh();}catch(e){sticky=e.message;note(sticky);}finally{requesting=false;actionControls();}}
 function options(element,values){const value=element.value;element.replaceChildren();values.forEach(([id,label])=>{const o=document.createElement('option');o.value=id;o.textContent=label;element.append(o);});if(values.some(x=>x[0]===value))element.value=value;}
 function active(){if(!current)throw Error('先在第2步创建任务。');return current.id;}
+function loginWaitTime(budget){
+ const due=budget.next_allowed_at;
+ const date=typeof due==='number'&&Number.isFinite(due)?new Date(due*1000):null;
+ if(!date||!Number.isFinite(date.getTime()))return '请检查本机任务与时间状态。';
+ const formatter=new Intl.DateTimeFormat('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23',timeZoneName:'longOffset'});
+ const zone=formatter.resolvedOptions().timeZone;
+ const utc=date.toISOString().slice(0,19).replace('T',' ')+' UTC';
+ const wait=budget.wait_seconds;
+ const minutes=typeof wait==='number'&&Number.isFinite(wait)&&wait>0?Math.ceil(wait/60):0;
+ const remaining=minutes?`按服务端当前额度计算，还需约 ${Math.floor(minutes/60)?Math.floor(minutes/60)+' 小时 ':''}${minutes%60?minutes%60+' 分钟': ''}。`:'';
+ return `下次允许时间：${formatter.format(date)}（${zone}）；${utc}。${remaining}`;
+}
 function render(){
  if(!state)return;
  $('guided-startup').disabled=false;$('guided-startup').setAttribute('aria-busy','false');$('guided-initializing').hidden=true;
@@ -96,9 +108,8 @@ function render(){
  $('login-availability').hidden=!loginBlocked;
  if(loginBlocked){
   const reason={daily_limit:'滚动24小时内打开登录已达上限',hourly_limit:'最近一小时打开登录已达上限',rate_wait:'尚未达到两次打开登录的最小间隔',cooldown:'本站仍在等待期',clock_rollback:'系统时间与已记录时间不一致'}[loginBudget.reason]||'暂时无法确认可用的登录次数';
-  const due=loginBudget.next_allowed_at;
-  const when=typeof due==='number'&&Number.isFinite(due)?`下次允许时间：${new Date(due*1000).toLocaleString()}（本机时区）。`:'请检查本机任务与时间状态。';
-  $('login-availability').textContent=`${reason}。${when}${current.browser_open?'可继续处理已经打开的采集窗口。':'当前没有已打开的采集登录窗口。'}等待期间不必填写账号密码，到时不会自动提交。`;
+  const scope=['daily_limit','hourly_limit','rate_wait'].includes(loginBudget.reason)?'这是本工作区打开登录窗口的程序限制，不是平台短信发送次数的判定。':'';
+  $('login-availability').textContent=`${reason}。${scope}${loginWaitTime(loginBudget)}${current.browser_open?'可继续处理已经打开的采集窗口。':'当前没有已打开的采集登录窗口。'}等待期间不必填写账号密码；额度恢复后仍需明确打开登录，不会自动提交。`;
   $('password-login-form').reset();
  }
  if(current&&loadedId!==current.id){selecting=new Set(current.selection||[]);loadedId=current.id;}
