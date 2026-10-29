@@ -7,7 +7,7 @@ from unittest.mock import Mock,patch
 from urllib.parse import urlsplit
 ROOT=Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT/'src'))
 from vibe_job_radar import application, workbench
-from vibe_job_radar.guided.rate import RateLedger
+from vibe_job_radar.guided.rate import RateLedger, Limits
 from vibe_job_radar.guided.service import GuidedService
 from vibe_job_radar.workspace import Workspace
 
@@ -18,7 +18,8 @@ def main():
     result={'success':False,'checks':[],'external_requests':0,'mutation_requests':0}
     with tempfile.TemporaryDirectory(prefix='radar-quota-ui-') as tmp:
         now=[time.time()-1000];first=now[0];path=Path(tmp)/'rates.sqlite'
-        ledger=RateLedger(path,clock=lambda:now[0])
+        # Exercise an explicitly configured cap; normal manual login has none.
+        ledger=RateLedger(path,Limits(login_interval=300,logins_day=3),clock=lambda:now[0])
         def rows():
             with closing(sqlite3.connect(path)) as conn:return list(conn.execute('SELECT site,kind,ts FROM visits ORDER BY ts'))
         for offset in (0,301,602):

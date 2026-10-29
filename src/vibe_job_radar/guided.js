@@ -133,7 +133,7 @@ function render(){
  }
  if(current.report_id){for(const [file,label] of [['requirements_zh.csv','下载岗位要求 CSV'],['descriptions.md','下载描述模板'],...(current.outcome ? [['guided_acquisition.json','下载本批采集结果']] : [])]){const b=document.createElement('button');b.className='secondary';b.textContent=label;const id=current.report_id;b.onclick=()=>act(()=>downloadReport(id,file));$('result').append(b);}const view=document.createElement('a');view.href='/#report='+current.report_id;view.textContent=' 查看本批研究结论';const a=document.createElement('a');a.href='/advanced#report='+current.report_id;a.textContent=' 用本批要求进入个人证据中心';$('result').append(view);if(!current.outcome||current.outcome.target_jobs>0)$('result').append(a);}
  }
- if(current?.code==='login_rate_limited'&&loginBudget?.available===true)$('task-status').textContent='上次登录因次数限制停止；当前已到允许时间，可明确重新操作。程序不会自动提交账号密码。';
+ if(current?.code==='login_rate_limited'&&loginBudget?.available===true)$('task-status').textContent='上次登录因限制停止；当前允许再次打开登录窗口。程序不会自动提交账号密码。';
  actionControls();
 }
 function renderCards(){const root=$('cards');root.replaceChildren();if(!current.cards.length){root.textContent=current.code==='no_matching_jobs'?current.message:'尚未取得可用岗位清单。请查看上方任务状态；仅在平台明确要求时处理登录，不必先提供密码。';return;}

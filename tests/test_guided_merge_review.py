@@ -193,6 +193,7 @@ class ServiceReviewTests(unittest.TestCase):
         self.assertEqual(self.service._load(ident)['authentication'], 'manual_pending')
 
     def test_repeated_login_does_not_open_or_reset_quota(self):
+        self.service.ledger.limits=dataclasses.replace(self.service.ledger.limits,login_interval=300,logins_day=3)
         ident = self.create()
         self.service.action({'id': ident, 'action': 'login'})
         self.wait()

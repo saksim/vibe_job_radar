@@ -45,8 +45,11 @@ class Limits:
     request_interval: float = 0.5
     requests_hour: int = 600
     requests_day: int = 3000
-    login_interval: float = 300
-    logins_day: int = 3
+    # Opening a user-operated login window is not an SMS/login submission.
+    # Keep its audit entries, but impose no default local interval/day cap.
+    # Callers can still explicitly choose a finite local policy.
+    login_interval: float = 0
+    logins_day: int | None = None
 
 
 class RateLimit(CrawlError):
@@ -181,9 +184,9 @@ class RateLedger:
             raise RateLimit(rows[-1] - now + interval, 'clock_rollback',
                             next_allowed_at=rows[-1] + interval)
         recent = [t for t in rows if t > now - 3600]
-        if len(rows) >= daily:
+        if daily is not None and len(rows) >= daily:
             candidates.append((rows[-daily] + 86400, 'daily_limit'))
-        if len(recent) >= hourly:
+        if hourly is not None and len(recent) >= hourly:
             candidates.append((recent[-hourly] + 3600, 'hourly_limit'))
         if rows:
             candidates.append((rows[-1] + interval, 'rate_wait'))
